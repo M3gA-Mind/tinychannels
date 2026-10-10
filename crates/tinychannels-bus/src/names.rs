@@ -36,6 +36,14 @@ pub mod methods {
     pub const SEND_CHANNEL_INTENT: &str = "SendChannelIntent";
     /// `SendEmail` — send host-configured MIME mail without starting IMAP.
     pub const SEND_EMAIL: &str = "SendEmail";
+    /// Begin an attachment upload whose chunks remain below TinyBus frame limits.
+    pub const BEGIN_EMAIL_UPLOAD: &str = "BeginEmailUpload";
+    /// Append one bounded confidential attachment chunk idempotently.
+    pub const APPEND_EMAIL_UPLOAD_CHUNK: &str = "AppendEmailUploadChunk";
+    /// Send a completed upload once and replay its terminal result by handle.
+    pub const SEND_EMAIL_UPLOAD: &str = "SendEmailUpload";
+    /// Abort an upload that has not entered SMTP delivery.
+    pub const ABORT_EMAIL_UPLOAD: &str = "AbortEmailUpload";
     /// `StartChannel` — connect and begin receiving on one configured provider.
     pub const START_CHANNEL: &str = "StartChannel";
     /// `StopChannel` — disconnect one running provider.
@@ -59,7 +67,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 13] = [
+pub const METHODS: [&str; 17] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -73,6 +81,10 @@ pub const METHODS: [&str; 13] = [
     methods::SHUTDOWN,
     methods::SEND_CHANNEL_INTENT,
     methods::SEND_EMAIL,
+    methods::BEGIN_EMAIL_UPLOAD,
+    methods::APPEND_EMAIL_UPLOAD_CHUNK,
+    methods::SEND_EMAIL_UPLOAD,
+    methods::ABORT_EMAIL_UPLOAD,
 ];
 
 /// All host-callback method names in declaration order.

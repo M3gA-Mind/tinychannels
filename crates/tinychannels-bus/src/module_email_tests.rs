@@ -52,3 +52,21 @@ fn email_send_schema_exposes_the_complete_attachment_request() {
         assert!(text.contains(field), "schema omitted {field}");
     }
 }
+
+#[test]
+fn email_upload_wire_keeps_chunk_payloads_bounded_and_camel_case() {
+    let chunk = EmailUploadChunk {
+        handle: EmailUploadHandle("opaque".into()),
+        attachment_index: 2,
+        sequence: 7,
+        bytes: vec![0, 255],
+    };
+    let value = serde_json::to_value(&chunk).unwrap();
+    assert_eq!(value["attachmentIndex"], 2);
+    assert_eq!(value["sequence"], 7);
+    assert_eq!(value["bytes"], serde_json::json!([0, 255]));
+    let decoded: EmailUploadChunk = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded, chunk);
+    assert_eq!(EMAIL_UPLOAD_CHUNK_BYTES, 512 * 1024);
+    assert_eq!(EMAIL_UPLOAD_MAX_CHUNKS, 128);
+}

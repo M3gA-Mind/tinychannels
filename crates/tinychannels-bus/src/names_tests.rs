@@ -22,6 +22,10 @@ fn every_declared_member_appears_in_its_method_table() {
         methods::SHUTDOWN,
         methods::SEND_CHANNEL_INTENT,
         methods::SEND_EMAIL,
+        methods::BEGIN_EMAIL_UPLOAD,
+        methods::APPEND_EMAIL_UPLOAD_CHUNK,
+        methods::SEND_EMAIL_UPLOAD,
+        methods::ABORT_EMAIL_UPLOAD,
     ] {
         assert!(METHODS.contains(&m), "{m} missing from METHODS");
     }
@@ -46,7 +50,16 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::CHANNEL_STATUS,
         ]
     );
-    assert_eq!(METHODS.len(), 13);
+    assert_eq!(METHODS.len(), 17);
+    assert_eq!(
+        &METHODS[13..],
+        &[
+            methods::BEGIN_EMAIL_UPLOAD,
+            methods::APPEND_EMAIL_UPLOAD_CHUNK,
+            methods::SEND_EMAIL_UPLOAD,
+            methods::ABORT_EMAIL_UPLOAD,
+        ]
+    );
 }
 
 /// A duplicate silently shadows one member with another's handler.

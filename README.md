@@ -85,6 +85,9 @@ cargo clippy --all-targets -- -D warnings
 cargo build --all-targets
 cargo test
 
+# Build and load the actual cdylib against local websocket and SMTP fixtures
+./scripts/verify-module-artifact.sh
+
 # Test with all optional providers
 cargo test --features email,lark
 ```
@@ -109,6 +112,10 @@ cargo test --features email,lark
   preserves the idempotency and thread fields for the host's delivery policy.
   Until a host durable-queue port is installed, `Required` durability is
   refused before provider send; the module does not own a durable outbox.
+  Legacy `SendEmail` remains available for small requests; larger attachments
+  use the confidential `BeginEmailUpload` / `AppendEmailUploadChunk` /
+  `SendEmailUpload` protocol, with bounded chunks and a replayable terminal
+  result keyed by the opaque upload handle.
 - `src/lib.rs` exports the crate surface and re-exports the contract.
 - `src/providers/` holds the provider transports.
 - `src/delivery/` holds the durable outbound queue and `progressive/`, the

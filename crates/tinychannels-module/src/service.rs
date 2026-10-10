@@ -45,7 +45,10 @@ use tinychannels_bus::ChannelOutboundIntent;
 use tinychannels_bus::config::RelayRuntimeConfig;
 use tinychannels_bus::controllers::ChannelSendMessageResult;
 use tinychannels_bus::module_relay::{RelayReservation, RelayStatus};
-use tinychannels_bus::{BUS_NAME, ChannelsConfig, EmailSendRequest, OBJECT_PATH, SendMessage};
+use tinychannels_bus::{
+    BUS_NAME, ChannelsConfig, EmailSendRequest, EmailUploadBegin, EmailUploadChunk,
+    EmailUploadHandle, OBJECT_PATH, SendMessage,
+};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
@@ -269,6 +272,42 @@ impl Channels {
         self.email.send(request).await
     }
 
+    /// Start a bounded confidential upload for an SMTP message.
+    #[tinybus(confidential)]
+    async fn begin_email_upload(&self, request: EmailUploadBegin) -> BusResult<EmailUploadHandle> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        self.email.begin_upload(request).await
+    }
+
+    /// Append an ordered, retry-safe confidential attachment chunk.
+    #[tinybus(confidential)]
+    async fn append_email_upload_chunk(&self, chunk: EmailUploadChunk) -> BusResult<u32> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        self.email.append_upload_chunk(chunk).await
+    }
+
+    /// Send a completed upload once; retries replay the handle's terminal result.
+    #[tinybus(confidential)]
+    async fn send_email_upload(
+        &self,
+        handle: EmailUploadHandle,
+    ) -> BusResult<ChannelSendMessageResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        self.email.send_upload(handle).await
+    }
+
+    /// Discard an upload that has not entered SMTP delivery.
+    #[tinybus(confidential)]
+    async fn abort_email_upload(&self, handle: EmailUploadHandle) -> BusResult<()> {
+        self.email.abort_upload(handle).await
+    }
+
     /// The providers currently running, in no particular order.
     async fn list_channels(&self) -> BusResult<Vec<String>> {
         Ok(self
@@ -431,6 +470,7 @@ pub(crate) mod exports {
             "ListChannels",
             "ChannelStatus",
             "ReserveRelay", "StartRelay", "StopRelay", "RelayStatus", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
+            "BeginEmailUpload", "AppendEmailUploadChunk", "SendEmailUpload", "AbortEmailUpload",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:
