@@ -66,6 +66,7 @@ async fn manager() -> (Arc<Relays>, Callback, Connection, HostChannels) {
 struct SocketFixture {
     config: RelayRuntimeConfig,
     hello: mpsc::Receiver<()>,
+    outbound_count: Arc<std::sync::atomic::AtomicUsize>,
     release: Option<oneshot::Sender<()>>,
     task: JoinHandle<()>,
 }
@@ -78,6 +79,8 @@ async fn socket(delayed: bool) -> SocketFixture {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}", listener.local_addr().unwrap());
     let (hello, heard) = mpsc::channel(8);
+    let outbound_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen_outbound = outbound_count.clone();
     let (release, wait) = oneshot::channel();
     let task = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
@@ -134,6 +137,7 @@ async fn socket(delayed: bool) -> SocketFixture {
             if let GatewayToConnectorFrame::Outbound { request_id, .. } =
                 serde_json::from_str(text).unwrap()
             {
+                seen_outbound.fetch_add(1, Ordering::SeqCst);
                 let result = ConnectorToGatewayFrame::OutboundResult {
                     request_id,
                     result: serde_json::json!({"success":true,"message_id":"fixture"}),
@@ -157,6 +161,7 @@ async fn socket(delayed: bool) -> SocketFixture {
             ..Default::default()
         },
         hello: heard,
+        outbound_count,
         release: Some(release),
         task,
     }
@@ -166,6 +171,27 @@ fn intent() -> ChannelOutboundIntent {
         "telegram",
         serde_json::json!({"content":"outbound","recipient":"chat"}),
     )
+}
+
+#[tokio::test]
+async fn required_relay_delivery_is_refused_before_socket_send() {
+    let (manager, _, _server, host) = manager().await;
+    let mut socket = socket(false).await;
+    let id = manager.reserve().await.unwrap();
+    manager
+        .start(id.clone(), socket.config.clone())
+        .await
+        .unwrap();
+    socket.hello.recv().await.unwrap();
+
+    let mut required = intent();
+    required.durability = tinychannels::DeliveryDurability::Required;
+    assert!(manager.send(id.clone(), required).await.is_err());
+    manager.stop(id).await.unwrap();
+    (&mut socket.task).await.unwrap();
+    assert_eq!(socket.outbound_count.load(Ordering::SeqCst), 0);
+    manager.shutdown().await.unwrap();
+    host.shutdown().await.unwrap();
 }
 
 #[tokio::test]

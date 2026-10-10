@@ -196,6 +196,11 @@ impl Relays {
         id: RelayReservation,
         intent: ChannelOutboundIntent,
     ) -> Result<ChannelSendMessageResult> {
+        if intent.durability == tinychannels::DeliveryDurability::Required {
+            return Err(Error::failed(
+                "required durability needs the host delivery queue",
+            ));
+        }
         let slot = self.get(&id).await?;
         if self.terminal.load(Ordering::SeqCst) || *slot.cancel.borrow() {
             return Err(closed());
