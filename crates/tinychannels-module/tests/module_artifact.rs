@@ -1,6 +1,7 @@
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::{fs, path::PathBuf};
 use tinybus::broker::Broker;
@@ -15,7 +16,17 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 
 #[derive(Clone)]
-struct Callback(Arc<Mutex<Vec<serde_json::Value>>>);
+struct Callback(
+    Arc<Mutex<Vec<serde_json::Value>>>,
+    Arc<Mutex<DeliveryState>>,
+);
+
+#[derive(Default)]
+struct DeliveryState {
+    pending: BTreeMap<String, tinychannels_bus::DeliveryQueueEntry>,
+    failed: BTreeMap<String, tinychannels_bus::DeliveryQueueEntry>,
+    results: BTreeMap<String, tinychannels_bus::DeliveryTerminalResult>,
+}
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
 impl Callback {
@@ -45,6 +56,86 @@ impl Callback {
             .await
             .push(serde_json::json!({"kind":"allowlist","channel":channel,"identity":identity}));
         Ok(())
+    }
+
+    async fn save_pending_delivery(
+        &self,
+        entry: tinychannels_bus::DeliveryQueueEntry,
+    ) -> Result<()> {
+        let mut state = self.1.lock().await;
+        if state.pending.len() >= tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY
+            && !state.pending.contains_key(&entry.id)
+        {
+            return Err(tinybus::Error::failed("artifact delivery queue is full"));
+        }
+        if state
+            .pending
+            .get(&entry.id)
+            .is_some_and(|existing| existing.intent != entry.intent)
+        {
+            return Err(tinybus::Error::failed("artifact delivery key conflicts"));
+        }
+        state.pending.insert(entry.id.clone(), entry);
+        Ok(())
+    }
+
+    async fn load_pending_delivery(
+        &self,
+        id: String,
+    ) -> Result<Option<tinychannels_bus::DeliveryQueueEntry>> {
+        Ok(self.1.lock().await.pending.get(&id).cloned())
+    }
+
+    async fn load_pending_deliveries(&self) -> Result<Vec<tinychannels_bus::DeliveryQueueEntry>> {
+        Ok(self.1.lock().await.pending.values().cloned().collect())
+    }
+
+    async fn remove_pending_delivery(&self, id: String) -> Result<()> {
+        self.1.lock().await.pending.remove(&id);
+        Ok(())
+    }
+
+    async fn save_failed_delivery(
+        &self,
+        entry: tinychannels_bus::DeliveryQueueEntry,
+    ) -> Result<()> {
+        self.1.lock().await.failed.insert(entry.id.clone(), entry);
+        Ok(())
+    }
+
+    async fn load_failed_delivery(
+        &self,
+        id: String,
+    ) -> Result<Option<tinychannels_bus::DeliveryQueueEntry>> {
+        Ok(self.1.lock().await.failed.get(&id).cloned())
+    }
+
+    async fn save_delivery_result(
+        &self,
+        result: tinychannels_bus::DeliveryTerminalResult,
+    ) -> Result<()> {
+        let mut state = self.1.lock().await;
+        if state.results.len() >= tinychannels_bus::module_delivery::DELIVERY_RESULT_CAPACITY
+            && !state.results.contains_key(&result.id)
+        {
+            return Err(tinybus::Error::failed("artifact result table is full"));
+        }
+        if state
+            .results
+            .get(&result.id)
+            .is_some_and(|existing| existing != &result)
+        {
+            return Err(tinybus::Error::failed("artifact result key conflicts"));
+        }
+        state.results.insert(result.id.clone(), result);
+        Ok(())
+    }
+
+    async fn load_delivery_result(
+        &self,
+        id: String,
+    ) -> Result<Option<tinychannels_bus::DeliveryTerminalResult>> {
+        Ok(self.1.lock().await.results.get(&id).cloned())
     }
 }
 
@@ -99,7 +190,10 @@ async fn compiled_artifact_exposes_confidential_relay_lifecycle_and_real_websock
     let connection = Connection::connect(Box::new(client_transport))
         .await
         .unwrap();
-    let callbacks = Callback(Arc::new(Mutex::new(Vec::new())));
+    let callbacks = Callback(
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(Mutex::new(DeliveryState::default())),
+    );
     connection
         .serve_at(
             tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
@@ -139,6 +233,45 @@ async fn compiled_artifact_exposes_confidential_relay_lifecycle_and_real_websock
     let _: Vec<String> = proxy.call("ListChannels", ()).await.unwrap();
     let status: String = proxy.call("ChannelStatus", ("missing",)).await.unwrap();
     assert_eq!(status, "stopped");
+    let required = ChannelOutboundIntent {
+        idempotency_key: "artifact-required".into(),
+        channel_id: "not-running".into(),
+        durability: tinychannels::DeliveryDurability::Required,
+        payload: OutboundPayload::Text {
+            text: "artifact fixture".into(),
+        },
+        ..Default::default()
+    };
+    assert!(
+        proxy
+            .call::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                "SendChannelIntent",
+                ("not-running", required.clone()),
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        callbacks
+            .1
+            .lock()
+            .await
+            .pending
+            .contains_key("artifact-required")
+    );
+    let mut conflict = required;
+    conflict.payload = OutboundPayload::Text {
+        text: "different artifact fixture".into(),
+    };
+    assert!(
+        proxy
+            .call::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                "SendChannelIntent",
+                ("not-running", conflict),
+            )
+            .await
+            .is_err()
+    );
     let (url, remote) = relay_server().await;
     assert!(
         proxy

@@ -1,63 +1,14 @@
 //! Durable delivery queue types.
 
-use crate::channel::{ChannelOutboundIntent, MessageReceipt};
+use crate::channel::MessageReceipt;
 use async_trait::async_trait;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+pub use tinychannels_bus::{DeliveryQueueEntry as QueuedDelivery, DeliveryRecoveryState};
+
 /// Maximum recovery attempts before a pending entry is moved to failed storage.
 pub const MAX_RETRIES: u32 = 5;
-
-/// A queued outbound delivery intent persisted before platform send.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, rename_all = "camelCase")]
-pub struct QueuedDelivery {
-    pub id: String,
-    pub intent: ChannelOutboundIntent,
-    pub enqueued_at_unix_ms: u64,
-    pub retry_count: u32,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_attempt_at_unix_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub platform_send_started_at_unix_ms: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub recovery_state: Option<DeliveryRecoveryState>,
-}
-
-impl QueuedDelivery {
-    pub fn new(
-        id: impl Into<String>,
-        intent: ChannelOutboundIntent,
-        enqueued_at_unix_ms: u64,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            intent,
-            enqueued_at_unix_ms,
-            retry_count: 0,
-            last_attempt_at_unix_ms: None,
-            last_error: None,
-            platform_send_started_at_unix_ms: None,
-            recovery_state: None,
-        }
-    }
-}
-
-impl Default for QueuedDelivery {
-    fn default() -> Self {
-        Self::new("", ChannelOutboundIntent::default(), 0)
-    }
-}
-
-/// Platform-send crash recovery marker.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum DeliveryRecoveryState {
-    SendAttemptStarted,
-    UnknownAfterSend,
-}
 
 /// Queue retry eligibility decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,6 +79,8 @@ pub enum ActiveDeliveryClaimResult<T> {
 pub enum DeliveryQueueError {
     #[error("delivery queue store error: {0}")]
     Store(String),
+    #[error("host delivery queue callback is unavailable")]
+    Unsupported,
 }
 
 /// Host-owned durable queue storage.
@@ -138,6 +91,20 @@ pub trait DeliveryQueueStore: Send + Sync {
     async fn load_pending_all(&self) -> Result<Vec<QueuedDelivery>, DeliveryQueueError>;
     async fn remove_pending(&self, id: &str) -> Result<(), DeliveryQueueError>;
     async fn save_failed(&self, entry: QueuedDelivery) -> Result<(), DeliveryQueueError>;
+}
+
+/// Bounded terminal replay and failed-record lookups owned by host storage.
+#[async_trait]
+pub trait DeliveryResultStore: DeliveryQueueStore {
+    async fn load_failed(&self, id: &str) -> Result<Option<QueuedDelivery>, DeliveryQueueError>;
+    async fn load_result(
+        &self,
+        id: &str,
+    ) -> Result<Option<tinychannels_bus::DeliveryTerminalResult>, DeliveryQueueError>;
+    async fn save_result(
+        &self,
+        result: tinychannels_bus::DeliveryTerminalResult,
+    ) -> Result<(), DeliveryQueueError>;
 }
 
 /// Host delivery hooks used by recovery drains.

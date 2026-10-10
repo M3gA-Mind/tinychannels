@@ -35,10 +35,17 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tinychannels::config::WhatsAppConfigExt as _;
 
+use crate::delivery::HostDeliveryStore;
 use crate::provider::{Hooks, Running};
 use crate::relay::Relays;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tinybus::{Connection, Error as BusError, Result as BusResult};
+use tinychannels::delivery::{
+    DeliveryAttemptFailure, DeliveryAttemptResult, DeliveryAttemptSuccess, DeliveryQueueError,
+    DeliveryQueueHandler, DeliveryQueueStore, DeliveryResultStore, PendingDeliveryDrainDecision,
+    QueuedDelivery, ack_delivery, drain_selected_pending_deliveries, enqueue_delivery,
+    recover_pending_deliveries,
+};
 use tinychannels::factory::{DefaultHttpClients, build_channels};
 use tinychannels::host::ChannelHost;
 use tinychannels_bus::ChannelOutboundIntent;
@@ -81,6 +88,62 @@ struct Channels {
     relays: Arc<Relays>,
     terminal: AtomicBool,
     shutdown_task: Mutex<Option<JoinHandle<BusResult<()>>>>,
+    delivery_admission: Arc<Mutex<()>>,
+}
+
+struct ModuleDeliveryHandler {
+    running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    store: HostDeliveryStore,
+}
+
+#[async_trait::async_trait]
+impl DeliveryQueueHandler for ModuleDeliveryHandler {
+    async fn deliver(&self, entry: &QueuedDelivery) -> DeliveryAttemptResult {
+        let Ok(intent_fingerprint) = intent_fingerprint(&entry.intent) else {
+            return Err(DeliveryAttemptFailure {
+                error: "delivery payload could not be encoded".into(),
+                sent_before_error: false,
+                permanent: Some(true),
+            });
+        };
+        let running = self.running.lock().await;
+        let Some(provider) = running.get(&entry.intent.channel_id).cloned() else {
+            return Err(DeliveryAttemptFailure {
+                error: "delivery target is unavailable".into(),
+                sent_before_error: false,
+                permanent: None,
+            });
+        };
+        drop(running);
+
+        let Ok(message) = intent_to_legacy_message(&entry.intent) else {
+            return Err(DeliveryAttemptFailure {
+                error: "delivery payload could not be encoded".into(),
+                sent_before_error: false,
+                permanent: Some(true),
+            });
+        };
+        if provider.send(message).await.is_err() {
+            return Err(DeliveryAttemptFailure {
+                error: "provider send failed".into(),
+                sent_before_error: true,
+                permanent: None,
+            });
+        }
+        let result = tinychannels_bus::DeliveryTerminalResult {
+            id: entry.id.clone(),
+            intent_fingerprint,
+            completed_at_unix_ms: now_unix_ms(),
+        };
+        if self.store.save_result(result).await.is_err() {
+            return Err(DeliveryAttemptFailure {
+                error: "terminal delivery result could not be persisted".into(),
+                sent_before_error: true,
+                permanent: None,
+            });
+        }
+        Ok(DeliveryAttemptSuccess::default())
+    }
 }
 
 #[allow(
@@ -148,7 +211,20 @@ impl Channels {
             });
         }
 
-        running.insert(name, Running::start(channel, hooks, self.host.clone()));
+        running.insert(
+            name.clone(),
+            Running::start(channel, hooks, self.host.clone()),
+        );
+        drop(running);
+        let _admission = self.delivery_admission.lock().await;
+        if let Err(error) = recover_delivery_channel(&self.host, &self.running, &name).await
+            && !matches!(error, DeliveryQueueError::Unsupported)
+        {
+            if let Some(entry) = self.running.lock().await.remove(&name) {
+                let _ = entry.stop().await;
+            }
+            return Err(delivery_store_error(error));
+        }
         Ok(())
     }
 
@@ -160,6 +236,12 @@ impl Channels {
     async fn stop_channel(&self, name: String) -> BusResult<()> {
         let entry = self.running.lock().await.get(&name).cloned();
         if let Some(entry) = entry {
+            let _admission = self.delivery_admission.lock().await;
+            if let Err(error) = recover_delivery_channel(&self.host, &self.running, &name).await
+                && !matches!(error, DeliveryQueueError::Unsupported)
+            {
+                return Err(delivery_store_error(error));
+            }
             entry.stop().await?;
             let result =
                 tokio::time::timeout(std::time::Duration::from_secs(10), self.host.flush())
@@ -216,13 +298,11 @@ impl Channels {
         if self.terminal.load(Ordering::SeqCst) {
             return Err(BusError::failed("module is shutting down"));
         }
-        if intent.durability == tinychannels::DeliveryDurability::Required {
-            return Err(BusError::failed(
-                "required durability needs the host delivery queue",
-            ));
-        }
         if intent.channel_id != name {
             return Err(BusError::failed("intent channel does not match provider"));
+        }
+        if intent.durability == tinychannels::DeliveryDurability::Required {
+            return self.send_required_intent(intent).await;
         }
         if serde_json::to_vec(&intent).map_or(true, |bytes| {
             bytes.len() > tinychannels_bus::module_relay::RELAY_FRAME_BYTES
@@ -240,25 +320,133 @@ impl Channels {
                     message: format!("channel {name} is not running"),
                 })?
         };
-        let value = tinychannels::legacy_message_value_from_outbound_intent(&intent);
-        let content = match &intent.payload {
-            tinychannels::OutboundPayload::Text { text } => text.clone(),
-            _ => serde_json::to_string(&value)
-                .map_err(|_| BusError::failed("could not encode channel intent"))?,
-        };
         entry
-            .send(SendMessage {
-                content,
-                recipient: intent.conversation_id,
-                subject: None,
-                thread_ts: intent.thread_id,
-                idempotency_key: Some(intent.idempotency_key),
-            })
+            .send(
+                intent_to_legacy_message(&intent)
+                    .map_err(|_| BusError::failed("could not encode channel intent"))?,
+            )
             .await
             .map_err(|error| BusError::MethodFailed {
                 name: SEND_FAILED_ERROR.to_owned(),
                 message: error.to_string(),
             })?;
+        Ok(ChannelSendMessageResult::default())
+    }
+
+    async fn send_required_intent(
+        &self,
+        intent: ChannelOutboundIntent,
+    ) -> BusResult<ChannelSendMessageResult> {
+        if intent.idempotency_key.is_empty() || intent.idempotency_key.len() > 256 {
+            return Err(BusError::failed(
+                "required delivery idempotency key is invalid",
+            ));
+        }
+        if intent.channel_id.is_empty() || intent.channel_id != intent.channel_id.trim() {
+            return Err(BusError::failed("required delivery channel is invalid"));
+        }
+        if serde_json::to_vec(&intent).map_or(true, |bytes| {
+            bytes.len() > tinychannels_bus::module_delivery::DELIVERY_RECORD_BYTES
+        }) {
+            return Err(BusError::failed(
+                "required delivery exceeds the record limit",
+            ));
+        }
+        let fingerprint = intent_fingerprint(&intent)
+            .map_err(|_| BusError::failed("required delivery could not be encoded"))?;
+        let _admission = self
+            .delivery_admission
+            .try_lock()
+            .map_err(|_| BusError::failed("required delivery queue is busy"))?;
+        let store = HostDeliveryStore::new(self.host.connection());
+        let id = intent.idempotency_key.clone();
+
+        if let Some(result) = store.load_result(&id).await.map_err(delivery_store_error)? {
+            if result.intent_fingerprint != fingerprint {
+                return Err(BusError::failed("required delivery key conflicts"));
+            }
+            if store
+                .load_pending(&id)
+                .await
+                .map_err(delivery_store_error)?
+                .is_some()
+            {
+                ack_delivery(&store, &id)
+                    .await
+                    .map_err(delivery_store_error)?;
+            }
+            return Ok(ChannelSendMessageResult::default());
+        }
+        if let Some(failed) = store.load_failed(&id).await.map_err(delivery_store_error)? {
+            return if failed.intent == intent {
+                Err(BusError::failed("required delivery is in failed storage"))
+            } else {
+                Err(BusError::failed("required delivery key conflicts"))
+            };
+        }
+
+        let pending = store
+            .load_pending(&id)
+            .await
+            .map_err(delivery_store_error)?;
+        if let Some(existing) = &pending {
+            if existing.intent != intent {
+                return Err(BusError::failed("required delivery key conflicts"));
+            }
+        } else {
+            enqueue_delivery(
+                &store,
+                QueuedDelivery::new(id.clone(), intent.clone(), now_unix_ms()),
+            )
+            .await
+            .map_err(delivery_store_error)?;
+        }
+
+        let handler = ModuleDeliveryHandler {
+            running: self.running.clone(),
+            store: store.clone(),
+        };
+        let recovery =
+            drain_selected_pending_deliveries(&store, &handler, now_unix_ms(), |entry| {
+                PendingDeliveryDrainDecision {
+                    matches: entry.intent.channel_id == intent.channel_id,
+                    bypass_backoff: false,
+                }
+            })
+            .await
+            .map_err(delivery_store_error)?;
+        if let Some(result) = store.load_result(&id).await.map_err(delivery_store_error)? {
+            if result.intent_fingerprint != fingerprint {
+                return Err(BusError::failed("required delivery key conflicts"));
+            }
+            if store
+                .load_pending(&id)
+                .await
+                .map_err(delivery_store_error)?
+                .is_some()
+            {
+                ack_delivery(&store, &id)
+                    .await
+                    .map_err(delivery_store_error)?;
+            }
+            return Ok(ChannelSendMessageResult::default());
+        }
+        let still_pending = store
+            .load_pending(&id)
+            .await
+            .map_err(delivery_store_error)?
+            .is_some();
+        let moved_to_failed = store
+            .load_failed(&id)
+            .await
+            .map_err(delivery_store_error)?
+            .is_some();
+        if moved_to_failed || still_pending || recovery.failed > 0 || recovery.deferred_backoff > 0
+        {
+            return Err(BusError::failed(
+                "required delivery remains pending or failed",
+            ));
+        }
         Ok(ChannelSendMessageResult::default())
     }
 
@@ -377,7 +565,22 @@ impl Channels {
             let relay = self.relays.clone();
             let email = self.email.clone();
             let host = self.host.clone();
+            let delivery_admission = self.delivery_admission.clone();
             *task = Some(tokio::spawn(async move {
+                let _delivery = delivery_admission.lock().await;
+                let delivery_store = HostDeliveryStore::new(host.connection());
+                let delivery_handler = ModuleDeliveryHandler {
+                    running: providers.clone(),
+                    store: delivery_store.clone(),
+                };
+                match recover_pending_deliveries(&delivery_store, &delivery_handler, now_unix_ms())
+                    .await
+                {
+                    Err(DeliveryQueueError::Unsupported) => {}
+                    Err(error) => return Err(delivery_store_error(error)),
+                    Ok(_) => {}
+                }
+                drop(_delivery);
                 let entries: Vec<_> = providers
                     .lock()
                     .await
@@ -434,6 +637,26 @@ impl Channels {
     }
 }
 
+async fn recover_delivery_channel(
+    host: &HostChannels,
+    running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    channel_id: &str,
+) -> Result<(), DeliveryQueueError> {
+    let store = HostDeliveryStore::new(host.connection());
+    let handler = ModuleDeliveryHandler {
+        running: running.clone(),
+        store: store.clone(),
+    };
+    drain_selected_pending_deliveries(&store, &handler, now_unix_ms(), |entry| {
+        PendingDeliveryDrainDecision {
+            matches: entry.intent.channel_id == channel_id,
+            bypass_backoff: false,
+        }
+    })
+    .await?;
+    Ok(())
+}
+
 async fn setup(connection: Connection) -> BusResult<()> {
     let host = HostChannels::new(connection.clone());
     let channels = Channels {
@@ -443,12 +666,55 @@ async fn setup(connection: Connection) -> BusResult<()> {
         running: Arc::new(Mutex::new(HashMap::new())),
         terminal: AtomicBool::new(false),
         shutdown_task: Mutex::new(None),
+        delivery_admission: Arc::new(Mutex::new(())),
     };
     connection
         .serve_at(OBJECT_PATH.try_into()?, channels)
         .await?;
     connection.request_name(BUS_NAME).await?;
     Ok(())
+}
+
+fn intent_to_legacy_message(
+    intent: &ChannelOutboundIntent,
+) -> Result<SendMessage, serde_json::Error> {
+    let value = tinychannels::legacy_message_value_from_outbound_intent(intent);
+    let content = match &intent.payload {
+        tinychannels::OutboundPayload::Text { text } => text.clone(),
+        _ => serde_json::to_string(&value)?,
+    };
+    Ok(SendMessage {
+        content,
+        recipient: intent.conversation_id.clone(),
+        subject: None,
+        thread_ts: intent.thread_id.clone(),
+        idempotency_key: Some(intent.idempotency_key.clone()),
+    })
+}
+
+fn intent_fingerprint(intent: &ChannelOutboundIntent) -> Result<String, serde_json::Error> {
+    use sha2::Digest as _;
+    let encoded = serde_json::to_vec(intent)?;
+    Ok(hex::encode(sha2::Sha256::digest(encoded)))
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn delivery_store_error(error: DeliveryQueueError) -> BusError {
+    match error {
+        DeliveryQueueError::Unsupported => {
+            BusError::failed("required delivery host queue is unavailable")
+        }
+        DeliveryQueueError::Store(_) => {
+            BusError::failed("required delivery persistence or recovery failed")
+        }
+    }
 }
 
 // Isolate the generated public C symbols so the lint exception cannot hide

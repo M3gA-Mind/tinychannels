@@ -33,6 +33,14 @@ fn every_declared_member_appears_in_its_method_table() {
         host_methods::DELIVER_INBOUND,
         host_methods::REPORT_STATUS,
         host_methods::PERSIST_ALLOWED_IDENTITY,
+        host_methods::SAVE_PENDING_DELIVERY,
+        host_methods::LOAD_PENDING_DELIVERY,
+        host_methods::LOAD_PENDING_DELIVERIES,
+        host_methods::REMOVE_PENDING_DELIVERY,
+        host_methods::SAVE_FAILED_DELIVERY,
+        host_methods::LOAD_FAILED_DELIVERY,
+        host_methods::SAVE_DELIVERY_RESULT,
+        host_methods::LOAD_DELIVERY_RESULT,
     ] {
         assert!(HOST_METHODS.contains(&m), "{m} missing from HOST_METHODS");
     }

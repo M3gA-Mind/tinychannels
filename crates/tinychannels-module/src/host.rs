@@ -90,6 +90,7 @@ impl Drop for Owner {
 pub struct HostChannels {
     outbox: mpsc::Sender<Notification>,
     owner: Arc<Owner>,
+    connection: Connection,
 }
 impl std::fmt::Debug for HostChannels {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -105,6 +106,7 @@ impl HostChannels {
         let (outbox, mut inbox) = mpsc::channel(OUTBOX_CAPACITY);
         let failure = Arc::new(StdMutex::new(None));
         let task_failure = failure.clone();
+        let callback_connection = connection.clone();
         let worker = tokio::spawn(async move {
             while let Some(notification) = inbox.recv().await {
                 if let Notification::Barrier { stop, reply } = notification {
@@ -121,8 +123,11 @@ impl HostChannels {
                 } = notification
                 {
                     let result = async {
-                        let proxy =
-                            connection.proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME)?;
+                        let proxy = callback_connection.proxy(
+                            HOST_BUS_NAME,
+                            HOST_OBJECT_PATH,
+                            HOST_BUS_NAME,
+                        )?;
                         proxy
                             .call::<()>(host_methods::PERSIST_ALLOWED_IDENTITY, (channel, identity))
                             .await
@@ -133,7 +138,11 @@ impl HostChannels {
                 }
                 let inbound = matches!(notification, Notification::DeliverInbound { .. });
                 let result = async {
-                    let proxy = connection.proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME)?;
+                    let proxy = callback_connection.proxy(
+                        HOST_BUS_NAME,
+                        HOST_OBJECT_PATH,
+                        HOST_BUS_NAME,
+                    )?;
                     match notification {
                         Notification::DeliverInbound { channel, message } => {
                             proxy
@@ -165,6 +174,7 @@ impl HostChannels {
         });
         Self {
             outbox,
+            connection,
             owner: Arc::new(Owner {
                 worker: Mutex::new(Some(worker)),
                 terminal: AtomicBool::new(false),
@@ -172,6 +182,10 @@ impl HostChannels {
                 failure,
             }),
         }
+    }
+
+    pub(crate) fn connection(&self) -> Connection {
+        self.connection.clone()
     }
 
     /// Enqueue one inbound message; a flush observes delivery failures.

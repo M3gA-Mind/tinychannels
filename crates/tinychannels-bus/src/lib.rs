@@ -7,6 +7,7 @@ pub mod config;
 pub mod context;
 pub mod controllers;
 pub mod error;
+pub mod module_delivery;
 pub mod module_email;
 pub mod module_relay;
 pub mod names;
@@ -20,6 +21,7 @@ pub use channel::{
 pub use config::ChannelsConfig;
 pub use controllers::{ChannelAuthMode, ChannelDefinition};
 pub use error::{Result, TinyChannelsError};
+pub use module_delivery::{DeliveryQueueEntry, DeliveryRecoveryState, DeliveryTerminalResult};
 pub use module_email::{
     EmailAttachment, EmailAttachmentUpload, EmailSendRequest, EmailUploadBegin, EmailUploadChunk,
     EmailUploadHandle,

@@ -21,7 +21,7 @@ pub use tinychannels_runtime::delivery::{segment_delay, segment_for_delivery};
 pub use types::{
     ActiveDeliveryClaimResult, DeliveryAttemptFailure, DeliveryAttemptResult,
     DeliveryAttemptSuccess, DeliveryQueueError, DeliveryQueueHandler, DeliveryQueueStore,
-    DeliveryRecoveryState, DeliveryRecoverySummary, DeliveryRetryEligibility,
+    DeliveryRecoveryState, DeliveryRecoverySummary, DeliveryResultStore, DeliveryRetryEligibility,
     DurabilityNegotiation, MAX_RETRIES, PendingDeliveryDrainDecision, QueuedDelivery,
     UnknownSendReconciliation,
 };
