@@ -136,6 +136,45 @@ async fn canceled_send_waiter_keeps_smtp_delivery_owned_until_shutdown_joins() {
     assert!(sender.send(request(port)).await.is_err());
 }
 
+#[tokio::test]
+async fn shutdown_stop_is_ordered_after_admitted_raw_send() {
+    let (port, data_started, release, server) = smtp_mock().await;
+    let sender = EmailSender::new();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release_enqueue = Arc::new(tokio::sync::Notify::new());
+    sender
+        .delay_send_enqueue_until(entered.clone(), release_enqueue.clone())
+        .await;
+
+    let send = tokio::spawn({
+        let sender = sender.clone();
+        async move { sender.send(request(port)).await }
+    });
+    entered.notified().await;
+    let shutdown = tokio::spawn({
+        let sender = sender.clone();
+        async move { sender.shutdown().await }
+    });
+    tokio::task::yield_now().await;
+    release_enqueue.notify_one();
+
+    tokio::time::timeout(Duration::from_secs(3), data_started)
+        .await
+        .expect("accepted raw send must run before shutdown Stop")
+        .unwrap();
+    release.send(()).unwrap();
+    send.await.unwrap().unwrap();
+    shutdown.await.unwrap().unwrap();
+    let captured = server.await.unwrap();
+    assert_eq!(
+        captured
+            .iter()
+            .filter(|line| line.as_str() == "DATA")
+            .count(),
+        1
+    );
+}
+
 #[test]
 fn malformed_or_oversized_email_requests_are_refused_before_enqueue() {
     let mut value = request(2525);
@@ -292,6 +331,43 @@ async fn upload_send_cancellation_abort_and_retry_share_one_smtp_operation() {
     let captured = server.await.unwrap();
     assert_eq!(captured.iter().filter(|line| line == &"DATA").count(), 1);
     assert!(captured.join("\n").contains("attach"));
+}
+
+#[tokio::test]
+async fn shutdown_preserves_accepted_upload_result_for_delayed_waiter_and_retry() {
+    let (port, data_started, release, server) = smtp_mock().await;
+    let sender = EmailSender::new();
+    let handle = sender.begin_upload(begin(port, 0)).await.unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release_waiter = Arc::new(tokio::sync::Notify::new());
+    sender
+        .delay_upload_result_until(entered.clone(), release_waiter.clone())
+        .await;
+
+    let waiter = tokio::spawn({
+        let sender = sender.clone();
+        let handle = handle.clone();
+        async move { sender.send_upload(handle).await }
+    });
+    data_started.await.unwrap();
+    release.send(()).unwrap();
+
+    // The accepted SMTP owner has completed, and its caller has received the
+    // completion notification but has not yet consumed the saved result.
+    entered.notified().await;
+    sender.shutdown().await.unwrap();
+    release_waiter.notify_one();
+    waiter.await.unwrap().unwrap();
+    sender.send_upload(handle).await.unwrap();
+
+    let captured = server.await.unwrap();
+    assert_eq!(
+        captured
+            .iter()
+            .filter(|line| line.as_str() == "DATA")
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]

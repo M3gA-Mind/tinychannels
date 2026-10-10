@@ -48,7 +48,7 @@ struct UploadData {
 
 enum UploadState {
     Uploading(Box<UploadData>),
-    Sending(watch::Sender<bool>),
+    Sending(watch::Sender<Option<UploadResult>>),
     Complete(UploadResult),
 }
 
@@ -74,7 +74,18 @@ struct Owner {
     sender: mpsc::Sender<Command>,
     worker: Mutex<Option<JoinHandle<()>>>,
     terminal: AtomicBool,
+    admission: Mutex<()>,
     uploads: Arc<Mutex<UploadStore>>,
+    #[cfg(test)]
+    result_wait_gate: Mutex<Option<Arc<ResultWaitGate>>>,
+    #[cfg(test)]
+    send_admission_gate: Mutex<Option<Arc<ResultWaitGate>>>,
+}
+
+#[cfg(test)]
+struct ResultWaitGate {
+    entered: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
 }
 impl Drop for Owner {
     fn drop(&mut self) {
@@ -118,16 +129,22 @@ impl EmailSender {
                                     UploadState::Complete(UploadResult::Failed(error.to_string()))
                                 }
                             };
-                            Some((reserved_bytes, completion_signal))
+                            let result = match &upload.state {
+                                UploadState::Complete(result) => Some(result.clone()),
+                                _ => None,
+                            };
+                            Some((reserved_bytes, completion_signal, result))
                         } else {
                             None
                         };
-                        if let Some((reserved_bytes, completion_signal)) = completion {
+                        if let Some((reserved_bytes, completion_signal, result)) = completion {
                             store.reserved_bytes =
                                 store.reserved_bytes.saturating_sub(reserved_bytes);
                             drop(store);
-                            if let Some(completion_signal) = completion_signal {
-                                completion_signal.send_replace(true);
+                            if let (Some(completion_signal), Some(result)) =
+                                (completion_signal, result)
+                            {
+                                completion_signal.send_replace(Some(result));
                             }
                         }
                     }
@@ -142,11 +159,22 @@ impl EmailSender {
             sender,
             worker: Mutex::new(Some(worker)),
             terminal: AtomicBool::new(false),
+            admission: Mutex::new(()),
             uploads,
+            #[cfg(test)]
+            result_wait_gate: Mutex::new(None),
+            #[cfg(test)]
+            send_admission_gate: Mutex::new(None),
         }))
     }
 
     pub(crate) async fn send(&self, request: EmailSendRequest) -> Result<ChannelSendMessageResult> {
+        let admission = self.0.admission.lock().await;
+        #[cfg(test)]
+        if let Some(gate) = self.0.send_admission_gate.lock().await.clone() {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
         if self.0.terminal.load(Ordering::SeqCst) {
             return Err(Error::failed("email sender is shutting down"));
         }
@@ -159,11 +187,13 @@ impl EmailSender {
                 reply,
             })
             .map_err(|_| Error::failed("email send queue is full or closed"))?;
+        drop(admission);
         wait.await
             .map_err(|_| Error::failed("email send owner stopped"))?
     }
 
     pub(crate) async fn begin_upload(&self, begin: EmailUploadBegin) -> Result<EmailUploadHandle> {
+        let _admission = self.0.admission.lock().await;
         if self.0.terminal.load(Ordering::SeqCst) {
             return Err(Error::failed("email sender is shutting down"));
         }
@@ -224,6 +254,7 @@ impl EmailSender {
     }
 
     pub(crate) async fn append_upload_chunk(&self, chunk: EmailUploadChunk) -> Result<u32> {
+        let _admission = self.0.admission.lock().await;
         if self.0.terminal.load(Ordering::SeqCst) {
             return Err(Error::failed("email sender is shutting down"));
         }
@@ -280,9 +311,7 @@ impl EmailSender {
         &self,
         handle: EmailUploadHandle,
     ) -> Result<ChannelSendMessageResult> {
-        if self.0.terminal.load(Ordering::SeqCst) {
-            return Err(Error::failed("email sender is shutting down"));
-        }
+        let admission = self.0.admission.lock().await;
         validate_upload_handle(&handle)?;
         let mut store = self.0.uploads.lock().await;
         prune_expired(&mut store);
@@ -294,6 +323,9 @@ impl EmailSender {
             UploadState::Complete(result) => return result.clone().into_result(),
             UploadState::Sending(signal) => signal.subscribe(),
             UploadState::Uploading(data) => {
+                if self.0.terminal.load(Ordering::SeqCst) {
+                    return Err(Error::failed("email sender is shutting down"));
+                }
                 if data
                     .attachments
                     .iter()
@@ -306,7 +338,7 @@ impl EmailSender {
                     .sender
                     .try_reserve()
                     .map_err(|_| Error::failed("email send queue is full or closed"))?;
-                let (completion_signal, waiter) = watch::channel(false);
+                let (completion_signal, waiter) = watch::channel(None);
                 let data = match std::mem::replace(
                     &mut upload.state,
                     UploadState::Sending(completion_signal),
@@ -337,26 +369,29 @@ impl EmailSender {
             }
         };
         drop(store);
-        loop {
-            let store = self.0.uploads.lock().await;
-            let upload = store
-                .uploads
-                .get(&handle.0)
-                .ok_or_else(|| Error::failed("email upload result expired"))?;
-            if let UploadState::Complete(result) = &upload.state {
-                return result.clone().into_result();
-            }
-            drop(store);
+        drop(admission);
+        if waiter.borrow().is_none() {
             waiter
                 .changed()
                 .await
                 .map_err(|_| Error::failed("email upload completion was interrupted"))?;
         }
+        #[cfg(test)]
+        if let Some(gate) = self.0.result_wait_gate.lock().await.clone() {
+            gate.entered.notify_one();
+            gate.release.notified().await;
+        }
+        waiter
+            .borrow()
+            .clone()
+            .ok_or_else(|| Error::failed("email upload completion was interrupted"))?
+            .into_result()
     }
 
     pub(crate) async fn abort_upload(&self, handle: EmailUploadHandle) -> Result<()> {
         validate_upload_handle(&handle)?;
         loop {
+            let admission = self.0.admission.lock().await;
             let mut store = self.0.uploads.lock().await;
             prune_expired(&mut store);
             let Some(upload) = store.uploads.get(&handle.0) else {
@@ -365,7 +400,8 @@ impl EmailSender {
             if let UploadState::Sending(signal) = &upload.state {
                 let mut waiter = signal.subscribe();
                 drop(store);
-                if !*waiter.borrow() {
+                drop(admission);
+                if waiter.borrow().is_none() {
                     let _ = waiter.changed().await;
                 }
                 continue;
@@ -380,11 +416,14 @@ impl EmailSender {
     }
 
     pub(crate) async fn shutdown(&self) -> Result<()> {
+        let admission = self.0.admission.lock().await;
         self.0.terminal.store(true, Ordering::SeqCst);
         let mut worker = self.0.worker.lock().await;
         if let Some(task) = worker.as_mut() {
             let (reply, wait) = oneshot::channel();
-            if self.0.sender.send(Command::Stop(reply)).await.is_ok() {
+            let stop_enqueued = self.0.sender.send(Command::Stop(reply)).await.is_ok();
+            drop(admission);
+            if stop_enqueued {
                 wait.await
                     .map_err(|_| Error::failed("email shutdown barrier interrupted"))?;
             }
@@ -393,9 +432,30 @@ impl EmailSender {
         }
         worker.take();
         let mut uploads = self.0.uploads.lock().await;
-        uploads.uploads.clear();
+        uploads
+            .uploads
+            .retain(|_, upload| matches!(upload.state, UploadState::Complete(_)));
         uploads.reserved_bytes = 0;
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn delay_upload_result_until(
+        &self,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    ) {
+        *self.0.result_wait_gate.lock().await = Some(Arc::new(ResultWaitGate { entered, release }));
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn delay_send_enqueue_until(
+        &self,
+        entered: Arc<tokio::sync::Notify>,
+        release: Arc<tokio::sync::Notify>,
+    ) {
+        *self.0.send_admission_gate.lock().await =
+            Some(Arc::new(ResultWaitGate { entered, release }));
     }
 }
 
