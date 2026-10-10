@@ -31,7 +31,8 @@ impl ChannelDefinitionExt for ChannelDefinition {
             .filter(|f| {
                 credentials
                     .get(f.key)
-                    .is_none_or(|v| v.as_str().is_some_and(|s| s.is_empty()))
+                    .and_then(serde_json::Value::as_str)
+                    .is_none_or(|value| value.trim().is_empty())
             })
             .map(|f| f.key)
             .collect();

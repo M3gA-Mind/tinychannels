@@ -70,6 +70,10 @@ fn inbound_media_payload_preserves_attachment_indexes() {
         payload.media_paths,
         Some(vec!["/tmp/image.png".into(), String::new()])
     );
+    assert_eq!(
+        payload.media_types,
+        Some(vec!["image/png".into(), "audio/mpeg".into()])
+    );
     assert_eq!(payload.media_transcribed_indexes, Some(vec![1]));
 }
 
@@ -136,6 +140,25 @@ fn receipt_uses_alternate_platform_ids_and_deduplicates() {
     assert_eq!(
         resolve_message_receipt_primary_id(&receipt).as_deref(),
         Some("m1")
+    );
+}
+
+#[test]
+fn receipt_platform_ids_include_part_ids_without_an_aggregate_list() {
+    let receipt = MessageReceipt {
+        parts: vec![MessageReceiptPart {
+            platform_message_id: "part-1".into(),
+            kind: MessageReceiptPartKind::Text,
+            index: 0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    assert_eq!(list_message_receipt_platform_ids(&receipt), vec!["part-1"]);
+    assert_eq!(
+        resolve_message_receipt_primary_id(&receipt).as_deref(),
+        Some("part-1")
     );
 }
 
@@ -267,6 +290,62 @@ fn session_keys_include_scope_topic_and_default_thread_sharing() {
 }
 
 #[test]
+fn session_keys_do_not_collide_when_components_contain_separators() {
+    let left = build_session_key(
+        "main",
+        &ChannelRef {
+            id: "a:b".into(),
+            account_id: Some("c".into()),
+        },
+        &ConversationRef {
+            kind: ConversationKind::Group,
+            id: "room".into(),
+            ..Default::default()
+        },
+        &SenderRef::default(),
+        SessionKeyPolicy::default(),
+    );
+    let right = build_session_key(
+        "main",
+        &ChannelRef {
+            id: "a".into(),
+            account_id: Some("b:c".into()),
+        },
+        &ConversationRef {
+            kind: ConversationKind::Group,
+            id: "room".into(),
+            ..Default::default()
+        },
+        &SenderRef::default(),
+        SessionKeyPolicy::default(),
+    );
+
+    assert_ne!(left, right);
+}
+
+#[test]
+fn empty_topic_falls_back_to_a_nonempty_thread_id() {
+    let key = build_session_key(
+        "main",
+        &ChannelRef {
+            id: "discord".into(),
+            ..Default::default()
+        },
+        &ConversationRef {
+            kind: ConversationKind::Group,
+            id: "room".into(),
+            topic_id: Some(String::new()),
+            thread_id: Some("thread-1".into()),
+            ..Default::default()
+        },
+        &SenderRef::default(),
+        SessionKeyPolicy::default(),
+    );
+
+    assert_eq!(key, "main:discord:default:group:room:thread-1");
+}
+
+#[test]
 fn session_keys_build_from_inbound_envelopes() {
     let envelope = ChannelInboundEnvelope {
         channel: ChannelRef {
@@ -333,6 +412,20 @@ fn legacy_inbound_envelope_preserves_telegram_topics_separately_from_threads() {
 
     let keys = conversation_history_key_candidates(&msg);
     assert_eq!(keys.conversation_history_key, "telegram_alice_-100123");
+}
+
+#[test]
+fn legacy_inbound_envelope_recognizes_qualified_telegram_channel_ids() {
+    for channel in ["tg:123", "telegram:123"] {
+        let msg = ChannelMessage {
+            channel: channel.into(),
+            thread_ts: Some("topic-99".into()),
+            ..Default::default()
+        };
+        let envelope = inbound_envelope_from_legacy_message(&msg);
+        assert_eq!(envelope.conversation.topic_id.as_deref(), Some("topic-99"));
+        assert_eq!(envelope.conversation.thread_id, None);
+    }
 }
 
 #[test]
@@ -430,6 +523,20 @@ fn legacy_inbound_envelope_preserves_non_telegram_threads() {
 }
 
 #[test]
+fn legacy_inbound_envelope_discards_whitespace_only_thread_ids() {
+    let msg = ChannelMessage {
+        channel: "discord".into(),
+        thread_ts: Some(" \t ".into()),
+        ..Default::default()
+    };
+
+    let envelope = inbound_envelope_from_legacy_message(&msg);
+
+    assert_eq!(envelope.conversation.thread_id, None);
+    assert_eq!(envelope.conversation.topic_id, None);
+}
+
+#[test]
 fn legacy_session_key_candidates_match_openhuman_helpers() {
     let msg = ChannelMessage {
         id: "msg-1".into(),
@@ -519,6 +626,18 @@ fn legacy_message_payload_adds_idempotency_without_dropping_rich_fields() {
     let payload = legacy_message_value_from_outbound_intent(&intent);
     assert_eq!(payload["text"], "hello");
     assert_eq!(payload["photoUrl"], "https://example.test/a.png");
+    assert_eq!(payload["idempotencyKey"], intent.idempotency_key);
+}
+
+#[test]
+fn legacy_message_payload_replaces_a_blank_idempotency_key() {
+    let intent = outbound_intent_from_legacy_message(
+        "telegram",
+        json!({"text": "hello", "idempotencyKey": "  "}),
+    );
+    let payload = legacy_message_value_from_outbound_intent(&intent);
+
+    assert!(!intent.idempotency_key.is_empty());
     assert_eq!(payload["idempotencyKey"], intent.idempotency_key);
 }
 
@@ -655,6 +774,17 @@ fn non_telegram_channel_id_shape_still_splits_on_thread_ts() {
 fn empty_optional_fields_are_skipped() {
     let only_sender = derive_inbound_thread_id("discord", Some("alice"), Some("   "), None);
     assert_eq!(only_sender, "channel:discord/alice");
+}
+
+#[test]
+fn inbound_thread_and_client_ids_do_not_collide_on_separators() {
+    let left_thread = derive_inbound_thread_id("a/b", Some("c"), None, None);
+    let right_thread = derive_inbound_thread_id("a", Some("b/c"), None, None);
+    assert_ne!(left_thread, right_thread);
+
+    let left_client = derive_inbound_client_id("a:b", Some("c"));
+    let right_client = derive_inbound_client_id("a", Some("b:c"));
+    assert_ne!(left_client, right_client);
 }
 
 #[test]

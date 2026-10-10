@@ -113,7 +113,10 @@ pub fn verify_delivery_signature_at(
     let Ok(ts) = timestamp.parse::<i64>() else {
         return false;
     };
-    if now_unix_seconds.abs_diff(ts) > max_skew_seconds as u64 {
+    let Ok(max_skew_seconds) = u64::try_from(max_skew_seconds) else {
+        return false;
+    };
+    if now_unix_seconds.abs_diff(ts) > max_skew_seconds {
         return false;
     }
     verify_signature(&delivery_payload(ts, body_json), signature, verify_keys)

@@ -64,3 +64,19 @@ fn relay_auth_rejects_malformed_tokens_headers_and_hex() {
         &["key"]
     ));
 }
+
+#[test]
+fn relay_auth_rejects_negative_replay_window() {
+    let body = "body";
+    let timestamp = "1000";
+    let signature = relay::sign(&format!("{timestamp}.{body}"), "key");
+
+    assert!(!relay::verify_delivery_signature_at(
+        body,
+        Some(timestamp),
+        Some(&signature),
+        &["key"],
+        -1,
+        1000,
+    ));
+}

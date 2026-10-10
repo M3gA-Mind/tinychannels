@@ -17,24 +17,24 @@ pub fn build_session_key(
     let account = channel.account_id.as_deref().unwrap_or("default");
     let chat_type = conversation.kind.as_session_segment();
     let mut parts = vec![
-        namespace,
-        channel.id.as_str(),
-        account,
-        chat_type,
-        conversation.id.as_str(),
+        encode_identity_component(namespace, &[':', '%']),
+        encode_identity_component(&channel.id, &[':', '%']),
+        encode_identity_component(account, &[':', '%']),
+        encode_identity_component(chat_type, &[':', '%']),
+        encode_identity_component(&conversation.id, &[':', '%']),
     ];
 
     if let Some(scope_id) = conversation.scope_id.as_deref().filter(|s| !s.is_empty()) {
-        parts.insert(4, scope_id);
+        parts.insert(4, encode_identity_component(scope_id, &[':', '%']));
     }
 
     let thread = conversation
         .topic_id
         .as_deref()
-        .or(conversation.thread_id.as_deref())
-        .filter(|s| !s.is_empty());
+        .and_then(nonempty)
+        .or_else(|| conversation.thread_id.as_deref().and_then(nonempty));
     if let Some(thread) = thread {
-        parts.push(thread);
+        parts.push(encode_identity_component(thread, &[':', '%']));
     }
 
     let participant = sender
@@ -49,7 +49,7 @@ pub fn build_session_key(
         _ => policy.group_sessions_per_user,
     };
     if isolate_user && let Some(participant) = participant {
-        parts.push(participant);
+        parts.push(encode_identity_component(participant, &[':', '%']));
     }
 
     parts.join(":")
@@ -72,23 +72,16 @@ pub fn build_session_key_for_inbound_envelope(
 
 /// Return legacy OpenHuman keys for migration lookup before writing a new key.
 pub fn conversation_history_key_candidates(msg: &ChannelMessage) -> LegacySessionKeys {
-    let base_key = format!("{}_{}_{}", msg.channel, msg.sender, msg.reply_target);
-    let conversation_history_key = if msg.channel == "telegram" {
-        base_key
-    } else if let Some(thread_ts) = msg
-        .thread_ts
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        format!("{base_key}_thread:{thread_ts}")
-    } else {
-        base_key
-    };
+    let conversation_history_key = crate::context::conversation_history_key_parts(
+        &msg.channel,
+        &msg.sender,
+        &msg.reply_target,
+        msg.thread_ts.as_deref(),
+    );
 
     LegacySessionKeys {
         conversation_history_key,
-        conversation_memory_key: format!("{}_{}_{}", msg.channel, msg.sender, msg.id),
+        conversation_memory_key: crate::context::conversation_memory_key(msg),
     }
 }
 
@@ -99,21 +92,24 @@ pub fn derive_inbound_thread_id(
     reply_target: Option<&str>,
     thread_ts: Option<&str>,
 ) -> String {
-    let mut key = format!("channel:{channel}");
+    let mut key = format!(
+        "channel:{}",
+        encode_identity_component(channel, &['/', '#', '%'])
+    );
     if let Some(sender) = sender.and_then(nonempty) {
         key.push('/');
-        key.push_str(sender);
+        key.push_str(&encode_identity_component(sender, &['/', '#', '%']));
     }
     if let Some(reply_target) = reply_target.and_then(nonempty) {
         key.push('/');
-        key.push_str(reply_target);
+        key.push_str(&encode_identity_component(reply_target, &['/', '#', '%']));
     }
     let provider = channel.split(':').next().unwrap_or("");
     if !matches!(provider, "telegram" | "tg")
         && let Some(thread_ts) = thread_ts.and_then(nonempty)
     {
         key.push_str("#thread:");
-        key.push_str(thread_ts);
+        key.push_str(&encode_identity_component(thread_ts, &['/', '#', '%']));
     }
     key
 }
@@ -122,10 +118,28 @@ pub fn derive_inbound_thread_id(
 pub fn derive_inbound_client_id(channel: &str, sender: Option<&str>) -> String {
     let channel = channel.trim();
     match sender.map(str::trim).filter(|sender| !sender.is_empty()) {
-        Some(sender) if !channel.is_empty() => format!("inbound:{channel}:{sender}"),
-        Some(sender) => format!("inbound:{sender}"),
+        Some(sender) if !channel.is_empty() => format!(
+            "inbound:{}:{}",
+            encode_identity_component(channel, &[':', '%']),
+            encode_identity_component(sender, &[':', '%'])
+        ),
+        Some(sender) => format!("inbound:{}", encode_identity_component(sender, &[':', '%'])),
         None => "inbound".to_string(),
     }
+}
+
+pub(crate) fn encode_identity_component(value: &str, separators: &[char]) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for ch in value.chars() {
+        let separator = ch == '%' || separators.contains(&ch);
+        if separator {
+            use std::fmt::Write as _;
+            write!(encoded, "%{:02X}", ch as u32).expect("writing to a String cannot fail");
+        } else {
+            encoded.push(ch);
+        }
+    }
+    encoded
 }
 
 fn normalize_namespace(namespace: &str) -> &str {

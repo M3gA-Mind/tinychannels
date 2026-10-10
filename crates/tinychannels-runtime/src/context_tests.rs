@@ -46,6 +46,14 @@ fn conversation_keys_match_openhuman_channel_behavior() {
 }
 
 #[test]
+fn conversation_history_keys_do_not_collide_on_underscores() {
+    let left = conversation_history_key_parts("a_b", "c", "room", None);
+    let right = conversation_history_key_parts("a", "b_c", "room", None);
+
+    assert_ne!(left, right);
+}
+
+#[test]
 fn compact_history_keeps_recent_turns_and_truncates_content() {
     let mut history = (0..20)
         .map(|idx| {
@@ -130,11 +138,26 @@ fn context_overflow_ignores_unrelated_and_rate_limit_bodies() {
         // Only one of the paired n_keep/n_ctx tokens.
         "loaded model with n_ctx: 8192 and 32 layers",
         "Rate limit reached: too many tokens per minute (TPM) for this org",
+        "too many tokens per hour",
+        "too many tokens per second",
         "rate_limit_exceeded: token limit exceeded, retry after 12s",
         "You have hit too many tokens per min; try again in 30s",
     ] {
         assert!(!is_context_window_overflow_message(body), "{body}");
     }
+}
+
+#[test]
+fn context_overflow_requires_a_numeric_un_evictable_prefix_marker() {
+    assert!(!is_context_window_overflow_message(
+        "n_keep is invalid; n_ctx is invalid"
+    ));
+    assert!(!is_context_window_overflow_message(
+        "n_keep: unknown, n_ctx: unknown"
+    ));
+    assert!(is_context_window_overflow_message(
+        "n_keep: 9000 >= n_ctx: 4096"
+    ));
 }
 
 #[tokio::test]

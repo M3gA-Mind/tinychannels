@@ -60,7 +60,8 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
 
-    let (thread_id, topic_id) = if msg.channel == "telegram" {
+    let provider = msg.channel.split(':').next().unwrap_or_default();
+    let (thread_id, topic_id) = if matches!(provider, "telegram" | "tg") {
         (None, thread_ts)
     } else {
         (thread_ts, None)

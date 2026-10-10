@@ -110,7 +110,14 @@ fn legacy_message_idempotency_key(channel_id: &str, message: &Value) -> String {
 fn with_idempotency_key(mut payload: Value, idempotency_key: &str) -> Value {
     match &mut payload {
         Value::Object(object) => {
-            if !object.contains_key("idempotencyKey") && !object.contains_key("idempotency_key") {
+            let has_valid_key = ["idempotencyKey", "idempotency_key"]
+                .iter()
+                .filter_map(|key| object.get(*key))
+                .filter_map(Value::as_str)
+                .any(|value| !value.trim().is_empty());
+            if !has_valid_key {
+                object.remove("idempotencyKey");
+                object.remove("idempotency_key");
                 object.insert(
                     "idempotencyKey".to_string(),
                     Value::String(idempotency_key.to_string()),
