@@ -1,7 +1,26 @@
 use super::*;
 use std::collections::HashMap;
+use std::sync::atomic::AtomicUsize;
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
+
+fn consume_failure(counter: &AtomicUsize) -> bool {
+    let mut remaining = counter.load(Ordering::SeqCst);
+    loop {
+        if remaining == 0 {
+            return false;
+        }
+        match counter.compare_exchange_weak(
+            remaining,
+            remaining - 1,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => return true,
+            Err(actual) => remaining = actual,
+        }
+    }
+}
 
 #[derive(Default)]
 struct DeliveryFixtureDb {
@@ -48,13 +67,7 @@ impl Callback {
     }
 
     async fn persist_allowed_identity(&self, channel: String, identity: String) -> Result<()> {
-        if self
-            .persist_failures
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_ok()
-        {
+        if consume_failure(&self.persist_failures) {
             return Err(tinybus::Error::failed("fixture persistence failure"));
         }
         self.events
@@ -68,13 +81,7 @@ impl Callback {
         &self,
         entry: tinychannels_bus::DeliveryQueueEntry,
     ) -> Result<()> {
-        if self
-            .pending_save_failures
-            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
-                remaining.checked_sub(1)
-            })
-            .is_ok()
-        {
+        if consume_failure(&self.pending_save_failures) {
             return Err(tinybus::Error::failed("fixture queue persistence failure"));
         }
         let scope = self.delivery_scope.lock().await.clone();
