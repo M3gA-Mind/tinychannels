@@ -599,6 +599,79 @@ async fn replayed_terminal_result_acknowledges_a_remaining_pending_record() {
 }
 
 #[tokio::test]
+async fn startup_recovery_acks_a_matching_terminal_result_without_resending() {
+    use tinychannels::delivery::{DeliveryQueueStore as _, DeliveryRecoveryState, QueuedDelivery};
+
+    let (sent, mut received) = tokio::sync::mpsc::channel(1);
+    let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
+    let intent = required_intent("recovery-terminal", "already sent");
+    let store = crate::delivery::HostDeliveryStore::new(channels.host.connection());
+    let mut entry = QueuedDelivery::new("recovery-terminal", intent.clone(), now_unix_ms());
+    entry.recovery_state = Some(DeliveryRecoveryState::SendAttemptStarted);
+    entry.platform_send_started_at_unix_ms = Some(now_unix_ms());
+    store.save_pending(entry).await.unwrap();
+    store
+        .save_result(tinychannels_bus::DeliveryTerminalResult {
+            id: "recovery-terminal".into(),
+            intent_fingerprint: intent_fingerprint(&intent).unwrap(),
+            completed_at_unix_ms: now_unix_ms(),
+        })
+        .await
+        .unwrap();
+
+    recover_delivery_channel(&channels.host, &channels.running, "fixture")
+        .await
+        .unwrap();
+
+    let scopes = callbacks.scopes.lock().await;
+    let scope = scopes.get("scope-a").unwrap();
+    assert!(scope.pending.is_empty());
+    assert!(scope.failed.is_empty());
+    drop(scopes);
+    assert!(
+        received.try_recv().is_err(),
+        "recovery must not resend success"
+    );
+    channels.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn startup_recovery_rejects_a_conflicting_terminal_result() {
+    use tinychannels::delivery::{DeliveryQueueStore as _, DeliveryRecoveryState, QueuedDelivery};
+
+    let (sent, mut received) = tokio::sync::mpsc::channel(1);
+    let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
+    let intent = required_intent("recovery-conflict", "pending intent");
+    let store = crate::delivery::HostDeliveryStore::new(channels.host.connection());
+    let mut entry = QueuedDelivery::new("recovery-conflict", intent, now_unix_ms());
+    entry.recovery_state = Some(DeliveryRecoveryState::SendAttemptStarted);
+    entry.platform_send_started_at_unix_ms = Some(now_unix_ms());
+    store.save_pending(entry).await.unwrap();
+    store
+        .save_result(tinychannels_bus::DeliveryTerminalResult {
+            id: "recovery-conflict".into(),
+            intent_fingerprint: "f".repeat(64),
+            completed_at_unix_ms: now_unix_ms(),
+        })
+        .await
+        .unwrap();
+
+    assert!(
+        recover_delivery_channel(&channels.host, &channels.running, "fixture")
+            .await
+            .is_err(),
+        "a terminal result for a different intent is a key conflict"
+    );
+    let scopes = callbacks.scopes.lock().await;
+    let scope = scopes.get("scope-a").unwrap();
+    assert_eq!(scope.pending.len(), 1, "conflicts stay retryable");
+    assert!(scope.failed.is_empty());
+    drop(scopes);
+    assert!(received.try_recv().is_err());
+    channels.shutdown().await.unwrap_err();
+}
+
+#[tokio::test]
 async fn failed_and_pending_keys_refuse_reuse_with_different_intents() {
     use tinychannels::delivery::{DeliveryQueueStore as _, QueuedDelivery};
 
@@ -807,6 +880,110 @@ async fn shutdown_drains_retryable_queue_before_stopping_provider() {
 
     channels.shutdown().await.unwrap();
     assert_eq!(received.recv().await.unwrap().content, "drain before stop");
+}
+
+#[tokio::test]
+async fn shutdown_store_failure_still_joins_provider_and_can_retry_persistence() {
+    use tinychannels::delivery::{DeliveryQueueStore as _, QueuedDelivery};
+
+    let (sent, _received) = tokio::sync::mpsc::channel(1);
+    let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
+    let provider = channels
+        .running
+        .lock()
+        .await
+        .get("fixture")
+        .unwrap()
+        .clone();
+    let store = crate::delivery::HostDeliveryStore::new(channels.host.connection());
+    let intent = required_intent("shutdown-store-outage", "retain for restart");
+    store
+        .save_pending(QueuedDelivery::new(
+            "shutdown-store-outage",
+            intent,
+            now_unix_ms(),
+        ))
+        .await
+        .unwrap();
+    channels.relays.reserve().await.unwrap();
+    callbacks.fail_queue_read.store(true, Ordering::SeqCst);
+
+    assert!(channels.shutdown().await.is_err());
+    assert!(
+        provider.is_finished(),
+        "native provider must be joined on error"
+    );
+    assert!(channels.running.lock().await.is_empty());
+    assert!(
+        channels.relays.is_empty().await,
+        "relay owner must be stopped"
+    );
+    assert_eq!(
+        callbacks
+            .scopes
+            .lock()
+            .await
+            .get("scope-a")
+            .unwrap()
+            .pending
+            .len(),
+        1,
+        "queue data remains host-owned and retryable"
+    );
+    assert!(
+        channels.host.flush().await.is_err(),
+        "host callback owner must be closed after shutdown cleanup"
+    );
+
+    callbacks.fail_queue_read.store(false, Ordering::SeqCst);
+    channels.shutdown().await.unwrap();
+    assert_eq!(
+        callbacks
+            .scopes
+            .lock()
+            .await
+            .get("scope-a")
+            .unwrap()
+            .pending
+            .len(),
+        1,
+        "a stopped provider leaves the durable entry for the next start"
+    );
+}
+
+#[tokio::test]
+async fn start_waiting_for_delivery_admission_is_rejected_after_shutdown_freezes() {
+    let (sent, _received) = tokio::sync::mpsc::channel(1);
+    let (channels, _callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
+    let provider = channels
+        .running
+        .lock()
+        .await
+        .get("fixture")
+        .unwrap()
+        .clone();
+    let admission = channels.delivery_admission.clone();
+    let guard = admission.lock().await;
+    let admission_future = finish_start_admission(
+        &channels.host,
+        &channels.running,
+        &admission,
+        &channels.terminal,
+        "fixture",
+    );
+    tokio::pin!(admission_future);
+    tokio::select! {
+        result = &mut admission_future => panic!("admission should wait for its lock: {result:?}"),
+        _ = tokio::task::yield_now() => {}
+    }
+
+    channels.terminal.store(true, Ordering::SeqCst);
+    drop(guard);
+
+    assert!(admission_future.await.is_err());
+    assert!(provider.is_finished());
+    assert!(channels.running.lock().await.is_empty());
+    channels.shutdown().await.unwrap();
 }
 
 #[tokio::test]

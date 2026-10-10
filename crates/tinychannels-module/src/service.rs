@@ -43,8 +43,8 @@ use tinybus::{Connection, Error as BusError, Result as BusResult};
 use tinychannels::delivery::{
     DeliveryAttemptFailure, DeliveryAttemptResult, DeliveryAttemptSuccess, DeliveryQueueError,
     DeliveryQueueHandler, DeliveryQueueStore, DeliveryResultStore, PendingDeliveryDrainDecision,
-    QueuedDelivery, ack_delivery, drain_selected_pending_deliveries, enqueue_delivery,
-    recover_pending_deliveries,
+    QueuedDelivery, UnknownSendReconciliation, ack_delivery, drain_selected_pending_deliveries,
+    enqueue_delivery, recover_pending_deliveries,
 };
 use tinychannels::factory::{DefaultHttpClients, build_channels};
 use tinychannels::host::ChannelHost;
@@ -144,6 +144,27 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
         }
         Ok(DeliveryAttemptSuccess::default())
     }
+
+    async fn reconcile_unknown_send(
+        &self,
+        entry: &QueuedDelivery,
+    ) -> Result<Option<UnknownSendReconciliation>, DeliveryQueueError> {
+        let Some(result) = self.store.load_result(&entry.id).await? else {
+            return Ok(None);
+        };
+        let fingerprint = intent_fingerprint(&entry.intent).map_err(|_| {
+            DeliveryQueueError::Store("delivery intent could not be encoded".into())
+        })?;
+        if result.intent_fingerprint != fingerprint {
+            return Err(DeliveryQueueError::Store(
+                "terminal delivery result conflicts with pending intent".into(),
+            ));
+        }
+        Ok(Some(UnknownSendReconciliation::Sent {
+            receipt: tinychannels::channel::MessageReceipt::default(),
+            message_id: None,
+        }))
+    }
 }
 
 #[allow(
@@ -216,16 +237,14 @@ impl Channels {
             Running::start(channel, hooks, self.host.clone()),
         );
         drop(running);
-        let _admission = self.delivery_admission.lock().await;
-        if let Err(error) = recover_delivery_channel(&self.host, &self.running, &name).await
-            && !matches!(error, DeliveryQueueError::Unsupported)
-        {
-            if let Some(entry) = self.running.lock().await.remove(&name) {
-                let _ = entry.stop().await;
-            }
-            return Err(delivery_store_error(error));
-        }
-        Ok(())
+        finish_start_admission(
+            &self.host,
+            &self.running,
+            &self.delivery_admission,
+            &self.terminal,
+            &name,
+        )
+        .await
     }
 
     /// Disconnect `name` and drop its tasks.
@@ -287,9 +306,8 @@ impl Channels {
             })
     }
 
-    /// Send one best-effort or disabled intent through the provider actor.
-    /// Required durability needs a host queue and is refused when that port
-    /// has not been installed; this method never silently downgrades it.
+    /// Send one intent through the provider actor or host-backed durable queue.
+    /// Required durability fails closed when queue storage is unavailable.
     async fn send_channel_intent(
         &self,
         name: String,
@@ -567,6 +585,7 @@ impl Channels {
             let host = self.host.clone();
             let delivery_admission = self.delivery_admission.clone();
             *task = Some(tokio::spawn(async move {
+                let mut failure = None;
                 let _delivery = delivery_admission.lock().await;
                 let delivery_store = HostDeliveryStore::new(host.connection());
                 let delivery_handler = ModuleDeliveryHandler {
@@ -577,7 +596,7 @@ impl Channels {
                     .await
                 {
                     Err(DeliveryQueueError::Unsupported) => {}
-                    Err(error) => return Err(delivery_store_error(error)),
+                    Err(error) => failure = Some(delivery_store_error(error)),
                     Ok(_) => {}
                 }
                 drop(_delivery);
@@ -587,7 +606,6 @@ impl Channels {
                     .iter()
                     .map(|(name, entry)| (name.clone(), entry.clone()))
                     .collect();
-                let mut failure = None;
                 let mut pending = false;
                 for (name, entry) in entries {
                     match entry.stop().await {
@@ -654,6 +672,48 @@ async fn recover_delivery_channel(
         }
     })
     .await?;
+    Ok(())
+}
+
+async fn finish_start_admission(
+    host: &HostChannels,
+    running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    delivery_admission: &Mutex<()>,
+    terminal: &AtomicBool,
+    name: &str,
+) -> BusResult<()> {
+    let _admission = delivery_admission.lock().await;
+    if terminal.load(Ordering::SeqCst) {
+        let entry = running.lock().await.get(name).cloned();
+        if let Some(entry) = entry {
+            entry.stop().await?;
+            let mut running = running.lock().await;
+            if running
+                .get(name)
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
+            {
+                running.remove(name);
+            }
+        }
+        return Err(BusError::failed("module is shutting down"));
+    }
+    if let Err(error) = recover_delivery_channel(host, running, name).await
+        && !matches!(error, DeliveryQueueError::Unsupported)
+    {
+        let entry = running.lock().await.get(name).cloned();
+        if let Some(entry) = entry
+            && entry.stop().await.is_ok()
+        {
+            let mut running = running.lock().await;
+            if running
+                .get(name)
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
+            {
+                running.remove(name);
+            }
+        }
+        return Err(delivery_store_error(error));
+    }
     Ok(())
 }
 

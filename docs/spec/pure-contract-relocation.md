@@ -57,13 +57,16 @@ confidential `StartRelay`, `StopRelay`, safe `RelayStatus`, and
 `SendRelayIntent`), `Shutdown`, typed provider `SendChannelIntent`, send-only
 confidential `SendEmail`, and an ordered host `PersistAllowedIdentity`
 callback. Relay/provider/email actors own accepted work across caller
-cancellation and join it during explicit cleanup. Pairing and durable delivery
-policy/storage remain host responsibilities: this API exposes the persistence
-callback and typed idempotency/thread facts, not a module-owned durable outbox
-or host adapter. Until the host queue/handler ports are wired into the module,
-`SendChannelIntent` refuses `Required` durability before sending; best-effort
-and disabled intents continue through the provider. Local websocket, callback,
-SMTP/MIME, and loaded-cdylib
+cancellation and join it during explicit cleanup. Pairing and delivery policy
+remain host responsibilities. For `Required` channel sends, the module writes
+a bounded intent and a send-attempt crash marker through the host's scoped
+storage callbacks before provider I/O; it records a terminal fingerprint
+before acknowledging success. Recovery acknowledges a matching terminal
+result, rejects a conflicting fingerprint, and moves an unresolved send to
+failed storage rather than blindly resending it. The host owns persistence and
+its user scope; the module validates record limits and implements queue
+recovery. Best-effort and disabled intents continue through the provider.
+Local websocket, callback, SMTP/MIME, durable-recovery, and loaded-cdylib
 fixtures exercise those contracts. Host adapters, release digests, downstream
 gitlinks and the switch to contract-only host dependencies remain gated on
 compatible published native artifacts. A locally built module is not a

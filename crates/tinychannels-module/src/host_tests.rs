@@ -50,7 +50,7 @@ impl Callback {
     async fn persist_allowed_identity(&self, channel: String, identity: String) -> Result<()> {
         if self
             .persist_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()
@@ -70,7 +70,7 @@ impl Callback {
     ) -> Result<()> {
         if self
             .pending_save_failures
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()
