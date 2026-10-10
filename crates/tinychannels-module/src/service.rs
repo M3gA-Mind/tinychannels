@@ -36,7 +36,7 @@ use std::sync::Arc;
 use tinychannels::config::WhatsAppConfigExt as _;
 
 use crate::delivery::HostDeliveryStore;
-use crate::provider::{Hooks, Running};
+use crate::provider::{Hooks, Running, RunningSendError};
 use crate::relay::Relays;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tinybus::{Connection, Error as BusError, Result as BusResult};
@@ -107,7 +107,11 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
             });
         };
         let running = self.running.lock().await;
-        let Some(provider) = running.get(&entry.intent.channel_id).cloned() else {
+        let Some(provider) = running
+            .get(&entry.intent.channel_id)
+            .filter(|provider| !provider.is_finished())
+            .cloned()
+        else {
             return Err(DeliveryAttemptFailure {
                 error: "delivery target is unavailable".into(),
                 sent_before_error: false,
@@ -123,10 +127,10 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 permanent: Some(true),
             });
         };
-        if provider.send(message).await.is_err() {
+        if let Err(error) = provider.send(message).await {
             return Err(DeliveryAttemptFailure {
                 error: "provider send failed".into(),
-                sent_before_error: true,
+                sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
                 permanent: None,
             });
         }

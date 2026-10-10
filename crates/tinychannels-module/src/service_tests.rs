@@ -384,6 +384,27 @@ impl tinychannels::Channel for FailingChannel {
     }
 }
 
+struct EndedChannel(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for EndedChannel {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
 async fn channels_with_store(
     channel: Arc<dyn tinychannels::Channel>,
 ) -> (Channels, DurableHost, tinybus::Connection) {
@@ -550,6 +571,43 @@ async fn missing_required_delivery_target_keeps_the_intent_pending() {
     let scopes = callbacks.scopes.lock().await;
     assert_eq!(scopes.get("scope-a").unwrap().pending.len(), 1);
     assert!(scopes.get("scope-a").unwrap().failed.is_empty());
+    drop(scopes);
+    channels.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn ended_provider_does_not_mark_unstarted_delivery_as_unknown_send() {
+    let send_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (channels, callbacks, _server) =
+        channels_with_store(Arc::new(EndedChannel(send_calls.clone()))).await;
+    let provider = channels
+        .running
+        .lock()
+        .await
+        .get("fixture")
+        .unwrap()
+        .clone();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !provider.is_finished() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), required_intent("ended-provider", "body"))
+            .await
+            .is_err()
+    );
+    assert_eq!(send_calls.load(Ordering::SeqCst), 0);
+    let scopes = callbacks.scopes.lock().await;
+    let queue = scopes.get("scope-a").unwrap();
+    assert!(queue.failed.is_empty());
+    let pending = queue.pending.get("ended-provider").unwrap();
+    assert_eq!(pending.recovery_state, None);
+    assert!(pending.platform_send_started_at_unix_ms.is_none());
     drop(scopes);
     channels.shutdown().await.unwrap();
 }

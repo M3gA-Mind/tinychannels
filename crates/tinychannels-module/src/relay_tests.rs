@@ -222,6 +222,25 @@ async fn stopped_reservations_never_reopen_and_sequential_cycles_reclaim_capacit
     assert!(manager.reserve().await.is_err());
     host.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn stop_releases_reservation_after_worker_panics() {
+    let (manager, _, _server, host) = manager().await;
+    let id = manager.reserve().await.unwrap();
+    let slot = manager.get(&id).await.unwrap();
+    let worker = tokio::spawn(async { panic!("fixture relay worker panic") });
+    while !worker.is_finished() {
+        tokio::task::yield_now().await;
+    }
+    *slot.worker.lock().await = Some(worker);
+
+    manager.stop(id.clone()).await.unwrap();
+    assert!(manager.status(id).await.is_err());
+    let next = manager.reserve().await.unwrap();
+    manager.stop(next).await.unwrap();
+    manager.shutdown().await.unwrap();
+    host.shutdown().await.unwrap();
+}
 #[tokio::test]
 async fn pending_start_can_be_stopped_and_lost_waiter_does_not_orphan_socket() {
     let (manager, _, _server, host) = manager().await;

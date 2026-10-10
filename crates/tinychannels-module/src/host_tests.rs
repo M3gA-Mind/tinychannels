@@ -38,6 +38,7 @@ struct Callback {
     delivery_scope: Arc<Mutex<String>>,
     delivery: Arc<Mutex<HashMap<String, DeliveryFixtureDb>>>,
     pending_save_failures: Arc<std::sync::atomic::AtomicUsize>,
+    pending_all_reads: Arc<AtomicUsize>,
 }
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
@@ -115,6 +116,7 @@ impl Callback {
     }
 
     async fn load_pending_deliveries(&self) -> Result<Vec<tinychannels_bus::DeliveryQueueEntry>> {
+        self.pending_all_reads.fetch_add(1, Ordering::SeqCst);
         let scope = self.delivery_scope.lock().await.clone();
         let mut entries: Vec<_> = self
             .delivery
@@ -209,6 +211,7 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         delivery_scope: Arc::new(Mutex::new("scope-a".into())),
         delivery: Arc::new(Mutex::new(HashMap::new())),
         pending_save_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        pending_all_reads: Arc::new(AtomicUsize::new(0)),
     };
     let server = Connection::connect(bus.connect().await.unwrap())
         .await
@@ -305,6 +308,33 @@ async fn durable_store_round_trips_records_inside_the_active_host_scope() {
     assert!(store.load_result("op-scope-test").await.unwrap().is_none());
     *callback.delivery_scope.lock().await = "scope-a".into();
     assert_eq!(store.load_pending_all().await.unwrap().len(), 1);
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn updating_pending_delivery_does_not_read_the_full_queue() {
+    use tinychannels::delivery::{DeliveryQueueStore as _, QueuedDelivery};
+
+    let (host, callback, _server) = connected_host().await;
+    let store = crate::delivery::HostDeliveryStore::new(host.connection());
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "op-update-only".into(),
+        durability: tinychannels_bus::DeliveryDurability::Required,
+        ..Default::default()
+    };
+    let entry = QueuedDelivery::new("op-update-only", intent, 42);
+    store.save_pending(entry.clone()).await.unwrap();
+    let full_reads_after_insert = callback.pending_all_reads.load(Ordering::SeqCst);
+
+    let mut update = entry;
+    update.retry_count = 1;
+    store.save_pending(update).await.unwrap();
+
+    assert_eq!(
+        callback.pending_all_reads.load(Ordering::SeqCst),
+        full_reads_after_insert,
+        "an update should load its existing record by id, not transfer the whole queue"
+    );
     host.shutdown().await.unwrap();
 }
 

@@ -228,10 +228,17 @@ impl Relays {
         slot.state.send_replace(State::Stopping);
         let mut worker = slot.worker.lock().await;
         if let Some(task) = worker.as_mut() {
-            tokio::time::timeout(STOP_WAIT, task)
-                .await
-                .map_err(|_| Error::failed("relay cleanup is still pending; retry StopRelay"))?
-                .map_err(|_| Error::failed("relay worker failed during cleanup"))?;
+            match tokio::time::timeout(STOP_WAIT, task).await {
+                Err(_) => {
+                    return Err(Error::failed(
+                        "relay cleanup is still pending; retry StopRelay",
+                    ));
+                }
+                Ok(Err(_)) => {
+                    tracing::warn!("relay worker ended unexpectedly during cleanup");
+                }
+                Ok(Ok(())) => {}
+            }
         }
         worker.take();
         drop(worker);

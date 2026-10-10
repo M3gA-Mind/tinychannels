@@ -18,6 +18,7 @@ use tokio::task::JoinHandle;
 
 const QUEUE_CAPACITY: usize = 2;
 const UPLOAD_CAPACITY: usize = 4;
+const UPLOAD_RESULT_CAPACITY: usize = 64;
 const UPLOAD_TTL: Duration = Duration::from_secs(10 * 60);
 
 enum Command {
@@ -140,6 +141,7 @@ impl EmailSender {
                         if let Some((reserved_bytes, completion_signal, result)) = completion {
                             store.reserved_bytes =
                                 store.reserved_bytes.saturating_sub(reserved_bytes);
+                            prune_completed(&mut store);
                             drop(store);
                             if let (Some(completion_signal), Some(result)) =
                                 (completion_signal, result)
@@ -222,8 +224,18 @@ impl EmailSender {
         }
         let mut store = self.0.uploads.lock().await;
         prune_expired(&mut store);
+        let active_uploads = store
+            .uploads
+            .values()
+            .filter(|upload| {
+                matches!(
+                    upload.state,
+                    UploadState::Uploading(_) | UploadState::Sending(_)
+                )
+            })
+            .count();
         if self.0.terminal.load(Ordering::SeqCst)
-            || store.uploads.len() >= UPLOAD_CAPACITY
+            || active_uploads >= UPLOAD_CAPACITY
             || store.reserved_bytes.saturating_add(bytes) > EMAIL_ATTACHMENT_BYTES
         {
             return Err(Error::failed("email upload capacity is full or closed"));
@@ -480,6 +492,21 @@ fn prune_expired(store: &mut UploadStore) {
         if let Some(upload) = store.uploads.remove(&id) {
             store.reserved_bytes = store.reserved_bytes.saturating_sub(upload.reserved_bytes);
         }
+    }
+    prune_completed(store);
+}
+
+fn prune_completed(store: &mut UploadStore) {
+    let mut completed: Vec<_> = store
+        .uploads
+        .iter()
+        .filter(|(_, upload)| matches!(upload.state, UploadState::Complete(_)))
+        .map(|(id, upload)| (upload.expires_at, id.clone()))
+        .collect();
+    completed.sort_by_key(|(expires_at, _)| *expires_at);
+    let excess = completed.len().saturating_sub(UPLOAD_RESULT_CAPACITY);
+    for (_, id) in completed.into_iter().take(excess) {
+        store.uploads.remove(&id);
     }
 }
 

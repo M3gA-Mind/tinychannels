@@ -265,6 +265,67 @@ async fn upload_capacity_expiry_and_abort_reclaim_bounded_slots() {
 }
 
 #[tokio::test]
+async fn completed_upload_replays_do_not_consume_active_upload_capacity() {
+    let sender = EmailSender::new();
+    let mut completed = Vec::new();
+    for _ in 0..UPLOAD_CAPACITY {
+        let handle = sender.begin_upload(begin(2525, 0)).await.unwrap();
+        let mut store = sender.0.uploads.lock().await;
+        let upload = store.uploads.get_mut(&handle.0).unwrap();
+        upload.state = UploadState::Complete(UploadResult::Success);
+        upload.reserved_bytes = 0;
+        upload.expires_at = Instant::now() + UPLOAD_TTL;
+        completed.push(handle);
+    }
+
+    let next = sender.begin_upload(begin(2525, 0)).await;
+    assert!(
+        next.is_ok(),
+        "completed results must not occupy active slots"
+    );
+    for handle in completed {
+        sender.send_upload(handle).await.unwrap();
+    }
+    sender.abort_upload(next.unwrap()).await.unwrap();
+    sender.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn completed_upload_replay_cache_stays_bounded_alongside_active_leases() {
+    let sender = EmailSender::new();
+    let active = sender.begin_upload(begin(2525, 0)).await.unwrap();
+    {
+        let mut store = sender.0.uploads.lock().await;
+        for _ in 0..=UPLOAD_RESULT_CAPACITY {
+            let id = uuid::Uuid::new_v4().to_string();
+            store.uploads.insert(
+                id,
+                Upload {
+                    expires_at: Instant::now() + UPLOAD_TTL,
+                    reserved_bytes: 0,
+                    state: UploadState::Complete(UploadResult::Success),
+                },
+            );
+        }
+        prune_completed(&mut store);
+        assert_eq!(
+            store
+                .uploads
+                .values()
+                .filter(|upload| matches!(upload.state, UploadState::Complete(_)))
+                .count(),
+            UPLOAD_RESULT_CAPACITY
+        );
+        assert!(matches!(
+            store.uploads.get(&active.0).map(|upload| &upload.state),
+            Some(UploadState::Uploading(_))
+        ));
+    }
+    sender.abort_upload(active).await.unwrap();
+    sender.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn upload_begin_refuses_invalid_message_and_attachment_metadata() {
     let sender = EmailSender::new();
     let mut invalid = begin(2525, 0);

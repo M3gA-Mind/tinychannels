@@ -19,6 +19,22 @@ impl<T> Drop for AbortOnDrop<T> {
 struct SendCommand {
     message: SendMessage,
     reply: oneshot::Sender<Result<()>>,
+    started: oneshot::Sender<()>,
+}
+
+pub(crate) enum RunningSendError {
+    NotDispatched(String),
+    AfterDispatch(String),
+}
+
+impl std::fmt::Display for RunningSendError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotDispatched(message) | Self::AfterDispatch(message) => {
+                formatter.write_str(message)
+            }
+        }
+    }
 }
 
 /// Native hooks registered while the selected provider starts.
@@ -101,6 +117,7 @@ impl Running {
                         _=async {let _=send_cancel.wait_for(|value|*value).await;}=>break,
                         command=sends.recv()=>match command {Some(command)=>command,None=>break},
                     };
+                    let _ = command.started.send(());
                     let result = send_channel
                         .send(&command.message)
                         .await
@@ -146,13 +163,36 @@ impl Running {
     pub(crate) fn is_finished(&self) -> bool {
         self.finished.load(Ordering::SeqCst)
     }
-    pub(crate) async fn send(&self, message: SendMessage) -> Result<()> {
+    pub(crate) async fn send(
+        &self,
+        message: SendMessage,
+    ) -> std::result::Result<(), RunningSendError> {
         let (reply, wait) = oneshot::channel();
+        let (started, dispatch) = oneshot::channel();
         self.send
-            .try_send(SendCommand { message, reply })
-            .map_err(|_| Error::failed("provider send queue is full or closed"))?;
-        wait.await
-            .map_err(|_| Error::failed("provider send worker stopped before replying"))?
+            .try_send(SendCommand {
+                message,
+                reply,
+                started,
+            })
+            .map_err(|_| {
+                RunningSendError::NotDispatched("provider send queue is full or closed".into())
+            })?;
+        match wait.await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(error)) => match dispatch.await {
+                Ok(()) => Err(RunningSendError::AfterDispatch(error.to_string())),
+                Err(_) => Err(RunningSendError::NotDispatched(error.to_string())),
+            },
+            Err(_) => match dispatch.await {
+                Ok(()) => Err(RunningSendError::AfterDispatch(
+                    "provider send worker stopped after dispatch".into(),
+                )),
+                Err(_) => Err(RunningSendError::NotDispatched(
+                    "provider send worker stopped before dispatch".into(),
+                )),
+            },
+        }
     }
     pub(crate) async fn stop(&self) -> Result<()> {
         self.cancel.send_replace(true);

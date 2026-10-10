@@ -38,15 +38,16 @@ impl HostDeliveryStore {
 impl DeliveryQueueStore for HostDeliveryStore {
     async fn save_pending(&self, entry: QueuedDelivery) -> Result<(), DeliveryQueueError> {
         validate_entry(&entry)?;
-        let count = self.load_pending_all().await?.len();
         if let Some(existing) = self.load_pending(&entry.id).await? {
             if existing.intent != entry.intent {
                 return Err(DeliveryQueueError::Store(
                     "delivery key conflicts with a different intent".into(),
                 ));
             }
-        } else if count >= DELIVERY_PENDING_CAPACITY {
-            return Err(DeliveryQueueError::Store("delivery queue is full".into()));
+        } else {
+            if self.load_pending_all().await?.len() >= DELIVERY_PENDING_CAPACITY {
+                return Err(DeliveryQueueError::Store("delivery queue is full".into()));
+            }
         }
         self.call(host_methods::SAVE_PENDING_DELIVERY, (entry,))
             .await
