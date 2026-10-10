@@ -537,8 +537,10 @@ impl Channel for WhatsAppWebChannel {
                         );
                         connected.store(false, Ordering::Release);
                         *client.lock() = None;
-                        if let Some(handle) = bot_handle.lock().take() {
+                        let handle = bot_handle.lock().take();
+                        if let Some(mut handle) = handle {
                             handle.abort();
+                            let _ = (&mut handle).await;
                         }
                         notify.notify_waiters();
                     })

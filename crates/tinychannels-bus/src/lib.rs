@@ -7,6 +7,8 @@ pub mod config;
 pub mod context;
 pub mod controllers;
 pub mod error;
+pub mod module_email;
+pub mod module_relay;
 pub mod names;
 pub mod relay;
 pub mod traits;
@@ -18,6 +20,7 @@ pub use channel::{
 pub use config::ChannelsConfig;
 pub use controllers::{ChannelAuthMode, ChannelDefinition};
 pub use error::{Result, TinyChannelsError};
+pub use module_email::{EmailAttachment, EmailSendRequest};
 pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, methods};
 pub use traits::{ChannelMessage, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};

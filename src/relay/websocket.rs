@@ -55,18 +55,43 @@ impl WebSocketRelayConfig {
 #[derive(Debug, Clone)]
 pub struct WebSocketRelayDialer {
     config: WebSocketRelayConfig,
+    max_message_bytes: Option<usize>,
 }
 
 impl WebSocketRelayDialer {
     pub fn new(config: WebSocketRelayConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            max_message_bytes: None,
+        }
+    }
+    /// Bound inbound frame/message buffering for the module's relay connection.
+    pub fn new_bounded(config: WebSocketRelayConfig, max_message_bytes: usize) -> Self {
+        Self {
+            config,
+            max_message_bytes: Some(max_message_bytes),
+        }
     }
 }
 
 #[async_trait]
 impl crate::relay::RelayFrameDialer for WebSocketRelayDialer {
     async fn dial(&self) -> Result<Arc<dyn RelayFrameIo>, RelayTransportError> {
-        Ok(Arc::new(connect_websocket_relay_io(&self.config).await?))
+        let io = match self.max_message_bytes {
+            Some(limit) => {
+                let request = websocket_request(&self.config)?;
+                let settings = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+                    .max_message_size(Some(limit))
+                    .max_frame_size(Some(limit));
+                let (stream, _) =
+                    tokio_tungstenite::connect_async_with_config(request, Some(settings), false)
+                        .await
+                        .map_err(|error| RelayTransportError::Io(error.to_string()))?;
+                WebSocketRelayIo::new(stream)
+            }
+            None => connect_websocket_relay_io(&self.config).await?,
+        };
+        Ok(Arc::new(io))
     }
 }
 

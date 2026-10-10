@@ -1021,3 +1021,41 @@ fn the_relay_transport_module_path_still_resolves() {
     fn _passthrough(_: &dyn crate::relay::transport::RelayPassthroughHandler) {}
     fn _interrupt(_: &dyn crate::relay::transport::RelayInterruptInboundHandler) {}
 }
+
+#[tokio::test]
+async fn dropping_relay_transport_releases_owned_reader() {
+    let io = Arc::new(MemoryRelayIo::default());
+    let weak = Arc::downgrade(&io);
+    let transport = RelayTransport::new(vec![], io.clone(), RelayTransportTimeouts::default());
+    transport.connect().await.unwrap();
+    tokio::task::yield_now().await;
+    drop(transport);
+    drop(io);
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while weak.upgrade().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("reader retained transport I/O after owner drop");
+}
+
+#[tokio::test]
+async fn relay_shutdown_joins_reader_and_refuses_reconnect() {
+    let io = Arc::new(MemoryRelayIo::default());
+    let transport = Arc::new(RelayTransport::new(
+        vec![],
+        io.clone(),
+        RelayTransportTimeouts::default(),
+    ));
+    transport.connect().await.unwrap();
+    transport.shutdown().await;
+    assert!(transport.is_closed());
+    assert_eq!(Arc::strong_count(&io), 2);
+    assert_eq!(transport.connect().await, Err(RelayTransportError::Closed));
+    let supervisor = transport.spawn_reconnect_supervisor(
+        Arc::new(QueueDialer::default()),
+        RelayReconnectPolicy::default(),
+    );
+    supervisor.shutdown().await;
+}

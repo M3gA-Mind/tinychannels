@@ -9,8 +9,9 @@
 use std::time::Duration;
 
 use async_trait::async_trait;
+use lettre::message::{Attachment, Message, MultiPart, SinglePart, header::ContentType};
 use lettre::transport::smtp::authentication::Credentials;
-use lettre::{AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor};
+use lettre::{AsyncSmtpTransport, AsyncTransport, Tokio1Executor};
 
 use super::types::{MailCredentials, MailError, MailSender, OutboundEmail, SmtpSecurity};
 
@@ -82,7 +83,7 @@ fn prepare(
     } else {
         format!("{} <{}>", creds.from_name, creds.from_email)
     };
-    let message = Message::builder()
+    let builder = Message::builder()
         .from(
             from.parse()
                 .map_err(|e| MailError::InvalidAddress(format!("from {from:?}: {e}")))?,
@@ -91,9 +92,26 @@ fn prepare(
             .to
             .parse()
             .map_err(|e| MailError::InvalidAddress(format!("to {:?}: {e}", email.to)))?)
-        .subject(&email.subject)
-        .body(email.body.clone())
-        .map_err(|e| MailError::InvalidAddress(format!("message: {e}")))?;
+        .subject(&email.subject);
+    let message = if email.attachments.is_empty() {
+        builder
+            .body(email.body.clone())
+            .map_err(|e| MailError::InvalidAddress(format!("message: {e}")))?
+    } else {
+        let mut multipart = MultiPart::mixed().singlepart(SinglePart::plain(email.body.clone()));
+        for attachment in &email.attachments {
+            let content_type = ContentType::parse(&attachment.content_type).map_err(|error| {
+                MailError::InvalidAddress(format!("attachment MIME type: {error}"))
+            })?;
+            multipart = multipart.singlepart(
+                Attachment::new(attachment.filename.clone())
+                    .body(attachment.bytes.clone(), content_type),
+            );
+        }
+        builder
+            .multipart(multipart)
+            .map_err(|e| MailError::InvalidAddress(format!("message: {e}")))?
+    };
 
     let mut builder = match creds.security {
         SmtpSecurity::None => {

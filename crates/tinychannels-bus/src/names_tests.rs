@@ -14,12 +14,39 @@ fn every_declared_member_appears_in_its_method_table() {
         methods::SEND_MESSAGE,
         methods::LIST_CHANNELS,
         methods::CHANNEL_STATUS,
+        methods::RESERVE_RELAY,
+        methods::START_RELAY,
+        methods::STOP_RELAY,
+        methods::RELAY_STATUS,
+        methods::SEND_RELAY_INTENT,
+        methods::SHUTDOWN,
+        methods::SEND_CHANNEL_INTENT,
+        methods::SEND_EMAIL,
     ] {
         assert!(METHODS.contains(&m), "{m} missing from METHODS");
     }
-    for m in [host_methods::DELIVER_INBOUND, host_methods::REPORT_STATUS] {
+    for m in [
+        host_methods::DELIVER_INBOUND,
+        host_methods::REPORT_STATUS,
+        host_methods::PERSIST_ALLOWED_IDENTITY,
+    ] {
         assert!(HOST_METHODS.contains(&m), "{m} missing from HOST_METHODS");
     }
+}
+
+#[test]
+fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
+    assert_eq!(
+        &METHODS[..5],
+        &[
+            methods::START_CHANNEL,
+            methods::STOP_CHANNEL,
+            methods::SEND_MESSAGE,
+            methods::LIST_CHANNELS,
+            methods::CHANNEL_STATUS,
+        ]
+    );
+    assert_eq!(METHODS.len(), 13);
 }
 
 /// A duplicate silently shadows one member with another's handler.

@@ -1,0 +1,181 @@
+//! Owned provider listener, lifecycle hooks and ordered inbound forwarding.
+use crate::host::HostChannels;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
+use tinybus::{Error, Result};
+use tinychannels::host::{LifecycleRegistry, ShutdownHook};
+use tinychannels::{Channel, ChannelHostBuilder, SendMessage};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tokio::task::JoinHandle;
+
+struct AbortOnDrop<T>(JoinHandle<T>);
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+struct SendCommand {
+    message: SendMessage,
+    reply: oneshot::Sender<Result<()>>,
+}
+
+/// Native hooks registered while the selected provider starts.
+#[derive(Default)]
+pub(crate) struct Hooks(StdMutex<Vec<ShutdownHook>>);
+impl LifecycleRegistry for Hooks {
+    fn register_shutdown(&self, _name: &str, hook: ShutdownHook) {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(hook);
+    }
+}
+impl Hooks {
+    pub(crate) fn host(
+        self: &Arc<Self>,
+        callbacks: HostChannels,
+    ) -> Arc<dyn tinychannels::host::ChannelHost> {
+        ChannelHostBuilder::new()
+            .lifecycle(self.clone())
+            .allowlist(Arc::new(ModuleAllowlist(callbacks)))
+            .build()
+    }
+    async fn drain(&self) {
+        let hooks = std::mem::take(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()));
+        for hook in hooks {
+            hook().await;
+        }
+    }
+}
+
+struct ModuleAllowlist(HostChannels);
+
+#[async_trait::async_trait]
+impl tinychannels::host::AllowlistStore for ModuleAllowlist {
+    async fn persist_allowed_identity(&self, channel: &str, identity: &str) -> anyhow::Result<()> {
+        self.0
+            .persist_allowed_identity(channel, identity)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
+}
+/// A resource is retained until its owning task acknowledges cleanup.
+pub(crate) struct Running {
+    pub(crate) channel: Arc<dyn Channel>,
+    send: mpsc::Sender<SendCommand>,
+    cancel: watch::Sender<bool>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+    finished: Arc<AtomicBool>,
+}
+impl Running {
+    pub(crate) fn start(
+        channel: Arc<dyn Channel>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+    ) -> Arc<Self> {
+        let (cancel, mut canceled) = watch::channel(false);
+        let send_cancel = cancel.subscribe();
+        let (send, mut sends) = mpsc::channel::<SendCommand>(256);
+        let finished = Arc::new(AtomicBool::new(false));
+        let task_finished = finished.clone();
+        let listen_channel = channel.clone();
+        let send_channel = channel.clone();
+        let worker_cancel = cancel.clone();
+        let worker = tokio::spawn(async move {
+            let name = listen_channel.name().to_owned();
+            let (tx, mut rx) = tokio::sync::mpsc::channel(256);
+            let forward_host = host.clone();
+            let forward_name = name.clone();
+            let mut forwarder = AbortOnDrop(tokio::spawn(async move {
+                while let Some(message) = rx.recv().await {
+                    if let Ok(value) = serde_json::to_value(message) {
+                        forward_host.deliver_inbound(&forward_name, value).await;
+                    }
+                }
+            }));
+            let mut listener =
+                AbortOnDrop(tokio::spawn(async move { listen_channel.listen(tx).await }));
+            let mut send_cancel = send_cancel;
+            let mut sender = AbortOnDrop(tokio::spawn(async move {
+                loop {
+                    let command = tokio::select! {biased;
+                        _=async {let _=send_cancel.wait_for(|value|*value).await;}=>break,
+                        command=sends.recv()=>match command {Some(command)=>command,None=>break},
+                    };
+                    let result = send_channel
+                        .send(&command.message)
+                        .await
+                        .map_err(|error| Error::failed(error.to_string()));
+                    let _ = command.reply.send(result);
+                }
+                while let Ok(command) = sends.try_recv() {
+                    let _ = command
+                        .reply
+                        .send(Err(Error::failed("provider is stopping")));
+                }
+            }));
+            host.report_status(&name, "connecting", None).await;
+            let outcome = tokio::select! {biased;
+                _=async {let _=canceled.wait_for(|value|*value).await;}=>{listener.0.abort(); let _=(&mut listener.0).await;None},
+                outcome=&mut listener.0=>Some(outcome),
+            };
+            worker_cancel.send_replace(true);
+            // Join listener first: it cannot register another native hook later.
+            hooks.drain().await;
+            let _ = (&mut sender.0).await;
+            let _ = (&mut forwarder.0).await;
+            host.report_status(
+                &name,
+                if outcome.is_some_and(|outcome| !matches!(outcome, Ok(Ok(())))) {
+                    "failed"
+                } else {
+                    "stopped"
+                },
+                None,
+            )
+            .await;
+            task_finished.store(true, Ordering::SeqCst);
+        });
+        Arc::new(Self {
+            channel,
+            send,
+            cancel,
+            worker: Mutex::new(Some(worker)),
+            finished,
+        })
+    }
+    pub(crate) fn is_finished(&self) -> bool {
+        self.finished.load(Ordering::SeqCst)
+    }
+    pub(crate) async fn send(&self, message: SendMessage) -> Result<()> {
+        let (reply, wait) = oneshot::channel();
+        self.send
+            .try_send(SendCommand { message, reply })
+            .map_err(|_| Error::failed("provider send queue is full or closed"))?;
+        wait.await
+            .map_err(|_| Error::failed("provider send worker stopped before replying"))?
+    }
+    pub(crate) async fn stop(&self) -> Result<()> {
+        self.cancel.send_replace(true);
+        let mut worker = self.worker.lock().await;
+        if let Some(task) = worker.as_mut() {
+            tokio::time::timeout(Duration::from_secs(10), task)
+                .await
+                .map_err(|_| Error::failed("provider cleanup is pending; retry StopChannel"))?
+                .map_err(|_| Error::failed("provider cleanup worker failed"))?;
+        }
+        worker.take();
+        Ok(())
+    }
+}
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.get_mut().take() {
+            worker.abort();
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "provider_tests.rs"]
+mod tests;

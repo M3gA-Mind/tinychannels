@@ -210,6 +210,19 @@ pub struct OutboundEmail {
     pub subject: String,
     /// Plain-text body.
     pub body: String,
+    /// Optional MIME attachments, retained in caller order.
+    pub attachments: Vec<MailAttachment>,
+}
+
+/// One attachment passed to a mail sender.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MailAttachment {
+    /// Filename presented in the MIME part.
+    pub filename: String,
+    /// MIME content type.
+    pub content_type: String,
+    /// Raw file bytes.
+    pub bytes: Vec<u8>,
 }
 
 /// One inbound message, reduced to its sender, subject and plain-text body.

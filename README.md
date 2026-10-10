@@ -99,6 +99,16 @@ cargo test --features email,lark
   algorithms, history/context processing, configuration preparation and text
   segmentation. It re-exports the same bus DTOs.
 - `crates/tinychannels-module/` is the loadable TinyBus module.
+- The module keeps its original `StartChannel`, `StopChannel`, `SendMessage`,
+  `ListChannels` and `ChannelStatus` members, and adds relay reservation/start/
+  stop/status/send plus `Shutdown`, typed `SendChannelIntent`, and send-only
+  `SendEmail`. Relay startup configuration and SMTP credentials are host
+  hydrated and sent only over TinyBus confidential calls. Relay handles are
+  bounded single-use leases; accepted sends run in bounded module-owned queues
+  so dropping a call waiter does not cancel the operation. `SendChannelIntent`
+  preserves the idempotency and thread fields for the host's delivery policy.
+  Until a host durable-queue port is installed, `Required` durability is
+  refused before provider send; the module does not own a durable outbox.
 - `src/lib.rs` exports the crate surface and re-exports the contract.
 - `src/providers/` holds the provider transports.
 - `src/delivery/` holds the durable outbound queue and `progressive/`, the

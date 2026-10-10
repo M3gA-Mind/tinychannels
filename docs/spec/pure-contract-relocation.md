@@ -52,9 +52,19 @@ and once for every declared bus feature. Dev dependencies are excluded. Its
 allowlist covers serialization/schema/error packages and Base64; source guards
 also catch runtime seams that could use only the standard library.
 
-This slice does not add relay configuration, pairing lifecycle, authenticated
-send/delivery-drain bus operations, or new inbound/status callbacks. Those
-need module request/response design and lifecycle/fault fixtures in later
-slices. Host adapters, release digests, downstream gitlinks and the switch to
-contract-only host dependencies remain gated on compatible published native
-artifacts. A locally built module is not a released artifact.
+The module follow-up adds a bounded relay lifecycle (`ReserveRelay`,
+confidential `StartRelay`, `StopRelay`, safe `RelayStatus`, and
+`SendRelayIntent`), `Shutdown`, typed provider `SendChannelIntent`, send-only
+confidential `SendEmail`, and an ordered host `PersistAllowedIdentity`
+callback. Relay/provider/email actors own accepted work across caller
+cancellation and join it during explicit cleanup. Pairing and durable delivery
+policy/storage remain host responsibilities: this API exposes the persistence
+callback and typed idempotency/thread facts, not a module-owned durable outbox
+or host adapter. Until the host queue/handler ports are wired into the module,
+`SendChannelIntent` refuses `Required` durability before sending; best-effort
+and disabled intents continue through the provider. Local websocket, callback,
+SMTP/MIME, and loaded-cdylib
+fixtures exercise those contracts. Host adapters, release digests, downstream
+gitlinks and the switch to contract-only host dependencies remain gated on
+compatible published native artifacts. A locally built module is not a
+released artifact.

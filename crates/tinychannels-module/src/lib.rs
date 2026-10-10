@@ -14,7 +14,10 @@
 //! caught panics contain ordinary misbehaviour, not a segfault. Modules are
 //! first-party code that ships separately.
 
+mod email;
 pub mod host;
+mod provider;
+mod relay;
 mod service;
 
 /// Constructs this module for registration with an in-process TinyBus host.

@@ -20,6 +20,22 @@ pub const HOST_OBJECT_PATH: &str = "/ai/tinyhumans/tinychannels/ChannelsHost";
 
 /// One constant per method name on [`BUS_NAME`].
 pub mod methods {
+    /// Reserve one idle relay handle before native startup.
+    pub const RESERVE_RELAY: &str = "ReserveRelay";
+    /// Start a reserved relay using confidential hydrated configuration.
+    pub const START_RELAY: &str = "StartRelay";
+    /// Stop and join one reserved relay, including pending startup.
+    pub const STOP_RELAY: &str = "StopRelay";
+    /// Return safe lifecycle facts for one relay reservation.
+    pub const RELAY_STATUS: &str = "RelayStatus";
+    /// Submit an ordered relay outbound intent.
+    pub const SEND_RELAY_INTENT: &str = "SendRelayIntent";
+    /// Freeze publication and drain every owned provider, relay and callback.
+    pub const SHUTDOWN: &str = "Shutdown";
+    /// `SendChannelIntent` — deliver one typed intent through a running provider.
+    pub const SEND_CHANNEL_INTENT: &str = "SendChannelIntent";
+    /// `SendEmail` — send host-configured MIME mail without starting IMAP.
+    pub const SEND_EMAIL: &str = "SendEmail";
     /// `StartChannel` — connect and begin receiving on one configured provider.
     pub const START_CHANNEL: &str = "StartChannel";
     /// `StopChannel` — disconnect one running provider.
@@ -38,19 +54,33 @@ pub mod host_methods {
     pub const DELIVER_INBOUND: &str = "DeliverInbound";
     /// `ReportStatus` — report a provider connection state transition.
     pub const REPORT_STATUS: &str = "ReportStatus";
+    /// `PersistAllowedIdentity` — persist a provider-authorized identity host-side.
+    pub const PERSIST_ALLOWED_IDENTITY: &str = "PersistAllowedIdentity";
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 5] = [
+pub const METHODS: [&str; 13] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
     methods::LIST_CHANNELS,
     methods::CHANNEL_STATUS,
+    methods::RESERVE_RELAY,
+    methods::START_RELAY,
+    methods::STOP_RELAY,
+    methods::RELAY_STATUS,
+    methods::SEND_RELAY_INTENT,
+    methods::SHUTDOWN,
+    methods::SEND_CHANNEL_INTENT,
+    methods::SEND_EMAIL,
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 2] = [host_methods::DELIVER_INBOUND, host_methods::REPORT_STATUS];
+pub const HOST_METHODS: [&str; 3] = [
+    host_methods::DELIVER_INBOUND,
+    host_methods::REPORT_STATUS,
+    host_methods::PERSIST_ALLOWED_IDENTITY,
+];
 
 #[cfg(test)]
 #[path = "names_tests.rs"]

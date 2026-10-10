@@ -1,6 +1,7 @@
 //! The TinyBus service boundary for the channel surface.
 //!
-//! One object, `/ai/tinyhumans/tinychannels/Channels`, exporting five methods:
+//! One object, `/ai/tinyhumans/tinychannels/Channels`, preserving its original
+//! five methods and adding typed intent, relay lifecycle, and shutdown members:
 //!
 //! ```text
 //! StartChannel(name, ChannelsConfig) -> ()
@@ -8,6 +9,7 @@
 //! SendMessage(name, SendMessage)     -> ()
 //! ListChannels()                     -> Vec<String>
 //! ChannelStatus(name)                -> ChannelState
+//! SendChannelIntent(name, intent)     -> ChannelSendMessageResult
 //! ```
 //!
 //! # This module is stateful, unlike the document one
@@ -33,14 +35,21 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tinychannels::config::WhatsAppConfigExt as _;
 
+use crate::provider::{Hooks, Running};
+use crate::relay::Relays;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tinybus::{Connection, Error as BusError, Result as BusResult};
 use tinychannels::factory::{DefaultHttpClients, build_channels};
 use tinychannels::host::ChannelHost;
-use tinychannels::{Channel, NoopHost};
-use tinychannels_bus::{BUS_NAME, ChannelsConfig, OBJECT_PATH, SendMessage};
+use tinychannels_bus::ChannelOutboundIntent;
+use tinychannels_bus::config::RelayRuntimeConfig;
+use tinychannels_bus::controllers::ChannelSendMessageResult;
+use tinychannels_bus::module_relay::{RelayReservation, RelayStatus};
+use tinychannels_bus::{BUS_NAME, ChannelsConfig, EmailSendRequest, OBJECT_PATH, SendMessage};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+use crate::email::EmailSender;
 use crate::host::HostChannels;
 
 const UNKNOWN_CHANNEL_ERROR: &str = "ai.tinyhumans.tinychannels.Error.UnknownChannel";
@@ -60,63 +69,15 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
                 .is_some_and(|wa| wa.backend_type() == "cloud"))
 }
 
-/// Bound on the inbound queue between a provider and the forwarding task.
-///
-/// A provider that outruns the host is dropping messages either way; a bounded
-/// channel makes that visible at a known point instead of growing until the
-/// process is killed.
-const INBOUND_QUEUE: usize = 256;
-
-/// How long a stopping provider's forwarder gets to hand over what it already
-/// accepted before it is abandoned.
-const FORWARDER_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// One running provider.
-struct Running {
-    channel: Arc<dyn Channel>,
-    /// The provider's `listen` loop.
-    listener: JoinHandle<()>,
-    /// Drains the inbound queue into the host callback.
-    forwarder: JoinHandle<()>,
-}
-
-impl Running {
-    /// Stop both tasks. Used by `StopChannel`, from outside either of them.
-    fn shutdown(self) {
-        self.listener.abort();
-        self.forwarder.abort();
-    }
-
-    /// Let the forwarder finish, then stop it if it will not.
-    ///
-    /// Used by the listener when it ends. **Not** an abort: `listen` owns the
-    /// sender, so its return closes the channel and the forwarder drains what is
-    /// left and exits on its own. Aborting instead would discard inbound
-    /// messages the provider had already accepted — exactly the traffic a host
-    /// is least willing to lose, and most likely to be holding when the host
-    /// callback is the slow part.
-    ///
-    /// The timeout is the backstop for the case where the host callback is
-    /// wedged: a drain that cannot finish must not keep the task alive for ever.
-    async fn drain_forwarder(self) {
-        if tokio::time::timeout(FORWARDER_DRAIN_TIMEOUT, self.forwarder)
-            .await
-            .is_err()
-        {
-            tracing::warn!(
-                "[tinychannels:module] forwarder did not drain within {:?}; \
-                 remaining inbound messages are dropped",
-                FORWARDER_DRAIN_TIMEOUT
-            );
-        }
-    }
-}
-
 /// The served object.
 struct Channels {
     host: HostChannels,
+    email: EmailSender,
     /// Shared with each listener task so it can retire its own entry.
-    running: Arc<Mutex<HashMap<String, Running>>>,
+    running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    relays: Arc<Relays>,
+    terminal: AtomicBool,
+    shutdown_task: Mutex<Option<JoinHandle<BusResult<()>>>>,
 }
 
 #[allow(
@@ -128,6 +89,15 @@ impl Channels {
     /// Connect `name` from `config` and start receiving.
     async fn start_channel(&self, name: String, config: ChannelsConfig) -> BusResult<()> {
         let mut running = self.running.lock().await;
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        if running
+            .get(&name)
+            .is_some_and(|running| running.is_finished())
+        {
+            running.remove(&name);
+        }
         if running.contains_key(&name) {
             return Err(BusError::MethodFailed {
                 name: ALREADY_RUNNING_ERROR.to_owned(),
@@ -139,8 +109,9 @@ impl Channels {
         // for. Building the set is cheap (no I/O) and keeps a single
         // config-to-provider mapping rather than a second one here that could
         // disagree about, say, which WhatsApp backend a stanza describes.
-        let noop: Arc<dyn ChannelHost> = NoopHost::arc();
-        let built = build_channels(&config, &noop, &DefaultHttpClients);
+        let hooks = Arc::new(Hooks::default());
+        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone());
+        let built = build_channels(&config, &owner_host, &DefaultHttpClients);
         let channel = built
             .into_iter()
             .find(|candidate| candidate.name() == name)
@@ -174,71 +145,7 @@ impl Channels {
             });
         }
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(INBOUND_QUEUE);
-
-        let listen_channel = Arc::clone(&channel);
-        let listen_name = name.clone();
-        let listen_host = self.host.clone();
-        let listen_registry = Arc::clone(&self.running);
-        let listener = tokio::spawn(async move {
-            listen_host
-                .report_status(&listen_name, "connecting", None)
-                .await;
-            let outcome = listen_channel.listen(tx).await;
-
-            // The listen loop returning is the provider's terminal state, so the
-            // registry entry has to go with it. Leaving it behind was a real bug:
-            // `ListChannels` kept advertising a dead provider, `StartChannel`
-            // rejected every retry as `AlreadyRunning`, and `ChannelStatus` could
-            // still answer "connected" off an HTTP health check that knows
-            // nothing about the receive loop.
-            //
-            // Dropped rather than aborted: this task is the listener, and
-            // `Running::shutdown` would abort it from inside itself.
-            if let Some(entry) = listen_registry.lock().await.remove(&listen_name) {
-                entry.drain_forwarder().await;
-            }
-
-            match outcome {
-                Ok(()) => {
-                    listen_host
-                        .report_status(&listen_name, "stopped", None)
-                        .await
-                }
-                Err(error) => {
-                    // The module deliberately does not reconnect on its own: a
-                    // backoff policy that disagreed with the host's would be
-                    // invisible from the host side. Reporting is what lets the
-                    // host decide to retry — and the entry is gone, so it can.
-                    tracing::warn!("[tinychannels:module] {listen_name} listen ended: {error}");
-                    listen_host
-                        .report_status(&listen_name, "failed", Some(error.to_string()))
-                        .await;
-                }
-            }
-        });
-
-        let forward_name = name.clone();
-        let forward_host = self.host.clone();
-        let forwarder = tokio::spawn(async move {
-            while let Some(message) = rx.recv().await {
-                match serde_json::to_value(&message) {
-                    Ok(value) => forward_host.deliver_inbound(&forward_name, value).await,
-                    Err(error) => tracing::warn!(
-                        "[tinychannels:module] {forward_name} inbound message not serialisable: {error}"
-                    ),
-                }
-            }
-        });
-
-        running.insert(
-            name,
-            Running {
-                channel,
-                listener,
-                forwarder,
-            },
-        );
+        running.insert(name, Running::start(channel, hooks, self.host.clone()));
         Ok(())
     }
 
@@ -248,12 +155,21 @@ impl Channels {
     /// reconciling desired against actual state should be able to call this
     /// unconditionally.
     async fn stop_channel(&self, name: String) -> BusResult<()> {
-        // Taken out of the map before the report so the lock is not held across
-        // the enqueue, which can block on a full outbox.
-        let running = self.running.lock().await.remove(&name);
-        if let Some(running) = running {
-            running.shutdown();
-            self.host.report_status(&name, "stopped", None).await;
+        let entry = self.running.lock().await.get(&name).cloned();
+        if let Some(entry) = entry {
+            entry.stop().await?;
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(10), self.host.flush())
+                    .await
+                    .map_err(|_| BusError::failed("callbacks are pending; retry StopChannel"))?;
+            let mut running = self.running.lock().await;
+            if running
+                .get(&name)
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
+            {
+                running.remove(&name);
+            }
+            result?;
         }
         Ok(())
     }
@@ -262,19 +178,23 @@ impl Channels {
     async fn send_message(&self, name: String, message: SendMessage) -> BusResult<()> {
         // Cloned out of the map so the send does not hold the registry lock for
         // the duration of a network round trip.
-        let channel = {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let entry = {
             let running = self.running.lock().await;
             running
                 .get(&name)
-                .map(|entry| Arc::clone(&entry.channel))
+                .filter(|entry| !entry.is_finished())
+                .cloned()
                 .ok_or_else(|| BusError::MethodFailed {
                     name: UNKNOWN_CHANNEL_ERROR.to_owned(),
                     message: format!("channel {name} is not running"),
                 })?
         };
 
-        channel
-            .send(&message)
+        entry
+            .send(message)
             .await
             .map_err(|error| BusError::MethodFailed {
                 name: SEND_FAILED_ERROR.to_owned(),
@@ -282,16 +202,93 @@ impl Channels {
             })
     }
 
+    /// Send one best-effort or disabled intent through the provider actor.
+    /// Required durability needs a host queue and is refused when that port
+    /// has not been installed; this method never silently downgrades it.
+    async fn send_channel_intent(
+        &self,
+        name: String,
+        intent: ChannelOutboundIntent,
+    ) -> BusResult<ChannelSendMessageResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        if intent.durability == tinychannels::DeliveryDurability::Required {
+            return Err(BusError::failed(
+                "required durability needs the host delivery queue",
+            ));
+        }
+        if intent.channel_id != name {
+            return Err(BusError::failed("intent channel does not match provider"));
+        }
+        if serde_json::to_vec(&intent).map_or(true, |bytes| {
+            bytes.len() > tinychannels_bus::module_relay::RELAY_FRAME_BYTES
+        }) {
+            return Err(BusError::failed("channel intent byte limit exceeded"));
+        }
+        let entry = {
+            let running = self.running.lock().await;
+            running
+                .get(&name)
+                .filter(|entry| !entry.is_finished())
+                .cloned()
+                .ok_or_else(|| BusError::MethodFailed {
+                    name: UNKNOWN_CHANNEL_ERROR.to_owned(),
+                    message: format!("channel {name} is not running"),
+                })?
+        };
+        let value = tinychannels::legacy_message_value_from_outbound_intent(&intent);
+        let content = match &intent.payload {
+            tinychannels::OutboundPayload::Text { text } => text.clone(),
+            _ => serde_json::to_string(&value)
+                .map_err(|_| BusError::failed("could not encode channel intent"))?,
+        };
+        entry
+            .send(SendMessage {
+                content,
+                recipient: intent.conversation_id,
+                subject: None,
+                thread_ts: intent.thread_id,
+                idempotency_key: Some(intent.idempotency_key),
+            })
+            .await
+            .map_err(|error| BusError::MethodFailed {
+                name: SEND_FAILED_ERROR.to_owned(),
+                message: error.to_string(),
+            })?;
+        Ok(ChannelSendMessageResult::default())
+    }
+
+    /// Send SMTP mail without requiring an active IMAP listener.
+    /// The host hydrates credentials and sends this payload confidentially.
+    #[tinybus(confidential)]
+    async fn send_email(&self, request: EmailSendRequest) -> BusResult<ChannelSendMessageResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        self.email.send(request).await
+    }
+
     /// The providers currently running, in no particular order.
     async fn list_channels(&self) -> BusResult<Vec<String>> {
-        Ok(self.running.lock().await.keys().cloned().collect())
+        Ok(self
+            .running
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, entry)| !entry.is_finished())
+            .map(|(name, _)| name.clone())
+            .collect())
     }
 
     /// Whether `name` is running, and whether the provider reports itself healthy.
     async fn channel_status(&self, name: String) -> BusResult<String> {
         let channel = {
             let running = self.running.lock().await;
-            running.get(&name).map(|entry| Arc::clone(&entry.channel))
+            running
+                .get(&name)
+                .filter(|entry| !entry.is_finished())
+                .map(|entry| Arc::clone(&entry.channel))
         };
         let Some(channel) = channel else {
             return Ok("stopped".to_owned());
@@ -302,12 +299,111 @@ impl Channels {
             "unhealthy".to_owned()
         })
     }
+    /// Mint a bounded, single-use relay reservation before async native startup.
+    async fn reserve_relay(&self) -> BusResult<RelayReservation> {
+        self.relays.reserve().await
+    }
+    /// Start this known handle with host-hydrated secrets over confidential delivery.
+    #[tinybus(confidential)]
+    async fn start_relay(
+        &self,
+        id: RelayReservation,
+        config: RelayRuntimeConfig,
+    ) -> BusResult<tinychannels::relay::CapabilityDescriptor> {
+        self.relays.start(id, config).await
+    }
+    /// Cancel pending startup and join relay/reconnect/native callback work.
+    async fn stop_relay(&self, id: RelayReservation) -> BusResult<()> {
+        self.relays.stop(id).await
+    }
+    /// Report safe lifecycle facts without URL, identities or credentials.
+    async fn relay_status(&self, id: RelayReservation) -> BusResult<RelayStatus> {
+        self.relays.status(id).await
+    }
+    /// Enqueue one bounded, ordered relay intent.
+    async fn send_relay_intent(
+        &self,
+        id: RelayReservation,
+        intent: ChannelOutboundIntent,
+    ) -> BusResult<ChannelSendMessageResult> {
+        self.relays.send(id, intent).await
+    }
+    /// Freeze operations and join all native providers, relay and callbacks.
+    async fn shutdown(&self) -> BusResult<()> {
+        self.terminal.store(true, Ordering::SeqCst);
+        self.relays.freeze();
+        let mut task = self.shutdown_task.lock().await;
+        if task.is_none() {
+            let providers = self.running.clone();
+            let relay = self.relays.clone();
+            let email = self.email.clone();
+            let host = self.host.clone();
+            *task = Some(tokio::spawn(async move {
+                let entries: Vec<_> = providers
+                    .lock()
+                    .await
+                    .iter()
+                    .map(|(name, entry)| (name.clone(), entry.clone()))
+                    .collect();
+                let mut failure = None;
+                let mut pending = false;
+                for (name, entry) in entries {
+                    match entry.stop().await {
+                        Ok(()) => {
+                            providers.lock().await.remove(&name);
+                        }
+                        Err(error) => {
+                            pending = true;
+                            if failure.is_none() {
+                                failure = Some(error);
+                            }
+                        }
+                    }
+                }
+                if let Err(error) = relay.shutdown().await
+                    && failure.is_none()
+                {
+                    failure = Some(error);
+                }
+                if let Err(error) = email.shutdown().await
+                    && failure.is_none()
+                {
+                    failure = Some(error);
+                }
+                if !pending && relay.is_empty().await {
+                    match host.shutdown().await {
+                        Err(error) if failure.is_none() => failure = Some(error),
+                        _ => {}
+                    }
+                }
+                match failure {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                }
+            }));
+        }
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            task.as_mut()
+                .ok_or_else(|| BusError::failed("missing shutdown owner"))?,
+        )
+        .await
+        .map_err(|_| BusError::failed("module cleanup is pending; retry Shutdown"))?
+        .map_err(|_| BusError::failed("module cleanup worker failed"))?;
+        task.take();
+        result
+    }
 }
 
 async fn setup(connection: Connection) -> BusResult<()> {
+    let host = HostChannels::new(connection.clone());
     let channels = Channels {
-        host: HostChannels::new(connection.clone()),
+        relays: Arc::new(Relays::new(host.clone())),
+        host,
+        email: EmailSender::new(),
         running: Arc::new(Mutex::new(HashMap::new())),
+        terminal: AtomicBool::new(false),
+        shutdown_task: Mutex::new(None),
     };
     connection
         .serve_at(OBJECT_PATH.try_into()?, channels)
@@ -334,6 +430,7 @@ pub(crate) mod exports {
             "SendMessage",
             "ListChannels",
             "ChannelStatus",
+            "ReserveRelay", "StartRelay", "StopRelay", "RelayStatus", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:
