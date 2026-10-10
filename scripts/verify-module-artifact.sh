@@ -7,10 +7,13 @@ cd "$repo_root"
 
 cargo build -p tinychannels-module --lib
 
+target_directory="$(cargo metadata --no-deps --format-version=1 --manifest-path "$repo_root/Cargo.toml" \
+  | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')"
+
 case "$(uname -s)" in
-  Darwin*) artifact="$repo_root/target/debug/libtinychannels_module.dylib" ;;
-  MINGW*|MSYS*|CYGWIN*|Windows_NT) artifact="$repo_root/target/debug/tinychannels_module.dll" ;;
-  *) artifact="$repo_root/target/debug/libtinychannels_module.so" ;;
+  Darwin*) artifact="$target_directory/debug/libtinychannels_module.dylib" ;;
+  MINGW*|MSYS*|CYGWIN*|Windows_NT) artifact="$target_directory/debug/tinychannels_module.dll" ;;
+  *) artifact="$target_directory/debug/libtinychannels_module.so" ;;
 esac
 
 if [[ ! -f "$artifact" ]]; then
