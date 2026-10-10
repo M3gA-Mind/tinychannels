@@ -554,6 +554,28 @@ fn legacy_session_key_candidates_match_openhuman_helpers() {
 }
 
 #[test]
+fn legacy_session_key_candidates_preserve_unescaped_stored_keys() {
+    let msg = ChannelMessage {
+        id: "message_part".into(),
+        channel: "a_b".into(),
+        sender: "c".into(),
+        reply_target: "room_part".into(),
+        thread_ts: Some("thread_part".into()),
+        ..Default::default()
+    };
+
+    let keys = conversation_history_key_candidates(&msg);
+
+    // These are migration lookup keys written by the former OpenHuman
+    // helpers, before current keys began escaping identity separators.
+    assert_eq!(
+        keys.conversation_history_key,
+        "a_b_c_room_part_thread:thread_part"
+    );
+    assert_eq!(keys.conversation_memory_key, "a_b_c_message_part");
+}
+
+#[test]
 fn outbound_intent_carries_idempotency_key() {
     let intent = ChannelOutboundIntent {
         idempotency_key: "idem-1".into(),

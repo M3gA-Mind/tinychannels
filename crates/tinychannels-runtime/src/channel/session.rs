@@ -72,16 +72,26 @@ pub fn build_session_key_for_inbound_envelope(
 
 /// Return legacy OpenHuman keys for migration lookup before writing a new key.
 pub fn conversation_history_key_candidates(msg: &ChannelMessage) -> LegacySessionKeys {
-    let conversation_history_key = crate::context::conversation_history_key_parts(
-        &msg.channel,
-        &msg.sender,
-        &msg.reply_target,
-        msg.thread_ts.as_deref(),
-    );
+    // Keep these in the original OpenHuman format: callers use them to find
+    // data written before current identity keys began escaping separators.
+    let base_key = format!("{}_{}_{}", msg.channel, msg.sender, msg.reply_target);
+    let conversation_history_key =
+        if crate::capabilities::capabilities_for(&msg.channel).history_key_ignores_thread {
+            base_key
+        } else if let Some(thread_ts) = msg
+            .thread_ts
+            .as_deref()
+            .map(str::trim)
+            .filter(|thread_ts| !thread_ts.is_empty())
+        {
+            format!("{base_key}_thread:{thread_ts}")
+        } else {
+            base_key
+        };
 
     LegacySessionKeys {
         conversation_history_key,
-        conversation_memory_key: crate::context::conversation_memory_key(msg),
+        conversation_memory_key: format!("{}_{}_{}", msg.channel, msg.sender, msg.id),
     }
 }
 
