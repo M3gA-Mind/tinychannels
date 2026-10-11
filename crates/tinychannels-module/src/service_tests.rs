@@ -2173,7 +2173,7 @@ async fn shutdown_refuses_preparation_and_execution_before_host_work() {
             .prepare_outbound_intent(
                 "fixture".into(),
                 tinychannels_bus::module_runtime::ChannelMessagePreparation::Legacy(
-                    SendMessage::new("hello", "room")
+                    serde_json::json!({"content": "hello", "recipient": "room"})
                 )
             )
             .await
