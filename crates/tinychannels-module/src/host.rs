@@ -121,6 +121,14 @@ impl std::fmt::Debug for HostChannels {
     }
 }
 impl HostChannels {
+    pub(crate) fn new_at_with_dispatch(
+        connection: Connection,
+        object_path: String,
+        _max_in_flight: usize,
+    ) -> Self {
+        Self::new_at(connection, object_path)
+    }
+
     /// Start one owned callback consumer. Explicit shutdown drains and joins it.
     #[must_use]
     pub fn new(connection: Connection) -> Self {
@@ -496,3 +504,7 @@ fn record_failure(failure: &StdMutex<Option<String>>, error: String) {
 #[cfg(test)]
 #[path = "host_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "host_dispatch_tests.rs"]
+mod dispatch_tests;
