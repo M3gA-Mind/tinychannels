@@ -973,3 +973,86 @@ async fn prepared_managed_connection_preserves_pending_auth_without_configuratio
     assert!(fixture.0.lock().await.is_empty());
     host.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn backend_preserves_host_owned_operations_and_default_selection() {
+    let (host, _, _server) = connected_host().await;
+    let backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(RecordingEmailVerifier {
+            observed: Default::default(),
+            fail: false,
+        }),
+        None,
+    );
+    let config = ChannelsConfig {
+        active_channel: Some("telegram".into()),
+        ..Default::default()
+    };
+    assert_eq!(
+        backend
+            .get_default_channel(&config)
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("telegram")
+    );
+    assert!(
+        backend
+            .set_default_channel(&config, "discord")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("host-owned")
+    );
+    assert!(
+        backend
+            .telegram_login_start(&config)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("host-owned")
+    );
+    assert!(
+        backend
+            .telegram_login_check(&config, "link")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("host-owned")
+    );
+    assert!(
+        backend
+            .discord_link_start(&config)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("host-owned")
+    );
+    assert!(
+        backend
+            .discord_link_check(&config, "link")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("host-owned")
+    );
+    assert!(
+        backend
+            .send_message(&config, "telegram", SendMessage::new("body", "room"))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("module provider path")
+    );
+    assert!(
+        backend
+            .discord_list_guilds(&config)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("token is empty")
+    );
+    host.shutdown().await.unwrap();
+}

@@ -516,3 +516,101 @@ async fn stopping_during_selected_backoff_prevents_another_provider_attempt() {
     assert!(running.is_finished());
     host.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn lifecycle_hooks_are_drained_once_in_registration_order() {
+    let hooks = Hooks::default();
+    let calls = Arc::new(StdMutex::new(Vec::new()));
+    for index in 0..3 {
+        let calls = calls.clone();
+        hooks.register_shutdown(
+            "fixture",
+            Box::new(move || {
+                Box::pin(async move {
+                    calls.lock().unwrap().push(index);
+                })
+            }),
+        );
+    }
+    hooks.drain().await;
+    hooks.drain().await;
+    assert_eq!(*calls.lock().unwrap(), [0, 1, 2]);
+}
+
+#[tokio::test]
+async fn host_adapters_propagate_callback_failures() {
+    use tinychannels::host::{AllowlistStore, EventSink, Transcriber};
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    // No host object is served: each adapter must surface the bus failure.
+    assert!(
+        ModuleAllowlist(host.clone())
+            .persist_allowed_identity("fixture", "member")
+            .await
+            .is_err()
+    );
+    assert!(
+        ModuleEvents(host.clone())
+            .publish("fixture", "event", serde_json::json!({}))
+            .await
+            .is_err()
+    );
+    let transcriber = ModuleTranscriber(host.clone());
+    assert_eq!(transcriber.name(), "module-host");
+    assert!(
+        transcriber
+            .transcribe(tinychannels::host::TranscriptionRequest {
+                audio_base64: "YQ==".into(),
+                mime_type: Some("audio/wav".into()),
+                file_name: None,
+                language: None,
+            })
+            .await
+            .is_err()
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
+    for dispatched in [false, true] {
+        let (send, mut commands) = mpsc::channel::<SendCommand>(1);
+        let (cancel, _) = watch::channel(false);
+        let running = Arc::new(Running {
+            channel: Arc::new(InteractionChannel::default()),
+            send,
+            cancel,
+            worker: Mutex::new(None),
+            finished: Arc::new(AtomicBool::new(false)),
+        });
+        let waiter = tokio::spawn({
+            let running = running.clone();
+            async move { running.send(SendMessage::new("body", "room")).await }
+        });
+        let command = commands.recv().await.unwrap();
+        if dispatched {
+            command.started.send(()).unwrap();
+        } else {
+            drop(command.started);
+        }
+        drop(command.reply);
+        let error = waiter.await.unwrap().unwrap_err();
+        if dispatched {
+            assert!(matches!(error, RunningSendError::AfterDispatch(_)));
+            assert_eq!(
+                error.to_string(),
+                "provider send worker stopped after dispatch"
+            );
+        } else {
+            assert!(matches!(error, RunningSendError::NotDispatched(_)));
+            assert_eq!(
+                error.to_string(),
+                "provider send worker stopped before dispatch"
+            );
+        }
+    }
+}
