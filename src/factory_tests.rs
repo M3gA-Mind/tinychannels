@@ -201,7 +201,7 @@ fn an_unusable_whatsapp_stanza_is_skipped_without_disturbing_others() {
 #[tokio::test]
 async fn configured_stanzas_build_every_supported_provider_in_order() {
     let config: ChannelsConfig = serde_json::from_value(serde_json::json!({
-        "telegram": {"bot_token": "token"},
+        "telegram": {"bot_token": "token", "allowed_users": []},
         "discord": {"bot_token": "token"},
         "slack": {"bot_token": "token"},
         "mattermost": {"url": "https://mattermost.test", "bot_token": "token"},
@@ -241,7 +241,7 @@ async fn configured_stanzas_build_every_supported_provider_in_order() {
 #[tokio::test]
 async fn incomplete_cloud_and_invalid_yuanbao_stanzas_preserve_other_providers() {
     let config: ChannelsConfig = serde_json::from_value(serde_json::json!({
-        "telegram": {"bot_token": "token"},
+        "telegram": {"bot_token": "token", "allowed_users": []},
         "whatsapp": {"phone_number_id": "phone"},
         "yuanbao": {"app_key": "", "app_secret": ""}
     }))
