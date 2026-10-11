@@ -32,7 +32,7 @@ pub struct ChannelMessage {
 ///
 /// Serde-derived for the same reason as [`ChannelMessage`]: it is the payload
 /// of the module's `SendMessage` member.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SendMessage {
     pub content: String,
     pub recipient: String,

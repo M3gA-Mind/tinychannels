@@ -17,9 +17,14 @@ impl<T> Drop for AbortOnDrop<T> {
     }
 }
 
+enum ProviderOperation {
+    Send(SendMessage),
+    Interaction(tinychannels_bus::ChannelInteraction),
+}
+
 struct SendCommand {
-    message: SendMessage,
-    reply: oneshot::Sender<Result<()>>,
+    operation: ProviderOperation,
+    reply: oneshot::Sender<Result<tinychannels_bus::ChannelInteractionResult>>,
     started: oneshot::Sender<()>,
 }
 
@@ -173,10 +178,16 @@ impl Running {
                         command=sends.recv()=>match command {Some(command)=>command,None=>break},
                     };
                     let _ = command.started.send(());
-                    let result = send_channel
-                        .send(&command.message)
-                        .await
-                        .map_err(|error| Error::failed(error.to_string()));
+                    let result = match command.operation {
+                        ProviderOperation::Send(message) => send_channel
+                            .send(&message)
+                            .await
+                            .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
+                            .map_err(|error| Error::failed(error.to_string())),
+                        ProviderOperation::Interaction(interaction) => {
+                            crate::interaction::dispatch(send_channel.as_ref(), interaction).await
+                        }
+                    };
                     let _ = command.reply.send(result);
                 }
                 while let Ok(command) = sends.try_recv() {
@@ -222,11 +233,28 @@ impl Running {
         &self,
         message: SendMessage,
     ) -> std::result::Result<(), RunningSendError> {
+        self.submit(ProviderOperation::Send(message))
+            .await
+            .map(|_| ())
+    }
+
+    pub(crate) async fn interact(
+        &self,
+        interaction: tinychannels_bus::ChannelInteraction,
+    ) -> std::result::Result<tinychannels_bus::ChannelInteractionResult, RunningSendError> {
+        self.submit(ProviderOperation::Interaction(interaction))
+            .await
+    }
+
+    async fn submit(
+        &self,
+        operation: ProviderOperation,
+    ) -> std::result::Result<tinychannels_bus::ChannelInteractionResult, RunningSendError> {
         let (reply, wait) = oneshot::channel();
         let (started, dispatch) = oneshot::channel();
         self.send
             .try_send(SendCommand {
-                message,
+                operation,
                 reply,
                 started,
             })
@@ -234,7 +262,7 @@ impl Running {
                 RunningSendError::NotDispatched("provider send queue is full or closed".into())
             })?;
         match wait.await {
-            Ok(Ok(())) => Ok(()),
+            Ok(Ok(result)) => Ok(result),
             Ok(Err(error)) => match dispatch.await {
                 Ok(()) => Err(RunningSendError::AfterDispatch(error.to_string())),
                 Err(_) => Err(RunningSendError::NotDispatched(error.to_string())),

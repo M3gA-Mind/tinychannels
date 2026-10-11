@@ -344,6 +344,36 @@ impl Channels {
             })
     }
 
+    /// Run provider interactions in the same bounded actor queue as sends.
+    /// Recipients and draft contents cross the bus confidentially.
+    #[tinybus(confidential)]
+    async fn channel_interaction(
+        &self,
+        request: tinychannels_bus::ChannelInteractionRequest,
+    ) -> BusResult<tinychannels_bus::ChannelInteractionResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let entry = self
+            .running
+            .lock()
+            .await
+            .get(&request.channel)
+            .filter(|entry| !entry.is_finished())
+            .cloned()
+            .ok_or_else(|| BusError::MethodFailed {
+                name: UNKNOWN_CHANNEL_ERROR.to_owned(),
+                message: "requested channel is not running".into(),
+            })?;
+        entry
+            .interact(request.interaction)
+            .await
+            .map_err(|_| BusError::MethodFailed {
+                name: SEND_FAILED_ERROR.to_owned(),
+                message: "provider interaction failed".into(),
+            })
+    }
+
     /// Send one intent through the provider actor or host-backed durable queue.
     /// Required durability fails closed when queue storage is unavailable.
     async fn send_channel_intent(
@@ -837,6 +867,7 @@ pub(crate) mod exports {
             "BeginEmailUpload", "AppendEmailUploadChunk", "SendEmailUpload", "AbortEmailUpload",
             "StartChannelConfigured",
             "ChannelController",
+            "ChannelInteraction",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:

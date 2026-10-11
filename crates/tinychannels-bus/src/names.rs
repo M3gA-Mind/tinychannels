@@ -58,6 +58,8 @@ pub mod methods {
     pub const START_CHANNEL_CONFIGURED: &str = "StartChannelConfigured";
     /// Dispatch typed controller work through TinyChannels' owning manager.
     pub const CHANNEL_CONTROLLER: &str = "ChannelController";
+    /// Run typing, draft and capability operations on one running provider.
+    pub const CHANNEL_INTERACTION: &str = "ChannelInteraction";
 }
 
 /// One constant per method name on [`HOST_BUS_NAME`].
@@ -95,7 +97,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 19] = [
+pub const METHODS: [&str; 20] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -115,6 +117,7 @@ pub const METHODS: [&str; 19] = [
     methods::ABORT_EMAIL_UPLOAD,
     methods::START_CHANNEL_CONFIGURED,
     methods::CHANNEL_CONTROLLER,
+    methods::CHANNEL_INTERACTION,
 ];
 
 /// All host-callback method names in declaration order.
