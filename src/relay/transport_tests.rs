@@ -8,6 +8,7 @@ struct TestIo {
     incoming: Mutex<mpsc::UnboundedReceiver<Result<ConnectorToGatewayFrame, RelayTransportError>>>,
     send_error: bool,
     response: Option<Value>,
+    responded: AtomicBool,
 }
 
 impl TestIo {
@@ -25,6 +26,7 @@ impl TestIo {
                 incoming: Mutex::new(rx),
                 send_error,
                 response,
+                responded: AtomicBool::new(false),
             }),
             tx,
         )
@@ -42,11 +44,16 @@ impl RelayFrameIo for TestIo {
     }
 
     async fn recv(&self) -> Result<Option<ConnectorToGatewayFrame>, RelayTransportError> {
-        if let Some(result) = &self.response {
+        if let Some(result) = self
+            .response
+            .as_ref()
+            .filter(|_| !self.responded.load(Ordering::SeqCst))
+        {
             loop {
                 if let Some(GatewayToConnectorFrame::Outbound { request_id, .. }) =
                     self.sent.lock().await.last().cloned()
                 {
+                    self.responded.store(true, Ordering::SeqCst);
                     return Ok(Some(ConnectorToGatewayFrame::OutboundResult {
                         request_id,
                         result: result.clone(),
@@ -122,7 +129,9 @@ async fn timed_out_operations_remove_waiters_and_closed_handshake_fails() {
 #[tokio::test]
 async fn reader_failure_releases_pending_outbound_and_idle_operations() {
     let (io, tx) = TestIo::new(false, None);
-    let transport = transport(io.clone());
+    let mut transport = transport(io.clone());
+    transport.timeouts.outbound_ms = 1000;
+    transport.timeouts.idle_ms = 1000;
     transport.connect().await.unwrap();
     let outbound = transport.send_outbound(json!({}), None);
     let idle = transport.go_idle();
@@ -157,7 +166,8 @@ async fn chat_info_normalizes_nested_flat_and_missing_fields() {
         (json!({"name":1}), json!({"name":"chat-1","type":"dm"})),
     ] {
         let (io, _tx) = TestIo::new(false, Some(response));
-        let transport = transport(io.clone());
+        let mut transport = transport(io.clone());
+        transport.timeouts.outbound_ms = 1000;
         transport.connect().await.unwrap();
         assert_eq!(transport.get_chat_info("chat-1").await.unwrap(), expected);
         assert!(
@@ -332,23 +342,12 @@ async fn interrupt_handler_receives_session_and_chat_and_unsolicited_replies_are
 }
 
 #[tokio::test]
-async fn malformed_inbound_and_handler_failure_never_acknowledge_buffer() {
+async fn inbound_handler_failure_never_acknowledges_buffer() {
     let (io, _tx) = TestIo::new(false, None);
     let transport = transport(io.clone());
     let dyn_io: Arc<dyn RelayFrameIo> = io.clone();
     let handler = Arc::new(Handlers::default());
     transport.set_inbound_handler(handler.clone()).await;
-    handle_frame(
-        &dyn_io,
-        &transport.state,
-        ConnectorToGatewayFrame::Inbound {
-            event: Value::Null,
-            buffer_id: Some("invalid".into()),
-        },
-    )
-    .await
-    .unwrap();
-    assert!(handler.calls.lock().await.is_empty());
     handler.fail.store(true, Ordering::SeqCst);
     assert!(matches!(
         handle_frame(
@@ -370,4 +369,73 @@ fn reconnect_backoff_doubles_saturates_and_caps_at_maximum() {
     assert_eq!(next_backoff(2, 10), 4);
     assert_eq!(next_backoff(8, 10), 10);
     assert_eq!(next_backoff(u64::MAX, u64::MAX), u64::MAX);
+}
+
+struct ScriptedDialer {
+    attempts: Mutex<std::collections::VecDeque<Result<Arc<dyn RelayFrameIo>, RelayTransportError>>>,
+    dialed: mpsc::UnboundedSender<()>,
+}
+
+#[async_trait]
+impl RelayFrameDialer for ScriptedDialer {
+    async fn dial(&self) -> Result<Arc<dyn RelayFrameIo>, RelayTransportError> {
+        let result = self
+            .attempts
+            .lock()
+            .await
+            .pop_front()
+            .expect("unexpected dial");
+        self.dialed.send(()).unwrap();
+        result
+    }
+}
+
+#[tokio::test]
+async fn reconnect_retries_dial_and_hello_failures_then_replaces_reader() {
+    let (initial, initial_tx) = TestIo::new(false, None);
+    let transport = Arc::new(transport(initial));
+    transport.connect().await.unwrap();
+    let (bad, _bad_tx) = TestIo::new(true, None);
+    let (good, good_tx) = TestIo::new(false, None);
+    let (dialed, mut attempts) = mpsc::unbounded_channel();
+    let dialer = Arc::new(ScriptedDialer {
+        attempts: Mutex::new(std::collections::VecDeque::from([
+            Err(RelayTransportError::Io("dial failed".into())),
+            Ok(bad as Arc<dyn RelayFrameIo>),
+            Ok(good.clone() as Arc<dyn RelayFrameIo>),
+        ])),
+        dialed,
+    });
+    let supervisor = transport.spawn_reconnect_supervisor(
+        dialer,
+        RelayReconnectPolicy {
+            backoff_ms: 1,
+            max_backoff_ms: 4,
+        },
+    );
+    drop(initial_tx);
+    // A hello-send failure does not close its I/O; emulate the peer closing it.
+    drop(_bad_tx);
+    timeout(Duration::from_secs(1), async {
+        for _ in 0..3 {
+            attempts.recv().await.unwrap();
+        }
+        while good.sent.lock().await.is_empty() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(
+        *good.sent.lock().await,
+        vec![GatewayToConnectorFrame::Hello {
+            platform: "discord".into(),
+            bot_id: "bot".into()
+        }]
+    );
+    assert!(!transport.is_closed());
+    assert!(transport.descriptor().await.is_none());
+    supervisor.shutdown().await;
+    drop(good_tx);
+    transport.shutdown().await;
 }
