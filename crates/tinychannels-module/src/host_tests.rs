@@ -34,6 +34,9 @@ struct Callback {
     events: Arc<Mutex<Vec<String>>>,
     blocked: Arc<AtomicBool>,
     gate: Arc<tokio::sync::Notify>,
+    transcription_blocked: Arc<AtomicBool>,
+    transcription_started: Arc<tokio::sync::Notify>,
+    transcription_gate: Arc<tokio::sync::Notify>,
     persist_failures: Arc<std::sync::atomic::AtomicUsize>,
     event_failures: Arc<AtomicUsize>,
     delivery_scope: Arc<Mutex<String>>,
@@ -49,6 +52,14 @@ impl Callback {
         request: tinychannels_bus::HostTranscriptionRequest,
     ) -> Result<tinychannels_bus::HostTranscriptionResult> {
         assert_eq!(request.mime_type.as_deref(), Some("audio/wav"));
+        self.transcription_started.notify_one();
+        while self.transcription_blocked.load(Ordering::SeqCst) {
+            self.transcription_gate.notified().await;
+        }
+        self.events
+            .lock()
+            .await
+            .push("transcription:complete".into());
         Ok(tinychannels_bus::HostTranscriptionResult {
             text: "spoken words".into(),
             language: request.language,
@@ -234,6 +245,9 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         events: Arc::new(Mutex::new(Vec::new())),
         blocked: Arc::new(AtomicBool::new(false)),
         gate: Arc::new(tokio::sync::Notify::new()),
+        transcription_blocked: Arc::new(AtomicBool::new(false)),
+        transcription_started: Arc::new(tokio::sync::Notify::new()),
+        transcription_gate: Arc::new(tokio::sync::Notify::new()),
         persist_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         event_failures: Arc::new(AtomicUsize::new(0)),
         delivery_scope: Arc::new(Mutex::new("scope-a".into())),
@@ -253,6 +267,116 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         .await
         .unwrap();
     (HostChannels::new(client), callback, server)
+}
+
+#[tokio::test]
+async fn shutdown_fences_new_transcription_and_joins_accepted_callback() {
+    let (host, callback, _server) = connected_host().await;
+    callback.transcription_blocked.store(true, Ordering::SeqCst);
+
+    let transcriber = host.clone();
+    let transcription = tokio::spawn(async move {
+        transcriber
+            .transcribe(tinychannels_bus::HostTranscriptionRequest {
+                audio_base64: "UklGRg==".into(),
+                mime_type: Some("audio/wav".into()),
+                file_name: None,
+                language: None,
+            })
+            .await
+    });
+    callback.transcription_started.notified().await;
+
+    let shutdown_host = host.clone();
+    let shutdown = tokio::spawn(async move { shutdown_host.shutdown().await });
+    while !host.owner.terminal.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !shutdown.is_finished(),
+        "shutdown must retain ownership until an accepted transcription completes"
+    );
+    assert!(
+        host.transcribe(tinychannels_bus::HostTranscriptionRequest {
+            audio_base64: "UklGRg==".into(),
+            mime_type: Some("audio/wav".into()),
+            file_name: None,
+            language: None,
+        })
+        .await
+        .is_err(),
+        "new transcription must be rejected after shutdown fences publication"
+    );
+
+    callback
+        .transcription_blocked
+        .store(false, Ordering::SeqCst);
+    callback.transcription_gate.notify_one();
+    assert_eq!(transcription.await.unwrap().unwrap().text, "spoken words");
+    shutdown.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn shutdown_joins_owned_transcription_after_waiter_cancellation() {
+    let (host, callback, _server) = connected_host().await;
+    callback.transcription_blocked.store(true, Ordering::SeqCst);
+
+    let transcriber = host.clone();
+    let waiter = tokio::spawn(async move {
+        transcriber
+            .transcribe(tinychannels_bus::HostTranscriptionRequest {
+                audio_base64: "UklGRg==".into(),
+                mime_type: Some("audio/wav".into()),
+                file_name: None,
+                language: None,
+            })
+            .await
+    });
+    callback.transcription_started.notified().await;
+    waiter.abort();
+    let _ = waiter.await;
+
+    let shutdown_host = host.clone();
+    let shutdown = tokio::spawn(async move { shutdown_host.shutdown().await });
+    while !host.owner.terminal.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !shutdown.is_finished(),
+        "canceling the caller must not release the accepted callback owner"
+    );
+    callback
+        .transcription_blocked
+        .store(false, Ordering::SeqCst);
+    callback.transcription_gate.notify_one();
+    shutdown.await.unwrap().unwrap();
+    assert!(
+        callback
+            .events
+            .lock()
+            .await
+            .contains(&"transcription:complete".into()),
+        "shutdown must wait for the host callback to finish"
+    );
+}
+
+#[tokio::test]
+async fn transcription_admission_refuses_when_its_owned_task_limit_is_reached() {
+    let (host, _callback, _server) = connected_host().await;
+    host.owner
+        .active_transcriptions
+        .store(super::MAX_ACTIVE_TRANSCRIPTIONS, Ordering::SeqCst);
+    let result = host
+        .transcribe(tinychannels_bus::HostTranscriptionRequest {
+            audio_base64: "UklGRg==".into(),
+            mime_type: Some("audio/wav".into()),
+            file_name: None,
+            language: None,
+        })
+        .await;
+    assert!(result.is_err());
+    host.owner.active_transcriptions.store(0, Ordering::SeqCst);
+    host.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -299,7 +423,7 @@ async fn module_host_exposes_typed_transcription_and_event_capabilities() {
         .unwrap();
     assert_eq!(
         callback.events.lock().await.as_slice(),
-        ["event:channel:reaction_sent"]
+        ["transcription:complete", "event:channel:reaction_sent"]
     );
     host.shutdown().await.unwrap();
 }

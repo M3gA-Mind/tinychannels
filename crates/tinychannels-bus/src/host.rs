@@ -3,7 +3,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Request speech recognition through the host's configured voice provider.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct HostTranscriptionRequest {
     /// Base64-encoded audio bytes.
@@ -14,17 +14,6 @@ pub struct HostTranscriptionRequest {
     pub file_name: Option<String>,
     /// BCP-47 language hint; `None` requests automatic detection.
     pub language: Option<String>,
-}
-
-impl Default for HostTranscriptionRequest {
-    fn default() -> Self {
-        Self {
-            audio_base64: String::new(),
-            mime_type: None,
-            file_name: None,
-            language: None,
-        }
-    }
 }
 
 /// Speech recognition result returned by the host.

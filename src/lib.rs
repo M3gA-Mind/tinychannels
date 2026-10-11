@@ -60,9 +60,10 @@ pub use providers::{
 pub use tinychannels_bus::{
     BUS_NAME, CONTRACT_VERSION, ChannelAuthMode, ChannelCapabilities, ChannelDefinition,
     ChannelInboundEnvelope, ChannelMessage, ChannelOutboundIntent, ChannelsConfig,
-    DeliveryDurability, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, OutboundPayload,
-    HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult, HttpProxyPolicy,
-    Result, SendMessage, TinyChannelsError, capabilities_for, is_compatible, methods,
+    DeliveryDurability, HOST_BUS_NAME, HOST_OBJECT_PATH, HostEventPublication,
+    HostTranscriptionRequest, HostTranscriptionResult, HttpProxyPolicy, METHODS, OBJECT_PATH,
+    OutboundPayload, Result, SendMessage, TinyChannelsError, capabilities_for, is_compatible,
+    methods,
 };
 pub use tinychannels_runtime::channel::{
     build_session_key_for_inbound_envelope, inbound_envelope_from_legacy_message,

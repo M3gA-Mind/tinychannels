@@ -40,17 +40,18 @@
 //! the ordered queue behind one unreachable host or grow in memory. Durable
 //! redelivery belongs to whoever owns storage, which is the host.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tinybus::{Connection, Error, Result};
 use tinychannels_bus::names::{HOST_BUS_NAME, HOST_OBJECT_PATH, host_methods};
 use tinychannels_bus::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 const OUTBOX_CAPACITY: usize = 256;
 const MAX_CALLBACK_BYTES: usize = 128 * 1024;
 const MAX_TRANSCRIPTION_REQUEST_BYTES: usize = 12 * 1024 * 1024;
+const MAX_ACTIVE_TRANSCRIPTIONS: usize = 16;
 
 enum Notification {
     DeliverInbound {
@@ -81,7 +82,18 @@ struct Owner {
     worker: Mutex<Option<JoinHandle<()>>>,
     terminal: AtomicBool,
     publication: Mutex<()>,
+    active_transcriptions: AtomicUsize,
+    transcriptions_drained: Notify,
     failure: Arc<StdMutex<Option<String>>>,
+}
+
+struct ActiveTranscription(Arc<Owner>);
+
+impl Drop for ActiveTranscription {
+    fn drop(&mut self) {
+        self.0.active_transcriptions.fetch_sub(1, Ordering::SeqCst);
+        self.0.transcriptions_drained.notify_waiters();
+    }
 }
 impl Drop for Owner {
     fn drop(&mut self) {
@@ -216,6 +228,8 @@ impl HostChannels {
                 worker: Mutex::new(Some(worker)),
                 terminal: AtomicBool::new(false),
                 publication: Mutex::new(()),
+                active_transcriptions: AtomicUsize::new(0),
+                transcriptions_drained: Notify::new(),
                 failure,
             }),
         }
@@ -235,10 +249,39 @@ impl HostChannels {
         {
             return Err(Error::failed("transcription request exceeds byte limit"));
         }
-        let proxy = self
-            .connection
-            .proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME)?;
-        proxy.call(host_methods::TRANSCRIBE, request).await
+        let publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(Error::failed("callback consumer is closed"));
+        }
+        // Admission is serialized with shutdown by `publication`; callbacks
+        // can only decrement this count while an admission is in progress.
+        // Reserve first, then roll back if the existing count was already full.
+        if self
+            .owner
+            .active_transcriptions
+            .fetch_add(1, Ordering::SeqCst)
+            >= MAX_ACTIVE_TRANSCRIPTIONS
+        {
+            self.owner
+                .active_transcriptions
+                .fetch_sub(1, Ordering::SeqCst);
+            return Err(Error::failed("too many active transcription callbacks"));
+        }
+        let owner = self.owner.clone();
+        let connection = self.connection.clone();
+        let (reply, wait) = oneshot::channel();
+        drop(publication);
+        tokio::spawn(async move {
+            let _active = ActiveTranscription(owner);
+            let result = async {
+                let proxy = connection.proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME)?;
+                proxy.call(host_methods::TRANSCRIBE, request).await
+            }
+            .await;
+            let _ = reply.send(result);
+        });
+        wait.await
+            .map_err(|_| Error::failed("transcription callback was interrupted"))?
     }
 
     /// Publish one bounded provider event through the host event sink.
@@ -349,6 +392,16 @@ impl HostChannels {
     pub async fn shutdown(&self) -> Result<()> {
         let publication = self.owner.publication.lock().await;
         self.owner.terminal.store(true, Ordering::SeqCst);
+        drop(publication);
+        loop {
+            let notified = self.owner.transcriptions_drained.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.owner.active_transcriptions.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            notified.await;
+        }
         let (reply, wait) = oneshot::channel();
         if self
             .outbox
@@ -356,10 +409,7 @@ impl HostChannels {
             .await
             .is_ok()
         {
-            drop(publication);
             let _ = wait.await;
-        } else {
-            drop(publication);
         }
         let mut worker = self.owner.worker.lock().await;
         if let Some(task) = worker.as_mut() {
