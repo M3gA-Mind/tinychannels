@@ -145,6 +145,8 @@ pub enum ChannelControllerResult {
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
 pub enum ChannelBackendRequest {
+    /// Execute only managed transport; module owns progressive state and idempotency.
+    ProgressiveTransport(crate::module_progressive::ProgressiveTransportRequest),
     /// Disconnect through the host credential/configuration store.
     Disconnect {
         channel: String,
@@ -174,6 +176,7 @@ pub enum ChannelBackendRequest {
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ChannelBackendResult {
+    ProgressiveTransport(crate::module_progressive::ProgressiveTransportResult),
     Disconnected(ChannelDisconnectResult),
     Status(Vec<ChannelStatusEntry>),
     SendReaction(ChannelReactionResult),

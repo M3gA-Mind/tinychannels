@@ -29,6 +29,16 @@ provenance separately: the envelope’s relay trust flag is intentionally omitte
 from serialization. Namespaces are limited to 256 bytes, identity requests to
 4 KiB, and inbound requests to the bounded preparation payload limit.
 
+Progressive replies run inside the private channel runtime through confidential
+`ExecuteProgressive` commands. The module owns drafts, thinking and filler
+bubbles, typing timers, error recovery, normalization, and idempotency keys;
+`DispatchControllerBackend` supplies only the host's managed transport with
+typed outcomes. Reply handles cannot cross runtimes. Terminal cleanup survives
+caller cancellation, identical finalization retries do not send twice, and
+shutdown joins replies before closing callbacks. Limits are 16 active replies,
+128 retained terminal handles, 32 events and 128 KiB per command, 384 KiB per
+accumulator, and a three-minute worker lifetime.
+
 ## Intended Scope
 
 - channel abstractions for inbound and outbound message streams

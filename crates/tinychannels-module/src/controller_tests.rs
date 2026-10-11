@@ -17,6 +17,9 @@ impl BackendFixture {
     ) -> Result<ChannelBackendResult> {
         self.0.lock().await.push(request.clone());
         match request {
+            ChannelBackendRequest::ProgressiveTransport(_) => Err(tinybus::Error::failed(
+                "unexpected progressive transport callback",
+            )),
             ChannelBackendRequest::Disconnect {
                 channel, auth_mode, ..
             } => Ok(ChannelBackendResult::Disconnected(

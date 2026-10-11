@@ -88,6 +88,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
+        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
         running: Arc::new(Mutex::new(running)),
@@ -141,6 +142,7 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
         Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
+        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
         running: Arc::new(Mutex::new(running)),
@@ -441,6 +443,7 @@ async fn channels_with_store(
     )]);
     let relays = Arc::new(Relays::new(host.clone()));
     let channels = Channels {
+        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
         host,
         email: crate::email::EmailSender::new(),
         running: Arc::new(Mutex::new(running)),
@@ -1474,4 +1477,44 @@ fn exported_manifest_preserves_the_complete_contract_member_order() {
         .map(|method| method.as_str())
         .collect();
     assert_eq!(actual, tinychannels_bus::METHODS);
+}
+
+#[tokio::test]
+async fn progressive_reply_is_opened_owned_and_closed_inside_the_module() {
+    use tinychannels_bus::module_progressive::{ProgressiveCommand, ProgressiveResult};
+    let service = inbound_preparation_service().await;
+    let opened = service
+        .execute_progressive(ProgressiveCommand::Open {
+            channel: "telegram:fixture".into(),
+        })
+        .await
+        .unwrap();
+    let ProgressiveResult::Opened { handle } = opened else {
+        panic!("missing progressive handle")
+    };
+    assert_eq!(
+        service
+            .execute_progressive(ProgressiveCommand::Close {
+                handle: handle.clone()
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Closed
+    );
+    assert_eq!(
+        service
+            .execute_progressive(ProgressiveCommand::Close { handle })
+            .await
+            .unwrap(),
+        ProgressiveResult::Closed
+    );
+    service.shutdown().await.unwrap();
+    assert!(
+        service
+            .execute_progressive(ProgressiveCommand::Open {
+                channel: "telegram:fixture".into()
+            })
+            .await
+            .is_err()
+    );
 }
