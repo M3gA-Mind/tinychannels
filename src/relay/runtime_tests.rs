@@ -33,6 +33,12 @@ fn relay_result_maps_message_id_and_failures() {
     let err = relay_send_message_result(serde_json::json!({"success": false, "error": "denied"}))
         .unwrap_err();
     assert_eq!(err.to_string(), "relay outbound failed: denied");
+    assert_eq!(
+        relay_send_message_result(serde_json::json!({"success": false}))
+            .unwrap_err()
+            .to_string(),
+        "relay outbound failed: relay outbound failed"
+    );
 }
 
 #[tokio::test]
@@ -42,7 +48,7 @@ async fn relay_teardown_removes_only_its_own_transport() {
     #[async_trait::async_trait]
     impl RelayFrameIo for NoNetwork {
         async fn send(&self, _: GatewayToConnectorFrame) -> Result<(), RelayTransportError> {
-            panic!("registry lifecycle must not send network traffic")
+            Err(RelayTransportError::Closed)
         }
         async fn recv(&self) -> Result<Option<ConnectorToGatewayFrame>, RelayTransportError> {
             panic!("registry lifecycle must not receive network traffic")
@@ -55,10 +61,21 @@ async fn relay_teardown_removes_only_its_own_transport() {
             RelayTransportTimeouts::default(),
         ))
     };
+    let intent = ChannelOutboundIntent {
+        channel_id: "discord".into(),
+        conversation_id: "room".into(),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "hello".into(),
+        },
+        ..Default::default()
+    };
+    assert!(send_outbound_intent(&intent).await.unwrap().is_none());
     let old = make_transport();
     let newer = make_transport();
     register_relay_transport(old.clone());
     register_relay_transport(newer.clone());
+    let error = send_outbound_intent(&intent).await.unwrap_err();
+    assert!(error.to_string().contains("relay outbound failed"));
     unregister_relay_transport(&old);
     assert!(Arc::ptr_eq(&current_relay_transport().unwrap(), &newer));
     unregister_relay_transport(&newer);
