@@ -487,3 +487,7 @@ async fn handle_frame(
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "transport_tests.rs"]
+mod tests;
