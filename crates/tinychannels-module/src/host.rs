@@ -44,6 +44,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tinybus::{Connection, Error, Result};
 use tinychannels_bus::names::{HOST_BUS_NAME, HOST_OBJECT_PATH, host_methods};
+use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
 use tinychannels_bus::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult};
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -51,7 +52,8 @@ use tokio::task::JoinHandle;
 const OUTBOX_CAPACITY: usize = 256;
 const MAX_CALLBACK_BYTES: usize = 128 * 1024;
 const MAX_TRANSCRIPTION_REQUEST_BYTES: usize = 12 * 1024 * 1024;
-const MAX_ACTIVE_TRANSCRIPTIONS: usize = 16;
+const MAX_ACTIVE_HOST_CALLBACKS: usize = 16;
+const MAX_CONTROLLER_PAYLOAD_BYTES: usize = 1024 * 1024;
 
 enum Notification {
     DeliverInbound {
@@ -82,17 +84,17 @@ struct Owner {
     worker: Mutex<Option<JoinHandle<()>>>,
     terminal: AtomicBool,
     publication: Mutex<()>,
-    active_transcriptions: AtomicUsize,
-    transcriptions_drained: Notify,
+    active_callbacks: AtomicUsize,
+    callbacks_drained: Notify,
     failure: Arc<StdMutex<Option<String>>>,
 }
 
-struct ActiveTranscription(Arc<Owner>);
+struct ActiveHostCallback(Arc<Owner>);
 
-impl Drop for ActiveTranscription {
+impl Drop for ActiveHostCallback {
     fn drop(&mut self) {
-        self.0.active_transcriptions.fetch_sub(1, Ordering::SeqCst);
-        self.0.transcriptions_drained.notify_waiters();
+        self.0.active_callbacks.fetch_sub(1, Ordering::SeqCst);
+        self.0.callbacks_drained.notify_waiters();
     }
 }
 impl Drop for Owner {
@@ -228,8 +230,8 @@ impl HostChannels {
                 worker: Mutex::new(Some(worker)),
                 terminal: AtomicBool::new(false),
                 publication: Mutex::new(()),
-                active_transcriptions: AtomicUsize::new(0),
-                transcriptions_drained: Notify::new(),
+                active_callbacks: AtomicUsize::new(0),
+                callbacks_drained: Notify::new(),
                 failure,
             }),
         }
@@ -256,15 +258,8 @@ impl HostChannels {
         // Admission is serialized with shutdown by `publication`; callbacks
         // can only decrement this count while an admission is in progress.
         // Reserve first, then roll back if the existing count was already full.
-        if self
-            .owner
-            .active_transcriptions
-            .fetch_add(1, Ordering::SeqCst)
-            >= MAX_ACTIVE_TRANSCRIPTIONS
-        {
-            self.owner
-                .active_transcriptions
-                .fetch_sub(1, Ordering::SeqCst);
+        if self.owner.active_callbacks.fetch_add(1, Ordering::SeqCst) >= MAX_ACTIVE_HOST_CALLBACKS {
+            self.owner.active_callbacks.fetch_sub(1, Ordering::SeqCst);
             return Err(Error::failed("too many active transcription callbacks"));
         }
         let owner = self.owner.clone();
@@ -272,7 +267,7 @@ impl HostChannels {
         let (reply, wait) = oneshot::channel();
         drop(publication);
         tokio::spawn(async move {
-            let _active = ActiveTranscription(owner);
+            let _active = ActiveHostCallback(owner);
             let result = async {
                 let proxy = connection.proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME)?;
                 proxy.call(host_methods::TRANSCRIBE, request).await
@@ -282,6 +277,50 @@ impl HostChannels {
         });
         wait.await
             .map_err(|_| Error::failed("transcription callback was interrupted"))?
+    }
+
+    /// Invoke one bounded host-owned credential, persistence, or managed API
+    /// capability required by the module's controller adapter.
+    pub async fn dispatch_controller_backend(
+        &self,
+        request: ChannelBackendRequest,
+    ) -> Result<ChannelBackendResult> {
+        if serde_json::to_vec(&request)
+            .map_or(true, |bytes| bytes.len() > MAX_CONTROLLER_PAYLOAD_BYTES)
+        {
+            return Err(Error::failed("controller request exceeds byte limit"));
+        }
+        let publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(Error::failed("callback consumer is closed"));
+        }
+        if self.owner.active_callbacks.fetch_add(1, Ordering::SeqCst) >= MAX_ACTIVE_HOST_CALLBACKS {
+            self.owner.active_callbacks.fetch_sub(1, Ordering::SeqCst);
+            return Err(Error::failed("too many active host callbacks"));
+        }
+        let owner = self.owner.clone();
+        let connection = self.connection.clone();
+        let (reply, wait) = oneshot::channel();
+        drop(publication);
+        tokio::spawn(async move {
+            let _active = ActiveHostCallback(owner);
+            let result = async {
+                let proxy = connection.proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME)?;
+                let result: ChannelBackendResult = proxy
+                    .call(host_methods::DISPATCH_CONTROLLER_BACKEND, request)
+                    .await?;
+                if serde_json::to_vec(&result)
+                    .map_or(true, |bytes| bytes.len() > MAX_CONTROLLER_PAYLOAD_BYTES)
+                {
+                    return Err(Error::failed("controller result exceeds byte limit"));
+                }
+                Ok(result)
+            }
+            .await;
+            let _ = reply.send(result);
+        });
+        wait.await
+            .map_err(|_| Error::failed("host controller callback was interrupted"))?
     }
 
     /// Publish one bounded provider event through the host event sink.
@@ -394,10 +433,10 @@ impl HostChannels {
         self.owner.terminal.store(true, Ordering::SeqCst);
         drop(publication);
         loop {
-            let notified = self.owner.transcriptions_drained.notified();
+            let notified = self.owner.callbacks_drained.notified();
             tokio::pin!(notified);
             notified.as_mut().enable();
-            if self.owner.active_transcriptions.load(Ordering::SeqCst) == 0 {
+            if self.owner.active_callbacks.load(Ordering::SeqCst) == 0 {
                 break;
             }
             notified.await;

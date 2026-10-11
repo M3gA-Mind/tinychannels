@@ -56,6 +56,8 @@ pub mod methods {
     pub const CHANNEL_STATUS: &str = "ChannelStatus";
     /// Start a provider with host-selected HTTP proxy policy.
     pub const START_CHANNEL_CONFIGURED: &str = "StartChannelConfigured";
+    /// Dispatch typed controller work through TinyChannels' owning manager.
+    pub const CHANNEL_CONTROLLER: &str = "ChannelController";
 }
 
 /// One constant per method name on [`HOST_BUS_NAME`].
@@ -88,10 +90,12 @@ pub mod host_methods {
     pub const TRANSCRIBE: &str = "Transcribe";
     /// `PublishEvent` — publish one provider event through the host event sink.
     pub const PUBLISH_EVENT: &str = "PublishEvent";
+    /// Call a narrow host persistence, credential, or managed API capability.
+    pub const DISPATCH_CONTROLLER_BACKEND: &str = "DispatchControllerBackend";
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 18] = [
+pub const METHODS: [&str; 19] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -110,10 +114,11 @@ pub const METHODS: [&str; 18] = [
     methods::SEND_EMAIL_UPLOAD,
     methods::ABORT_EMAIL_UPLOAD,
     methods::START_CHANNEL_CONFIGURED,
+    methods::CHANNEL_CONTROLLER,
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 13] = [
+pub const HOST_METHODS: [&str; 14] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,
@@ -127,6 +132,7 @@ pub const HOST_METHODS: [&str; 13] = [
     host_methods::LOAD_DELIVERY_RESULT,
     host_methods::TRANSCRIBE,
     host_methods::PUBLISH_EVENT,
+    host_methods::DISPATCH_CONTROLLER_BACKEND,
 ];
 
 #[cfg(test)]

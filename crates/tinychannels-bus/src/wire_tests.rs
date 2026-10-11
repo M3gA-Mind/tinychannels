@@ -66,6 +66,97 @@ fn http_proxy_policy_round_trips_without_changing_its_wire_fields() {
 }
 
 #[test]
+fn channel_controller_operations_have_closed_typed_wire_tags() {
+    let request = ChannelControllerRequest::TestChannel {
+        config: ChannelsConfig::default(),
+        channel: "discord".into(),
+        auth_mode: controllers::ChannelAuthMode::BotToken,
+        credentials: json!({"bot_token":"fixture-secret"}),
+    };
+    let wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(wire["operation"], "test_channel");
+    assert_eq!(wire["request"]["channel"], "discord");
+    assert_eq!(
+        wire["request"]["credentials"]["bot_token"],
+        "fixture-secret"
+    );
+    let round_trip = serde_json::from_value::<ChannelControllerRequest>(wire).unwrap();
+    assert!(matches!(
+        round_trip,
+        ChannelControllerRequest::TestChannel { .. }
+    ));
+    assert!(
+        serde_json::from_value::<ChannelControllerRequest>(json!({
+            "operation":"execute_arbitrary",
+            "request":{}
+        }))
+        .is_err()
+    );
+}
+
+#[test]
+fn channel_connect_carries_host_proxy_policy_inside_its_confidential_request() {
+    let request = ChannelControllerRequest::Connect {
+        config: ChannelsConfig::default(),
+        channel: "yuanbao".into(),
+        auth_mode: controllers::ChannelAuthMode::ApiKey,
+        credentials: json!({"app_key":"fixture-key", "app_secret":"fixture-secret"}),
+        proxy: HttpProxyPolicy {
+            https_proxy: Some("http://proxy.invalid:8443".into()),
+            service_selectors: vec!["channel.yuanbao".into()],
+            ..Default::default()
+        },
+    };
+    let wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(wire["operation"], "connect");
+    assert_eq!(
+        wire["request"]["credentials"]["app_secret"],
+        "fixture-secret"
+    );
+    assert_eq!(
+        wire["request"]["proxy"]["https_proxy"],
+        "http://proxy.invalid:8443"
+    );
+    assert_eq!(
+        wire["request"]["proxy"]["service_selectors"][0],
+        "channel.yuanbao"
+    );
+    assert!(matches!(
+        serde_json::from_value::<ChannelControllerRequest>(wire).unwrap(),
+        ChannelControllerRequest::Connect { proxy, .. }
+            if proxy.service_selectors == ["channel.yuanbao"]
+    ));
+}
+
+#[test]
+fn discord_controller_credentials_are_host_hydrated_in_the_confidential_module_request() {
+    let request = ChannelControllerRequest::DiscordListGuilds {
+        config: ChannelsConfig::default(),
+        bot_token: "fixture-secret".into(),
+    };
+    let wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(wire["operation"], "discord_list_guilds");
+    assert_eq!(wire["request"]["bot_token"], "fixture-secret");
+    assert!(matches!(
+        serde_json::from_value::<ChannelControllerRequest>(wire).unwrap(),
+        ChannelControllerRequest::DiscordListGuilds { bot_token, .. }
+            if bot_token == "fixture-secret"
+    ));
+}
+
+#[test]
+fn host_backend_requests_do_not_repeat_module_config_or_credentials() {
+    let wire = serde_json::to_value(ChannelBackendRequest::SendReaction {
+        channel: "discord".into(),
+        reaction: json!({"message_id":"fixture-message","emoji":"✅"}),
+    })
+    .unwrap();
+    assert_eq!(wire["operation"], "send_reaction");
+    assert!(wire["request"].get("config").is_none());
+    assert!(wire["request"].get("credentials").is_none());
+}
+
+#[test]
 fn legacy_message_and_normalized_envelope_keep_optional_field_and_trust_wire() {
     let wire = json!({"id":"m1", "sender":"alice", "reply_target":"room", "content":"hi", "channel":"telegram", "timestamp":7, "thread_ts":"topic"});
     let message: ChannelMessage = serde_json::from_value(wire.clone()).unwrap();
@@ -117,6 +208,8 @@ fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
     }
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible(CONTRACT_VERSION + 1));
+    assert_eq!(CONTRACT_VERSION, 4);
+    assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 6));
 }
 
 #[test]

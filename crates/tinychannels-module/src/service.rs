@@ -10,6 +10,7 @@
 //! ListChannels()                     -> Vec<String>
 //! ChannelStatus(name)                -> ChannelState
 //! StartChannelConfigured(name, config, proxy) -> ()
+//! ChannelController(request) -> ChannelControllerResult
 //! SendChannelIntent(name, intent)     -> ChannelSendMessageResult
 //! ```
 //!
@@ -51,6 +52,8 @@ use tinychannels::factory::{
     ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
 };
 use tinychannels::host::ChannelHost;
+use tinychannels_bus::ChannelControllerRequest;
+use tinychannels_bus::ChannelControllerResult;
 use tinychannels_bus::ChannelOutboundIntent;
 use tinychannels_bus::HttpProxyPolicy;
 use tinychannels_bus::config::RelayRuntimeConfig;
@@ -263,6 +266,23 @@ impl Channels {
         let http = ConfiguredHttpClients::new(proxy)
             .map_err(|_| BusError::failed("invalid host HTTP proxy policy"))?;
         self.start_channel_inner(name, config, &http).await
+    }
+
+    /// Dispatch one typed operation through TinyChannels' ChannelManager.
+    ///
+    /// The request can contain channel credentials and therefore requires a
+    /// confidential host-to-module call. TinyChannels owns validation and
+    /// provider-native operations; its callback port is limited to host-owned
+    /// configuration persistence and authenticated managed API calls.
+    #[tinybus(confidential)]
+    async fn channel_controller(
+        &self,
+        request: ChannelControllerRequest,
+    ) -> BusResult<ChannelControllerResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        crate::controller::dispatch(&self.host, request).await
     }
 
     /// Disconnect `name` and drop its tasks.
@@ -816,6 +836,7 @@ pub(crate) mod exports {
             "ReserveRelay", "StartRelay", "StopRelay", "RelayStatus", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
             "BeginEmailUpload", "AppendEmailUploadChunk", "SendEmailUpload", "AbortEmailUpload",
             "StartChannelConfigured",
+            "ChannelController",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:
