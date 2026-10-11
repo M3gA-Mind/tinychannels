@@ -21,3 +21,9 @@ The original module and host callback names, method arities, JSON field names,
 optional fields and persisted configuration values are unchanged. See the
 [relocation specification](../../docs/spec/pure-contract-relocation.md) for
 necessary Rust source API migrations and subsequent module-operation slices.
+
+`ChannelInteraction(request)` adds instance capability discovery, typing start/stop,
+and draft creation, updates and finalization. It is a confidential call. The
+module serializes these operations with ordinary sends in its bounded provider
+queue; stopping a provider joins admitted work and rejects subsequent calls.
+Contract version 6 adds the member without changing existing method arity.

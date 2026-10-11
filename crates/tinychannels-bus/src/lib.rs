@@ -12,6 +12,7 @@ pub mod http;
 pub mod module_controller;
 pub mod module_delivery;
 pub mod module_email;
+pub mod module_interaction;
 pub mod module_relay;
 pub mod names;
 pub mod relay;
@@ -41,3 +42,7 @@ pub use version::{CONTRACT_VERSION, is_compatible};
 #[cfg(test)]
 #[path = "wire_tests.rs"]
 mod tests;
+
+pub use module_interaction::{
+    ChannelInteraction, ChannelInteractionInfo, ChannelInteractionRequest, ChannelInteractionResult,
+};

@@ -18,6 +18,7 @@ mod controller;
 mod delivery;
 mod email;
 pub mod host;
+mod interaction;
 mod provider;
 mod relay;
 mod service;

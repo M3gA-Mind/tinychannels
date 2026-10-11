@@ -14,7 +14,17 @@
 //! in explicitly rather than inherit behaviour it may not support.
 
 /// What a channel can do beyond plain send/receive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+    schemars::JsonSchema,
+)]
 pub struct ChannelCapabilities {
     /// The channel carries free-text replies from the user who started the
     /// turn, so remote-control slash commands (`/status`, `/sessions`, `/new`,

@@ -218,6 +218,34 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
             tinychannels_bus::BUS_NAME,
         )
         .unwrap();
+    let interaction = tinychannels_bus::ChannelInteractionRequest {
+        channel: "missing".into(),
+        interaction: tinychannels_bus::ChannelInteraction::StartTyping {
+            recipient: "room".into(),
+        },
+    };
+    assert_eq!(
+        proxy
+            .call::<tinychannels_bus::ChannelInteractionResult>(
+                "ChannelInteraction",
+                interaction.clone()
+            )
+            .await
+            .unwrap_err()
+            .wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    assert_eq!(
+        proxy
+            .call_confidential::<tinychannels_bus::ChannelInteractionResult>(
+                "ChannelInteraction",
+                interaction
+            )
+            .await
+            .unwrap_err()
+            .wire_name(),
+        "ai.tinyhumans.tinychannels.Error.UnknownChannel"
+    );
     // The configured member stays callable through the loaded artifact. An
     // absent channel gives the typed configuration error before any provider
     // or network resource is created.
