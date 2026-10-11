@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -16,7 +17,7 @@ class FeatureLaneTests(unittest.TestCase):
             calls = root / "calls.jsonl"
             cargo = root / "cargo"
             cargo.write_text(
-                "#!/usr/bin/env python3\nimport json, os, sys\n"
+                f"#!{sys.executable}\nimport json, os, sys\n"
                 "with open(os.environ['FEATURE_LANE_CALLS'], 'a') as calls:\n"
                 " calls.write(json.dumps(sys.argv[1:]) + '\\n')\n"
             )
@@ -25,8 +26,6 @@ class FeatureLaneTests(unittest.TestCase):
             python = root / "python3"
             python.write_text("#!/bin/sh\nexit 0\n")
             python.chmod(0o755)
-            # Use an absolute interpreter so the stub does not intercept cargo.
-            cargo.write_text(cargo.read_text().replace("#!/usr/bin/env python3", "#!" + os.sys.executable))
             result = subprocess.run(
                 ["bash", str(ROOT / "scripts/test-features.sh")],
                 env=dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
