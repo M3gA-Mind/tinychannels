@@ -103,6 +103,7 @@ struct SendCommand {
     started: oneshot::Sender<()>,
 }
 
+#[derive(Debug)]
 pub(crate) enum RunningSendError {
     NotDispatched(String),
     AfterDispatch(String),

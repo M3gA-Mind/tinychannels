@@ -107,7 +107,7 @@ impl Channel for InteractionChannel {
 
 #[tokio::test]
 async fn provider_actor_orders_interactions_with_sends_and_rejects_after_stop() {
-    use tinychannels_bus::ChannelInteraction as Op;
+    use tinychannels_bus::{ChannelInteraction as Op, ChannelInteractionResult};
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
