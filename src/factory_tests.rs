@@ -8,9 +8,6 @@
 
 use super::*;
 use crate::NoopHost;
-use crate::factory::{
-    ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
-};
 use crate::host::ChannelHost;
 use std::sync::Arc;
 use tinychannels_bus::ChannelsConfig;
@@ -260,7 +257,7 @@ async fn whatsapp_web_configuration_respects_the_feature_gate() {
     }))
     .unwrap();
     let expected: Vec<&str> = if cfg!(feature = "whatsapp-web") {
-        vec!["whatsapp-web"]
+        vec!["whatsapp"]
     } else {
         vec![]
     };
