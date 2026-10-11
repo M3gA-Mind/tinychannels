@@ -102,3 +102,87 @@ async fn full_dm_dispatch() {
         outcome
     );
 }
+
+#[test]
+fn pipeline_orders_trust_and_filter_stages_before_dispatch_enrichment() {
+    let pipeline = InboundPipeline::new(PipelineState::new(&cfg("bot1"), "bot1".into()));
+    let names: Vec<_> = pipeline.stages.iter().map(|stage| stage.name()).collect();
+    assert_eq!(
+        names,
+        vec![
+            "decode",
+            "extract_fields",
+            "recall_guard",
+            "dedup",
+            "skip_self",
+            "chat_routing",
+            "access_guard",
+            "auto_set_home",
+            "extract_content",
+            "placeholder_filter",
+            "owner_command",
+            "build_source",
+            "group_at_guard",
+            "group_attribution",
+            "classify_msg_type",
+            "quote_context",
+            "media_resolve",
+        ]
+    );
+}
+
+#[test]
+fn dedup_evicts_oldest_at_capacity_and_expired_ids_can_be_reinserted() {
+    let mut cache = DedupCache::new(2, 60);
+    assert!(!cache.check_and_insert("first"));
+    assert!(!cache.check_and_insert("second"));
+    assert!(!cache.check_and_insert("third"));
+    assert!(!cache.index.contains("first"));
+    assert!(cache.check_and_insert("second"));
+    cache.order.front_mut().unwrap().1 = Instant::now() - Duration::from_secs(61);
+    assert!(!cache.check_and_insert("second"));
+    assert_eq!(
+        cache
+            .order
+            .iter()
+            .map(|(id, _)| id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["third", "second"]
+    );
+}
+
+#[test]
+fn closed_access_aliases_disable_inbound_access() {
+    for policy in ["closed", "disabled", "none", "CLOSED"] {
+        assert_eq!(AccessPolicy::parse(policy), AccessPolicy::Closed);
+    }
+    assert_eq!(AccessPolicy::parse("unknown"), AccessPolicy::Allowlist);
+}
+
+struct AbortStage;
+
+#[async_trait]
+impl Middleware for AbortStage {
+    fn name(&self) -> &'static str {
+        "abort"
+    }
+    async fn process(&self, _state: &PipelineState, _ctx: &mut PipelineCtx) -> MwResult {
+        MwResult::Abort(YuanbaoError::AuthFailed("middleware rejected".into()))
+    }
+}
+
+#[tokio::test]
+async fn middleware_abort_preserves_error_and_malformed_json_fails_before_stages() {
+    let mut pipeline = InboundPipeline::new(PipelineState::new(&cfg("bot1"), "bot1".into()));
+    pipeline.stages = vec![Box::new(AbortStage)];
+    match pipeline.process(b"{}").await {
+        PipelineOutcome::Failed(YuanbaoError::AuthFailed(message)) => {
+            assert_eq!(message, "middleware rejected")
+        }
+        outcome => panic!("unexpected outcome: {outcome:?}"),
+    }
+    assert!(matches!(
+        pipeline.process(b"{invalid").await,
+        PipelineOutcome::Failed(YuanbaoError::Proto(_))
+    ));
+}
