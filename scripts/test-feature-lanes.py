@@ -17,7 +17,7 @@ class FeatureLaneTests(unittest.TestCase):
             # Functions avoid Windows PATH/PATHEXT lookup and executable-script
             # handling; forward slashes work in both native and Git Bash paths.
             result = subprocess.run(
-                ["bash", "-c", '\n'.join([
+                [os.environ.get("FEATURE_TEST_BASH", "bash"), "-c", '\n'.join([
                     'cargo() { printf "%s\\n" "$*" >> "$FEATURE_LANE_CALLS"; }',
                     'python3() { return 0; }',
                     'export -f cargo python3',
