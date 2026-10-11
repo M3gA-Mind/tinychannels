@@ -6,6 +6,7 @@ use tokio::sync::Notify;
 #[derive(Clone, Default)]
 struct Callback {
     sends: Arc<Mutex<Vec<Value>>>,
+    requests: Arc<Mutex<Vec<ProgressiveTransportRequest>>>,
     block: bool,
     entered: Arc<Notify>,
     released: Arc<Notify>,
@@ -20,6 +21,7 @@ impl Callback {
         let ChannelBackendRequest::ProgressiveTransport(request) = request else {
             return Err(Error::failed("unexpected callback"));
         };
+        self.requests.lock().await.push(request.clone());
         if let ProgressiveTransportRequest::Send { message, .. } = request {
             self.sends.lock().await.push(message);
             if self.block {
@@ -430,4 +432,24 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
     );
     assert!(reply.state().content.is_empty());
     assert_eq!(reply.state().thinking_accumulator.len(), MAX_CONTENT);
+}
+
+#[tokio::test]
+async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
+    let (replies, callback) = fixture(false).await;
+    let sender = Sender(replies.host.clone());
+    sender
+        .edit("discord:room", "message-id", "updated")
+        .await
+        .unwrap();
+    sender.delete("discord:room", "message-id").await.unwrap();
+    let requests = callback.requests.lock().await;
+    assert!(
+        matches!(&requests[0], ProgressiveTransportRequest::Edit { channel, message_id, text }
+        if channel == "discord:room" && message_id == "message-id" && text == "updated")
+    );
+    assert!(
+        matches!(&requests[1], ProgressiveTransportRequest::Delete { channel, message_id }
+        if channel == "discord:room" && message_id == "message-id")
+    );
 }
