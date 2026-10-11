@@ -10,6 +10,7 @@ pub mod error;
 pub mod health;
 pub mod host;
 pub mod http;
+pub mod module_control;
 pub mod module_controller;
 pub mod module_delivery;
 pub mod module_email;
