@@ -9,6 +9,7 @@
 //! SendMessage(name, SendMessage)     -> ()
 //! ListChannels()                     -> Vec<String>
 //! ChannelStatus(name)                -> ChannelState
+//! StartChannelConfigured(name, config, proxy) -> ()
 //! SendChannelIntent(name, intent)     -> ChannelSendMessageResult
 //! ```
 //!
@@ -46,9 +47,12 @@ use tinychannels::delivery::{
     QueuedDelivery, UnknownSendReconciliation, ack_delivery, drain_selected_pending_deliveries,
     enqueue_delivery, recover_pending_deliveries,
 };
-use tinychannels::factory::{DefaultHttpClients, build_channels};
+use tinychannels::factory::{
+    ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
+};
 use tinychannels::host::ChannelHost;
 use tinychannels_bus::ChannelOutboundIntent;
+use tinychannels_bus::HttpProxyPolicy;
 use tinychannels_bus::config::RelayRuntimeConfig;
 use tinychannels_bus::controllers::ChannelSendMessageResult;
 use tinychannels_bus::module_relay::{RelayReservation, RelayStatus};
@@ -94,6 +98,68 @@ struct Channels {
 struct ModuleDeliveryHandler {
     running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
     store: HostDeliveryStore,
+}
+
+impl Channels {
+    async fn start_channel_inner(
+        &self,
+        name: String,
+        config: ChannelsConfig,
+        http: &dyn HttpClientFactory,
+    ) -> BusResult<()> {
+        let mut running = self.running.lock().await;
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        if running
+            .get(&name)
+            .is_some_and(|running| running.is_finished())
+        {
+            running.remove(&name);
+        }
+        if running.contains_key(&name) {
+            return Err(BusError::MethodFailed {
+                name: ALREADY_RUNNING_ERROR.to_owned(),
+                message: format!("channel {name} is already running"),
+            });
+        }
+
+        let hooks = Arc::new(Hooks::default());
+        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone());
+        let built = build_channels(&config, &owner_host, http);
+        let channel = built
+            .into_iter()
+            .find(|candidate| candidate.name() == name)
+            .ok_or_else(|| BusError::MethodFailed {
+                name: NOT_CONFIGURED_ERROR.to_owned(),
+                message: format!("channel {name} is not present in the supplied config"),
+            })?;
+
+        if is_webhook_backed(&name, &config) {
+            return Err(BusError::MethodFailed {
+                name: NO_INGRESS_ERROR.to_owned(),
+                message: format!(
+                    "channel {name} receives inbound traffic through an external webhook, \
+                     and this module has no ingress for it; run this provider in-process \
+                     or serve its webhook host-side"
+                ),
+            });
+        }
+
+        running.insert(
+            name.clone(),
+            Running::start(channel, hooks, self.host.clone()),
+        );
+        drop(running);
+        finish_start_admission(
+            &self.host,
+            &self.running,
+            &self.delivery_admission,
+            &self.terminal,
+            &name,
+        )
+        .await
+    }
 }
 
 #[async_trait::async_trait]
@@ -179,76 +245,24 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
 impl Channels {
     /// Connect `name` from `config` and start receiving.
     async fn start_channel(&self, name: String, config: ChannelsConfig) -> BusResult<()> {
-        let mut running = self.running.lock().await;
-        if self.terminal.load(Ordering::SeqCst) {
-            return Err(BusError::failed("module is shutting down"));
-        }
-        if running
-            .get(&name)
-            .is_some_and(|running| running.is_finished())
-        {
-            running.remove(&name);
-        }
-        if running.contains_key(&name) {
-            return Err(BusError::MethodFailed {
-                name: ALREADY_RUNNING_ERROR.to_owned(),
-                message: format!("channel {name} is already running"),
-            });
-        }
+        self.start_channel_inner(name, config, &DefaultHttpClients)
+            .await
+    }
 
-        // The factory builds every *configured* provider; we take the one asked
-        // for. Building the set is cheap (no I/O) and keeps a single
-        // config-to-provider mapping rather than a second one here that could
-        // disagree about, say, which WhatsApp backend a stanza describes.
-        let hooks = Arc::new(Hooks::default());
-        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone());
-        let built = build_channels(&config, &owner_host, &DefaultHttpClients);
-        let channel = built
-            .into_iter()
-            .find(|candidate| candidate.name() == name)
-            .ok_or_else(|| BusError::MethodFailed {
-                name: NOT_CONFIGURED_ERROR.to_owned(),
-                message: format!("channel {name} is not present in the supplied config"),
-            })?;
-
-        // Refuse the providers whose inbound path this module cannot serve.
-        //
-        // Linq and the WhatsApp *Cloud API* variant are push-based: their
-        // `listen` implementations sleep forever, because messages arrive at an
-        // HTTPS webhook the host operates. The module exports no route or bus
-        // member that can feed such a payload into the channel, so starting one
-        // here would report success and then deliver nothing, for ever — the
-        // worst failure shape available.
-        //
-        // Failing loudly is deliberately preferred to a silent no-op. When
-        // webhook ingress is added to the contract this check is what gets
-        // relaxed. (WhatsApp *Web* is unaffected: it has a real listen loop.
-        // Both variants report `name() == "whatsapp"`, so the config shape is
-        // what distinguishes them, not the name.)
-        if is_webhook_backed(&name, &config) {
-            return Err(BusError::MethodFailed {
-                name: NO_INGRESS_ERROR.to_owned(),
-                message: format!(
-                    "channel {name} receives inbound traffic through an external webhook, \
-                     and this module has no ingress for it; run this provider in-process \
-                     or serve its webhook host-side"
-                ),
-            });
-        }
-
-        running.insert(
-            name.clone(),
-            Running::start(channel, hooks, self.host.clone()),
-        );
-        drop(running);
-        finish_start_admission(
-            &self.host,
-            &self.running,
-            &self.delivery_admission,
-            &self.terminal,
-            &name,
-        )
-        .await
+    /// Connect one provider with host-selected HTTP proxy configuration.
+    ///
+    /// This additive operation is confidential because proxy URLs may include
+    /// credentials. `StartChannel` retains its original two-argument wire.
+    #[tinybus(confidential)]
+    async fn start_channel_configured(
+        &self,
+        name: String,
+        config: ChannelsConfig,
+        proxy: HttpProxyPolicy,
+    ) -> BusResult<()> {
+        let http = ConfiguredHttpClients::new(proxy)
+            .map_err(|_| BusError::failed("invalid host HTTP proxy policy"))?;
+        self.start_channel_inner(name, config, &http).await
     }
 
     /// Disconnect `name` and drop its tasks.
@@ -801,6 +815,7 @@ pub(crate) mod exports {
             "ChannelStatus",
             "ReserveRelay", "StartRelay", "StopRelay", "RelayStatus", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
             "BeginEmailUpload", "AppendEmailUploadChunk", "SendEmailUpload", "AbortEmailUpload",
+            "StartChannelConfigured",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:

@@ -40,6 +40,7 @@ use crate::{
     YuanbaoChannel,
 };
 use tinychannels_bus::ChannelsConfig;
+use tinychannels_bus::HttpProxyPolicy;
 
 /// Supplies the HTTP client each network-backed provider should use.
 ///
@@ -71,6 +72,143 @@ pub struct DefaultHttpClients;
 impl HttpClientFactory for DefaultHttpClients {
     fn client_for(&self, _channel: &str) -> reqwest::Client {
         reqwest::Client::new()
+    }
+}
+
+/// A module-owned HTTP factory configured by its embedding host.
+///
+/// The policy is received over a confidential module member because URLs may
+/// include credentials. Error text deliberately excludes the supplied URLs.
+pub struct ConfiguredHttpClients {
+    policy: HttpProxyPolicy,
+    default_client: reqwest::Client,
+    signal_default_client: reqwest::Client,
+    proxy_client: reqwest::Client,
+    signal_proxy_client: reqwest::Client,
+}
+
+impl ConfiguredHttpClients {
+    /// Validate and retain a host-provided proxy policy.
+    pub fn new(policy: HttpProxyPolicy) -> anyhow::Result<Self> {
+        for (label, value) in [
+            ("HTTP", policy.http_proxy.as_deref()),
+            ("HTTPS", policy.https_proxy.as_deref()),
+            ("all-schemes", policy.all_proxy.as_deref()),
+        ] {
+            let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+                continue;
+            };
+            if value.len() > 4096 || reqwest::Proxy::all(value).is_err() {
+                anyhow::bail!("invalid {label} proxy URL");
+            }
+        }
+        if policy.no_proxy.len() > 128
+            || policy.no_proxy.iter().any(|entry| entry.len() > 1024)
+            || policy.service_selectors.len() > 64
+            || policy
+                .service_selectors
+                .iter()
+                .any(|selector| selector.len() > 128 || selector.trim().is_empty())
+        {
+            anyhow::bail!("HTTP proxy policy exceeds its limit");
+        }
+        let default_client = build_client(None, false)?;
+        let signal_default_client = build_client(None, true)?;
+        let proxy_client = build_client(Some(&policy), false)?;
+        let signal_proxy_client = build_client(Some(&policy), true)?;
+        Ok(Self {
+            policy,
+            default_client,
+            signal_default_client,
+            proxy_client,
+            signal_proxy_client,
+        })
+    }
+
+    fn applies_to(&self, service: &str) -> bool {
+        self.policy.service_selectors.iter().any(|selector| {
+            if let Some(prefix) = selector.strip_suffix("*") {
+                service.starts_with(prefix)
+            } else {
+                selector == service
+            }
+        })
+    }
+
+    fn client(&self, service: &str, signal: bool) -> reqwest::Client {
+        let proxied = self.applies_to(service);
+        match (proxied, signal) {
+            (false, false) => self.default_client.clone(),
+            (false, true) => self.signal_default_client.clone(),
+            (true, false) => self.proxy_client.clone(),
+            (true, true) => self.signal_proxy_client.clone(),
+        }
+    }
+}
+
+fn build_client(policy: Option<&HttpProxyPolicy>, signal: bool) -> anyhow::Result<reqwest::Client> {
+    let builder = reqwest::Client::builder();
+    let builder = if signal {
+        builder.connect_timeout(std::time::Duration::from_secs(10))
+    } else {
+        builder
+    };
+    let Some(policy) = policy else {
+        return builder
+            .build()
+            .map_err(|_| anyhow::anyhow!("failed to build HTTP client"));
+    };
+    let no_proxy = policy
+        .no_proxy
+        .iter()
+        .map(|entry| entry.trim())
+        .filter(|entry| !entry.is_empty())
+        .collect::<Vec<_>>()
+        .join(",");
+    let no_proxy = reqwest::NoProxy::from_string(&no_proxy);
+    let mut builder = builder;
+    if let Some(value) = policy
+        .all_proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let proxy = reqwest::Proxy::all(value)
+            .map_err(|_| anyhow::anyhow!("invalid all-schemes proxy URL"))?;
+        builder = builder.proxy(proxy.no_proxy(no_proxy.clone()));
+    }
+    if let Some(value) = policy
+        .http_proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let proxy =
+            reqwest::Proxy::http(value).map_err(|_| anyhow::anyhow!("invalid HTTP proxy URL"))?;
+        builder = builder.proxy(proxy.no_proxy(no_proxy.clone()));
+    }
+    if let Some(value) = policy
+        .https_proxy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        let proxy =
+            reqwest::Proxy::https(value).map_err(|_| anyhow::anyhow!("invalid HTTPS proxy URL"))?;
+        builder = builder.proxy(proxy.no_proxy(no_proxy));
+    }
+    builder
+        .build()
+        .map_err(|_| anyhow::anyhow!("failed to build HTTP client"))
+}
+
+impl HttpClientFactory for ConfiguredHttpClients {
+    fn client_for(&self, channel: &str) -> reqwest::Client {
+        self.client(channel, false)
+    }
+
+    fn signal_client(&self) -> reqwest::Client {
+        self.client("channel.signal", true)
     }
 }
 

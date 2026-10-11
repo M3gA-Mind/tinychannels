@@ -54,6 +54,8 @@ pub mod methods {
     pub const LIST_CHANNELS: &str = "ListChannels";
     /// `ChannelStatus` — report connection state for one provider.
     pub const CHANNEL_STATUS: &str = "ChannelStatus";
+    /// Start a provider with host-selected HTTP proxy policy.
+    pub const START_CHANNEL_CONFIGURED: &str = "StartChannelConfigured";
 }
 
 /// One constant per method name on [`HOST_BUS_NAME`].
@@ -82,10 +84,14 @@ pub mod host_methods {
     pub const SAVE_DELIVERY_RESULT: &str = "SaveDeliveryResult";
     /// Replay a successful result after a lost final reply.
     pub const LOAD_DELIVERY_RESULT: &str = "LoadDeliveryResult";
+    /// `Transcribe` — use the host's configured speech recognition provider.
+    pub const TRANSCRIBE: &str = "Transcribe";
+    /// `PublishEvent` — publish one provider event through the host event sink.
+    pub const PUBLISH_EVENT: &str = "PublishEvent";
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 17] = [
+pub const METHODS: [&str; 18] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -103,10 +109,11 @@ pub const METHODS: [&str; 17] = [
     methods::APPEND_EMAIL_UPLOAD_CHUNK,
     methods::SEND_EMAIL_UPLOAD,
     methods::ABORT_EMAIL_UPLOAD,
+    methods::START_CHANNEL_CONFIGURED,
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 11] = [
+pub const HOST_METHODS: [&str; 13] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,
@@ -118,6 +125,8 @@ pub const HOST_METHODS: [&str; 11] = [
     host_methods::LOAD_FAILED_DELIVERY,
     host_methods::SAVE_DELIVERY_RESULT,
     host_methods::LOAD_DELIVERY_RESULT,
+    host_methods::TRANSCRIBE,
+    host_methods::PUBLISH_EVENT,
 ];
 
 #[cfg(test)]

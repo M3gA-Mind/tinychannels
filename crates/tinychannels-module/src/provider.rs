@@ -6,6 +6,7 @@ use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::host::{LifecycleRegistry, ShutdownHook};
 use tinychannels::{Channel, ChannelHostBuilder, SendMessage};
+use tinychannels_bus::{HostEventPublication, HostTranscriptionRequest};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
@@ -52,6 +53,8 @@ impl Hooks {
     ) -> Arc<dyn tinychannels::host::ChannelHost> {
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
+            .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
+            .events(Arc::new(ModuleEvents(callbacks.clone())))
             .allowlist(Arc::new(ModuleAllowlist(callbacks)))
             .build()
     }
@@ -74,6 +77,58 @@ impl tinychannels::host::AllowlistStore for ModuleAllowlist {
             .map_err(|error| anyhow::anyhow!(error.to_string()))
     }
 }
+
+struct ModuleTranscriber(HostChannels);
+
+#[async_trait::async_trait]
+impl tinychannels::host::Transcriber for ModuleTranscriber {
+    fn name(&self) -> &str {
+        "module-host"
+    }
+
+    async fn transcribe(
+        &self,
+        request: tinychannels::host::TranscriptionRequest,
+    ) -> anyhow::Result<tinychannels::host::TranscriptionResult> {
+        let result = self
+            .0
+            .transcribe(HostTranscriptionRequest {
+                audio_base64: request.audio_base64,
+                mime_type: request.mime_type,
+                file_name: request.file_name,
+                language: request.language,
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(tinychannels::host::TranscriptionResult {
+            text: result.text,
+            language: result.language,
+            duration_secs: result.duration_secs,
+        })
+    }
+}
+
+struct ModuleEvents(HostChannels);
+
+#[async_trait::async_trait]
+impl tinychannels::host::EventSink for ModuleEvents {
+    async fn publish(
+        &self,
+        domain: &str,
+        kind: &str,
+        payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        self.0
+            .publish_event(HostEventPublication {
+                domain: domain.to_owned(),
+                kind: kind.to_owned(),
+                payload,
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
+}
+
 /// A resource is retained until its owning task acknowledges cleanup.
 pub(crate) struct Running {
     pub(crate) channel: Arc<dyn Channel>,

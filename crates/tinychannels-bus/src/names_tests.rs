@@ -26,6 +26,7 @@ fn every_declared_member_appears_in_its_method_table() {
         methods::APPEND_EMAIL_UPLOAD_CHUNK,
         methods::SEND_EMAIL_UPLOAD,
         methods::ABORT_EMAIL_UPLOAD,
+        methods::START_CHANNEL_CONFIGURED,
     ] {
         assert!(METHODS.contains(&m), "{m} missing from METHODS");
     }
@@ -41,6 +42,8 @@ fn every_declared_member_appears_in_its_method_table() {
         host_methods::LOAD_FAILED_DELIVERY,
         host_methods::SAVE_DELIVERY_RESULT,
         host_methods::LOAD_DELIVERY_RESULT,
+        host_methods::TRANSCRIBE,
+        host_methods::PUBLISH_EVENT,
     ] {
         assert!(HOST_METHODS.contains(&m), "{m} missing from HOST_METHODS");
     }
@@ -58,7 +61,7 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::CHANNEL_STATUS,
         ]
     );
-    assert_eq!(METHODS.len(), 17);
+    assert_eq!(METHODS.len(), 18);
     assert_eq!(
         &METHODS[13..],
         &[
@@ -66,6 +69,7 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::APPEND_EMAIL_UPLOAD_CHUNK,
             methods::SEND_EMAIL_UPLOAD,
             methods::ABORT_EMAIL_UPLOAD,
+            methods::START_CHANNEL_CONFIGURED,
         ]
     );
 }

@@ -7,10 +7,13 @@
 //! answered by starting the real thing.
 
 use crate::NoopHost;
-use crate::factory::{DefaultHttpClients, build_channels};
+use crate::factory::{
+    ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
+};
 use crate::host::ChannelHost;
 use std::sync::Arc;
 use tinychannels_bus::ChannelsConfig;
+use tinychannels_bus::HttpProxyPolicy;
 use tinychannels_bus::config::{DiscordConfig, TelegramConfig, WhatsAppConfig};
 
 fn host() -> Arc<dyn ChannelHost> {
@@ -34,6 +37,101 @@ fn telegram() -> TelegramConfig {
         silent_streaming: false,
         mention_only: false,
     }
+}
+
+#[tokio::test]
+async fn configured_proxy_client_routes_channel_requests_through_the_host_proxy() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_address = proxy.local_addr().unwrap();
+    let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+    tokio::spawn(async move {
+        let (mut stream, _) = proxy.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let read = stream.read(&mut request).await.unwrap();
+        request.truncate(read);
+        let _ = request_tx.send(String::from_utf8_lossy(&request).into_owned());
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+            .await
+            .unwrap();
+    });
+
+    let clients = ConfiguredHttpClients::new(HttpProxyPolicy {
+        all_proxy: Some(format!("http://{proxy_address}")),
+        service_selectors: vec!["channel.*".into()],
+        ..HttpProxyPolicy::default()
+    })
+    .unwrap();
+    let response = clients
+        .client_for("channel.telegram")
+        .get("http://fixture.invalid/path")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let request = request_rx.await.unwrap();
+    assert!(request.starts_with("GET http://fixture.invalid/path HTTP/1.1"));
+}
+
+#[tokio::test]
+async fn configured_proxy_policy_leaves_unselected_channel_direct() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn serve_once(listener: tokio::net::TcpListener, body: &'static str) {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let _ = stream.read(&mut request).await.unwrap();
+        stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await
+            .unwrap();
+    }
+
+    let proxy = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let proxy_address = proxy.local_addr().unwrap();
+    let proxy_task = tokio::spawn(serve_once(proxy, "proxy"));
+    let destination = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let destination_address = destination.local_addr().unwrap();
+    let destination_task = tokio::spawn(serve_once(destination, "direct"));
+
+    let clients = ConfiguredHttpClients::new(HttpProxyPolicy {
+        all_proxy: Some(format!("http://{proxy_address}")),
+        service_selectors: vec!["channel.telegram".into()],
+        ..HttpProxyPolicy::default()
+    })
+    .unwrap();
+    let response = clients
+        .client_for("channel.discord")
+        .get(format!("http://{destination_address}/path"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(response.text().await.unwrap(), "direct");
+    destination_task.await.unwrap();
+    proxy_task.abort();
+}
+
+#[test]
+fn configured_proxy_client_rejects_invalid_urls_without_echoing_credentials() {
+    let secret = "http://user:password@not a valid proxy";
+    let error = ConfiguredHttpClients::new(HttpProxyPolicy {
+        all_proxy: Some(secret.into()),
+        service_selectors: vec!["channel.*".into()],
+        ..HttpProxyPolicy::default()
+    })
+    .err()
+    .expect("invalid proxy policy must be rejected")
+    .to_string();
+    assert!(!error.contains("user"));
+    assert!(!error.contains("password"));
 }
 
 #[test]
