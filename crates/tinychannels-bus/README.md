@@ -28,7 +28,7 @@ module serializes these operations with ordinary sends in its bounded provider
 queue; stopping a provider joins admitted work and rejects subsequent calls.
 Contract version 6 adds the member without changing existing method arity.
 
-Contract version 13 adds confidential `StartRuntimeWithDispatch(handle,
+Contract version 16 adds confidential `StartRuntimeWithDispatch(handle,
 ChannelRuntimeDispatchPolicy)`. The listener count selects the existing module
 admission rule (four turns per listener, clamped to 8–64). This opt-in runtime
 calls its immutable host object's `ProcessInbound(channel, message)` for each
