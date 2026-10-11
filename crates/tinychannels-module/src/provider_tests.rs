@@ -155,7 +155,7 @@ async fn provider_actor_orders_interactions_with_sends_and_rejects_after_stop() 
 
 #[tokio::test(start_paused = true)]
 async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
-    use tinychannels_bus::{ChannelInteraction as Op, ChannelInteractionResult};
+    use tinychannels_bus::ChannelInteraction as Op;
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
