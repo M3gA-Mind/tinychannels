@@ -27,7 +27,7 @@ pub enum ChannelControlRequest {
         listener_count: usize,
     },
     Connected {
-        config: ChannelsConfig,
+        config: Box<ChannelsConfig>,
         channel: String,
         mode: crate::ChannelAuthMode,
     },
