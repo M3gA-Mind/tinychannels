@@ -50,6 +50,27 @@ async fn activated_runtime_dispatch_policy_is_immutable_and_legacy_start_stays_s
         Some(Some(8))
     );
     runtimes.stop(reservation.handle).await.unwrap();
+    let many = runtimes.reserve().await.unwrap();
+    runtimes
+        .start_with_dispatch(
+            many.handle.clone(),
+            tinychannels_bus::ChannelRuntimeDispatchPolicy {
+                listener_count: u32::MAX,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        *runtimes
+            .get(&many.handle)
+            .await
+            .unwrap()
+            .dispatch_limit
+            .lock()
+            .await,
+        Some(Some(64))
+    );
+    runtimes.stop(many.handle).await.unwrap();
     let legacy = runtimes.reserve().await.unwrap();
     runtimes.start(legacy.handle.clone()).await.unwrap();
     assert_eq!(
