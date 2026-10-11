@@ -178,7 +178,7 @@ impl Running {
         hooks: Arc<Hooks>,
         host: HostChannels,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, None)
+        Self::start_inner(channel, hooks, host, None, false)
     }
     pub(crate) fn start_supervised(
         channel: Arc<dyn Channel>,
@@ -186,13 +186,21 @@ impl Running {
         host: HostChannels,
         policy: ChannelSupervisionPolicy,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, Some(policy))
+        Self::start_inner(channel, hooks, host, Some(policy), false)
+    }
+    pub(crate) fn start_outbound(
+        channel: Arc<dyn Channel>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+    ) -> Arc<Self> {
+        Self::start_inner(channel, hooks, host, None, true)
     }
     fn start_inner(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
         supervision: Option<ChannelSupervisionPolicy>,
+        outbound_only: bool,
     ) -> Arc<Self> {
         let (cancel, mut canceled) = watch::channel(false);
         let send_cancel = cancel.subscribe();
@@ -217,7 +225,14 @@ impl Running {
             }));
             let listener_host = host.clone();
             let mut listener = AbortOnDrop(tokio::spawn(async move {
-                listen_with_supervision(listen_channel, tx, listener_host, supervision).await
+                if outbound_only {
+                    // Keep the inbound sender alive until cancellation so the forwarder
+                    // has the same explicit cleanup path as native listeners.
+                    let _inbound = tx;
+                    std::future::pending::<anyhow::Result<()>>().await
+                } else {
+                    listen_with_supervision(listen_channel, tx, listener_host, supervision).await
+                }
             }));
             let mut send_cancel = send_cancel;
             let mut sender = AbortOnDrop(tokio::spawn(async move {

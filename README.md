@@ -15,6 +15,12 @@ schema, connection metadata, route helpers, and backend delegation layer used to
 connect channel surfaces to OpenHuman harnesses without coupling this crate to
 the OpenHuman application crate.
 
+Configured provider discovery, legacy intent normalization, and external-webhook
+outbound startup are confidential module operations. The catalog returns provider
+facts without listening; outbound-only startup preserves Linq and WhatsApp Cloud
+sends while keeping their ingress explicitly external. Existing listener start
+methods retain their refusal when no webhook ingress is available.
+
 ## Intended Scope
 
 - channel abstractions for inbound and outbound message streams
