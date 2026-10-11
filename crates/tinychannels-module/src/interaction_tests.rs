@@ -129,3 +129,21 @@ async fn interaction_dispatch_preserves_provider_draft_and_typing_behavior() {
         ]
     );
 }
+
+#[tokio::test]
+async fn typing_refresh_requires_a_running_provider_owner() {
+    let provider = DraftProvider::default();
+    for operation in [
+        ChannelInteraction::StartTypingRefresh {
+            recipient: "room".into(),
+            interval_secs: 2,
+        },
+        ChannelInteraction::StopTypingRefresh {
+            handle: "handle".into(),
+        },
+    ] {
+        let error = dispatch(&provider, operation).await.unwrap_err();
+        assert!(error.to_string().contains("typing refresh must be owned"));
+    }
+    assert!(provider.0.lock().unwrap().is_empty());
+}
