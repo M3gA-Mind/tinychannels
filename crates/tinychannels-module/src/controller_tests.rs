@@ -17,6 +17,36 @@ impl BackendFixture {
     ) -> Result<ChannelBackendResult> {
         self.0.lock().await.push(request.clone());
         match request {
+            ChannelBackendRequest::Disconnect {
+                channel, auth_mode, ..
+            } => Ok(ChannelBackendResult::Disconnected(
+                tinychannels_bus::controllers::ChannelDisconnectResult {
+                    channel,
+                    auth_mode,
+                    disconnected: true,
+                    ..Default::default()
+                },
+            )),
+            ChannelBackendRequest::Status { channel } => Ok(ChannelBackendResult::Status(
+                channel
+                    .into_iter()
+                    .map(
+                        |channel_id| tinychannels_bus::controllers::ChannelStatusEntry {
+                            channel_id,
+                            auth_mode: ChannelAuthMode::BotToken,
+                            connected: true,
+                            has_credentials: true,
+                            error: None,
+                        },
+                    )
+                    .collect(),
+            )),
+            ChannelBackendRequest::SendReaction { .. } => Ok(ChannelBackendResult::SendReaction(
+                tinychannels_bus::controllers::ChannelReactionResult {
+                    success: true,
+                    ..Default::default()
+                },
+            )),
             ChannelBackendRequest::CreateThread { title, .. } => {
                 Ok(ChannelBackendResult::Thread(ChannelThreadResult {
                     thread_id: "thread-fixture".into(),
@@ -24,8 +54,23 @@ impl BackendFixture {
                     raw: None,
                 }))
             }
-            _ => Err(tinybus::Error::failed(
-                "unexpected controller backend request",
+            ChannelBackendRequest::UpdateThread { thread_id, .. } => {
+                Ok(ChannelBackendResult::Thread(ChannelThreadResult {
+                    thread_id,
+                    title: Some("updated fixture".into()),
+                    raw: None,
+                }))
+            }
+            ChannelBackendRequest::ListThreads { .. } => Ok(ChannelBackendResult::Threads(
+                tinychannels_bus::controllers::ChannelThreadListResult {
+                    threads: vec![tinychannels_bus::controllers::ChannelThreadEntry {
+                        thread_id: "thread-fixture".into(),
+                        title: Some("fixture".into()),
+                        active: Some(true),
+                        raw: None,
+                    }],
+                    raw: None,
+                },
             )),
         }
     }
@@ -88,6 +133,29 @@ async fn controller_manager_validates_credentials_before_host_backend_dispatch()
     ));
     let calls = fixture.0.lock().await;
     assert!(calls.is_empty(), "structural validation is module-owned");
+    drop(calls);
+
+    let pending = dispatch(
+        &host,
+        ChannelControllerRequest::Connect {
+            config: ChannelsConfig::default(),
+            channel: "telegram".into(),
+            auth_mode: ChannelAuthMode::ManagedDm,
+            credentials: Value::Object(Default::default()),
+            proxy: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        pending,
+        ChannelControllerResult::Connected(ChannelConnectionResult {
+            status,
+            auth_action: Some(_),
+            ..
+        }) if status == "pending_auth"
+    ));
+    assert!(fixture.0.lock().await.is_empty());
     host.shutdown().await.unwrap();
 }
 
@@ -125,6 +193,36 @@ async fn email_connect_verifies_provider_config_inside_module_before_host_persis
     assert_eq!(observed.len(), 1);
     assert_eq!(observed[0].imap_port, 993);
     assert_eq!(observed[0].smtp_port, 465);
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn successful_email_test_reports_verified_login() {
+    let (host, fixture, _server) = connected_host().await;
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let result = dispatch_with(
+        &host,
+        ChannelControllerRequest::TestChannel {
+            config: ChannelsConfig::default(),
+            channel: "email".into(),
+            auth_mode: ChannelAuthMode::ApiKey,
+            credentials: email_credentials(),
+        },
+        Arc::new(FakeDiscordApi),
+        Arc::new(RecordingEmailVerifier {
+            observed: observed.clone(),
+            fail: false,
+        }),
+        Arc::new(NativeYuanbaoVerifier),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        result,
+        ChannelControllerResult::TestChannel(ChannelTestResult { success: true, .. })
+    ));
+    assert_eq!(observed.lock().await.len(), 1);
+    assert!(fixture.0.lock().await.is_empty());
     host.shutdown().await.unwrap();
 }
 
@@ -262,6 +360,94 @@ async fn controller_manager_routes_thread_and_discord_results_through_backend_po
         fixture.0.lock().await.as_slice(),
         [ChannelBackendRequest::CreateThread { .. }]
     ));
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn controller_manager_routes_managed_state_and_thread_operations() {
+    let (host, fixture, _server) = connected_host().await;
+
+    let disconnected = dispatch(
+        &host,
+        ChannelControllerRequest::Disconnect {
+            config: ChannelsConfig::default(),
+            channel: "telegram".into(),
+            auth_mode: ChannelAuthMode::BotToken,
+            clear_memory: false,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        disconnected,
+        ChannelControllerResult::Disconnected(result)
+            if result.channel == "telegram" && result.disconnected
+    ));
+
+    let status = dispatch(
+        &host,
+        ChannelControllerRequest::Status {
+            config: ChannelsConfig::default(),
+            channel: Some("telegram".into()),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        status,
+        ChannelControllerResult::Status(entries)
+            if entries.len() == 1 && entries[0].channel_id == "telegram" && entries[0].connected
+    ));
+
+    let reaction = dispatch(
+        &host,
+        ChannelControllerRequest::SendReaction {
+            config: ChannelsConfig::default(),
+            channel: "discord".into(),
+            reaction: serde_json::json!({"message_id":"fixture", "emoji":"✅"}),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        reaction,
+        ChannelControllerResult::SendReaction(result) if result.success
+    ));
+
+    let updated = dispatch(
+        &host,
+        ChannelControllerRequest::UpdateThread {
+            config: ChannelsConfig::default(),
+            channel: "discord".into(),
+            thread_id: "thread-fixture".into(),
+            action: "close".into(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        updated,
+        ChannelControllerResult::Thread(result)
+            if result.thread_id == "thread-fixture" && result.title.as_deref() == Some("updated fixture")
+    ));
+
+    let threads = dispatch(
+        &host,
+        ChannelControllerRequest::ListThreads {
+            config: ChannelsConfig::default(),
+            channel: "discord".into(),
+            active: Some(true),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        threads,
+        ChannelControllerResult::Threads(result)
+            if result.threads.len() == 1 && result.threads[0].active == Some(true)
+    ));
+
+    assert_eq!(fixture.0.lock().await.len(), 5);
     host.shutdown().await.unwrap();
 }
 
