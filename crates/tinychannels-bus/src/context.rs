@@ -1,6 +1,8 @@
 //! Shared channel context vocabulary.
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize, schemars::JsonSchema,
+)]
 pub struct ChannelRouteSelection {
     pub provider: String,
     pub model: String,

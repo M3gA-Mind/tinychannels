@@ -1,9 +1,9 @@
 //! Per-sender route selection and runtime command helpers.
 
 use crate::context::ChannelRouteSelection;
-use serde::Deserialize;
 use std::fmt::Write;
 use std::path::Path;
+pub use tinychannels_bus::module_routes::{ModelCatalog, ModelCatalogEntry, ProviderDescriptor};
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const MODEL_CACHE_PREVIEW_LIMIT: usize = 10;
@@ -14,23 +14,6 @@ pub enum ChannelRuntimeCommand {
     SetProvider(String),
     ShowModel,
     SetModel(String),
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct ModelCacheState {
-    entries: Vec<ModelCacheEntry>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct ModelCacheEntry {
-    provider: String,
-    models: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderDescriptor {
-    pub name: String,
-    pub aliases: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -102,25 +85,44 @@ pub fn load_cached_model_preview(workspace_dir: &Path, provider_name: &str) -> V
     let Ok(raw) = std::fs::read_to_string(cache_path) else {
         return Vec::new();
     };
-    let Ok(state) = serde_json::from_str::<ModelCacheState>(&raw) else {
+    let Ok(state) = serde_json::from_str::<ModelCatalog>(&raw) else {
         return Vec::new();
     };
 
-    state
+    model_preview(&state, provider_name)
+}
+
+/// Select the first exact provider match and preserve its first ten model IDs.
+pub fn model_preview(catalog: &ModelCatalog, provider_name: &str) -> Vec<String> {
+    catalog
         .entries
-        .into_iter()
+        .iter()
         .find(|entry| entry.provider == provider_name)
         .map(|entry| {
             entry
                 .models
-                .into_iter()
+                .iter()
                 .take(MODEL_CACHE_PREVIEW_LIMIT)
-                .collect::<Vec<_>>()
+                .cloned()
+                .collect()
         })
         .unwrap_or_default()
 }
 
 pub fn build_models_help_response(current: &ChannelRouteSelection, workspace_dir: &Path) -> String {
+    let models = load_cached_model_preview(workspace_dir, &current.provider);
+    models_help_from_preview(current, &models)
+}
+
+/// Format model help from a host-resolved catalog without reading storage.
+pub fn build_models_help_response_from_catalog(
+    current: &ChannelRouteSelection,
+    catalog: &ModelCatalog,
+) -> String {
+    models_help_from_preview(current, &model_preview(catalog, &current.provider))
+}
+
+fn models_help_from_preview(current: &ChannelRouteSelection, cached_models: &[String]) -> String {
     let mut response = String::new();
     let _ = writeln!(
         response,
@@ -129,7 +131,6 @@ pub fn build_models_help_response(current: &ChannelRouteSelection, workspace_dir
     );
     response.push_str("\nSwitch model with `/model <model-id>`.\n");
 
-    let cached_models = load_cached_model_preview(workspace_dir, &current.provider);
     if cached_models.is_empty() {
         let _ = writeln!(
             response,

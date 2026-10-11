@@ -17,6 +17,7 @@ pub mod module_inbound;
 pub mod module_interaction;
 pub mod module_progressive;
 pub mod module_relay;
+pub mod module_routes;
 pub mod module_runtime;
 pub mod module_supervision;
 pub mod names;

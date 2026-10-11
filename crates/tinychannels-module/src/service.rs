@@ -404,6 +404,55 @@ impl Channels {
         self.progressive.execute(request).await
     }
 
+    /// Parse runtime switching and render help from host-resolved catalog facts.
+    #[tinybus(confidential)]
+    async fn prepare_runtime_command(
+        &self,
+        request: tinychannels_bus::module_routes::PrepareRuntimeCommandRequest,
+    ) -> BusResult<Option<tinychannels_bus::module_routes::PreparedRuntimeCommand>> {
+        use tinychannels::routes::{self, ChannelRuntimeCommand};
+        use tinychannels_bus::module_routes::PreparedRuntimeCommand;
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(BusError::failed("channel module is shutting down"));
+        }
+        if serde_json::to_vec(&request)
+            .map_err(|_| BusError::failed("invalid runtime command preparation"))?
+            .len()
+            > tinychannels_bus::module_runtime::PREPARATION_MESSAGE_BYTES
+        {
+            return Err(BusError::failed(
+                "runtime command preparation exceeds its limit",
+            ));
+        }
+        Ok(
+            routes::parse_runtime_command(&request.channel, &request.content).map(|command| {
+                match command {
+                    ChannelRuntimeCommand::SetProvider(requested) => {
+                        PreparedRuntimeCommand::SetProvider {
+                            provider: routes::resolve_provider_alias(
+                                &requested,
+                                &request.providers,
+                            ),
+                            requested,
+                        }
+                    }
+                    ChannelRuntimeCommand::SetModel(model) => {
+                        PreparedRuntimeCommand::SetModel(model)
+                    }
+                    ChannelRuntimeCommand::ShowProviders => PreparedRuntimeCommand::ShowProviders(
+                        routes::build_providers_help_response(&request.current, &request.providers),
+                    ),
+                    ChannelRuntimeCommand::ShowModel => PreparedRuntimeCommand::ShowModel(
+                        routes::build_models_help_response_from_catalog(
+                            &request.current,
+                            &request.model_catalog,
+                        ),
+                    ),
+                }
+            }),
+        )
+    }
+
     /// Preserve provider data and compute persisted identities inside the module.
     #[tinybus(confidential)]
     async fn prepare_channel_inbound(
@@ -1175,7 +1224,7 @@ pub(crate) mod exports {
             "StartChannelSupervised",
             "ReserveRuntime", "StartRuntime", "StopRuntime",
             "DescribeConfiguredChannels", "StartOutboundChannel", "PrepareOutboundIntent",
-            "PrepareChannelInbound", "PrepareChannelIdentity", "ExecuteProgressive",
+            "PrepareChannelInbound", "PrepareChannelIdentity", "ExecuteProgressive", "PrepareRuntimeCommand",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:
