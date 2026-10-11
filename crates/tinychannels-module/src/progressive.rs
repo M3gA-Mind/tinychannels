@@ -262,8 +262,24 @@ impl Replies {
             state.terminal = true;
             state.entries.values().cloned().collect::<Vec<_>>()
         };
+        // Start every terminal task before awaiting any one provider. A blocked
+        // delivery must not prevent unrelated reply workers from draining.
+        let mut closes = tokio::task::JoinSet::new();
         for entry in entries {
-            close_entry(entry, "Cancelled.".into(), true).await?;
+            closes.spawn(close_entry(entry, "Cancelled.".into(), true));
+        }
+        let mut failure = None;
+        while let Some(result) = closes.join_next().await {
+            let result =
+                result.unwrap_or_else(|_| Err(Error::failed("progressive shutdown worker failed")));
+            if let Err(error) = result {
+                failure.get_or_insert(error);
+            }
+        }
+        if let Some(error) = failure {
+            // Retained per-entry terminal tasks can finish after the timeout;
+            // the next Shutdown awaits them without sending a second reply.
+            return Err(error);
         }
         self.state.lock().await.entries.clear();
         Ok(())
