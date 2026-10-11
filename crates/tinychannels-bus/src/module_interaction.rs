@@ -30,7 +30,7 @@ pub enum ChannelInteraction {
     },
     /// Stop and join the module-owned refresh task before acknowledging.
     StopTypingRefresh {
-        recipient: String,
+        handle: String,
     },
     SendDraft {
         message: SendMessage,
@@ -64,6 +64,7 @@ pub enum ChannelInteractionResult {
     Completed,
     Draft(Option<String>),
     Info(ChannelInteractionInfo),
+    TypingRefresh { handle: String },
 }
 
 #[cfg(test)]

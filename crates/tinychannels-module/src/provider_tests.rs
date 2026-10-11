@@ -174,13 +174,31 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
         })
         .await
         .unwrap();
-    running
+    let first_handle = running
         .interact(Op::StartTypingRefresh {
             recipient: "room".into(),
             interval_secs: 4,
         })
         .await
         .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle: first_handle } =
+        first_handle
+    else {
+        panic!("provider did not return a refresh handle")
+    };
+    let second_handle = running
+        .interact(Op::StartTypingRefresh {
+            recipient: "room".into(),
+            interval_secs: 4,
+        })
+        .await
+        .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle: second_handle } =
+        second_handle
+    else {
+        panic!("provider did not return a refresh handle")
+    };
+    assert_ne!(first_handle, second_handle);
     for _ in 0..10 {
         tokio::task::yield_now().await;
     }
@@ -189,9 +207,9 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
         tokio::task::yield_now().await;
     }
     assert_eq!(
-        *channel.0.lock().unwrap(),
-        ["typing:room", "typing:room"],
-        "the module refreshes the indicator after its interval"
+        channel.0.lock().unwrap().len(),
+        3,
+        "both refresh handles remain independently active"
     );
 
     assert!(
@@ -205,7 +223,18 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
     );
     running
         .interact(Op::StopTypingRefresh {
-            recipient: "room".into(),
+            handle: first_handle,
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(4)).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(channel.0.lock().unwrap().len(), 4);
+    running
+        .interact(Op::StopTypingRefresh {
+            handle: second_handle,
         })
         .await
         .unwrap();
@@ -226,7 +255,13 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
     ));
     assert_eq!(
         *channel.0.lock().unwrap(),
-        ["typing:room", "typing:room", "stop:room"]
+        [
+            "typing:room",
+            "typing:room",
+            "typing:room",
+            "typing:room",
+            "stop:room"
+        ]
     );
     connection.close().await.unwrap();
 }
@@ -283,13 +318,18 @@ async fn typing_refresh_stop_and_shutdown_cancel_inflight_provider_calls() {
         HostChannels::new(connection.clone()),
     );
 
-    running
+    let stop_handle = running
         .interact(Op::StartTypingRefresh {
             recipient: "stop-case".into(),
             interval_secs: 1,
         })
         .await
         .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle: stop_handle } =
+        stop_handle
+    else {
+        panic!("provider did not return a refresh handle")
+    };
     for _ in 0..10 {
         tokio::task::yield_now().await;
     }
@@ -297,19 +337,23 @@ async fn typing_refresh_stop_and_shutdown_cancel_inflight_provider_calls() {
     entered.notified().await;
     running
         .interact(Op::StopTypingRefresh {
-            recipient: "stop-case".into(),
+            handle: stop_handle,
         })
         .await
         .unwrap();
     assert_eq!(dropped.load(Ordering::SeqCst), 1);
 
-    running
+    let shutdown_handle = running
         .interact(Op::StartTypingRefresh {
             recipient: "shutdown-case".into(),
             interval_secs: 1,
         })
         .await
         .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle: _ } = shutdown_handle
+    else {
+        panic!("provider did not return a refresh handle")
+    };
     for _ in 0..10 {
         tokio::task::yield_now().await;
     }

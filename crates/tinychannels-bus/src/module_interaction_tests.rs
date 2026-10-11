@@ -54,7 +54,7 @@ fn typing_refresh_operations_are_additive_and_typed() {
     ));
 
     let stop = serde_json::to_value(ChannelInteraction::StopTypingRefresh {
-        recipient: "chat".into(),
+        handle: "opaque-handle".into(),
     })
     .unwrap();
     assert_eq!(stop["operation"], "stop_typing_refresh");

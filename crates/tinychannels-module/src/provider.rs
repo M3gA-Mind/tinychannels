@@ -47,7 +47,6 @@ async fn dispatch_interaction(
             if !typing.contains_key(&recipient) && typing.len() >= MAX_TYPING_REFRESH_RECIPIENTS {
                 return Err(Error::failed("typing refresh capacity is full"));
             }
-            stop_typing_refresh(&recipient, typing).await;
             let (cancel, mut canceled) = watch::channel(false);
             let refresh_channel = Arc::clone(&channel);
             let refresh_recipient = recipient.clone();
@@ -70,30 +69,36 @@ async fn dispatch_interaction(
                     }
                 }
             });
-            typing.insert(recipient, (cancel, task));
-            Ok(tinychannels_bus::ChannelInteractionResult::Completed)
+            let handle = loop {
+                let candidate = uuid::Uuid::new_v4().simple().to_string();
+                if !typing.contains_key(&candidate) {
+                    break candidate;
+                }
+            };
+            typing.insert(handle.clone(), (cancel, task));
+            Ok(tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle })
         }
-        Op::StopTypingRefresh { recipient } => {
-            stop_typing_refresh(&recipient, typing).await;
+        Op::StopTypingRefresh { handle } => {
+            stop_typing_refresh(&handle, typing).await;
             Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
         interaction => crate::interaction::dispatch(channel.as_ref(), interaction).await,
     }
 }
 
-async fn stop_typing_refresh(recipient: &str, typing: &mut TypingRefreshes) {
-    if let Some((cancel, task)) = typing.remove(recipient) {
+async fn stop_typing_refresh(handle: &str, typing: &mut TypingRefreshes) {
+    if let Some((cancel, task)) = typing.remove(handle) {
         cancel.send_replace(true);
         if let Err(error) = task.await {
-            tracing::debug!(%recipient, "typing refresh task join failed: {error}");
+            tracing::debug!(%handle, "typing refresh task join failed: {error}");
         }
     }
 }
 
 async fn stop_all_typing_refreshes(typing: &mut TypingRefreshes) {
-    let recipients = typing.keys().cloned().collect::<Vec<_>>();
-    for recipient in recipients {
-        stop_typing_refresh(&recipient, typing).await;
+    let handles = typing.keys().cloned().collect::<Vec<_>>();
+    for handle in handles {
+        stop_typing_refresh(&handle, typing).await;
     }
 }
 
