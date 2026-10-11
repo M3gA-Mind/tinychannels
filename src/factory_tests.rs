@@ -6,6 +6,7 @@
 //! the host, so "does a config stanza produce a provider" was only ever
 //! answered by starting the real thing.
 
+use super::*;
 use crate::NoopHost;
 use crate::factory::{
     ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
@@ -198,4 +199,126 @@ fn an_unusable_whatsapp_stanza_is_skipped_without_disturbing_others() {
     };
 
     assert_eq!(names(&config), vec!["telegram".to_owned()]);
+}
+
+#[tokio::test]
+async fn configured_stanzas_build_every_supported_provider_in_order() {
+    let config: ChannelsConfig = serde_json::from_value(serde_json::json!({
+        "telegram": {"bot_token": "token"},
+        "discord": {"bot_token": "token"},
+        "slack": {"bot_token": "token"},
+        "mattermost": {"url": "https://mattermost.test", "bot_token": "token"},
+        "imessage": {"allowed_contacts": ["alice"]},
+        "matrix": {"homeserver": "https://matrix.test", "access_token": "token", "room_id": "room", "allowed_users": []},
+        "signal": {"http_url": "http://localhost:8080", "account": "alice"},
+        "whatsapp": {"phone_number_id": "phone", "access_token": "token", "verify_token": "verify"},
+        "linq": {"api_token": "token", "from_phone": "+15551234567"},
+        "email": {"imap_host": "imap.test", "smtp_host": "smtp.test", "username": "user", "password": "pass", "from_address": "user@example.test"},
+        "irc": {"server": "irc.test", "nickname": "bot"},
+        "lark": {"app_id": "app", "app_secret": "secret"},
+        "dingtalk": {"client_id": "app", "client_secret": "secret"},
+        "qq": {"app_id": "app", "app_secret": "secret"},
+        "yuanbao": {"app_key": "app", "app_secret": "secret"}
+    })).unwrap();
+    let mut expected = vec![
+        "telegram",
+        "discord",
+        "slack",
+        "mattermost",
+        "imessage",
+        "signal",
+        "whatsapp",
+        "linq",
+    ];
+    if cfg!(feature = "email") {
+        expected.push("email");
+    }
+    expected.push("irc");
+    if cfg!(feature = "lark") {
+        expected.push("lark");
+    }
+    expected.extend(["dingtalk", "qq", "yuanbao"]);
+    assert_eq!(names(&config), expected);
+}
+
+#[tokio::test]
+async fn incomplete_cloud_and_invalid_yuanbao_stanzas_preserve_other_providers() {
+    let config: ChannelsConfig = serde_json::from_value(serde_json::json!({
+        "telegram": {"bot_token": "token"},
+        "whatsapp": {"phone_number_id": "phone"},
+        "yuanbao": {"app_key": "", "app_secret": ""}
+    }))
+    .unwrap();
+    assert_eq!(names(&config), ["telegram"]);
+}
+
+#[tokio::test]
+async fn whatsapp_web_configuration_respects_the_feature_gate() {
+    let directory = tempfile::tempdir().unwrap();
+    let config: ChannelsConfig = serde_json::from_value(serde_json::json!({
+        "whatsapp": {"session_path": directory.path(), "allowed_numbers": ["alice"]}
+    }))
+    .unwrap();
+    let expected: Vec<&str> = if cfg!(feature = "whatsapp-web") {
+        vec!["whatsapp-web"]
+    } else {
+        vec![]
+    };
+    assert_eq!(names(&config), expected);
+}
+
+#[test]
+fn proxy_policy_limits_reject_oversized_and_empty_entries() {
+    let policies = [
+        HttpProxyPolicy {
+            all_proxy: Some("x".repeat(4097)),
+            ..Default::default()
+        },
+        HttpProxyPolicy {
+            no_proxy: vec!["localhost".into(); 129],
+            ..Default::default()
+        },
+        HttpProxyPolicy {
+            no_proxy: vec!["x".repeat(1025)],
+            ..Default::default()
+        },
+        HttpProxyPolicy {
+            service_selectors: vec!["channel.*".into(); 65],
+            ..Default::default()
+        },
+        HttpProxyPolicy {
+            service_selectors: vec!["x".repeat(129)],
+            ..Default::default()
+        },
+        HttpProxyPolicy {
+            service_selectors: vec!["  ".into()],
+            ..Default::default()
+        },
+    ];
+    for policy in policies {
+        assert!(ConfiguredHttpClients::new(policy).is_err());
+    }
+}
+
+#[test]
+fn proxy_selectors_match_exact_services_and_prefixes() {
+    let clients = ConfiguredHttpClients::new(HttpProxyPolicy {
+        http_proxy: Some(" http://127.0.0.1:1234 ".into()),
+        https_proxy: Some("http://127.0.0.1:1234".into()),
+        no_proxy: vec![" localhost ".into(), " ".into()],
+        service_selectors: vec!["channel.telegram".into(), "channel.discord.*".into()],
+        ..Default::default()
+    })
+    .unwrap();
+    assert!(clients.applies_to("channel.telegram"));
+    assert!(clients.applies_to("channel.discord.media"));
+    assert!(!clients.applies_to("channel.telegram.media"));
+    assert!(!clients.applies_to("channel.signal"));
+    let _ = clients.signal_client();
+    let proxied_signal = ConfiguredHttpClients::new(HttpProxyPolicy {
+        service_selectors: vec!["channel.signal".into()],
+        ..Default::default()
+    })
+    .unwrap();
+    let _ = proxied_signal.signal_client();
 }
