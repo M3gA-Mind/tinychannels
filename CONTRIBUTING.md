@@ -4,6 +4,11 @@ TinyChannels is early scaffolding for OpenHuman channel and harness
 communication. The best contributions are small, explicit, tested, and easy to
 review.
 
+## Shared Module CI and Releases
+
+TinyChannels follows the shared module CI and release contract maintained in
+[tinyhumansai/.github](https://github.com/tinyhumansai/.github/blob/main/docs/module-ci-contract.md).
+
 ## Development Setup
 
 Install a stable Rust toolchain with Rust 2024 support, then run:
