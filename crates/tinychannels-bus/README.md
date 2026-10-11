@@ -27,3 +27,7 @@ and draft creation, updates and finalization. It is a confidential call. The
 module serializes these operations with ordinary sends in its bounded provider
 queue; stopping a provider joins admitted work and rejects subsequent calls.
 Contract version 6 adds the member without changing existing method arity.
+
+The controller vocabulary includes complete Discord guild, text-channel and
+permission DTOs. Provider APIs re-export these types at their existing paths;
+REST calls and permission calculations remain implementation behavior.

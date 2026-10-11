@@ -268,3 +268,38 @@ fn relay_descriptor_keeps_explicit_platform_limit() {
         descriptor
     );
 }
+
+#[test]
+fn discord_provider_metadata_keeps_complete_legacy_wire_fields() {
+    use crate::controllers::{BotPermissionCheck, DiscordGuild, DiscordTextChannel};
+    let guild = json!({"id":"g", "name":"Guild", "icon":null});
+    let channel =
+        json!({"id":"c", "name":"general", "type":0, "position":4, "parent_id":"category"});
+    let permissions = json!({"can_view_channel":true, "can_send_messages":false, "can_read_message_history":true, "missing_permissions":["SEND_MESSAGES"]});
+    assert_eq!(
+        serde_json::to_value(serde_json::from_value::<DiscordGuild>(guild.clone()).unwrap())
+            .unwrap(),
+        guild
+    );
+    assert_eq!(
+        serde_json::to_value(
+            serde_json::from_value::<DiscordTextChannel>(channel.clone()).unwrap()
+        )
+        .unwrap(),
+        channel
+    );
+    assert_eq!(
+        serde_json::to_value(
+            serde_json::from_value::<BotPermissionCheck>(permissions.clone()).unwrap()
+        )
+        .unwrap(),
+        permissions
+    );
+    let missing_position = json!({"id":"c", "name":"general", "type":0, "parent_id":null});
+    assert_eq!(
+        serde_json::from_value::<DiscordTextChannel>(missing_position)
+            .unwrap()
+            .position,
+        0
+    );
+}
