@@ -13,6 +13,7 @@ pub mod http;
 pub mod module_controller;
 pub mod module_delivery;
 pub mod module_email;
+pub mod module_inbound;
 pub mod module_interaction;
 pub mod module_relay;
 pub mod module_runtime;

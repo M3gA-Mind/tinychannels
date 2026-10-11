@@ -21,6 +21,14 @@ facts without listening; outbound-only startup preserves Linq and WhatsApp Cloud
 sends while keeping their ingress explicitly external. Existing listener start
 methods retain their refusal when no webhook ingress is available.
 
+Inbound preparation and hosted identity projection are confidential module
+operations. They return stable history, thread, client, and session keys using
+the module’s existing provider rules. Preparation preserves rich envelope data
+and rejects conflicting legacy identities. Hosts retain authenticated transport
+provenance separately: the envelope’s relay trust flag is intentionally omitted
+from serialization. Namespaces are limited to 256 bytes, identity requests to
+4 KiB, and inbound requests to the bounded preparation payload limit.
+
 ## Intended Scope
 
 - channel abstractions for inbound and outbound message streams

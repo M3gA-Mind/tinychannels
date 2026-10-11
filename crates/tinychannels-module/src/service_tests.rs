@@ -1257,3 +1257,221 @@ async fn outbound_only_worker_sends_and_joins_without_polling_webhook_listener()
     );
     host.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn inbound_preparation_preserves_escaped_persisted_keys_and_provider_thread_rules() {
+    use tinychannels_bus::module_inbound::{ChannelInboundSource, PrepareChannelInboundRequest};
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let service = Channels::new(HostChannels::new(connection), None);
+    let message = tinychannels_bus::ChannelMessage {
+        id: "message-1".into(),
+        channel: "discord".into(),
+        sender: "sender/a".into(),
+        reply_target: "room#b".into(),
+        content: "fixture content".into(),
+        timestamp: 42,
+        thread_ts: Some("thread/c".into()),
+        sender_name: Some("Display".into()),
+    };
+    let prepared = service
+        .prepare_channel_inbound(PrepareChannelInboundRequest {
+            source: ChannelInboundSource::Legacy {
+                message: message.clone(),
+                envelope: None,
+            },
+            namespace: "openhuman".into(),
+            session_policy: Default::default(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.thread_id,
+        "channel:discord/sender%2Fa/room%23b#thread:thread%2Fc"
+    );
+    assert_eq!(prepared.client_id, "inbound:discord:sender/a");
+    assert_eq!(
+        prepared.history_key,
+        "discord_sender/a_room#b_thread:thread/c"
+    );
+    assert_eq!(prepared.message.timestamp, 42);
+    assert_eq!(prepared.message.sender_name.as_deref(), Some("Display"));
+    assert_eq!(prepared.envelope.text, "fixture content");
+    assert_eq!(
+        prepared.session_key,
+        "openhuman:discord:default:unknown:room#b:thread/c"
+    );
+    service.shutdown().await.unwrap();
+}
+
+async fn inbound_preparation_service() -> Channels {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    Channels::new(HostChannels::new(connection), None)
+}
+
+#[tokio::test]
+async fn hosted_identity_preserves_absent_sender_and_telegram_topic_rules() {
+    use tinychannels_bus::module_inbound::PrepareChannelIdentityRequest;
+    let service = inbound_preparation_service().await;
+    let prepared = service
+        .prepare_channel_identity(PrepareChannelIdentityRequest {
+            channel: "telegram:bot".into(),
+            sender: None,
+            reply_target: Some("chat".into()),
+            thread_ts: Some("topic".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(prepared.thread_id, "channel:telegram:bot/chat");
+    assert_eq!(prepared.client_id, "inbound");
+    let prepared = service
+        .prepare_channel_identity(PrepareChannelIdentityRequest {
+            channel: "discord:bot".into(),
+            sender: Some("user:one".into()),
+            reply_target: Some("chat".into()),
+            thread_ts: Some("topic".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        prepared.thread_id,
+        "channel:discord:bot/user:one/chat#thread:topic"
+    );
+    assert_eq!(prepared.client_id, "inbound:discord%3Abot:user%3Aone");
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_envelope_preserves_media_account_and_group_isolation_policy() {
+    use tinychannels_bus::module_inbound::{ChannelInboundSource, PrepareChannelInboundRequest};
+    let service = inbound_preparation_service().await;
+    let mut envelope = tinychannels_bus::ChannelInboundEnvelope::default();
+    envelope.channel.id = "discord".into();
+    envelope.channel.account_id = Some("account".into());
+    envelope.message_id = "msg".into();
+    envelope.sender.id = "user".into();
+    envelope.sender.name = Some("Display".into());
+    envelope.conversation.id = "room".into();
+    envelope.conversation.kind = tinychannels_bus::channel::ConversationKind::Group;
+    envelope.conversation.thread_id = Some("thread".into());
+    envelope.text = "content".into();
+    envelope
+        .media
+        .push(tinychannels_bus::channel::MediaReference {
+            url: Some("https://fixture.invalid/media".into()),
+            kind: tinychannels_bus::channel::MediaKind::Image,
+            ..Default::default()
+        });
+    let request = PrepareChannelInboundRequest {
+        source: ChannelInboundSource::Envelope {
+            envelope: envelope.clone(),
+            timestamp: 123,
+        },
+        namespace: "tenant".into(),
+        session_policy: Default::default(),
+    };
+    let prepared = service
+        .prepare_channel_inbound(request.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(prepared.envelope).unwrap(),
+        serde_json::to_value(envelope).unwrap()
+    );
+    assert_eq!(prepared.message.timestamp, 123);
+    assert_eq!(prepared.message.sender_name.as_deref(), Some("Display"));
+    assert_eq!(
+        prepared.session_key,
+        "tenant:discord:account:group:room:thread"
+    );
+    let mut per_user = request;
+    per_user.session_policy.thread_sessions_per_user = true;
+    let prepared = service.prepare_channel_inbound(per_user).await.unwrap();
+    assert_eq!(
+        prepared.session_key,
+        "tenant:discord:account:group:room:thread:user"
+    );
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn inbound_preparation_refuses_mismatched_identity_oversized_payload_and_shutdown() {
+    use tinychannels_bus::module_inbound::{
+        ChannelInboundSource, PrepareChannelIdentityRequest, PrepareChannelInboundRequest,
+    };
+    let service = inbound_preparation_service().await;
+    let message = tinychannels_bus::ChannelMessage {
+        channel: "discord".into(),
+        id: "msg".into(),
+        sender: "user".into(),
+        reply_target: "room".into(),
+        ..Default::default()
+    };
+    let mut envelope = tinychannels::inbound_envelope_from_legacy_message(&message);
+    envelope.sender.id = "other".into();
+    let request = PrepareChannelInboundRequest {
+        source: ChannelInboundSource::Legacy {
+            message: message.clone(),
+            envelope: Some(envelope),
+        },
+        namespace: "tenant".into(),
+        session_policy: Default::default(),
+    };
+    let error = service
+        .prepare_channel_inbound(request)
+        .await
+        .err()
+        .unwrap();
+    assert!(error.to_string().contains("identity does not match"));
+    let mut huge = message;
+    huge.content = "x".repeat(tinychannels_bus::module_runtime::PREPARATION_MESSAGE_BYTES);
+    let request = PrepareChannelInboundRequest {
+        source: ChannelInboundSource::Legacy {
+            message: huge,
+            envelope: None,
+        },
+        namespace: "tenant".into(),
+        session_policy: Default::default(),
+    };
+    assert!(
+        service
+            .prepare_channel_inbound(request.clone())
+            .await
+            .is_err()
+    );
+    let identity = PrepareChannelIdentityRequest {
+        channel: "discord".into(),
+        sender: Some("x".repeat(4096)),
+        reply_target: None,
+        thread_ts: None,
+    };
+    assert!(
+        service
+            .prepare_channel_identity(identity.clone())
+            .await
+            .is_err()
+    );
+    service.shutdown().await.unwrap();
+    assert!(service.prepare_channel_inbound(request).await.is_err());
+    assert!(service.prepare_channel_identity(identity).await.is_err());
+}
+
+#[cfg(feature = "static-link")]
+#[test]
+fn exported_manifest_preserves_the_complete_contract_member_order() {
+    let linked = exports::linked_module().unwrap();
+    let provided = linked.manifest.provides.first().unwrap();
+    let actual: Vec<_> = provided
+        .methods
+        .iter()
+        .map(|method| method.as_str())
+        .collect();
+    assert_eq!(actual, tinychannels_bus::METHODS);
+}
