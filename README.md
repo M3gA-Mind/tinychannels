@@ -39,6 +39,16 @@ shutdown joins replies before closing callbacks. Limits are 16 active replies,
 128 retained terminal handles, 32 events and 128 KiB per command, 384 KiB per
 accumulator, and a three-minute worker lifetime.
 
+Runtime model/provider commands are prepared through confidential
+`PrepareRuntimeCommand`. Hosts supply the current route, provider aliases and
+an already-loaded model catalog. The module preserves the existing Telegram
+and Discord command parser, unknown-provider proposals and help text, including
+the first matching provider's first ten cached model IDs. It returns a proposal
+or a ready-to-send reply; applying route changes, validating model IDs, clearing
+history and reading product catalog storage remain host responsibilities.
+Unrecognized commands return no proposal. Requests obey the existing bounded
+preparation payload limit and fail after module shutdown.
+
 ## Intended Scope
 
 - channel abstractions for inbound and outbound message streams
