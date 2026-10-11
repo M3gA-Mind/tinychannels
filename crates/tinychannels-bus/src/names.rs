@@ -40,6 +40,8 @@ pub mod methods {
     pub const RESERVE_RUNTIME: &str = "ReserveRuntime";
     /// Activate the private provider object for a known runtime handle.
     pub const START_RUNTIME: &str = "StartRuntime";
+    /// Activate an identity runtime with bounded `ProcessInbound` turn callbacks.
+    pub const START_RUNTIME_WITH_DISPATCH: &str = "StartRuntimeWithDispatch";
     /// Stop and join all resources belonging to one runtime handle.
     pub const STOP_RUNTIME: &str = "StopRuntime";
     /// Start a provider with module-owned reconnect supervision and host-selected timing.
@@ -92,6 +94,9 @@ pub mod methods {
 pub mod host_methods {
     /// `DeliverInbound` — hand the host one authenticated inbound envelope.
     pub const DELIVER_INBOUND: &str = "DeliverInbound";
+    /// Complete one admitted turn. Opt-in runtimes invoke bounded concurrent
+    /// callbacks and retain each call until flush/stop has drained it.
+    pub const PROCESS_INBOUND: &str = "ProcessInbound";
     /// `ReportStatus` — report a provider connection state transition.
     pub const REPORT_STATUS: &str = "ReportStatus";
     /// `PersistAllowedIdentity` — persist a provider-authorized identity host-side.
@@ -123,7 +128,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 33] = [
+pub const METHODS: [&str; 34] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -157,10 +162,11 @@ pub const METHODS: [&str; 33] = [
     methods::EXECUTE_PROGRESSIVE,
     methods::EXECUTE_REMOTE,
     methods::PREPARE_CHANNEL_CONTROL,
+    methods::START_RUNTIME_WITH_DISPATCH,
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 14] = [
+pub const HOST_METHODS: [&str; 15] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,
@@ -175,6 +181,7 @@ pub const HOST_METHODS: [&str; 14] = [
     host_methods::TRANSCRIBE,
     host_methods::PUBLISH_EVENT,
     host_methods::DISPATCH_CONTROLLER_BACKEND,
+    host_methods::PROCESS_INBOUND,
 ];
 
 #[cfg(test)]

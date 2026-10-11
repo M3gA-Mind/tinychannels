@@ -33,6 +33,12 @@
 //! queue, which blocks the provider — the same path a slow consumer always took.
 //! Nothing is silently dropped.
 //!
+//! Identity runtimes may explicitly opt into a separate bounded turn dispatcher.
+//! It invokes `ProcessInbound` concurrently while the notification consumer
+//! still owns status/persistence/event ordering. Its barriers drain the accepted
+//! turn frontier and shutdown joins the dispatcher. Legacy callers retain the
+//! serial `DeliverInbound` contract described above.
+//!
 //! # Failures are logged, not retried
 //!
 //! A failed delivery is logged and the queue moves on. Retrying here would be
@@ -54,6 +60,9 @@ const MAX_CALLBACK_BYTES: usize = 128 * 1024;
 const MAX_TRANSCRIPTION_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 const MAX_ACTIVE_HOST_CALLBACKS: usize = 16;
 const MAX_CONTROLLER_PAYLOAD_BYTES: usize = 1024 * 1024;
+
+#[path = "host_dispatch.rs"]
+mod dispatch;
 
 enum Notification {
     DeliverInbound {
@@ -121,6 +130,14 @@ impl std::fmt::Debug for HostChannels {
     }
 }
 impl HostChannels {
+    pub(crate) fn new_at_with_dispatch(
+        connection: Connection,
+        object_path: String,
+        max_in_flight: usize,
+    ) -> Self {
+        Self::new_at_inner(connection, object_path, Some(max_in_flight))
+    }
+
     /// Start one owned callback consumer. Explicit shutdown drains and joins it.
     #[must_use]
     pub fn new(connection: Connection) -> Self {
@@ -129,6 +146,14 @@ impl HostChannels {
 
     /// Bind all callbacks to an immutable runtime-specific host object.
     pub(crate) fn new_at(connection: Connection, object_path: String) -> Self {
+        Self::new_at_inner(connection, object_path, None)
+    }
+
+    fn new_at_inner(
+        connection: Connection,
+        object_path: String,
+        dispatch_limit: Option<usize>,
+    ) -> Self {
         let object_path: Arc<str> = object_path.into();
         let callback_path = object_path.clone();
         let (outbox, mut inbox) = mpsc::channel(OUTBOX_CAPACITY);
@@ -136,12 +161,29 @@ impl HostChannels {
         let task_failure = failure.clone();
         let callback_connection = connection.clone();
         let worker = tokio::spawn(async move {
+            let mut dispatcher = dispatch_limit.map(|limit| {
+                dispatch::InboundDispatcher::new(
+                    callback_connection.clone(),
+                    callback_path.clone(),
+                    task_failure.clone(),
+                    limit,
+                )
+            });
             while let Some(notification) = inbox.recv().await {
                 if let Notification::Barrier { stop, reply } = notification {
+                    if let Some(dispatcher) = dispatcher.as_ref() {
+                        dispatcher.flush().await;
+                    }
                     let _ = reply.send(());
                     if stop {
                         break;
                     }
+                    continue;
+                }
+                if let (Some(dispatcher), Notification::DeliverInbound { channel, message }) =
+                    (dispatcher.as_mut(), &notification)
+                {
+                    dispatcher.enqueue(channel.clone(), message.clone()).await;
                     continue;
                 }
                 if let Notification::PersistAllowedIdentity {
@@ -229,6 +271,9 @@ impl HostChannels {
                         record_failure(&task_failure, error.to_string());
                     }
                 }
+            }
+            if let Some(dispatcher) = dispatcher.as_mut() {
+                dispatcher.shutdown().await;
             }
         });
         Self {
@@ -496,3 +541,7 @@ fn record_failure(failure: &StdMutex<Option<String>>, error: String) {
 #[cfg(test)]
 #[path = "host_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "host_dispatch_tests.rs"]
+mod dispatch_tests;

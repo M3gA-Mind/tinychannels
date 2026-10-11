@@ -23,6 +23,7 @@ struct Slot {
     child: Mutex<Option<Arc<Channels>>>,
     worker: Mutex<Option<JoinHandle<Result<()>>>>,
     activation_result: Mutex<Option<bool>>,
+    dispatch_limit: Mutex<Option<Option<usize>>>,
 }
 
 /// Owns separate provider, relay and delivery resources for each host identity.
@@ -69,6 +70,7 @@ impl Runtimes {
                 child: Mutex::new(None),
                 worker: Mutex::new(None),
                 activation_result: Mutex::new(None),
+                dispatch_limit: Mutex::new(None),
             }),
         );
         Ok(reservation)
@@ -81,11 +83,38 @@ impl Runtimes {
     /// Activate only after the host has installed the reserved callback object.
     /// Dropping the reply waiter leaves startup owned by the retained worker.
     pub(crate) async fn start(&self, id: String) -> Result<()> {
+        self.start_with_limit(id, None).await
+    }
+
+    pub(crate) async fn start_with_dispatch(
+        &self,
+        id: String,
+        policy: tinychannels_bus::ChannelRuntimeDispatchPolicy,
+    ) -> Result<()> {
+        let count = usize::try_from(policy.listener_count)
+            .map_err(|_| Error::failed("listener count exceeds this platform's capacity"))?;
+        self.start_with_limit(
+            id,
+            Some(tinychannels::runtime::compute_max_in_flight_messages(count)),
+        )
+        .await
+    }
+
+    async fn start_with_limit(&self, id: String, limit: Option<usize>) -> Result<()> {
         let slot = self.get(&id).await?;
         let mut worker = slot.worker.lock().await;
         if self.terminal.load(Ordering::SeqCst) || slot.canceled.load(Ordering::SeqCst) {
             return Err(closed());
         }
+        let mut policy = slot.dispatch_limit.lock().await;
+        if let Some(previous) = *policy {
+            if previous != limit {
+                return Err(Error::failed("runtime dispatch policy is immutable"));
+            }
+        } else {
+            *policy = Some(limit);
+        }
+        drop(policy);
         if let Some(result) = *slot.activation_result.lock().await {
             return if result {
                 Ok(())
@@ -110,10 +139,17 @@ impl Runtimes {
             let connection = self.connection.clone();
             let owned = slot.clone();
             *worker = Some(tokio::spawn(async move {
-                let host = HostChannels::new_at(
-                    connection.clone(),
-                    owned.reservation.host_object_path.clone(),
-                );
+                let host = match limit {
+                    Some(limit) => HostChannels::new_at_with_dispatch(
+                        connection.clone(),
+                        owned.reservation.host_object_path.clone(),
+                        limit,
+                    ),
+                    None => HostChannels::new_at(
+                        connection.clone(),
+                        owned.reservation.host_object_path.clone(),
+                    ),
+                };
                 let child = Arc::new(Channels::new(host, None));
                 *owned.child.lock().await = Some(child.clone());
                 let result = async {
