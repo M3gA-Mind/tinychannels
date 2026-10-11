@@ -200,3 +200,55 @@ async fn a_stalled_server_times_out() {
         .unwrap_err();
     assert_eq!(error, MailError::TimedOut);
 }
+
+#[test]
+fn smtp_preparation_accepts_tls_modes_and_an_address_without_display_name() {
+    for security in [
+        SmtpSecurity::None,
+        SmtpSecurity::Starttls,
+        SmtpSecurity::Ssl,
+    ] {
+        let MailCredentials::Smtp(mut smtp) = creds(2525, "user", "password");
+        smtp.host = "smtp.example.test".into();
+        smtp.security = security;
+        smtp.from_name.clear();
+        let (_, message) =
+            prepare(&MailCredentials::Smtp(smtp), &email("to@example.test")).unwrap();
+        let formatted = String::from_utf8(message.formatted()).unwrap();
+        assert!(formatted.contains("From: hi@acme.test"));
+        assert!(formatted.contains("A plain body"));
+    }
+}
+
+#[test]
+fn smtp_preparation_rejects_invalid_sender_and_attachment_mime_type() {
+    let MailCredentials::Smtp(mut smtp) = creds(2525, "", "");
+    smtp.from_email = "invalid mailbox".into();
+    assert!(matches!(
+        prepare(&MailCredentials::Smtp(smtp), &email("to@example.test")),
+        Err(MailError::InvalidAddress(_))
+    ));
+    let mut message = email("to@example.test");
+    message
+        .attachments
+        .push(crate::providers::mail::MailAttachment {
+            filename: "file".into(),
+            content_type: "invalid MIME type".into(),
+            bytes: vec![1],
+        });
+    assert!(matches!(prepare(&creds(2525, "", ""), &message),
+        Err(MailError::InvalidAddress(detail)) if detail.contains("MIME type")));
+}
+
+#[test]
+fn smtp_preparation_rejects_invalid_tls_server_names() {
+    for security in [SmtpSecurity::Starttls, SmtpSecurity::Ssl] {
+        let MailCredentials::Smtp(mut smtp) = creds(2525, "", "");
+        smtp.host = "invalid host name".into();
+        smtp.security = security;
+        assert!(matches!(
+            prepare(&MailCredentials::Smtp(smtp), &email("to@example.test")),
+            Err(MailError::Transport(_))
+        ));
+    }
+}
