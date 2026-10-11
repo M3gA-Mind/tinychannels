@@ -2113,3 +2113,70 @@ async fn service_runtime_wrappers_activate_stop_and_freeze_identity_owners() {
     service.shutdown().await.unwrap();
     assert!(service.reserve_runtime().await.is_err());
 }
+
+#[tokio::test]
+async fn shutdown_refuses_preparation_and_execution_before_host_work() {
+    let service = inbound_preparation_service().await;
+    service.shutdown().await.unwrap();
+    assert!(
+        service
+            .describe_configured_channels(Default::default(), Default::default())
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_channel_control(
+                tinychannels_bus::module_control::ChannelControlRequest::Acknowledgment {
+                    content: "hello".into()
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .execute_remote(tinychannels_bus::module_remote::RemoteOperation::MarkTurn {
+                workspace_dir: ".".into(),
+                channel: "fixture".into(),
+                reply_target: "room".into(),
+                busy: true,
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .execute_progressive(
+                tinychannels_bus::module_progressive::ProgressiveCommand::Open {
+                    channel: "fixture".into(),
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_channel_identity(
+                tinychannels_bus::module_inbound::PrepareChannelIdentityRequest {
+                    channel: "fixture".into(),
+                    sender: None,
+                    reply_target: None,
+                    thread_ts: None,
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_outbound_intent(
+                "fixture".into(),
+                tinychannels_bus::module_runtime::ChannelMessagePreparation::Legacy(
+                    SendMessage::new("hello", "room")
+                )
+            )
+            .await
+            .is_err()
+    );
+}
