@@ -396,9 +396,13 @@ impl Channels {
     #[tinybus(confidential)]
     async fn execute_remote(
         &self,
-        _request: tinychannels_bus::module_remote::RemoteOperation,
+        request: tinychannels_bus::module_remote::RemoteOperation,
     ) -> BusResult<tinychannels_bus::module_remote::RemoteOperationResult> {
-        Err(BusError::failed("remote operation is unavailable"))
+        let _admission = self.delivery_admission.lock().await;
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(BusError::failed("channel module is shutting down"));
+        }
+        crate::remote::execute(&self.host, request).await
     }
 
     /// Drive progressive delivery without exposing its state to the host.
@@ -1184,7 +1188,7 @@ pub(crate) mod exports {
             "StartChannelSupervised",
             "ReserveRuntime", "StartRuntime", "StopRuntime",
             "DescribeConfiguredChannels", "StartOutboundChannel", "PrepareOutboundIntent",
-            "PrepareChannelInbound", "PrepareChannelIdentity", "ExecuteProgressive",
+            "PrepareChannelInbound", "PrepareChannelIdentity", "ExecuteProgressive", "ExecuteRemote",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:
