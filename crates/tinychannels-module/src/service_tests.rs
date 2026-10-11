@@ -1722,8 +1722,8 @@ async fn webhook_provider_requires_outbound_start_and_rejects_duplicate_ownershi
     let error = service
         .start_channel("linq".into(), config.clone())
         .await
-        .err()
-        .expect("request must fail");
+        .map(|_| ())
+        .expect_err("request must fail");
     assert!(matches!(error, BusError::MethodFailed { name, .. } if name == NO_INGRESS_ERROR));
     assert!(service.list_channels().await.unwrap().is_empty());
     service
@@ -1734,8 +1734,8 @@ async fn webhook_provider_requires_outbound_start_and_rejects_duplicate_ownershi
     let error = service
         .start_outbound_channel("linq".into(), config.clone(), Default::default())
         .await
-        .err()
-        .expect("request must fail");
+        .map(|_| ())
+        .expect_err("request must fail");
     assert!(matches!(error, BusError::MethodFailed { name, .. } if name == ALREADY_RUNNING_ERROR));
     service.stop_channel("linq".into()).await.unwrap();
     assert_eq!(
@@ -1751,8 +1751,8 @@ async fn webhook_provider_requires_outbound_start_and_rejects_duplicate_ownershi
         service
             .start_outbound_channel("linq".into(), config, Default::default())
             .await
-            .err()
-            .expect("request must fail")
+            .map(|_| ())
+            .expect_err("request must fail")
             .to_string()
             .contains("shutting down")
     );
@@ -1765,8 +1765,8 @@ async fn channel_start_variants_refuse_missing_configuration_and_excessive_backo
     let error = service
         .start_channel_configured("unknown".into(), config.clone(), Default::default())
         .await
-        .err()
-        .expect("request must fail");
+        .map(|_| ())
+        .expect_err("request must fail");
     assert!(matches!(error, BusError::MethodFailed { name, .. } if name == NOT_CONFIGURED_ERROR));
     let error = service
         .start_channel_supervised(
@@ -1776,8 +1776,8 @@ async fn channel_start_variants_refuse_missing_configuration_and_excessive_backo
             Default::default(),
         )
         .await
-        .err()
-        .expect("request must fail");
+        .map(|_| ())
+        .expect_err("request must fail");
     assert!(matches!(error, BusError::MethodFailed { name, .. } if name == NOT_CONFIGURED_ERROR));
     for policy in [
         tinychannels_bus::ChannelSupervisionPolicy {
@@ -1798,8 +1798,8 @@ async fn channel_start_variants_refuse_missing_configuration_and_excessive_backo
                     policy
                 )
                 .await
-                .err()
-                .expect("request must fail")
+                .map(|_| ())
+                .expect_err("request must fail")
                 .to_string()
                 .contains("exceeds one day")
         );
@@ -1814,8 +1814,8 @@ async fn identity_scoped_services_refuse_nested_runtime_management() {
         service
             .reserve_runtime()
             .await
-            .err()
-            .expect("request must fail")
+            .map(|_| ())
+            .expect_err("request must fail")
             .to_string()
             .contains("unavailable")
     );
@@ -1823,8 +1823,8 @@ async fn identity_scoped_services_refuse_nested_runtime_management() {
         service
             .start_runtime("handle".into())
             .await
-            .err()
-            .expect("request must fail")
+            .map(|_| ())
+            .expect_err("request must fail")
             .to_string()
             .contains("unavailable")
     );
@@ -1835,8 +1835,8 @@ async fn identity_scoped_services_refuse_nested_runtime_management() {
                 tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 1 }
             )
             .await
-            .err()
-            .expect("request must fail")
+            .map(|_| ())
+            .expect_err("request must fail")
             .to_string()
             .contains("unavailable")
     );
@@ -1844,8 +1844,8 @@ async fn identity_scoped_services_refuse_nested_runtime_management() {
         service
             .stop_runtime("handle".into())
             .await
-            .err()
-            .expect("request must fail")
+            .map(|_| ())
+            .expect_err("request must fail")
             .to_string()
             .contains("unavailable")
     );
@@ -1874,8 +1874,8 @@ async fn health_and_controller_operations_refuse_requests_after_shutdown() {
         service
             .check_channel_health(Default::default(), Default::default(), 100)
             .await
-            .err()
-            .expect("request must fail")
+            .map(|_| ())
+            .expect_err("request must fail")
             .to_string()
             .contains("shutting down")
     );
@@ -1886,8 +1886,8 @@ async fn health_and_controller_operations_refuse_requests_after_shutdown() {
                 channel: None,
             })
             .await
-            .err()
-            .expect("request must fail")
+            .map(|_| ())
+            .expect_err("request must fail")
             .to_string()
             .contains("shutting down")
     );
