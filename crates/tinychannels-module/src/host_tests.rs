@@ -839,3 +839,28 @@ async fn runtime_callbacks_and_delivery_storage_do_not_follow_the_default_user()
     scoped.shutdown().await.unwrap();
     legacy.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn runtime_only_callback_host_has_no_legacy_delivery_store_and_refuses_required_send() {
+    use tinychannels::delivery::{
+        DeliveryQueueError, DeliveryQueueStore as _, QueuedDelivery, enqueue_delivery,
+    };
+    let (host, _callback, server) = connected_host().await;
+    server.unserve(&HOST_OBJECT_PATH.try_into().unwrap()).await;
+    let store = crate::delivery::HostDeliveryStore::from_host(&host);
+    assert!(matches!(
+        store.load_pending_all().await,
+        Err(DeliveryQueueError::Unsupported)
+    ));
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "missing-store".into(),
+        durability: tinychannels_bus::DeliveryDurability::Required,
+        ..Default::default()
+    };
+    assert!(
+        enqueue_delivery(&store, QueuedDelivery::new("missing-store", intent, 0))
+            .await
+            .is_err()
+    );
+    host.shutdown().await.unwrap();
+}

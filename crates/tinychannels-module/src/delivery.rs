@@ -176,8 +176,13 @@ fn validate_id(id: &str) -> Result<(), DeliveryQueueError> {
 fn store_error(error: tinybus::Error) -> DeliveryQueueError {
     if matches!(
         error.wire_name(),
-        tinybus::Error::UNKNOWN_METHOD | "ai.tinyhumans.tinybus.Error.NameHasNoOwner"
+        tinybus::Error::UNKNOWN_METHOD
+            | "ai.tinyhumans.tinybus.Error.NameHasNoOwner"
+            | "ai.tinyhumans.tinybus.Error.UnknownObject"
     ) {
+        // A runtime-only host owns the callback bus name without exporting
+        // the legacy default object. This is an absent capability, not a
+        // broken store. Required delivery still refuses Unsupported before I/O.
         DeliveryQueueError::Unsupported
     } else {
         DeliveryQueueError::Store(error.to_string())
