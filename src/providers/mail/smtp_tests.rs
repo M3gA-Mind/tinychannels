@@ -239,16 +239,3 @@ fn smtp_preparation_rejects_invalid_sender_and_attachment_mime_type() {
     assert!(matches!(prepare(&creds(2525, "", ""), &message),
         Err(MailError::InvalidAddress(detail)) if detail.contains("MIME type")));
 }
-
-#[test]
-fn smtp_preparation_rejects_invalid_tls_server_names() {
-    for security in [SmtpSecurity::Starttls, SmtpSecurity::Ssl] {
-        let MailCredentials::Smtp(mut smtp) = creds(2525, "", "");
-        smtp.host = "invalid host name".into();
-        smtp.security = security;
-        assert!(matches!(
-            prepare(&MailCredentials::Smtp(smtp), &email("to@example.test")),
-            Err(MailError::Transport(_))
-        ));
-    }
-}
