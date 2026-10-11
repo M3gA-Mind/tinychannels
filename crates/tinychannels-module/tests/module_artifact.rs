@@ -177,6 +177,7 @@ async fn compiled_artifact_exposes_confidential_relay_lifecycle_and_real_websock
         "AppendEmailUploadChunk",
         "SendEmailUpload",
         "AbortEmailUpload",
+        "StartChannelConfigured",
         "Shutdown",
     ] {
         assert!(
@@ -212,6 +213,30 @@ async fn compiled_artifact_exposes_confidential_relay_lifecycle_and_real_websock
             tinychannels_bus::BUS_NAME,
         )
         .unwrap();
+    // The configured member stays callable through the loaded artifact. An
+    // absent channel gives the typed configuration error before any provider
+    // or network resource is created.
+    let configured_args = (
+        "missing",
+        ChannelsConfig::default(),
+        tinychannels_bus::HttpProxyPolicy::default(),
+    );
+    assert_eq!(
+        proxy
+            .call::<()>("StartChannelConfigured", configured_args.clone())
+            .await
+            .unwrap_err()
+            .wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    let error = proxy
+        .call_confidential::<()>("StartChannelConfigured", configured_args)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.wire_name(),
+        "ai.tinyhumans.tinychannels.Error.NotConfigured"
+    );
     // Exercise every original argument shape on the loaded cdylib. The
     // expected NotConfigured/Unknown outcomes prove dispatch reached handlers.
     assert!(

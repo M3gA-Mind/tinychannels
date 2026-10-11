@@ -13,6 +13,59 @@ fn relay_passthrough_body_preserves_base64_wire_and_legacy_invalid_input() {
 }
 
 #[test]
+fn host_capability_payloads_keep_typed_snake_case_wire() {
+    let request = HostTranscriptionRequest {
+        audio_base64: "UklGRg==".into(),
+        mime_type: Some("audio/wav".into()),
+        file_name: Some("voice.wav".into()),
+        language: Some("en".into()),
+    };
+    assert_eq!(
+        serde_json::to_value(&request).unwrap(),
+        json!({
+            "audio_base64":"UklGRg==",
+            "mime_type":"audio/wav",
+            "file_name":"voice.wav",
+            "language":"en"
+        })
+    );
+    let result = HostTranscriptionResult {
+        text: "spoken words".into(),
+        language: Some("en".into()),
+        duration_secs: Some(1.25),
+    };
+    assert_eq!(
+        serde_json::from_value::<HostTranscriptionResult>(serde_json::to_value(result).unwrap())
+            .unwrap()
+            .text,
+        "spoken words"
+    );
+    let event = HostEventPublication {
+        domain: "channel".into(),
+        kind: "reaction_sent".into(),
+        payload: json!({"target_message_id":"tg_42"}),
+    };
+    let wire = serde_json::to_value(event).unwrap();
+    assert_eq!(wire["domain"], "channel");
+    assert_eq!(wire["kind"], "reaction_sent");
+    assert_eq!(wire["payload"]["target_message_id"], "tg_42");
+}
+
+#[test]
+fn http_proxy_policy_round_trips_without_changing_its_wire_fields() {
+    let policy = HttpProxyPolicy {
+        http_proxy: Some("http://proxy.invalid:8080".into()),
+        https_proxy: Some("http://secure-proxy.invalid:8443".into()),
+        all_proxy: None,
+        no_proxy: vec!["localhost".into(), ".internal".into()],
+        service_selectors: vec!["channel.telegram".into(), "channel.discord*".into()],
+    };
+    let value = serde_json::to_value(&policy).unwrap();
+    let decoded = serde_json::from_value::<HttpProxyPolicy>(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), value);
+}
+
+#[test]
 fn legacy_message_and_normalized_envelope_keep_optional_field_and_trust_wire() {
     let wire = json!({"id":"m1", "sender":"alice", "reply_target":"room", "content":"hi", "channel":"telegram", "timestamp":7, "thread_ts":"topic"});
     let message: ChannelMessage = serde_json::from_value(wire.clone()).unwrap();

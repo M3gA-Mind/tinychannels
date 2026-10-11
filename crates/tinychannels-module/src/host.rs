@@ -44,11 +44,13 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tinybus::{Connection, Error, Result};
 use tinychannels_bus::names::{HOST_BUS_NAME, HOST_OBJECT_PATH, host_methods};
+use tinychannels_bus::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult};
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 const OUTBOX_CAPACITY: usize = 256;
 const MAX_CALLBACK_BYTES: usize = 128 * 1024;
+const MAX_TRANSCRIPTION_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 
 enum Notification {
     DeliverInbound {
@@ -63,6 +65,10 @@ enum Notification {
     PersistAllowedIdentity {
         channel: String,
         identity: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    PublishEvent {
+        publication: HostEventPublication,
         reply: oneshot::Sender<Result<()>>,
     },
     Barrier {
@@ -136,6 +142,36 @@ impl HostChannels {
                     let _ = reply.send(result);
                     continue;
                 }
+                if let Notification::PublishEvent { publication, reply } = notification {
+                    let result = async {
+                        let proxy = callback_connection.proxy(
+                            HOST_BUS_NAME,
+                            HOST_OBJECT_PATH,
+                            HOST_BUS_NAME,
+                        )?;
+                        proxy
+                            .call::<()>(host_methods::PUBLISH_EVENT, publication)
+                            .await
+                    }
+                    .await;
+                    let result = match result {
+                        Err(error)
+                            if error.wire_name()
+                                == "ai.tinyhumans.tinybus.Error.NameHasNoOwner"
+                                || error.wire_name()
+                                    == "ai.tinyhumans.tinybus.Error.MemberNotFound" =>
+                        {
+                            // Event sinks are optional capabilities. A host on
+                            // an older callback surface must not make provider
+                            // startup or shutdown fail because an event is
+                            // unavailable.
+                            Ok(())
+                        }
+                        result => result,
+                    };
+                    let _ = reply.send(result);
+                    continue;
+                }
                 let inbound = matches!(notification, Notification::DeliverInbound { .. });
                 let result = async {
                     let proxy = callback_connection.proxy(
@@ -159,6 +195,7 @@ impl HostChannels {
                                 .await
                         }
                         Notification::PersistAllowedIdentity { .. } => unreachable!(),
+                        Notification::PublishEvent { .. } => unreachable!(),
                         Notification::Barrier { .. } => Ok(()),
                     }
                 }
@@ -186,6 +223,41 @@ impl HostChannels {
 
     pub(crate) fn connection(&self) -> Connection {
         self.connection.clone()
+    }
+
+    /// Request transcription through the host's configured speech provider.
+    pub async fn transcribe(
+        &self,
+        request: HostTranscriptionRequest,
+    ) -> Result<HostTranscriptionResult> {
+        if serde_json::to_vec(&request)
+            .map_or(true, |bytes| bytes.len() > MAX_TRANSCRIPTION_REQUEST_BYTES)
+        {
+            return Err(Error::failed("transcription request exceeds byte limit"));
+        }
+        let proxy = self
+            .connection
+            .proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME)?;
+        proxy.call(host_methods::TRANSCRIBE, request).await
+    }
+
+    /// Publish one bounded provider event through the host event sink.
+    pub async fn publish_event(&self, publication: HostEventPublication) -> Result<()> {
+        if serde_json::to_vec(&publication).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
+            return Err(Error::failed("event callback byte limit exceeded"));
+        }
+        let (reply, wait) = oneshot::channel();
+        let _publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(Error::failed("callback consumer is closed"));
+        }
+        self.outbox
+            .send(Notification::PublishEvent { publication, reply })
+            .await
+            .map_err(|_| Error::failed("callback consumer is closed"))?;
+        drop(_publication);
+        wait.await
+            .map_err(|_| Error::failed("event publication was interrupted"))?
     }
 
     /// Enqueue one inbound message; a flush observes delivery failures.

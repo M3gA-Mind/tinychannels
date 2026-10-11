@@ -50,7 +50,7 @@ pub mod routes;
 pub mod runtime;
 
 pub use backend::{ChannelBackend, ChannelManager};
-pub use factory::{DefaultHttpClients, HttpClientFactory, build_channels};
+pub use factory::{ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels};
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
 pub use providers::{
     CliChannel, DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, IrcChannelConfig,
@@ -61,6 +61,7 @@ pub use tinychannels_bus::{
     BUS_NAME, CONTRACT_VERSION, ChannelAuthMode, ChannelCapabilities, ChannelDefinition,
     ChannelInboundEnvelope, ChannelMessage, ChannelOutboundIntent, ChannelsConfig,
     DeliveryDurability, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, OutboundPayload,
+    HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult, HttpProxyPolicy,
     Result, SendMessage, TinyChannelsError, capabilities_for, is_compatible, methods,
 };
 pub use tinychannels_runtime::channel::{
