@@ -24,6 +24,8 @@ pub struct RelayTransport {
     io: RwLock<Arc<dyn RelayFrameIo>>,
     timeouts: RelayTransportTimeouts,
     state: Arc<RelayTransportState>,
+    reader: Mutex<Option<JoinHandle<()>>>,
+    terminal: AtomicBool,
 }
 
 impl RelayTransport {
@@ -37,10 +39,15 @@ impl RelayTransport {
             io: RwLock::new(io),
             timeouts,
             state: Arc::new(RelayTransportState::default()),
+            reader: Mutex::new(None),
+            terminal: AtomicBool::new(false),
         }
     }
 
     pub async fn connect(&self) -> Result<(), RelayTransportError> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(RelayTransportError::Closed);
+        }
         self.prepare_connect().await;
         self.start_reader().await;
         self.send_hellos().await
@@ -70,6 +77,28 @@ impl RelayTransport {
         RelayReconnectHandle { shutdown, task }
     }
 
+    /// Permanently stop and join the owned reader, failing all pending replies.
+    /// A shut down transport cannot reconnect; create a new owner instead.
+    pub async fn shutdown(&self) {
+        self.terminal.store(true, Ordering::SeqCst);
+        let mut reader = self.reader.lock().await;
+        if let Some(task) = reader.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        self.state.fail_waiters(RelayTransportError::Closed).await;
+    }
+
+    /// Safe connection facts without credentials or message contents.
+    pub async fn descriptor(&self) -> Option<CapabilityDescriptor> {
+        self.state.descriptor.lock().await.clone()
+    }
+
+    /// Whether the reader has ended or terminal shutdown was requested.
+    pub fn is_closed(&self) -> bool {
+        self.terminal.load(Ordering::SeqCst) || self.state.closed.load(Ordering::SeqCst)
+    }
+
     async fn prepare_connect(&self) {
         self.state.closed.store(false, Ordering::SeqCst);
         *self.state.descriptor.lock().await = None;
@@ -93,20 +122,20 @@ impl RelayTransport {
 
     pub async fn handshake(&self) -> Result<CapabilityDescriptor, RelayTransportError> {
         loop {
+            let notified = self.state.descriptor_ready.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if let Some(descriptor) = self.state.descriptor.lock().await.clone() {
                 return Ok(descriptor);
             }
             if self.state.closed.load(Ordering::SeqCst) {
                 return Err(RelayTransportError::Closed);
             }
-            timeout(
-                Duration::from_millis(self.timeouts.handshake_ms),
-                self.state.descriptor_ready.notified(),
-            )
-            .await
-            .map_err(|_| RelayTransportError::Timeout {
-                operation: "handshake",
-            })?;
+            timeout(Duration::from_millis(self.timeouts.handshake_ms), notified)
+                .await
+                .map_err(|_| RelayTransportError::Timeout {
+                    operation: "handshake",
+                })?;
         }
     }
 
@@ -192,6 +221,10 @@ impl RelayTransport {
     }
 
     async fn start_reader(&self) {
+        let mut reader = self.reader.lock().await;
+        if self.terminal.load(Ordering::SeqCst) {
+            return;
+        }
         if self
             .state
             .reader_started
@@ -200,14 +233,18 @@ impl RelayTransport {
         {
             return;
         }
+        if let Some(previous) = reader.take() {
+            previous.abort();
+            let _ = previous.await;
+        }
         let io = self.current_io().await;
         let state = self.state.clone();
-        tokio::spawn(async move {
+        *reader = Some(tokio::spawn(async move {
             let result = read_loop(io.clone(), state.clone()).await;
             if let Err(error) = result {
                 state.fail_waiters(error).await;
             }
-        });
+        }));
     }
 
     async fn reconnect_loop(
@@ -244,10 +281,13 @@ impl RelayTransport {
 
     async fn wait_closed(&self) {
         loop {
+            let notified = self.state.closed_ready.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             if self.state.closed.load(Ordering::SeqCst) {
                 return;
             }
-            self.state.closed_ready.notified().await;
+            notified.await;
         }
     }
 
@@ -308,6 +348,14 @@ impl RelayTransport {
     }
 }
 
+impl Drop for RelayTransport {
+    fn drop(&mut self) {
+        if let Some(reader) = self.reader.get_mut().take() {
+            reader.abort();
+        }
+    }
+}
+
 /// Handle for a spawned reconnect supervisor.
 pub struct RelayReconnectHandle {
     shutdown: Arc<AtomicBool>,
@@ -318,6 +366,17 @@ impl RelayReconnectHandle {
     pub fn abort(&self) {
         self.shutdown.store(true, Ordering::SeqCst);
         self.task.abort();
+    }
+    /// Stop and join this reconnect supervisor before stopping its transport.
+    pub async fn shutdown(mut self) {
+        self.abort();
+        let _ = (&mut self.task).await;
+    }
+}
+
+impl Drop for RelayReconnectHandle {
+    fn drop(&mut self) {
+        self.abort();
     }
 }
 

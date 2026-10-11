@@ -248,6 +248,10 @@ async fn attempt_delivery(
     entry: &QueuedDelivery,
     now_unix_ms: u64,
 ) -> Result<DrainResult, DeliveryQueueError> {
+    // Persist the crash boundary before platform I/O. If this write fails, no
+    // handler is invoked; if the process dies in `deliver`, recovery can avoid
+    // blindly sending an operation that may already have escaped.
+    mark_delivery_platform_send_attempt_started(store, &entry.id, now_unix_ms).await?;
     match handler.deliver(entry).await {
         Ok(DeliveryAttemptSuccess { .. }) => {
             ack_delivery(store, &entry.id).await?;
@@ -274,6 +278,15 @@ async fn attempt_delivery(
                 Ok(DrainResult::MovedToFailed)
             } else {
                 fail_delivery(store, &entry.id, error, now_unix_ms).await?;
+                // A handler can positively state that platform I/O did not
+                // begin. Clear the pre-send crash marker so the next retry is
+                // safe to execute without an unknown-send reconciliation.
+                let Some(mut current) = store.load_pending(&entry.id).await? else {
+                    return Ok(DrainResult::Failed);
+                };
+                current.platform_send_started_at_unix_ms = None;
+                current.recovery_state = None;
+                store.save_pending(current).await?;
                 Ok(DrainResult::Failed)
             }
         }

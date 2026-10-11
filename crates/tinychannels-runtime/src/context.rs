@@ -36,7 +36,11 @@ pub fn effective_channel_message_timeout_secs(configured: u64) -> u64 {
 }
 
 pub fn conversation_memory_key(msg: &ChannelMessage) -> String {
-    format!("{}_{}_{}", msg.channel, msg.sender, msg.id)
+    [msg.channel.as_str(), msg.sender.as_str(), msg.id.as_str()]
+        .iter()
+        .map(|part| crate::channel::session::encode_identity_component(part, &['_', '%']))
+        .collect::<Vec<_>>()
+        .join("_")
 }
 
 pub fn conversation_history_key(msg: &ChannelMessage) -> String {
@@ -56,7 +60,11 @@ pub fn conversation_history_key_parts(
     reply_target: &str,
     thread_ts: Option<&str>,
 ) -> String {
-    let base_key = format!("{channel}_{sender}_{reply_target}");
+    let base_key = [channel, sender, reply_target]
+        .iter()
+        .map(|part| crate::channel::session::encode_identity_component(part, &['_', '%']))
+        .collect::<Vec<_>>()
+        .join("_");
     // Some providers (Telegram topics) use thread_ts as a reply target, not as
     // a distinct conversation boundary.
     if crate::capabilities::capabilities_for(channel).history_key_ignores_thread {
@@ -65,7 +73,10 @@ pub fn conversation_history_key_parts(
     if let Some(thread_ts) = thread_ts {
         let thread_ts = thread_ts.trim();
         if !thread_ts.is_empty() {
-            return format!("{base_key}_thread:{thread_ts}");
+            return format!(
+                "{base_key}_thread:{}",
+                crate::channel::session::encode_identity_component(thread_ts, &['_', '%', ':'])
+            );
         }
     }
     base_key
@@ -133,9 +144,8 @@ pub fn should_skip_memory_context_entry(key: &str, content: &str) -> bool {
 /// This is a deliberate copy of `is_context_window_exceeded_message` in
 /// tinyinference's `crates/tinyinference-llm/src/failure.rs`, and its match
 /// list must track that function. It is duplicated rather than imported
-/// because this is the contract crate, which stays dependency-free and cannot
-/// take a dependency on the inference stack. When a provider phrasing is added
-/// there, add it here with the same test string.
+/// because the channel runtime must not depend on the inference stack. When a
+/// provider phrasing is added there, add it here with the same test string.
 pub fn is_context_window_overflow_message(err: &str) -> bool {
     let lower = err.to_ascii_lowercase();
 
@@ -156,7 +166,7 @@ pub fn is_context_window_overflow_message(err: &str) -> bool {
         return true;
     }
 
-    if lower.contains("n_keep") && lower.contains("n_ctx") {
+    if has_un_evictable_prefix_marker(&lower) {
         return true;
     }
 
@@ -165,6 +175,11 @@ pub fn is_context_window_overflow_message(err: &str) -> bool {
         const RATE_LIMIT_MARKERS: &[&str] = &[
             "per minute",
             "per min",
+            "per second",
+            "per sec",
+            "per hour",
+            "per day",
+            "per month",
             "rate limit",
             "rate_limit",
             "tpm",
@@ -178,6 +193,35 @@ pub fn is_context_window_overflow_message(err: &str) -> bool {
     }
 
     false
+}
+
+fn has_un_evictable_prefix_marker(message: &str) -> bool {
+    let Some(keep) = parse_number_after(message, "n_keep:") else {
+        return false;
+    };
+    let Some(ctx_marker) = message.find("n_ctx:") else {
+        return false;
+    };
+    let Some(keep_end) = message.find("n_keep:").map(|index| index + "n_keep:".len()) else {
+        return false;
+    };
+    if ctx_marker < keep_end || !message[keep_end..ctx_marker].contains(">=") {
+        return false;
+    }
+    let Some(ctx) = parse_number_after(&message[ctx_marker..], "n_ctx:") else {
+        return false;
+    };
+    keep >= ctx
+}
+
+fn parse_number_after(message: &str, marker: &str) -> Option<u64> {
+    let start = message.find(marker)? + marker.len();
+    let digits = message[start..]
+        .trim_start()
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    (!digits.is_empty()).then(|| digits.parse().ok()).flatten()
 }
 
 pub async fn build_memory_context(

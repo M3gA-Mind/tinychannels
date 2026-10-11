@@ -18,7 +18,7 @@ crate-type = ["rlib", "cdylib"]
 # loop. Without the feature the factory compiles its gate-off branch, returns no
 # provider, and the request fails as `NotConfigured`: a guard that allows a
 # configuration the build cannot serve.
-tinychannels = { path = "../..", features = ["email", "lark", "whatsapp-web"] }
+tinychannels = { path = "../..", features = ["email", "lark", "whatsapp-web", "relay-websocket"] }
 # The transport-free vocabulary shared with the host.
 tinychannels-bus = { path = "../tinychannels-bus" }
 # TinyBus provides the typed service interface and dynamic module host ABI.
@@ -28,12 +28,21 @@ tinybus-module = "=0.1.2"
 # Provider listen loops are long-lived tasks the module owns.
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.11"
+hex = "0.4"
+anyhow = "1"
 # Diagnostics. A provider that stops receiving is otherwise silent.
 tracing = "0.1"
 log = "0.4"
+async-trait = "0.1"
+uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
 serde_json = "1"
+futures-util = "0.3"
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+base64 = "0.23"
 
 [features]
 default = []

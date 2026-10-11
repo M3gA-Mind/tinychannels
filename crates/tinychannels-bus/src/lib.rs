@@ -7,6 +7,11 @@ pub mod config;
 pub mod context;
 pub mod controllers;
 pub mod error;
+pub mod host;
+pub mod http;
+pub mod module_delivery;
+pub mod module_email;
+pub mod module_relay;
 pub mod names;
 pub mod relay;
 pub mod traits;
@@ -18,6 +23,13 @@ pub use channel::{
 pub use config::ChannelsConfig;
 pub use controllers::{ChannelAuthMode, ChannelDefinition};
 pub use error::{Result, TinyChannelsError};
+pub use host::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult};
+pub use http::HttpProxyPolicy;
+pub use module_delivery::{DeliveryQueueEntry, DeliveryRecoveryState, DeliveryTerminalResult};
+pub use module_email::{
+    EmailAttachment, EmailAttachmentUpload, EmailSendRequest, EmailUploadBegin, EmailUploadChunk,
+    EmailUploadHandle,
+};
 pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, methods};
 pub use traits::{ChannelMessage, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};

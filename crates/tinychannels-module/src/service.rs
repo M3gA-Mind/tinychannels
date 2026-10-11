@@ -1,6 +1,7 @@
 //! The TinyBus service boundary for the channel surface.
 //!
-//! One object, `/ai/tinyhumans/tinychannels/Channels`, exporting five methods:
+//! One object, `/ai/tinyhumans/tinychannels/Channels`, preserving its original
+//! five methods and adding typed intent, relay lifecycle, and shutdown members:
 //!
 //! ```text
 //! StartChannel(name, ChannelsConfig) -> ()
@@ -8,6 +9,8 @@
 //! SendMessage(name, SendMessage)     -> ()
 //! ListChannels()                     -> Vec<String>
 //! ChannelStatus(name)                -> ChannelState
+//! StartChannelConfigured(name, config, proxy) -> ()
+//! SendChannelIntent(name, intent)     -> ChannelSendMessageResult
 //! ```
 //!
 //! # This module is stateful, unlike the document one
@@ -33,14 +36,34 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tinychannels::config::WhatsAppConfigExt as _;
 
+use crate::delivery::HostDeliveryStore;
+use crate::provider::{Hooks, Running, RunningSendError};
+use crate::relay::Relays;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tinybus::{Connection, Error as BusError, Result as BusResult};
-use tinychannels::factory::{DefaultHttpClients, build_channels};
+use tinychannels::delivery::{
+    DeliveryAttemptFailure, DeliveryAttemptResult, DeliveryAttemptSuccess, DeliveryQueueError,
+    DeliveryQueueHandler, DeliveryQueueStore, DeliveryResultStore, PendingDeliveryDrainDecision,
+    QueuedDelivery, UnknownSendReconciliation, ack_delivery, drain_selected_pending_deliveries,
+    enqueue_delivery, recover_pending_deliveries,
+};
+use tinychannels::factory::{
+    ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
+};
 use tinychannels::host::ChannelHost;
-use tinychannels::{Channel, NoopHost};
-use tinychannels_bus::{BUS_NAME, ChannelsConfig, OBJECT_PATH, SendMessage};
+use tinychannels_bus::ChannelOutboundIntent;
+use tinychannels_bus::HttpProxyPolicy;
+use tinychannels_bus::config::RelayRuntimeConfig;
+use tinychannels_bus::controllers::ChannelSendMessageResult;
+use tinychannels_bus::module_relay::{RelayReservation, RelayStatus};
+use tinychannels_bus::{
+    BUS_NAME, ChannelsConfig, EmailSendRequest, EmailUploadBegin, EmailUploadChunk,
+    EmailUploadHandle, OBJECT_PATH, SendMessage,
+};
 use tokio::sync::Mutex;
 use tokio::task::JoinHandle;
 
+use crate::email::EmailSender;
 use crate::host::HostChannels;
 
 const UNKNOWN_CHANNEL_ERROR: &str = "ai.tinyhumans.tinychannels.Error.UnknownChannel";
@@ -60,74 +83,40 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
                 .is_some_and(|wa| wa.backend_type() == "cloud"))
 }
 
-/// Bound on the inbound queue between a provider and the forwarding task.
-///
-/// A provider that outruns the host is dropping messages either way; a bounded
-/// channel makes that visible at a known point instead of growing until the
-/// process is killed.
-const INBOUND_QUEUE: usize = 256;
-
-/// How long a stopping provider's forwarder gets to hand over what it already
-/// accepted before it is abandoned.
-const FORWARDER_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// One running provider.
-struct Running {
-    channel: Arc<dyn Channel>,
-    /// The provider's `listen` loop.
-    listener: JoinHandle<()>,
-    /// Drains the inbound queue into the host callback.
-    forwarder: JoinHandle<()>,
-}
-
-impl Running {
-    /// Stop both tasks. Used by `StopChannel`, from outside either of them.
-    fn shutdown(self) {
-        self.listener.abort();
-        self.forwarder.abort();
-    }
-
-    /// Let the forwarder finish, then stop it if it will not.
-    ///
-    /// Used by the listener when it ends. **Not** an abort: `listen` owns the
-    /// sender, so its return closes the channel and the forwarder drains what is
-    /// left and exits on its own. Aborting instead would discard inbound
-    /// messages the provider had already accepted — exactly the traffic a host
-    /// is least willing to lose, and most likely to be holding when the host
-    /// callback is the slow part.
-    ///
-    /// The timeout is the backstop for the case where the host callback is
-    /// wedged: a drain that cannot finish must not keep the task alive for ever.
-    async fn drain_forwarder(self) {
-        if tokio::time::timeout(FORWARDER_DRAIN_TIMEOUT, self.forwarder)
-            .await
-            .is_err()
-        {
-            tracing::warn!(
-                "[tinychannels:module] forwarder did not drain within {:?}; \
-                 remaining inbound messages are dropped",
-                FORWARDER_DRAIN_TIMEOUT
-            );
-        }
-    }
-}
-
 /// The served object.
 struct Channels {
     host: HostChannels,
+    email: EmailSender,
     /// Shared with each listener task so it can retire its own entry.
-    running: Arc<Mutex<HashMap<String, Running>>>,
+    running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    relays: Arc<Relays>,
+    terminal: AtomicBool,
+    shutdown_task: Mutex<Option<JoinHandle<BusResult<()>>>>,
+    delivery_admission: Arc<Mutex<()>>,
 }
 
-#[allow(
-    clippy::unused_async,
-    reason = "tinybus::interface requires every method to be `async fn`"
-)]
-#[tinybus::interface(name = "ai.tinyhumans.tinychannels.Channels")]
+struct ModuleDeliveryHandler {
+    running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    store: HostDeliveryStore,
+}
+
 impl Channels {
-    /// Connect `name` from `config` and start receiving.
-    async fn start_channel(&self, name: String, config: ChannelsConfig) -> BusResult<()> {
+    async fn start_channel_inner(
+        &self,
+        name: String,
+        config: ChannelsConfig,
+        http: &dyn HttpClientFactory,
+    ) -> BusResult<()> {
         let mut running = self.running.lock().await;
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        if running
+            .get(&name)
+            .is_some_and(|running| running.is_finished())
+        {
+            running.remove(&name);
+        }
         if running.contains_key(&name) {
             return Err(BusError::MethodFailed {
                 name: ALREADY_RUNNING_ERROR.to_owned(),
@@ -135,12 +124,9 @@ impl Channels {
             });
         }
 
-        // The factory builds every *configured* provider; we take the one asked
-        // for. Building the set is cheap (no I/O) and keeps a single
-        // config-to-provider mapping rather than a second one here that could
-        // disagree about, say, which WhatsApp backend a stanza describes.
-        let noop: Arc<dyn ChannelHost> = NoopHost::arc();
-        let built = build_channels(&config, &noop, &DefaultHttpClients);
+        let hooks = Arc::new(Hooks::default());
+        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone());
+        let built = build_channels(&config, &owner_host, http);
         let channel = built
             .into_iter()
             .find(|candidate| candidate.name() == name)
@@ -149,20 +135,6 @@ impl Channels {
                 message: format!("channel {name} is not present in the supplied config"),
             })?;
 
-        // Refuse the providers whose inbound path this module cannot serve.
-        //
-        // Linq and the WhatsApp *Cloud API* variant are push-based: their
-        // `listen` implementations sleep forever, because messages arrive at an
-        // HTTPS webhook the host operates. The module exports no route or bus
-        // member that can feed such a payload into the channel, so starting one
-        // here would report success and then deliver nothing, for ever — the
-        // worst failure shape available.
-        //
-        // Failing loudly is deliberately preferred to a silent no-op. When
-        // webhook ingress is added to the contract this check is what gets
-        // relaxed. (WhatsApp *Web* is unaffected: it has a real listen loop.
-        // Both variants report `name() == "whatsapp"`, so the config shape is
-        // what distinguishes them, not the name.)
         if is_webhook_backed(&name, &config) {
             return Err(BusError::MethodFailed {
                 name: NO_INGRESS_ERROR.to_owned(),
@@ -174,72 +146,123 @@ impl Channels {
             });
         }
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel(INBOUND_QUEUE);
-
-        let listen_channel = Arc::clone(&channel);
-        let listen_name = name.clone();
-        let listen_host = self.host.clone();
-        let listen_registry = Arc::clone(&self.running);
-        let listener = tokio::spawn(async move {
-            listen_host
-                .report_status(&listen_name, "connecting", None)
-                .await;
-            let outcome = listen_channel.listen(tx).await;
-
-            // The listen loop returning is the provider's terminal state, so the
-            // registry entry has to go with it. Leaving it behind was a real bug:
-            // `ListChannels` kept advertising a dead provider, `StartChannel`
-            // rejected every retry as `AlreadyRunning`, and `ChannelStatus` could
-            // still answer "connected" off an HTTP health check that knows
-            // nothing about the receive loop.
-            //
-            // Dropped rather than aborted: this task is the listener, and
-            // `Running::shutdown` would abort it from inside itself.
-            if let Some(entry) = listen_registry.lock().await.remove(&listen_name) {
-                entry.drain_forwarder().await;
-            }
-
-            match outcome {
-                Ok(()) => {
-                    listen_host
-                        .report_status(&listen_name, "stopped", None)
-                        .await
-                }
-                Err(error) => {
-                    // The module deliberately does not reconnect on its own: a
-                    // backoff policy that disagreed with the host's would be
-                    // invisible from the host side. Reporting is what lets the
-                    // host decide to retry — and the entry is gone, so it can.
-                    tracing::warn!("[tinychannels:module] {listen_name} listen ended: {error}");
-                    listen_host
-                        .report_status(&listen_name, "failed", Some(error.to_string()))
-                        .await;
-                }
-            }
-        });
-
-        let forward_name = name.clone();
-        let forward_host = self.host.clone();
-        let forwarder = tokio::spawn(async move {
-            while let Some(message) = rx.recv().await {
-                match serde_json::to_value(&message) {
-                    Ok(value) => forward_host.deliver_inbound(&forward_name, value).await,
-                    Err(error) => tracing::warn!(
-                        "[tinychannels:module] {forward_name} inbound message not serialisable: {error}"
-                    ),
-                }
-            }
-        });
-
         running.insert(
-            name,
-            Running {
-                channel,
-                listener,
-                forwarder,
-            },
+            name.clone(),
+            Running::start(channel, hooks, self.host.clone()),
         );
-        Ok(())
+        drop(running);
+        finish_start_admission(
+            &self.host,
+            &self.running,
+            &self.delivery_admission,
+            &self.terminal,
+            &name,
+        )
+        .await
+    }
+}
+
+#[async_trait::async_trait]
+impl DeliveryQueueHandler for ModuleDeliveryHandler {
+    async fn deliver(&self, entry: &QueuedDelivery) -> DeliveryAttemptResult {
+        let Ok(intent_fingerprint) = intent_fingerprint(&entry.intent) else {
+            return Err(DeliveryAttemptFailure {
+                error: "delivery payload could not be encoded".into(),
+                sent_before_error: false,
+                permanent: Some(true),
+            });
+        };
+        let running = self.running.lock().await;
+        let Some(provider) = running
+            .get(&entry.intent.channel_id)
+            .filter(|provider| !provider.is_finished())
+            .cloned()
+        else {
+            return Err(DeliveryAttemptFailure {
+                error: "delivery target is unavailable".into(),
+                sent_before_error: false,
+                permanent: None,
+            });
+        };
+        drop(running);
+
+        let Ok(message) = intent_to_legacy_message(&entry.intent) else {
+            return Err(DeliveryAttemptFailure {
+                error: "delivery payload could not be encoded".into(),
+                sent_before_error: false,
+                permanent: Some(true),
+            });
+        };
+        if let Err(error) = provider.send(message).await {
+            return Err(DeliveryAttemptFailure {
+                error: "provider send failed".into(),
+                sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
+                permanent: None,
+            });
+        }
+        let result = tinychannels_bus::DeliveryTerminalResult {
+            id: entry.id.clone(),
+            intent_fingerprint,
+            completed_at_unix_ms: now_unix_ms(),
+        };
+        if self.store.save_result(result).await.is_err() {
+            return Err(DeliveryAttemptFailure {
+                error: "terminal delivery result could not be persisted".into(),
+                sent_before_error: true,
+                permanent: None,
+            });
+        }
+        Ok(DeliveryAttemptSuccess::default())
+    }
+
+    async fn reconcile_unknown_send(
+        &self,
+        entry: &QueuedDelivery,
+    ) -> Result<Option<UnknownSendReconciliation>, DeliveryQueueError> {
+        let Some(result) = self.store.load_result(&entry.id).await? else {
+            return Ok(None);
+        };
+        let fingerprint = intent_fingerprint(&entry.intent).map_err(|_| {
+            DeliveryQueueError::Store("delivery intent could not be encoded".into())
+        })?;
+        if result.intent_fingerprint != fingerprint {
+            return Err(DeliveryQueueError::Store(
+                "terminal delivery result conflicts with pending intent".into(),
+            ));
+        }
+        Ok(Some(UnknownSendReconciliation::Sent {
+            receipt: tinychannels::channel::MessageReceipt::default(),
+            message_id: None,
+        }))
+    }
+}
+
+#[allow(
+    clippy::unused_async,
+    reason = "tinybus::interface requires every method to be `async fn`"
+)]
+#[tinybus::interface(name = "ai.tinyhumans.tinychannels.Channels")]
+impl Channels {
+    /// Connect `name` from `config` and start receiving.
+    async fn start_channel(&self, name: String, config: ChannelsConfig) -> BusResult<()> {
+        self.start_channel_inner(name, config, &DefaultHttpClients)
+            .await
+    }
+
+    /// Connect one provider with host-selected HTTP proxy configuration.
+    ///
+    /// This additive operation is confidential because proxy URLs may include
+    /// credentials. `StartChannel` retains its original two-argument wire.
+    #[tinybus(confidential)]
+    async fn start_channel_configured(
+        &self,
+        name: String,
+        config: ChannelsConfig,
+        proxy: HttpProxyPolicy,
+    ) -> BusResult<()> {
+        let http = ConfiguredHttpClients::new(proxy)
+            .map_err(|_| BusError::failed("invalid host HTTP proxy policy"))?;
+        self.start_channel_inner(name, config, &http).await
     }
 
     /// Disconnect `name` and drop its tasks.
@@ -248,12 +271,27 @@ impl Channels {
     /// reconciling desired against actual state should be able to call this
     /// unconditionally.
     async fn stop_channel(&self, name: String) -> BusResult<()> {
-        // Taken out of the map before the report so the lock is not held across
-        // the enqueue, which can block on a full outbox.
-        let running = self.running.lock().await.remove(&name);
-        if let Some(running) = running {
-            running.shutdown();
-            self.host.report_status(&name, "stopped", None).await;
+        let entry = self.running.lock().await.get(&name).cloned();
+        if let Some(entry) = entry {
+            let _admission = self.delivery_admission.lock().await;
+            if let Err(error) = recover_delivery_channel(&self.host, &self.running, &name).await
+                && !matches!(error, DeliveryQueueError::Unsupported)
+            {
+                return Err(delivery_store_error(error));
+            }
+            entry.stop().await?;
+            let result =
+                tokio::time::timeout(std::time::Duration::from_secs(10), self.host.flush())
+                    .await
+                    .map_err(|_| BusError::failed("callbacks are pending; retry StopChannel"))?;
+            let mut running = self.running.lock().await;
+            if running
+                .get(&name)
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
+            {
+                running.remove(&name);
+            }
+            result?;
         }
         Ok(())
     }
@@ -262,19 +300,23 @@ impl Channels {
     async fn send_message(&self, name: String, message: SendMessage) -> BusResult<()> {
         // Cloned out of the map so the send does not hold the registry lock for
         // the duration of a network round trip.
-        let channel = {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let entry = {
             let running = self.running.lock().await;
             running
                 .get(&name)
-                .map(|entry| Arc::clone(&entry.channel))
+                .filter(|entry| !entry.is_finished())
+                .cloned()
                 .ok_or_else(|| BusError::MethodFailed {
                     name: UNKNOWN_CHANNEL_ERROR.to_owned(),
                     message: format!("channel {name} is not running"),
                 })?
         };
 
-        channel
-            .send(&message)
+        entry
+            .send(message)
             .await
             .map_err(|error| BusError::MethodFailed {
                 name: SEND_FAILED_ERROR.to_owned(),
@@ -282,16 +324,234 @@ impl Channels {
             })
     }
 
+    /// Send one intent through the provider actor or host-backed durable queue.
+    /// Required durability fails closed when queue storage is unavailable.
+    async fn send_channel_intent(
+        &self,
+        name: String,
+        intent: ChannelOutboundIntent,
+    ) -> BusResult<ChannelSendMessageResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        if intent.channel_id != name {
+            return Err(BusError::failed("intent channel does not match provider"));
+        }
+        if intent.durability == tinychannels::DeliveryDurability::Required {
+            return self.send_required_intent(intent).await;
+        }
+        if serde_json::to_vec(&intent).map_or(true, |bytes| {
+            bytes.len() > tinychannels_bus::module_relay::RELAY_FRAME_BYTES
+        }) {
+            return Err(BusError::failed("channel intent byte limit exceeded"));
+        }
+        let entry = {
+            let running = self.running.lock().await;
+            running
+                .get(&name)
+                .filter(|entry| !entry.is_finished())
+                .cloned()
+                .ok_or_else(|| BusError::MethodFailed {
+                    name: UNKNOWN_CHANNEL_ERROR.to_owned(),
+                    message: format!("channel {name} is not running"),
+                })?
+        };
+        entry
+            .send(
+                intent_to_legacy_message(&intent)
+                    .map_err(|_| BusError::failed("could not encode channel intent"))?,
+            )
+            .await
+            .map_err(|error| BusError::MethodFailed {
+                name: SEND_FAILED_ERROR.to_owned(),
+                message: error.to_string(),
+            })?;
+        Ok(ChannelSendMessageResult::default())
+    }
+
+    async fn send_required_intent(
+        &self,
+        intent: ChannelOutboundIntent,
+    ) -> BusResult<ChannelSendMessageResult> {
+        if intent.idempotency_key.is_empty() || intent.idempotency_key.len() > 256 {
+            return Err(BusError::failed(
+                "required delivery idempotency key is invalid",
+            ));
+        }
+        if intent.channel_id.is_empty() || intent.channel_id != intent.channel_id.trim() {
+            return Err(BusError::failed("required delivery channel is invalid"));
+        }
+        if serde_json::to_vec(&intent).map_or(true, |bytes| {
+            bytes.len() > tinychannels_bus::module_delivery::DELIVERY_RECORD_BYTES
+        }) {
+            return Err(BusError::failed(
+                "required delivery exceeds the record limit",
+            ));
+        }
+        let fingerprint = intent_fingerprint(&intent)
+            .map_err(|_| BusError::failed("required delivery could not be encoded"))?;
+        let _admission = self
+            .delivery_admission
+            .try_lock()
+            .map_err(|_| BusError::failed("required delivery queue is busy"))?;
+        let store = HostDeliveryStore::new(self.host.connection());
+        let id = intent.idempotency_key.clone();
+
+        if let Some(result) = store.load_result(&id).await.map_err(delivery_store_error)? {
+            if result.intent_fingerprint != fingerprint {
+                return Err(BusError::failed("required delivery key conflicts"));
+            }
+            if store
+                .load_pending(&id)
+                .await
+                .map_err(delivery_store_error)?
+                .is_some()
+            {
+                ack_delivery(&store, &id)
+                    .await
+                    .map_err(delivery_store_error)?;
+            }
+            return Ok(ChannelSendMessageResult::default());
+        }
+        if let Some(failed) = store.load_failed(&id).await.map_err(delivery_store_error)? {
+            return if failed.intent == intent {
+                Err(BusError::failed("required delivery is in failed storage"))
+            } else {
+                Err(BusError::failed("required delivery key conflicts"))
+            };
+        }
+
+        let pending = store
+            .load_pending(&id)
+            .await
+            .map_err(delivery_store_error)?;
+        if let Some(existing) = &pending {
+            if existing.intent != intent {
+                return Err(BusError::failed("required delivery key conflicts"));
+            }
+        } else {
+            enqueue_delivery(
+                &store,
+                QueuedDelivery::new(id.clone(), intent.clone(), now_unix_ms()),
+            )
+            .await
+            .map_err(delivery_store_error)?;
+        }
+
+        let handler = ModuleDeliveryHandler {
+            running: self.running.clone(),
+            store: store.clone(),
+        };
+        let recovery =
+            drain_selected_pending_deliveries(&store, &handler, now_unix_ms(), |entry| {
+                PendingDeliveryDrainDecision {
+                    matches: entry.intent.channel_id == intent.channel_id,
+                    bypass_backoff: false,
+                }
+            })
+            .await
+            .map_err(delivery_store_error)?;
+        if let Some(result) = store.load_result(&id).await.map_err(delivery_store_error)? {
+            if result.intent_fingerprint != fingerprint {
+                return Err(BusError::failed("required delivery key conflicts"));
+            }
+            if store
+                .load_pending(&id)
+                .await
+                .map_err(delivery_store_error)?
+                .is_some()
+            {
+                ack_delivery(&store, &id)
+                    .await
+                    .map_err(delivery_store_error)?;
+            }
+            return Ok(ChannelSendMessageResult::default());
+        }
+        let still_pending = store
+            .load_pending(&id)
+            .await
+            .map_err(delivery_store_error)?
+            .is_some();
+        let moved_to_failed = store
+            .load_failed(&id)
+            .await
+            .map_err(delivery_store_error)?
+            .is_some();
+        if moved_to_failed || still_pending || recovery.failed > 0 || recovery.deferred_backoff > 0
+        {
+            return Err(BusError::failed(
+                "required delivery remains pending or failed",
+            ));
+        }
+        Ok(ChannelSendMessageResult::default())
+    }
+
+    /// Send SMTP mail without requiring an active IMAP listener.
+    /// The host hydrates credentials and sends this payload confidentially.
+    #[tinybus(confidential)]
+    async fn send_email(&self, request: EmailSendRequest) -> BusResult<ChannelSendMessageResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        self.email.send(request).await
+    }
+
+    /// Start a bounded confidential upload for an SMTP message.
+    #[tinybus(confidential)]
+    async fn begin_email_upload(&self, request: EmailUploadBegin) -> BusResult<EmailUploadHandle> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        self.email.begin_upload(request).await
+    }
+
+    /// Append an ordered, retry-safe confidential attachment chunk.
+    #[tinybus(confidential)]
+    async fn append_email_upload_chunk(&self, chunk: EmailUploadChunk) -> BusResult<u32> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        self.email.append_upload_chunk(chunk).await
+    }
+
+    /// Send a completed upload once; retries replay the handle's terminal result.
+    #[tinybus(confidential)]
+    async fn send_email_upload(
+        &self,
+        handle: EmailUploadHandle,
+    ) -> BusResult<ChannelSendMessageResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        self.email.send_upload(handle).await
+    }
+
+    /// Discard an upload that has not entered SMTP delivery.
+    #[tinybus(confidential)]
+    async fn abort_email_upload(&self, handle: EmailUploadHandle) -> BusResult<()> {
+        self.email.abort_upload(handle).await
+    }
+
     /// The providers currently running, in no particular order.
     async fn list_channels(&self) -> BusResult<Vec<String>> {
-        Ok(self.running.lock().await.keys().cloned().collect())
+        Ok(self
+            .running
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, entry)| !entry.is_finished())
+            .map(|(name, _)| name.clone())
+            .collect())
     }
 
     /// Whether `name` is running, and whether the provider reports itself healthy.
     async fn channel_status(&self, name: String) -> BusResult<String> {
         let channel = {
             let running = self.running.lock().await;
-            running.get(&name).map(|entry| Arc::clone(&entry.channel))
+            running
+                .get(&name)
+                .filter(|entry| !entry.is_finished())
+                .map(|entry| Arc::clone(&entry.channel))
         };
         let Some(channel) = channel else {
             return Ok("stopped".to_owned());
@@ -302,18 +562,237 @@ impl Channels {
             "unhealthy".to_owned()
         })
     }
+    /// Mint a bounded, single-use relay reservation before async native startup.
+    async fn reserve_relay(&self) -> BusResult<RelayReservation> {
+        self.relays.reserve().await
+    }
+    /// Start this known handle with host-hydrated secrets over confidential delivery.
+    #[tinybus(confidential)]
+    async fn start_relay(
+        &self,
+        id: RelayReservation,
+        config: RelayRuntimeConfig,
+    ) -> BusResult<tinychannels::relay::CapabilityDescriptor> {
+        self.relays.start(id, config).await
+    }
+    /// Cancel pending startup and join relay/reconnect/native callback work.
+    async fn stop_relay(&self, id: RelayReservation) -> BusResult<()> {
+        self.relays.stop(id).await
+    }
+    /// Report safe lifecycle facts without URL, identities or credentials.
+    async fn relay_status(&self, id: RelayReservation) -> BusResult<RelayStatus> {
+        self.relays.status(id).await
+    }
+    /// Enqueue one bounded, ordered relay intent.
+    async fn send_relay_intent(
+        &self,
+        id: RelayReservation,
+        intent: ChannelOutboundIntent,
+    ) -> BusResult<ChannelSendMessageResult> {
+        self.relays.send(id, intent).await
+    }
+    /// Freeze operations and join all native providers, relay and callbacks.
+    async fn shutdown(&self) -> BusResult<()> {
+        self.terminal.store(true, Ordering::SeqCst);
+        self.relays.freeze();
+        let mut task = self.shutdown_task.lock().await;
+        if task.is_none() {
+            let providers = self.running.clone();
+            let relay = self.relays.clone();
+            let email = self.email.clone();
+            let host = self.host.clone();
+            let delivery_admission = self.delivery_admission.clone();
+            *task = Some(tokio::spawn(async move {
+                let mut failure = None;
+                let _delivery = delivery_admission.lock().await;
+                let delivery_store = HostDeliveryStore::new(host.connection());
+                let delivery_handler = ModuleDeliveryHandler {
+                    running: providers.clone(),
+                    store: delivery_store.clone(),
+                };
+                match recover_pending_deliveries(&delivery_store, &delivery_handler, now_unix_ms())
+                    .await
+                {
+                    Err(DeliveryQueueError::Unsupported) => {}
+                    Err(error) => failure = Some(delivery_store_error(error)),
+                    Ok(_) => {}
+                }
+                drop(_delivery);
+                let entries: Vec<_> = providers
+                    .lock()
+                    .await
+                    .iter()
+                    .map(|(name, entry)| (name.clone(), entry.clone()))
+                    .collect();
+                let mut pending = false;
+                for (name, entry) in entries {
+                    match entry.stop().await {
+                        Ok(()) => {
+                            providers.lock().await.remove(&name);
+                        }
+                        Err(error) => {
+                            pending = true;
+                            if failure.is_none() {
+                                failure = Some(error);
+                            }
+                        }
+                    }
+                }
+                if let Err(error) = relay.shutdown().await
+                    && failure.is_none()
+                {
+                    failure = Some(error);
+                }
+                if let Err(error) = email.shutdown().await
+                    && failure.is_none()
+                {
+                    failure = Some(error);
+                }
+                if !pending && relay.is_empty().await {
+                    match host.shutdown().await {
+                        Err(error) if failure.is_none() => failure = Some(error),
+                        _ => {}
+                    }
+                }
+                match failure {
+                    Some(error) => Err(error),
+                    None => Ok(()),
+                }
+            }));
+        }
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            task.as_mut()
+                .ok_or_else(|| BusError::failed("missing shutdown owner"))?,
+        )
+        .await
+        .map_err(|_| BusError::failed("module cleanup is pending; retry Shutdown"))?
+        .map_err(|_| BusError::failed("module cleanup worker failed"))?;
+        task.take();
+        result
+    }
+}
+
+async fn recover_delivery_channel(
+    host: &HostChannels,
+    running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    channel_id: &str,
+) -> Result<(), DeliveryQueueError> {
+    let store = HostDeliveryStore::new(host.connection());
+    let handler = ModuleDeliveryHandler {
+        running: running.clone(),
+        store: store.clone(),
+    };
+    drain_selected_pending_deliveries(&store, &handler, now_unix_ms(), |entry| {
+        PendingDeliveryDrainDecision {
+            matches: entry.intent.channel_id == channel_id,
+            bypass_backoff: false,
+        }
+    })
+    .await?;
+    Ok(())
+}
+
+async fn finish_start_admission(
+    host: &HostChannels,
+    running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    delivery_admission: &Mutex<()>,
+    terminal: &AtomicBool,
+    name: &str,
+) -> BusResult<()> {
+    let _admission = delivery_admission.lock().await;
+    if terminal.load(Ordering::SeqCst) {
+        let entry = running.lock().await.get(name).cloned();
+        if let Some(entry) = entry {
+            entry.stop().await?;
+            let mut running = running.lock().await;
+            if running
+                .get(name)
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
+            {
+                running.remove(name);
+            }
+        }
+        return Err(BusError::failed("module is shutting down"));
+    }
+    if let Err(error) = recover_delivery_channel(host, running, name).await
+        && !matches!(error, DeliveryQueueError::Unsupported)
+    {
+        let entry = running.lock().await.get(name).cloned();
+        if let Some(entry) = entry
+            && entry.stop().await.is_ok()
+        {
+            let mut running = running.lock().await;
+            if running
+                .get(name)
+                .is_some_and(|current| Arc::ptr_eq(current, &entry))
+            {
+                running.remove(name);
+            }
+        }
+        return Err(delivery_store_error(error));
+    }
+    Ok(())
 }
 
 async fn setup(connection: Connection) -> BusResult<()> {
+    let host = HostChannels::new(connection.clone());
     let channels = Channels {
-        host: HostChannels::new(connection.clone()),
+        relays: Arc::new(Relays::new(host.clone())),
+        host,
+        email: EmailSender::new(),
         running: Arc::new(Mutex::new(HashMap::new())),
+        terminal: AtomicBool::new(false),
+        shutdown_task: Mutex::new(None),
+        delivery_admission: Arc::new(Mutex::new(())),
     };
     connection
         .serve_at(OBJECT_PATH.try_into()?, channels)
         .await?;
     connection.request_name(BUS_NAME).await?;
     Ok(())
+}
+
+fn intent_to_legacy_message(
+    intent: &ChannelOutboundIntent,
+) -> Result<SendMessage, serde_json::Error> {
+    let value = tinychannels::legacy_message_value_from_outbound_intent(intent);
+    let content = match &intent.payload {
+        tinychannels::OutboundPayload::Text { text } => text.clone(),
+        _ => serde_json::to_string(&value)?,
+    };
+    Ok(SendMessage {
+        content,
+        recipient: intent.conversation_id.clone(),
+        subject: None,
+        thread_ts: intent.thread_id.clone(),
+        idempotency_key: Some(intent.idempotency_key.clone()),
+    })
+}
+
+fn intent_fingerprint(intent: &ChannelOutboundIntent) -> Result<String, serde_json::Error> {
+    use sha2::Digest as _;
+    let encoded = serde_json::to_vec(intent)?;
+    Ok(hex::encode(sha2::Sha256::digest(encoded)))
+}
+
+fn now_unix_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .min(u64::MAX as u128) as u64
+}
+
+fn delivery_store_error(error: DeliveryQueueError) -> BusError {
+    match error {
+        DeliveryQueueError::Unsupported => {
+            BusError::failed("required delivery host queue is unavailable")
+        }
+        DeliveryQueueError::Store(_) => {
+            BusError::failed("required delivery persistence or recovery failed")
+        }
+    }
 }
 
 // Isolate the generated public C symbols so the lint exception cannot hide
@@ -334,6 +813,9 @@ pub(crate) mod exports {
             "SendMessage",
             "ListChannels",
             "ChannelStatus",
+            "ReserveRelay", "StartRelay", "StopRelay", "RelayStatus", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
+            "BeginEmailUpload", "AppendEmailUploadChunk", "SendEmailUpload", "AbortEmailUpload",
+            "StartChannelConfigured",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:

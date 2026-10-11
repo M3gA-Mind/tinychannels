@@ -96,8 +96,12 @@ pub fn create_message_receipt_from_outbound_results(
 
 pub fn list_message_receipt_platform_ids(receipt: &MessageReceipt) -> Vec<String> {
     let mut ids = Vec::new();
+    append_unique(&mut ids, receipt.primary_platform_message_id.as_deref());
     for id in &receipt.platform_message_ids {
         append_unique(&mut ids, Some(id));
+    }
+    for part in &receipt.parts {
+        append_unique(&mut ids, Some(&part.platform_message_id));
     }
     ids
 }

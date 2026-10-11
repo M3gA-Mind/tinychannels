@@ -274,6 +274,24 @@ fn validate_credentials_rejects_missing_required() {
 }
 
 #[test]
+fn validate_credentials_rejects_non_string_required_values() {
+    let def = find_channel_definition("telegram").unwrap();
+    for value in [
+        serde_json::Value::Null,
+        serde_json::json!(7),
+        serde_json::json!([]),
+        serde_json::json!({}),
+    ] {
+        let mut credentials = serde_json::Map::new();
+        credentials.insert("bot_token".into(), value);
+        assert!(
+            def.validate_credentials(ChannelAuthMode::BotToken, &credentials)
+                .is_err()
+        );
+    }
+}
+
+#[test]
 fn validate_credentials_accepts_complete() {
     let def = find_channel_definition("telegram").unwrap();
     let mut creds = serde_json::Map::new();

@@ -40,17 +40,19 @@
 //! the ordered queue behind one unreachable host or grow in memory. Durable
 //! redelivery belongs to whoever owns storage, which is the host.
 
-use tinybus::Connection;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex as StdMutex};
+use tinybus::{Connection, Error, Result};
 use tinychannels_bus::names::{HOST_BUS_NAME, HOST_OBJECT_PATH, host_methods};
-use tokio::sync::mpsc;
+use tinychannels_bus::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
+use tokio::task::JoinHandle;
 
-/// Bound on notifications waiting to be handed to the host.
-///
-/// Sized to match the per-provider inbound queue in `service.rs`, so the two
-/// buffers cannot combine into a surprise multiple of either.
 const OUTBOX_CAPACITY: usize = 256;
+const MAX_CALLBACK_BYTES: usize = 128 * 1024;
+const MAX_TRANSCRIPTION_REQUEST_BYTES: usize = 12 * 1024 * 1024;
+const MAX_ACTIVE_TRANSCRIPTIONS: usize = 16;
 
-/// One queued host call, already serialised into its argument tuple.
 enum Notification {
     DeliverInbound {
         channel: String,
@@ -61,14 +63,53 @@ enum Notification {
         state: String,
         detail: Option<String>,
     },
+    PersistAllowedIdentity {
+        channel: String,
+        identity: String,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    PublishEvent {
+        publication: HostEventPublication,
+        reply: oneshot::Sender<Result<()>>,
+    },
+    Barrier {
+        stop: bool,
+        reply: oneshot::Sender<()>,
+    },
 }
 
-/// Client for the callback object the host serves.
+struct Owner {
+    worker: Mutex<Option<JoinHandle<()>>>,
+    terminal: AtomicBool,
+    publication: Mutex<()>,
+    active_transcriptions: AtomicUsize,
+    transcriptions_drained: Notify,
+    failure: Arc<StdMutex<Option<String>>>,
+}
+
+struct ActiveTranscription(Arc<Owner>);
+
+impl Drop for ActiveTranscription {
+    fn drop(&mut self) {
+        self.0.active_transcriptions.fetch_sub(1, Ordering::SeqCst);
+        self.0.transcriptions_drained.notify_waiters();
+    }
+}
+impl Drop for Owner {
+    fn drop(&mut self) {
+        if let Some(worker) = self.worker.get_mut().take() {
+            worker.abort();
+        }
+    }
+}
+
+/// An ordered, bounded client for the optional host callback object.
 #[derive(Clone)]
 pub struct HostChannels {
     outbox: mpsc::Sender<Notification>,
+    owner: Arc<Owner>,
+    connection: Connection,
 }
-
 impl std::fmt::Debug for HostChannels {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -76,54 +117,201 @@ impl std::fmt::Debug for HostChannels {
             .finish_non_exhaustive()
     }
 }
-
 impl HostChannels {
-    /// Wrap a connection and start the ordered consumer.
+    /// Start one owned callback consumer. Explicit shutdown drains and joins it.
     #[must_use]
     pub fn new(connection: Connection) -> Self {
         let (outbox, mut inbox) = mpsc::channel(OUTBOX_CAPACITY);
-        tokio::spawn(async move {
+        let failure = Arc::new(StdMutex::new(None));
+        let task_failure = failure.clone();
+        let callback_connection = connection.clone();
+        let worker = tokio::spawn(async move {
             while let Some(notification) = inbox.recv().await {
-                // Resolved per notification rather than once here: a host may
-                // start serving this object after the module loads, and a name
-                // captured up front would pin the failure forever.
-                let proxy = match connection.proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME) {
-                    Ok(proxy) => proxy,
-                    Err(error) => {
-                        log::debug!("[tinychannels:module] host callback unreachable: {error}");
-                        continue;
+                if let Notification::Barrier { stop, reply } = notification {
+                    let _ = reply.send(());
+                    if stop {
+                        break;
                     }
-                };
-                // Awaited, not spawned — this is what keeps the order.
-                let result = match notification {
-                    Notification::DeliverInbound { channel, message } => {
+                    continue;
+                }
+                if let Notification::PersistAllowedIdentity {
+                    channel,
+                    identity,
+                    reply,
+                } = notification
+                {
+                    let result = async {
+                        let proxy = callback_connection.proxy(
+                            HOST_BUS_NAME,
+                            HOST_OBJECT_PATH,
+                            HOST_BUS_NAME,
+                        )?;
                         proxy
-                            .call::<()>(host_methods::DELIVER_INBOUND, (channel, message))
+                            .call::<()>(host_methods::PERSIST_ALLOWED_IDENTITY, (channel, identity))
                             .await
                     }
-                    Notification::ReportStatus {
-                        channel,
-                        state,
-                        detail,
-                    } => {
+                    .await;
+                    let _ = reply.send(result);
+                    continue;
+                }
+                if let Notification::PublishEvent { publication, reply } = notification {
+                    let result = async {
+                        let proxy = callback_connection.proxy(
+                            HOST_BUS_NAME,
+                            HOST_OBJECT_PATH,
+                            HOST_BUS_NAME,
+                        )?;
                         proxy
-                            .call::<()>(host_methods::REPORT_STATUS, (channel, state, detail))
+                            .call::<()>(host_methods::PUBLISH_EVENT, publication)
                             .await
                     }
-                };
+                    .await;
+                    let result = match result {
+                        Err(error)
+                            if error.wire_name()
+                                == "ai.tinyhumans.tinybus.Error.NameHasNoOwner"
+                                || error.wire_name()
+                                    == "ai.tinyhumans.tinybus.Error.MemberNotFound" =>
+                        {
+                            // Event sinks are optional capabilities. A host on
+                            // an older callback surface must not make provider
+                            // startup or shutdown fail because an event is
+                            // unavailable.
+                            Ok(())
+                        }
+                        result => result,
+                    };
+                    let _ = reply.send(result);
+                    continue;
+                }
+                let inbound = matches!(notification, Notification::DeliverInbound { .. });
+                let result = async {
+                    let proxy = callback_connection.proxy(
+                        HOST_BUS_NAME,
+                        HOST_OBJECT_PATH,
+                        HOST_BUS_NAME,
+                    )?;
+                    match notification {
+                        Notification::DeliverInbound { channel, message } => {
+                            proxy
+                                .call::<()>(host_methods::DELIVER_INBOUND, (channel, message))
+                                .await
+                        }
+                        Notification::ReportStatus {
+                            channel,
+                            state,
+                            detail,
+                        } => {
+                            proxy
+                                .call::<()>(host_methods::REPORT_STATUS, (channel, state, detail))
+                                .await
+                        }
+                        Notification::PersistAllowedIdentity { .. } => unreachable!(),
+                        Notification::PublishEvent { .. } => unreachable!(),
+                        Notification::Barrier { .. } => Ok(()),
+                    }
+                }
+                .await;
                 if let Err(error) = result {
-                    // `debug`, not `warn`: a host that serves no callback object
-                    // is a supported configuration (outbound-only), and warning
-                    // per received message would be a log flood, not a signal.
-                    log::debug!("[tinychannels:module] host callback failed: {error}");
+                    // No host object is a supported outbound-only configuration.
+                    if inbound || error.wire_name() != "ai.tinyhumans.tinybus.Error.NameHasNoOwner"
+                    {
+                        record_failure(&task_failure, error.to_string());
+                    }
                 }
             }
         });
-        Self { outbox }
+        Self {
+            outbox,
+            connection,
+            owner: Arc::new(Owner {
+                worker: Mutex::new(Some(worker)),
+                terminal: AtomicBool::new(false),
+                publication: Mutex::new(()),
+                active_transcriptions: AtomicUsize::new(0),
+                transcriptions_drained: Notify::new(),
+                failure,
+            }),
+        }
     }
 
-    /// Hand the host one inbound message.
+    pub(crate) fn connection(&self) -> Connection {
+        self.connection.clone()
+    }
+
+    /// Request transcription through the host's configured speech provider.
+    pub async fn transcribe(
+        &self,
+        request: HostTranscriptionRequest,
+    ) -> Result<HostTranscriptionResult> {
+        if serde_json::to_vec(&request)
+            .map_or(true, |bytes| bytes.len() > MAX_TRANSCRIPTION_REQUEST_BYTES)
+        {
+            return Err(Error::failed("transcription request exceeds byte limit"));
+        }
+        let publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(Error::failed("callback consumer is closed"));
+        }
+        // Admission is serialized with shutdown by `publication`; callbacks
+        // can only decrement this count while an admission is in progress.
+        // Reserve first, then roll back if the existing count was already full.
+        if self
+            .owner
+            .active_transcriptions
+            .fetch_add(1, Ordering::SeqCst)
+            >= MAX_ACTIVE_TRANSCRIPTIONS
+        {
+            self.owner
+                .active_transcriptions
+                .fetch_sub(1, Ordering::SeqCst);
+            return Err(Error::failed("too many active transcription callbacks"));
+        }
+        let owner = self.owner.clone();
+        let connection = self.connection.clone();
+        let (reply, wait) = oneshot::channel();
+        drop(publication);
+        tokio::spawn(async move {
+            let _active = ActiveTranscription(owner);
+            let result = async {
+                let proxy = connection.proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME)?;
+                proxy.call(host_methods::TRANSCRIBE, request).await
+            }
+            .await;
+            let _ = reply.send(result);
+        });
+        wait.await
+            .map_err(|_| Error::failed("transcription callback was interrupted"))?
+    }
+
+    /// Publish one bounded provider event through the host event sink.
+    pub async fn publish_event(&self, publication: HostEventPublication) -> Result<()> {
+        if serde_json::to_vec(&publication).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
+            return Err(Error::failed("event callback byte limit exceeded"));
+        }
+        let (reply, wait) = oneshot::channel();
+        let _publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(Error::failed("callback consumer is closed"));
+        }
+        self.outbox
+            .send(Notification::PublishEvent { publication, reply })
+            .await
+            .map_err(|_| Error::failed("callback consumer is closed"))?;
+        drop(_publication);
+        wait.await
+            .map_err(|_| Error::failed("event publication was interrupted"))?
+    }
+
+    /// Enqueue one inbound message; a flush observes delivery failures.
     pub async fn deliver_inbound(&self, channel: &str, message: serde_json::Value) {
+        if serde_json::to_vec(&message).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
+            record_failure(
+                &self.owner.failure,
+                "inbound callback byte limit exceeded".into(),
+            );
+            return;
+        }
         self.enqueue(Notification::DeliverInbound {
             channel: channel.to_owned(),
             message,
@@ -131,11 +319,18 @@ impl HostChannels {
         .await;
     }
 
-    /// Report a provider connection-state transition.
-    ///
-    /// Goes through the same queue as inbound messages so a `stopped` cannot
-    /// overtake the last message that arrived before it.
+    /// Enqueue a status fact after preceding inbound messages.
     pub async fn report_status(&self, channel: &str, state: &str, detail: Option<String>) {
+        if channel.len() > 1024
+            || state.len() > 128
+            || detail.as_ref().is_some_and(|detail| detail.len() > 4096)
+        {
+            record_failure(
+                &self.owner.failure,
+                "status callback byte limit exceeded".into(),
+            );
+            return;
+        }
         self.enqueue(Notification::ReportStatus {
             channel: channel.to_owned(),
             state: state.to_owned(),
@@ -144,11 +339,106 @@ impl HostChannels {
         .await;
     }
 
+    /// Persist a provider-authorized identity through the host-owned policy store.
+    pub async fn persist_allowed_identity(&self, channel: &str, identity: &str) -> Result<()> {
+        let (reply, wait) = oneshot::channel();
+        let _publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(Error::failed("callback consumer is closed"));
+        }
+        self.outbox
+            .send(Notification::PersistAllowedIdentity {
+                channel: channel.to_owned(),
+                identity: identity.to_owned(),
+                reply,
+            })
+            .await
+            .map_err(|_| Error::failed("callback consumer is closed"))?;
+        drop(_publication);
+        wait.await
+            .map_err(|_| Error::failed("allowlist persistence was interrupted"))?
+    }
+
     async fn enqueue(&self, notification: Notification) {
-        // Only fails once the consumer is gone, which means the module is
-        // shutting down; there is nothing useful left to do with the payload.
-        if self.outbox.send(notification).await.is_err() {
-            log::debug!("[tinychannels:module] host callback consumer has stopped");
+        let _publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst)
+            || self.outbox.send(notification).await.is_err()
+        {
+            record_failure(&self.owner.failure, "callback consumer is closed".into());
+        }
+    }
+
+    /// Await all preceding callbacks, returning an observed terminal delivery error.
+    ///
+    /// # Errors
+    /// Returns a callback failure once, or a closed-consumer error. Dropping this
+    /// waiter does not cancel the owned consumer or discard its failure facts.
+    pub async fn flush(&self) -> Result<()> {
+        let (reply, wait) = oneshot::channel();
+        self.outbox
+            .send(Notification::Barrier { stop: false, reply })
+            .await
+            .map_err(|_| Error::failed("callback consumer is closed"))?;
+        wait.await
+            .map_err(|_| Error::failed("callback barrier was interrupted"))?;
+        self.take_failure()
+    }
+
+    /// Freeze publication, drain all callbacks and join the consumer.
+    ///
+    /// # Errors
+    /// Reports a terminal delivery error once. A canceled waiter leaves the
+    /// join handle retained for a later shutdown retry.
+    pub async fn shutdown(&self) -> Result<()> {
+        let publication = self.owner.publication.lock().await;
+        self.owner.terminal.store(true, Ordering::SeqCst);
+        drop(publication);
+        loop {
+            let notified = self.owner.transcriptions_drained.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.owner.active_transcriptions.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            notified.await;
+        }
+        let (reply, wait) = oneshot::channel();
+        if self
+            .outbox
+            .send(Notification::Barrier { stop: true, reply })
+            .await
+            .is_ok()
+        {
+            let _ = wait.await;
+        }
+        let mut worker = self.owner.worker.lock().await;
+        if let Some(task) = worker.as_mut() {
+            let _ = task.await;
+        }
+        worker.take();
+        self.take_failure()
+    }
+
+    fn take_failure(&self) -> Result<()> {
+        match self
+            .owner
+            .failure
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            Some(error) => Err(Error::failed(error)),
+            None => Ok(()),
         }
     }
 }
+fn record_failure(failure: &StdMutex<Option<String>>, error: String) {
+    let mut failure = failure.lock().unwrap_or_else(|error| error.into_inner());
+    if failure.is_none() {
+        *failure = Some(error);
+    }
+}
+
+#[cfg(test)]
+#[path = "host_tests.rs"]
+mod tests;

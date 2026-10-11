@@ -85,27 +85,43 @@ cargo clippy --all-targets -- -D warnings
 cargo build --all-targets
 cargo test
 
+# Build and load the actual cdylib against local websocket and SMTP fixtures
+./scripts/verify-module-artifact.sh
+
 # Test with all optional providers
 cargo test --features email,lark
 ```
 
 ## Repository Layout
 
-- `crates/tinychannels-bus/` is the contract: `Channel`, `ChannelMessage` and
-  `SendMessage` (`traits.rs`), channel configuration (`config.rs`), per-provider
-  capabilities (`capabilities.rs`), connection definitions, connect-form
-  parsing and backend response types (`controllers/`), and conversation keys
-  (`context.rs`).
-- `crates/tinychannels-runtime/` holds listener supervision, the bounded
-  dispatch loop, logout-scoped sessions, channel health checks and the
-  console `CliChannel`.
+- `crates/tinychannels-bus/` holds shared message/envelope DTOs, serialized
+  channel configuration, capabilities, controller schemas/response types,
+  relay frames and errors.
+- `crates/tinychannels-runtime/` owns provider/adapter callbacks, listener and
+  dispatch supervision, pairing and relay crypto, persisted key/idempotency
+  algorithms, history/context processing, configuration preparation and text
+  segmentation. It re-exports the same bus DTOs.
 - `crates/tinychannels-module/` is the loadable TinyBus module.
+- The module keeps its original `StartChannel`, `StopChannel`, `SendMessage`,
+  `ListChannels` and `ChannelStatus` members, and adds relay reservation/start/
+  stop/status/send plus `Shutdown`, typed `SendChannelIntent`, and send-only
+  `SendEmail`. Relay startup configuration and SMTP credentials are host
+  hydrated and sent only over TinyBus confidential calls. Relay handles are
+  bounded single-use leases; accepted sends run in bounded module-owned queues
+  so dropping a call waiter does not cancel the operation. `SendChannelIntent`
+  preserves the idempotency and thread fields for the host's delivery policy.
+  Until a host durable-queue port is installed, `Required` durability is
+  refused before provider send; the module does not own a durable outbox.
+  Legacy `SendEmail` remains available for small requests; larger attachments
+  use the confidential `BeginEmailUpload` / `AppendEmailUploadChunk` /
+  `SendEmailUpload` protocol, with bounded chunks and a replayable terminal
+  result keyed by the opaque upload handle.
 - `src/lib.rs` exports the crate surface and re-exports the contract.
 - `src/providers/` holds the provider transports.
 - `src/delivery/` holds the durable outbound queue and `progressive/`, the
   streaming reply driver (draft, thinking and filler bubbles) over a
   host-supplied `ProgressiveSender`. The reply splitter
-  (`segment_for_delivery`) lives in `tinychannels-bus` (`delivery::segment`) and
+  (`segment_for_delivery`) lives in `tinychannels-runtime` (`delivery::segment`) and
   is re-exported here.
 - `src/remote/` implements `/status`, `/sessions`, `/new` and `/help` for every
   provider with the `remote_control` capability, over a host-supplied
@@ -117,3 +133,6 @@ cargo test --features email,lark
 - `src/backend.rs` owns `ChannelBackend` and `ChannelManager`; `src/host/` is
   the host service boundary; `src/routes.rs` and `src/runtime.rs` hold portable
   runtime helpers.
+
+The [pure-contract relocation specification](docs/spec/pure-contract-relocation.md)
+records extension-trait source migrations and subsequent module-operation work.

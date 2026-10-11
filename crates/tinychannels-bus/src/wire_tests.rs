@@ -13,6 +13,59 @@ fn relay_passthrough_body_preserves_base64_wire_and_legacy_invalid_input() {
 }
 
 #[test]
+fn host_capability_payloads_keep_typed_snake_case_wire() {
+    let request = HostTranscriptionRequest {
+        audio_base64: "UklGRg==".into(),
+        mime_type: Some("audio/wav".into()),
+        file_name: Some("voice.wav".into()),
+        language: Some("en".into()),
+    };
+    assert_eq!(
+        serde_json::to_value(&request).unwrap(),
+        json!({
+            "audio_base64":"UklGRg==",
+            "mime_type":"audio/wav",
+            "file_name":"voice.wav",
+            "language":"en"
+        })
+    );
+    let result = HostTranscriptionResult {
+        text: "spoken words".into(),
+        language: Some("en".into()),
+        duration_secs: Some(1.25),
+    };
+    assert_eq!(
+        serde_json::from_value::<HostTranscriptionResult>(serde_json::to_value(result).unwrap())
+            .unwrap()
+            .text,
+        "spoken words"
+    );
+    let event = HostEventPublication {
+        domain: "channel".into(),
+        kind: "reaction_sent".into(),
+        payload: json!({"target_message_id":"tg_42"}),
+    };
+    let wire = serde_json::to_value(event).unwrap();
+    assert_eq!(wire["domain"], "channel");
+    assert_eq!(wire["kind"], "reaction_sent");
+    assert_eq!(wire["payload"]["target_message_id"], "tg_42");
+}
+
+#[test]
+fn http_proxy_policy_round_trips_without_changing_its_wire_fields() {
+    let policy = HttpProxyPolicy {
+        http_proxy: Some("http://proxy.invalid:8080".into()),
+        https_proxy: Some("http://secure-proxy.invalid:8443".into()),
+        all_proxy: None,
+        no_proxy: vec!["localhost".into(), ".internal".into()],
+        service_selectors: vec!["channel.telegram".into(), "channel.discord*".into()],
+    };
+    let value = serde_json::to_value(&policy).unwrap();
+    let decoded = serde_json::from_value::<HttpProxyPolicy>(value.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), value);
+}
+
+#[test]
 fn legacy_message_and_normalized_envelope_keep_optional_field_and_trust_wire() {
     let wire = json!({"id":"m1", "sender":"alice", "reply_target":"room", "content":"hi", "channel":"telegram", "timestamp":7, "thread_ts":"topic"});
     let message: ChannelMessage = serde_json::from_value(wire.clone()).unwrap();
@@ -35,5 +88,85 @@ fn send_message_legacy_wire_remains_snake_case() {
     assert_eq!(
         serde_json::to_value(message).unwrap(),
         json!({"content":"hi", "recipient":"room", "subject":"subject", "thread_ts":"topic", "idempotency_key":"caller-key"})
+    );
+}
+
+#[test]
+fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
+    let intent = ChannelOutboundIntent::default();
+    assert_eq!(intent.durability, DeliveryDurability::BestEffort);
+    assert_eq!(
+        intent.payload,
+        OutboundPayload::Text {
+            text: String::new()
+        }
+    );
+    let disconnected = controllers::ChannelDisconnectResult::default();
+    let wire = serde_json::to_value(disconnected).unwrap();
+    assert_eq!(wire["disconnected"], false);
+    assert_eq!(wire["restartRequired"], false);
+    for (kind, spelling) in [
+        (channel::ConversationKind::Dm, "dm"),
+        (channel::ConversationKind::Group, "group"),
+        (channel::ConversationKind::Channel, "channel"),
+        (channel::ConversationKind::Thread, "thread"),
+        (channel::ConversationKind::Unknown, "unknown"),
+    ] {
+        assert_eq!(kind.as_session_segment(), spelling);
+        assert_eq!(serde_json::to_value(kind).unwrap(), spelling);
+    }
+    assert!(is_compatible(CONTRACT_VERSION));
+    assert!(!is_compatible(CONTRACT_VERSION + 1));
+}
+
+#[test]
+fn structured_errors_preserve_kind_message_and_details() {
+    let details = channel::ChannelSendError {
+        message: "fixture refusal".into(),
+        kind: channel::SendErrorKind::Forbidden,
+        ..Default::default()
+    };
+    let error = TinyChannelsError::from(details.clone());
+    assert_eq!(error.message(), "fixture refusal");
+    match error {
+        TinyChannelsError::Send {
+            kind,
+            details: actual,
+            ..
+        } => {
+            assert_eq!(kind, channel::SendErrorKind::Forbidden);
+            assert_eq!(*actual, details);
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    for error in [
+        TinyChannelsError::new("fixture"),
+        TinyChannelsError::Config("fixture".into()),
+        TinyChannelsError::Serialization("fixture".into()),
+    ] {
+        assert_eq!(error.message(), "fixture");
+        assert!(error.to_string().contains("fixture"));
+    }
+}
+
+#[test]
+fn relay_descriptor_keeps_explicit_platform_limit() {
+    let descriptor = relay::CapabilityDescriptor::from_platform_entry(
+        &relay::RelayPlatformEntry {
+            name: "fixture".into(),
+            label: "Fixture".into(),
+            max_message_length: 128,
+            emoji: None,
+            platform_hint: None,
+            pii_safe: true,
+        },
+        relay::RelayDescriptorOptions::default(),
+    );
+    assert_eq!(descriptor.max_message_length, 128);
+    assert!(descriptor.supports_edit);
+    assert!(descriptor.pii_safe);
+    assert_eq!(
+        relay::CapabilityDescriptor::from_json(&descriptor.to_json().unwrap()).unwrap(),
+        descriptor
     );
 }

@@ -20,6 +20,30 @@ pub const HOST_OBJECT_PATH: &str = "/ai/tinyhumans/tinychannels/ChannelsHost";
 
 /// One constant per method name on [`BUS_NAME`].
 pub mod methods {
+    /// Reserve one idle relay handle before native startup.
+    pub const RESERVE_RELAY: &str = "ReserveRelay";
+    /// Start a reserved relay using confidential hydrated configuration.
+    pub const START_RELAY: &str = "StartRelay";
+    /// Stop and join one reserved relay, including pending startup.
+    pub const STOP_RELAY: &str = "StopRelay";
+    /// Return safe lifecycle facts for one relay reservation.
+    pub const RELAY_STATUS: &str = "RelayStatus";
+    /// Submit an ordered relay outbound intent.
+    pub const SEND_RELAY_INTENT: &str = "SendRelayIntent";
+    /// Freeze publication and drain every owned provider, relay and callback.
+    pub const SHUTDOWN: &str = "Shutdown";
+    /// `SendChannelIntent` — deliver one typed intent through a running provider.
+    pub const SEND_CHANNEL_INTENT: &str = "SendChannelIntent";
+    /// `SendEmail` — send host-configured MIME mail without starting IMAP.
+    pub const SEND_EMAIL: &str = "SendEmail";
+    /// Begin an attachment upload whose chunks remain below TinyBus frame limits.
+    pub const BEGIN_EMAIL_UPLOAD: &str = "BeginEmailUpload";
+    /// Append one bounded confidential attachment chunk idempotently.
+    pub const APPEND_EMAIL_UPLOAD_CHUNK: &str = "AppendEmailUploadChunk";
+    /// Send a completed upload once and replay its terminal result by handle.
+    pub const SEND_EMAIL_UPLOAD: &str = "SendEmailUpload";
+    /// Abort an upload that has not entered SMTP delivery.
+    pub const ABORT_EMAIL_UPLOAD: &str = "AbortEmailUpload";
     /// `StartChannel` — connect and begin receiving on one configured provider.
     pub const START_CHANNEL: &str = "StartChannel";
     /// `StopChannel` — disconnect one running provider.
@@ -30,6 +54,8 @@ pub mod methods {
     pub const LIST_CHANNELS: &str = "ListChannels";
     /// `ChannelStatus` — report connection state for one provider.
     pub const CHANNEL_STATUS: &str = "ChannelStatus";
+    /// Start a provider with host-selected HTTP proxy policy.
+    pub const START_CHANNEL_CONFIGURED: &str = "StartChannelConfigured";
 }
 
 /// One constant per method name on [`HOST_BUS_NAME`].
@@ -38,19 +64,70 @@ pub mod host_methods {
     pub const DELIVER_INBOUND: &str = "DeliverInbound";
     /// `ReportStatus` — report a provider connection state transition.
     pub const REPORT_STATUS: &str = "ReportStatus";
+    /// `PersistAllowedIdentity` — persist a provider-authorized identity host-side.
+    pub const PERSIST_ALLOWED_IDENTITY: &str = "PersistAllowedIdentity";
+    /// Atomically store a bounded pending delivery before provider I/O.
+    /// Identical id retries are idempotent; changed intent under one id fails.
+    pub const SAVE_PENDING_DELIVERY: &str = "SavePendingDelivery";
+    /// Read one pending delivery by idempotency key.
+    pub const LOAD_PENDING_DELIVERY: &str = "LoadPendingDelivery";
+    /// Read at most `DELIVERY_PENDING_CAPACITY` records in enqueue order.
+    pub const LOAD_PENDING_DELIVERIES: &str = "LoadPendingDeliveries";
+    /// Remove a pending delivery after terminal success.
+    pub const REMOVE_PENDING_DELIVERY: &str = "RemovePendingDelivery";
+    /// Move a permanently failed delivery to host-owned failed storage.
+    pub const SAVE_FAILED_DELIVERY: &str = "SaveFailedDelivery";
+    /// Read a permanently failed delivery by idempotency key.
+    pub const LOAD_FAILED_DELIVERY: &str = "LoadFailedDelivery";
+    /// Persist an idempotent successful result before acknowledging the item.
+    /// The host enforces `DELIVERY_RESULT_CAPACITY` and `DELIVERY_RESULT_TTL_SECONDS`.
+    pub const SAVE_DELIVERY_RESULT: &str = "SaveDeliveryResult";
+    /// Replay a successful result after a lost final reply.
+    pub const LOAD_DELIVERY_RESULT: &str = "LoadDeliveryResult";
+    /// `Transcribe` — use the host's configured speech recognition provider.
+    pub const TRANSCRIBE: &str = "Transcribe";
+    /// `PublishEvent` — publish one provider event through the host event sink.
+    pub const PUBLISH_EVENT: &str = "PublishEvent";
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 5] = [
+pub const METHODS: [&str; 18] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
     methods::LIST_CHANNELS,
     methods::CHANNEL_STATUS,
+    methods::RESERVE_RELAY,
+    methods::START_RELAY,
+    methods::STOP_RELAY,
+    methods::RELAY_STATUS,
+    methods::SEND_RELAY_INTENT,
+    methods::SHUTDOWN,
+    methods::SEND_CHANNEL_INTENT,
+    methods::SEND_EMAIL,
+    methods::BEGIN_EMAIL_UPLOAD,
+    methods::APPEND_EMAIL_UPLOAD_CHUNK,
+    methods::SEND_EMAIL_UPLOAD,
+    methods::ABORT_EMAIL_UPLOAD,
+    methods::START_CHANNEL_CONFIGURED,
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 2] = [host_methods::DELIVER_INBOUND, host_methods::REPORT_STATUS];
+pub const HOST_METHODS: [&str; 13] = [
+    host_methods::DELIVER_INBOUND,
+    host_methods::REPORT_STATUS,
+    host_methods::PERSIST_ALLOWED_IDENTITY,
+    host_methods::SAVE_PENDING_DELIVERY,
+    host_methods::LOAD_PENDING_DELIVERY,
+    host_methods::LOAD_PENDING_DELIVERIES,
+    host_methods::REMOVE_PENDING_DELIVERY,
+    host_methods::SAVE_FAILED_DELIVERY,
+    host_methods::LOAD_FAILED_DELIVERY,
+    host_methods::SAVE_DELIVERY_RESULT,
+    host_methods::LOAD_DELIVERY_RESULT,
+    host_methods::TRANSCRIBE,
+    host_methods::PUBLISH_EVENT,
+];
 
 #[cfg(test)]
 #[path = "names_tests.rs"]

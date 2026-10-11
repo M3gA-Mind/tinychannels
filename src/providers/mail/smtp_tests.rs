@@ -89,6 +89,7 @@ fn email(to: &str) -> OutboundEmail {
         to: to.into(),
         subject: "Hello there".into(),
         body: "A plain body".into(),
+        attachments: Vec::new(),
     }
 }
 
@@ -120,6 +121,29 @@ async fn a_message_is_delivered_with_its_envelope_headers_and_body() {
     assert!(session.contains("Acme"), "the From display name: {session}");
     // An empty username is an unauthenticated relay: no AUTH attempt.
     assert_eq!(auth_plain(&sessions[0]), None, "{session}");
+}
+
+#[tokio::test]
+async fn a_message_preserves_mime_attachment_name_type_and_bytes() {
+    let (port, server) = fake_smtp(1, Rcpt::Accept).await;
+    let mut message = email("to@x.test");
+    message
+        .attachments
+        .push(crate::providers::mail::MailAttachment {
+            filename: "report.pdf".into(),
+            content_type: "application/pdf".into(),
+            bytes: vec![0, 1, 2, 3, 254, 255],
+        });
+    LettreMailSender::new()
+        .send(&creds(port, "", ""), &message)
+        .await
+        .unwrap();
+    let sessions = server.await.unwrap();
+    let session = sessions[0].join("\n");
+    assert!(session.contains("multipart/mixed"), "{session}");
+    assert!(session.contains("filename=\"report.pdf\""), "{session}");
+    assert!(session.contains("application/pdf"), "{session}");
+    assert!(session.contains("AAECA/7/"), "{session}");
 }
 
 #[tokio::test]

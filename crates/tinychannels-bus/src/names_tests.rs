@@ -14,12 +14,64 @@ fn every_declared_member_appears_in_its_method_table() {
         methods::SEND_MESSAGE,
         methods::LIST_CHANNELS,
         methods::CHANNEL_STATUS,
+        methods::RESERVE_RELAY,
+        methods::START_RELAY,
+        methods::STOP_RELAY,
+        methods::RELAY_STATUS,
+        methods::SEND_RELAY_INTENT,
+        methods::SHUTDOWN,
+        methods::SEND_CHANNEL_INTENT,
+        methods::SEND_EMAIL,
+        methods::BEGIN_EMAIL_UPLOAD,
+        methods::APPEND_EMAIL_UPLOAD_CHUNK,
+        methods::SEND_EMAIL_UPLOAD,
+        methods::ABORT_EMAIL_UPLOAD,
+        methods::START_CHANNEL_CONFIGURED,
     ] {
         assert!(METHODS.contains(&m), "{m} missing from METHODS");
     }
-    for m in [host_methods::DELIVER_INBOUND, host_methods::REPORT_STATUS] {
+    for m in [
+        host_methods::DELIVER_INBOUND,
+        host_methods::REPORT_STATUS,
+        host_methods::PERSIST_ALLOWED_IDENTITY,
+        host_methods::SAVE_PENDING_DELIVERY,
+        host_methods::LOAD_PENDING_DELIVERY,
+        host_methods::LOAD_PENDING_DELIVERIES,
+        host_methods::REMOVE_PENDING_DELIVERY,
+        host_methods::SAVE_FAILED_DELIVERY,
+        host_methods::LOAD_FAILED_DELIVERY,
+        host_methods::SAVE_DELIVERY_RESULT,
+        host_methods::LOAD_DELIVERY_RESULT,
+        host_methods::TRANSCRIBE,
+        host_methods::PUBLISH_EVENT,
+    ] {
         assert!(HOST_METHODS.contains(&m), "{m} missing from HOST_METHODS");
     }
+}
+
+#[test]
+fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
+    assert_eq!(
+        &METHODS[..5],
+        &[
+            methods::START_CHANNEL,
+            methods::STOP_CHANNEL,
+            methods::SEND_MESSAGE,
+            methods::LIST_CHANNELS,
+            methods::CHANNEL_STATUS,
+        ]
+    );
+    assert_eq!(METHODS.len(), 18);
+    assert_eq!(
+        &METHODS[13..],
+        &[
+            methods::BEGIN_EMAIL_UPLOAD,
+            methods::APPEND_EMAIL_UPLOAD_CHUNK,
+            methods::SEND_EMAIL_UPLOAD,
+            methods::ABORT_EMAIL_UPLOAD,
+            methods::START_CHANNEL_CONFIGURED,
+        ]
+    );
 }
 
 /// A duplicate silently shadows one member with another's handler.
