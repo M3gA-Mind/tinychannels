@@ -987,9 +987,15 @@ impl Channels {
     pub(crate) async fn shutdown(&self) -> BusResult<()> {
         self.terminal.store(true, Ordering::SeqCst);
         self.relays.freeze();
-        if let Some(runtimes) = &self.runtimes {
-            runtimes.shutdown().await?;
-        }
+        // Fence and stop identity-scoped children before draining the legacy
+        // service resources, but do not let one failed child skip cleanup of
+        // root providers, relay, email, delivery state, or host callbacks.
+        // Runtimes retains failed handles, so a later Shutdown retries them.
+        let runtime_failure = if let Some(runtimes) = &self.runtimes {
+            runtimes.shutdown().await.err()
+        } else {
+            None
+        };
         let mut task = self.shutdown_task.lock().await;
         if task.is_none() {
             let progressive = self.progressive.clone();
@@ -1001,7 +1007,7 @@ impl Channels {
             *task = Some(tokio::spawn(async move {
                 let progressive_result = progressive.shutdown().await;
                 let progressive_pending = progressive_result.is_err();
-                let mut failure = progressive_result.err();
+                let mut failure = runtime_failure.or_else(|| progressive_result.err());
                 let _delivery = delivery_admission.lock().await;
                 let delivery_store = HostDeliveryStore::from_host(&host);
                 let delivery_handler = ModuleDeliveryHandler {
