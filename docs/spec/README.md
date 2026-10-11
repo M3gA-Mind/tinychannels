@@ -33,3 +33,19 @@ state remain outside this crate until they can be split behind transport traits.
 - [TinyChannels execution plan](tinychannels-execution-plan.md) — the phased
   implementation plan: current-state gap matrix, known bugs, module plan,
   and test-migration/fixture catalog.
+
+## Compiled provider supervision
+
+`StartChannelSupervised(name, config, proxy, policy)` starts a configured provider
+with module-owned reconnects. Host policy selects initial and maximum backoff;
+the module applies exponential delay and bounded jitter, reports sanitized
+`restarting`/`connecting` status, and forwards inbound traffic in order. Delays
+greater than one day are rejected before constructing a provider. Configuration
+and proxy credentials require a confidential call.
+
+`StopChannel` cancels and joins the listener even during a reconnect delay,
+drains accepted sends and inbound callbacks, and runs native shutdown hooks.
+Legacy `StartChannel` and `StartChannelConfigured` preserve their original
+arguments and one-listener behavior. The new member is advertised in contract
+revision 9 and module operation version 1.10. Webhook-only providers still
+require the separately pending ingress surface.

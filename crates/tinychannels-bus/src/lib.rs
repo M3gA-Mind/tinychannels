@@ -15,6 +15,7 @@ pub mod module_delivery;
 pub mod module_email;
 pub mod module_interaction;
 pub mod module_relay;
+pub mod module_supervision;
 pub mod names;
 pub mod relay;
 pub mod traits;
@@ -48,3 +49,5 @@ mod tests;
 pub use module_interaction::{
     ChannelInteraction, ChannelInteractionInfo, ChannelInteractionRequest, ChannelInteractionResult,
 };
+
+pub use module_supervision::ChannelSupervisionPolicy;

@@ -361,6 +361,34 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         tinybus::Error::CONFIDENTIALITY_REQUIRED,
         "connect credentials and proxy settings must use the confidential module operation"
     );
+    let supervised_request = (
+        "artifact-missing-channel".to_owned(),
+        ChannelsConfig::default(),
+        tinychannels_bus::HttpProxyPolicy::default(),
+        tinychannels_bus::ChannelSupervisionPolicy {
+            initial_backoff_secs: 86_401,
+            max_backoff_secs: 86_401,
+        },
+    );
+    assert_eq!(
+        proxy
+            .call::<()>("StartChannelSupervised", supervised_request.clone())
+            .await
+            .err()
+            .unwrap()
+            .wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    let supervised_error = proxy
+        .call_confidential::<()>("StartChannelSupervised", supervised_request)
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(supervised_error.wire_name(), tinybus::Error::FAILED);
+    assert_eq!(
+        supervised_error.wire_message(),
+        "provider retry delay exceeds one day"
+    );
     let connect_error = match proxy
         .call_confidential::<tinychannels_bus::ChannelControllerResult>(
             "ChannelController",
