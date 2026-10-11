@@ -23,7 +23,13 @@ enum ProviderOperation {
     Interaction(tinychannels_bus::ChannelInteraction),
 }
 
-type TypingRefreshes = HashMap<String, (watch::Sender<bool>, JoinHandle<()>)>;
+struct TypingRefreshTask {
+    recipient: String,
+    cancel: watch::Sender<bool>,
+    task: JoinHandle<()>,
+}
+
+type TypingRefreshes = HashMap<String, TypingRefreshTask>;
 
 const MAX_TYPING_REFRESH_RECIPIENTS: usize = 64;
 const MAX_TYPING_REFRESH_INTERVAL_SECS: u64 = 60;
@@ -44,7 +50,7 @@ async fn dispatch_interaction(
                     "typing refresh interval is outside its limit",
                 ));
             }
-            if !typing.contains_key(&recipient) && typing.len() >= MAX_TYPING_REFRESH_RECIPIENTS {
+            if typing.len() >= MAX_TYPING_REFRESH_RECIPIENTS {
                 return Err(Error::failed("typing refresh capacity is full"));
             }
             let (cancel, mut canceled) = watch::channel(false);
@@ -75,7 +81,14 @@ async fn dispatch_interaction(
                     break candidate;
                 }
             };
-            typing.insert(handle.clone(), (cancel, task));
+            typing.insert(
+                handle.clone(),
+                TypingRefreshTask {
+                    recipient,
+                    cancel,
+                    task,
+                },
+            );
             Ok(tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle })
         }
         Op::StopTypingRefresh { handle } => {
@@ -87,10 +100,10 @@ async fn dispatch_interaction(
 }
 
 async fn stop_typing_refresh(handle: &str, typing: &mut TypingRefreshes) {
-    if let Some((cancel, task)) = typing.remove(handle) {
-        cancel.send_replace(true);
-        if let Err(error) = task.await {
-            tracing::debug!(%handle, "typing refresh task join failed: {error}");
+    if let Some(refresh) = typing.remove(handle) {
+        refresh.cancel.send_replace(true);
+        if let Err(error) = refresh.task.await {
+            tracing::debug!(%handle, recipient = %refresh.recipient, "typing refresh task join failed: {error}");
         }
     }
 }

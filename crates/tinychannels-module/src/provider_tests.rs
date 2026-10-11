@@ -181,8 +181,9 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
         })
         .await
         .unwrap();
-    let tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle: first_handle } =
-        first_handle
+    let tinychannels_bus::ChannelInteractionResult::TypingRefresh {
+        handle: first_handle,
+    } = first_handle
     else {
         panic!("provider did not return a refresh handle")
     };
@@ -193,8 +194,9 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
         })
         .await
         .unwrap();
-    let tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle: second_handle } =
-        second_handle
+    let tinychannels_bus::ChannelInteractionResult::TypingRefresh {
+        handle: second_handle,
+    } = second_handle
     else {
         panic!("provider did not return a refresh handle")
     };
@@ -234,7 +236,7 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
     assert_eq!(channel.0.lock().unwrap().len(), 4);
     running
         .interact(Op::StopTypingRefresh {
-            handle: second_handle,
+            handle: second_handle.clone(),
         })
         .await
         .unwrap();
@@ -248,7 +250,7 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
     assert!(matches!(
         running
             .interact(Op::StopTypingRefresh {
-                recipient: "room".into(),
+                handle: second_handle,
             })
             .await,
         Err(RunningSendError::NotDispatched(_))
@@ -325,8 +327,9 @@ async fn typing_refresh_stop_and_shutdown_cancel_inflight_provider_calls() {
         })
         .await
         .unwrap();
-    let tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle: stop_handle } =
-        stop_handle
+    let tinychannels_bus::ChannelInteractionResult::TypingRefresh {
+        handle: stop_handle,
+    } = stop_handle
     else {
         panic!("provider did not return a refresh handle")
     };
@@ -361,6 +364,53 @@ async fn typing_refresh_stop_and_shutdown_cancel_inflight_provider_calls() {
     entered.notified().await;
     running.stop().await.unwrap();
     assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    connection.close().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn typing_refresh_capacity_counts_handles_not_recipients() {
+    use tinychannels_bus::ChannelInteraction as Op;
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channel = Arc::new(InteractionChannel::default());
+    let running = Running::start(
+        channel,
+        Arc::new(Hooks::default()),
+        HostChannels::new(connection.clone()),
+    );
+    let mut handles = Vec::new();
+    for _ in 0..MAX_TYPING_REFRESH_RECIPIENTS {
+        let result = running
+            .interact(Op::StartTypingRefresh {
+                recipient: "same-room".into(),
+                interval_secs: MAX_TYPING_REFRESH_INTERVAL_SECS,
+            })
+            .await
+            .unwrap();
+        let tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle } = result else {
+            panic!("provider did not return a refresh handle")
+        };
+        handles.push(handle);
+    }
+    assert!(
+        running
+            .interact(Op::StartTypingRefresh {
+                recipient: "same-room".into(),
+                interval_secs: MAX_TYPING_REFRESH_INTERVAL_SECS,
+            })
+            .await
+            .is_err()
+    );
+    for handle in handles {
+        running
+            .interact(Op::StopTypingRefresh { handle })
+            .await
+            .unwrap();
+    }
+    running.stop().await.unwrap();
     connection.close().await.unwrap();
 }
 

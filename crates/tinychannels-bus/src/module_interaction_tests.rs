@@ -58,4 +58,14 @@ fn typing_refresh_operations_are_additive_and_typed() {
     })
     .unwrap();
     assert_eq!(stop["operation"], "stop_typing_refresh");
+    assert_eq!(
+        serde_json::to_value(ChannelInteractionResult::TypingRefresh {
+            handle: "opaque-handle".into(),
+        })
+        .unwrap(),
+        serde_json::json!({
+            "result": "typing_refresh",
+            "value": {"handle": "opaque-handle"}
+        })
+    );
 }
