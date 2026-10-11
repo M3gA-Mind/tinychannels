@@ -11,22 +11,20 @@ ROOT = Path(__file__).resolve().parent.parent
 
 class FeatureLaneTests(unittest.TestCase):
     def test_send_only_lane_cannot_unify_full_email_from_workspace(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory(prefix="feature lanes ") as directory:
             root = Path(directory)
             calls = root / "calls.log"
-            cargo = root / "cargo"
-            cargo.write_text(
-                '#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$FEATURE_LANE_CALLS"\n'
-            )
-            cargo.chmod(0o755)
-            # Other script checks have their own regression suites.
-            python = root / "python3"
-            python.write_text("#!/bin/sh\nexit 0\n")
-            python.chmod(0o755)
+            # Functions avoid Windows PATH/PATHEXT lookup and executable-script
+            # handling; forward slashes work in both native and Git Bash paths.
             result = subprocess.run(
-                ["bash", str(ROOT / "scripts/test-features.sh")],
-                env=dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
-                         FEATURE_LANE_CALLS=str(calls), RUNNER_OS="Linux"),
+                ["bash", "-c", '
+'.join([
+                    'cargo() { printf "%s\\n" "$*" >> "$FEATURE_LANE_CALLS"; }',
+                    'python3() { return 0; }',
+                    'export -f cargo python3',
+                    'source "$1"',
+                ]), "feature-lanes", (ROOT / "scripts/test-features.sh").as_posix()],
+                env=dict(os.environ, FEATURE_LANE_CALLS=calls.as_posix(), RUNNER_OS="Linux"),
                 capture_output=True, text=True,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
