@@ -34,6 +34,8 @@ pub mod methods {
     pub const RESERVE_RUNTIME: &str = "ReserveRuntime";
     /// Activate the private provider object for a known runtime handle.
     pub const START_RUNTIME: &str = "StartRuntime";
+    /// Activate an identity runtime with bounded `ProcessInbound` turn callbacks.
+    pub const START_RUNTIME_WITH_DISPATCH: &str = "StartRuntimeWithDispatch";
     /// Stop and join all resources belonging to one runtime handle.
     pub const STOP_RUNTIME: &str = "StopRuntime";
     /// Start a provider with module-owned reconnect supervision and host-selected timing.

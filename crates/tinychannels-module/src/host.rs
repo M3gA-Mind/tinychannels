@@ -55,6 +55,9 @@ const MAX_TRANSCRIPTION_REQUEST_BYTES: usize = 12 * 1024 * 1024;
 const MAX_ACTIVE_HOST_CALLBACKS: usize = 16;
 const MAX_CONTROLLER_PAYLOAD_BYTES: usize = 1024 * 1024;
 
+#[path = "host_dispatch.rs"]
+mod dispatch;
+
 enum Notification {
     DeliverInbound {
         channel: String,
@@ -124,9 +127,9 @@ impl HostChannels {
     pub(crate) fn new_at_with_dispatch(
         connection: Connection,
         object_path: String,
-        _max_in_flight: usize,
+        max_in_flight: usize,
     ) -> Self {
-        Self::new_at(connection, object_path)
+        Self::new_at_inner(connection, object_path, Some(max_in_flight))
     }
 
     /// Start one owned callback consumer. Explicit shutdown drains and joins it.
@@ -137,6 +140,10 @@ impl HostChannels {
 
     /// Bind all callbacks to an immutable runtime-specific host object.
     pub(crate) fn new_at(connection: Connection, object_path: String) -> Self {
+        Self::new_at_inner(connection, object_path, None)
+    }
+
+    fn new_at_inner(connection: Connection, object_path: String, dispatch_limit: Option<usize>) -> Self {
         let object_path: Arc<str> = object_path.into();
         let callback_path = object_path.clone();
         let (outbox, mut inbox) = mpsc::channel(OUTBOX_CAPACITY);
@@ -144,12 +151,22 @@ impl HostChannels {
         let task_failure = failure.clone();
         let callback_connection = connection.clone();
         let worker = tokio::spawn(async move {
+            let mut dispatcher = dispatch_limit.map(|limit| dispatch::InboundDispatcher::new(
+                callback_connection.clone(), callback_path.clone(), task_failure.clone(), limit,
+            ));
             while let Some(notification) = inbox.recv().await {
                 if let Notification::Barrier { stop, reply } = notification {
+                    if let Some(dispatcher) = dispatcher.as_ref() { dispatcher.flush().await; }
                     let _ = reply.send(());
                     if stop {
                         break;
                     }
+                    continue;
+                }
+                if let (Some(dispatcher), Notification::DeliverInbound { channel, message }) =
+                    (dispatcher.as_mut(), &notification)
+                {
+                    dispatcher.enqueue(channel.clone(), message.clone()).await;
                     continue;
                 }
                 if let Notification::PersistAllowedIdentity {
@@ -238,6 +255,7 @@ impl HostChannels {
                     }
                 }
             }
+            if let Some(dispatcher) = dispatcher.as_mut() { dispatcher.shutdown().await; }
         });
         Self {
             outbox,

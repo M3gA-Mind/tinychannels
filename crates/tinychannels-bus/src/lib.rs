@@ -54,4 +54,4 @@ pub use module_interaction::{
 
 pub use module_supervision::ChannelSupervisionPolicy;
 
-pub use module_runtime::ChannelRuntimeReservation;
+pub use module_runtime::{ChannelRuntimeDispatchPolicy, ChannelRuntimeReservation};

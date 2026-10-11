@@ -20,6 +20,17 @@ pub struct ChannelRuntimeReservation {
     pub host_object_path: String,
 }
 
+/// Opt-in turn dispatch for a reserved runtime. Legacy `StartRuntime` retains
+/// serial `DeliverInbound` notifications; this policy uses `ProcessInbound`
+/// callbacks with module-owned bounded concurrency and stop/drain ownership.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChannelRuntimeDispatchPolicy {
+    /// Number of active provider listeners, including an optional relay.
+    /// The module admits four turns per listener, clamped to eight through 64.
+    pub listener_count: u32,
+}
+
 #[cfg(test)]
 #[path = "module_runtime_tests.rs"]
 mod tests;

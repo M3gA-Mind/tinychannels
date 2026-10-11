@@ -291,6 +291,18 @@ impl Channels {
             .await
     }
 
+    /// Activate an immutable identity runtime with module-owned turn admission.
+    #[tinybus(confidential)]
+    async fn start_runtime_with_dispatch(
+        &self,
+        handle: String,
+        policy: tinychannels_bus::ChannelRuntimeDispatchPolicy,
+    ) -> BusResult<()> {
+        self.runtimes.as_ref()
+            .ok_or_else(|| BusError::failed("nested channel runtimes are unavailable"))?
+            .start_with_dispatch(handle, policy).await
+    }
+
     /// Stop this identity's providers, relay and callbacks, joining pending startup.
     #[tinybus(confidential)]
     async fn stop_runtime(&self, handle: String) -> BusResult<()> {
