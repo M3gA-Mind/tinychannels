@@ -77,3 +77,7 @@ API shape they imply, and any safety or observability concerns.
 
 Do not report vulnerabilities through public issues. Use the process in
 [SECURITY.md](SECURITY.md).
+
+## Releasing
+
+Change the Cargo package versions through a reviewed PR. After it merges, tag that commit as vX.Y.Z and push the tag, or dispatch Release with an existing version tag. The shared release verifies the package version, builds and loads all 17 native and distro artifacts, and publishes their checksum manifest. Release does not push version bumps to main.
