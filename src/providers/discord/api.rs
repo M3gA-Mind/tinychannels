@@ -110,17 +110,33 @@ fn format_discord_http_error(endpoint: &str, status: reqwest::StatusCode, body: 
 
 /// List all guilds (servers) the bot is a member of.
 pub async fn list_bot_guilds(token: &str) -> anyhow::Result<Vec<DiscordGuild>> {
-    list_bot_guilds_at_base(DISCORD_API_BASE, token).await
+    list_bot_guilds_with_client(&build_client(), token).await
+}
+
+/// List bot guilds using a caller-configured HTTP client.
+pub async fn list_bot_guilds_with_client(
+    client: &reqwest::Client,
+    token: &str,
+) -> anyhow::Result<Vec<DiscordGuild>> {
+    list_bot_guilds_at_base_with_client(DISCORD_API_BASE, client, token).await
 }
 
 /// Test seam: list guilds against an arbitrary API base. Used by
 /// `list_bot_guilds` in production and by unit tests that drive a
 /// local mock Discord API.
 async fn list_bot_guilds_at_base(base: &str, token: &str) -> anyhow::Result<Vec<DiscordGuild>> {
+    list_bot_guilds_at_base_with_client(base, &build_client(), token).await
+}
+
+async fn list_bot_guilds_at_base_with_client(
+    base: &str,
+    client: &reqwest::Client,
+    token: &str,
+) -> anyhow::Result<Vec<DiscordGuild>> {
     let url = format!("{base}/users/@me/guilds");
     tracing::debug!("[discord-api] listing guilds for bot");
 
-    let resp = build_client()
+    let resp = client
         .get(&url)
         .header("Authorization", auth_header(token))
         .send()
@@ -153,7 +169,16 @@ pub async fn list_guild_channels(
     token: &str,
     guild_id: &str,
 ) -> anyhow::Result<Vec<DiscordTextChannel>> {
-    list_guild_channels_at_base(DISCORD_API_BASE, token, guild_id).await
+    list_guild_channels_with_client(&build_client(), token, guild_id).await
+}
+
+/// List guild channels using a caller-configured HTTP client.
+pub async fn list_guild_channels_with_client(
+    client: &reqwest::Client,
+    token: &str,
+    guild_id: &str,
+) -> anyhow::Result<Vec<DiscordTextChannel>> {
+    list_guild_channels_at_base_with_client(DISCORD_API_BASE, client, token, guild_id).await
 }
 
 /// Test seam: list guild channels against an arbitrary API base.
@@ -162,10 +187,19 @@ async fn list_guild_channels_at_base(
     token: &str,
     guild_id: &str,
 ) -> anyhow::Result<Vec<DiscordTextChannel>> {
+    list_guild_channels_at_base_with_client(base, &build_client(), token, guild_id).await
+}
+
+async fn list_guild_channels_at_base_with_client(
+    base: &str,
+    client: &reqwest::Client,
+    token: &str,
+    guild_id: &str,
+) -> anyhow::Result<Vec<DiscordTextChannel>> {
     let url = format!("{base}/guilds/{guild_id}/channels");
     tracing::debug!("[discord-api] listing channels for guild {guild_id}");
 
-    let resp = build_client()
+    let resp = client
         .get(&url)
         .header("Authorization", auth_header(token))
         .send()
@@ -214,12 +248,46 @@ pub async fn check_channel_permissions(
     guild_id: &str,
     channel_id: &str,
 ) -> anyhow::Result<BotPermissionCheck> {
-    check_channel_permissions_at_base(DISCORD_API_BASE, token, guild_id, channel_id).await
+    check_channel_permissions_with_client(&build_client(), token, guild_id, channel_id).await
+}
+
+/// Check permissions using a caller-configured HTTP client.
+pub async fn check_channel_permissions_with_client(
+    client: &reqwest::Client,
+    token: &str,
+    guild_id: &str,
+    channel_id: &str,
+) -> anyhow::Result<BotPermissionCheck> {
+    check_channel_permissions_at_base_with_client(
+        DISCORD_API_BASE,
+        client,
+        token,
+        guild_id,
+        channel_id,
+    )
+    .await
 }
 
 /// Test seam: see [`check_channel_permissions`].
 async fn check_channel_permissions_at_base(
     base: &str,
+    token: &str,
+    guild_id: &str,
+    channel_id: &str,
+) -> anyhow::Result<BotPermissionCheck> {
+    check_channel_permissions_at_base_with_client(
+        base,
+        &build_client(),
+        token,
+        guild_id,
+        channel_id,
+    )
+    .await
+}
+
+async fn check_channel_permissions_at_base_with_client(
+    base: &str,
+    client: &reqwest::Client,
     token: &str,
     guild_id: &str,
     channel_id: &str,
@@ -230,7 +298,7 @@ async fn check_channel_permissions_at_base(
 
     // Resolve bot user id first (`members/@me` is not a valid Discord route).
     let me_url = format!("{base}/users/@me");
-    let me_resp = build_client()
+    let me_resp = client
         .get(&me_url)
         .header("Authorization", auth_header(token))
         .send()
@@ -262,7 +330,7 @@ async fn check_channel_permissions_at_base(
 
     // Fetch the bot's guild member info which includes role ids.
     let member_url = format!("{base}/guilds/{guild_id}/members/{bot_user_id}");
-    let member_resp = build_client()
+    let member_resp = client
         .get(&member_url)
         .header("Authorization", auth_header(token))
         .send()
@@ -291,7 +359,7 @@ async fn check_channel_permissions_at_base(
 
     // Fetch guild roles to compute permissions
     let roles_url = format!("{base}/guilds/{guild_id}/roles");
-    let roles_resp = build_client()
+    let roles_resp = client
         .get(&roles_url)
         .header("Authorization", auth_header(token))
         .send()
@@ -351,7 +419,7 @@ async fn check_channel_permissions_at_base(
 
     // Now check channel-level permission overwrites
     let channel_url = format!("{base}/channels/{channel_id}");
-    let ch_resp = build_client()
+    let ch_resp = client
         .get(&channel_url)
         .header("Authorization", auth_header(token))
         .send()

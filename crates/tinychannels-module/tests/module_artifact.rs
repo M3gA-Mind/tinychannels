@@ -313,6 +313,46 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
             tinychannels_bus::controllers::ChannelTestResult { success: true, .. }
         )
     ));
+    let discord_request = tinychannels_bus::ChannelControllerRequest::DiscordListGuilds {
+        config: ChannelsConfig::default(),
+        bot_token: "artifact-token".into(),
+        proxy: tinychannels_bus::HttpProxyPolicy {
+            https_proxy: Some("http://user:password@not a valid proxy".into()),
+            service_selectors: vec!["channel.discord".into()],
+            ..Default::default()
+        },
+    };
+    let ordinary_discord_error = match proxy
+        .call::<tinychannels_bus::ChannelControllerResult>(
+            "ChannelController",
+            discord_request.clone(),
+        )
+        .await
+    {
+        Ok(_) => panic!("confidential Discord request must reject ordinary calls"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        ordinary_discord_error.wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED,
+        "Discord credentials and host proxy settings must use the confidential module operation"
+    );
+    let discord_error = match proxy
+        .call_confidential::<tinychannels_bus::ChannelControllerResult>(
+            "ChannelController",
+            discord_request,
+        )
+        .await
+    {
+        Ok(_) => panic!("invalid proxy URL must be rejected by controller dispatch"),
+        Err(error) => error,
+    };
+    assert_eq!(discord_error.wire_name(), tinybus::Error::FAILED);
+    assert_eq!(
+        discord_error.wire_message(),
+        "invalid HTTPS proxy URL",
+        "the compiled module must dispatch the Discord request through configured proxy validation"
+    );
     assert!(matches!(
         proxy
             .call_confidential::<tinychannels_bus::ChannelControllerResult>(

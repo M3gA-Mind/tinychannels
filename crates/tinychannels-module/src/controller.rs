@@ -161,16 +161,19 @@ async fn dispatch_with(
                 .map(ChannelControllerResult::Threads)
                 .map_err(|error| failed(error, &sensitive_values))
         }
-        ChannelControllerRequest::DiscordListGuilds { config, bot_token } => {
-            let manager = ChannelManager::new(
-                config,
-                HostBackend::new(
-                    host.clone(),
-                    discord.clone(),
-                    email.clone(),
-                    Some(bot_token),
-                ),
+        ChannelControllerRequest::DiscordListGuilds {
+            config,
+            bot_token,
+            proxy,
+        } => {
+            let mut backend = HostBackend::new(
+                host.clone(),
+                discord.clone(),
+                email.clone(),
+                Some(bot_token),
             );
+            backend.proxy = proxy;
+            let manager = ChannelManager::new(config, backend);
             manager
                 .discord_list_guilds()
                 .await
@@ -181,16 +184,16 @@ async fn dispatch_with(
             config,
             guild_id,
             bot_token,
+            proxy,
         } => {
-            let manager = ChannelManager::new(
-                config,
-                HostBackend::new(
-                    host.clone(),
-                    discord.clone(),
-                    email.clone(),
-                    Some(bot_token),
-                ),
+            let mut backend = HostBackend::new(
+                host.clone(),
+                discord.clone(),
+                email.clone(),
+                Some(bot_token),
             );
+            backend.proxy = proxy;
+            let manager = ChannelManager::new(config, backend);
             manager
                 .discord_list_channels(&guild_id)
                 .await
@@ -202,16 +205,16 @@ async fn dispatch_with(
             guild_id,
             channel_id,
             bot_token,
+            proxy,
         } => {
-            let manager = ChannelManager::new(
-                config,
-                HostBackend::new(
-                    host.clone(),
-                    discord.clone(),
-                    email.clone(),
-                    Some(bot_token),
-                ),
+            let mut backend = HostBackend::new(
+                host.clone(),
+                discord.clone(),
+                email.clone(),
+                Some(bot_token),
             );
+            backend.proxy = proxy;
+            let manager = ChannelManager::new(config, backend);
             manager
                 .discord_check_permissions(&guild_id, &channel_id)
                 .await
@@ -306,17 +309,20 @@ trait DiscordApi: Send + Sync {
     async fn list_guilds(
         &self,
         token: &str,
+        proxy: &tinychannels_bus::HttpProxyPolicy,
     ) -> anyhow::Result<Vec<tinychannels::providers::discord::api::DiscordGuild>>;
     async fn list_channels(
         &self,
         token: &str,
         guild_id: &str,
+        proxy: &tinychannels_bus::HttpProxyPolicy,
     ) -> anyhow::Result<Vec<tinychannels::providers::discord::api::DiscordTextChannel>>;
     async fn check_permissions(
         &self,
         token: &str,
         guild_id: &str,
         channel_id: &str,
+        proxy: &tinychannels_bus::HttpProxyPolicy,
     ) -> anyhow::Result<tinychannels::providers::discord::api::BotPermissionCheck>;
 }
 
@@ -327,16 +333,27 @@ impl DiscordApi for NativeDiscordApi {
     async fn list_guilds(
         &self,
         token: &str,
+        proxy: &tinychannels_bus::HttpProxyPolicy,
     ) -> anyhow::Result<Vec<tinychannels::providers::discord::api::DiscordGuild>> {
-        tinychannels::providers::discord::api::list_bot_guilds(token).await
+        use tinychannels::factory::HttpClientFactory as _;
+        let clients = tinychannels::factory::ConfiguredHttpClients::new(proxy.clone())?;
+        let client = clients.client_for("channel.discord");
+        tinychannels::providers::discord::api::list_bot_guilds_with_client(&client, token).await
     }
 
     async fn list_channels(
         &self,
         token: &str,
         guild_id: &str,
+        proxy: &tinychannels_bus::HttpProxyPolicy,
     ) -> anyhow::Result<Vec<tinychannels::providers::discord::api::DiscordTextChannel>> {
-        tinychannels::providers::discord::api::list_guild_channels(token, guild_id).await
+        use tinychannels::factory::HttpClientFactory as _;
+        let clients = tinychannels::factory::ConfiguredHttpClients::new(proxy.clone())?;
+        let client = clients.client_for("channel.discord");
+        tinychannels::providers::discord::api::list_guild_channels_with_client(
+            &client, token, guild_id,
+        )
+        .await
     }
 
     async fn check_permissions(
@@ -344,9 +361,13 @@ impl DiscordApi for NativeDiscordApi {
         token: &str,
         guild_id: &str,
         channel_id: &str,
+        proxy: &tinychannels_bus::HttpProxyPolicy,
     ) -> anyhow::Result<tinychannels::providers::discord::api::BotPermissionCheck> {
-        tinychannels::providers::discord::api::check_channel_permissions(
-            token, guild_id, channel_id,
+        use tinychannels::factory::HttpClientFactory as _;
+        let clients = tinychannels::factory::ConfiguredHttpClients::new(proxy.clone())?;
+        let client = clients.client_for("channel.discord");
+        tinychannels::providers::discord::api::check_channel_permissions_with_client(
+            &client, token, guild_id, channel_id,
         )
         .await
     }
@@ -650,7 +671,7 @@ impl ChannelBackend for HostBackend {
         _config: &ChannelsConfig,
     ) -> anyhow::Result<DiscordGuildListResult> {
         let token = self.discord_bot_token()?;
-        let guilds = self.discord.list_guilds(token).await?;
+        let guilds = self.discord.list_guilds(token, &self.proxy).await?;
         let raw = serde_json::to_value(&guilds).ok();
         Ok(DiscordGuildListResult {
             guilds: guilds
@@ -674,7 +695,10 @@ impl ChannelBackend for HostBackend {
         guild_id: &str,
     ) -> anyhow::Result<DiscordChannelListResult> {
         let token = self.discord_bot_token()?;
-        let channels = self.discord.list_channels(token, guild_id).await?;
+        let channels = self
+            .discord
+            .list_channels(token, guild_id, &self.proxy)
+            .await?;
         let raw = serde_json::to_value(&channels).ok();
         Ok(DiscordChannelListResult {
             channels: channels
@@ -702,7 +726,7 @@ impl ChannelBackend for HostBackend {
         let token = self.discord_bot_token()?;
         let permissions = self
             .discord
-            .check_permissions(token, guild_id, channel_id)
+            .check_permissions(token, guild_id, channel_id, &self.proxy)
             .await?;
         let raw = serde_json::to_value(&permissions).ok();
         Ok(DiscordPermissionCheckResult {
