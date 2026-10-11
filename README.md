@@ -179,3 +179,14 @@ confidential TinyBus call. The per-provider budget is bounded to 1–60,000 ms;
 results retain provider order and distinguish healthy, unhealthy, and timeout.
 Hosts own credential hydration and presentation. `ChannelStatus(name)` keeps its
 existing arity and continues to report a running provider's state.
+
+### Remote chat command boundary
+
+`ExecuteRemote` parses and renders `/status`, `/sessions`, `/new`, and `/help`
+inside the module and owns persisted chat bindings and busy-state updates. The
+host supplies validated workspace configuration, route/history facts, and
+conversation/session operations through the existing confidential backend
+callback. The module awaits host history clearing before committing a new
+binding. Ordinary messages and unsupported providers produce no remote reply.
+The additive contract is revision 14 / operation version 1.15; existing members
+and callback arity are unchanged.

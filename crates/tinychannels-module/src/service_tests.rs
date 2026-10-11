@@ -1518,3 +1518,31 @@ async fn progressive_reply_is_opened_owned_and_closed_inside_the_module() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn remote_help_is_parsed_and_rendered_inside_the_module() {
+    use tinychannels_bus::module_remote::{RemoteOperation, RemoteRoute};
+    let service = inbound_preparation_service().await;
+    let message = serde_json::from_value(serde_json::json!({
+        "id":"fixture", "sender":"sender", "reply_target":"chat",
+        "content":"/HELP@FixtureBot", "channel":"telegram", "timestamp":1
+    }))
+    .unwrap();
+    let result = service
+        .execute_remote(RemoteOperation::Execute {
+            workspace_dir: ".".into(),
+            message,
+            route: RemoteRoute {
+                provider: "fixture".into(),
+                model: "fixture".into(),
+            },
+            history_len: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        result.reply.as_deref(),
+        Some(tinychannels::remote::build_remote_help_response().as_str())
+    );
+    service.shutdown().await.unwrap();
+}
