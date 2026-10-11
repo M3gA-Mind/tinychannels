@@ -228,7 +228,7 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
         *channel.0.lock().unwrap(),
         ["typing:room", "typing:room", "stop:room"]
     );
-    connection.close().await;
+    connection.close().await.unwrap();
 }
 
 struct PendingTypingChannel {
@@ -317,7 +317,7 @@ async fn typing_refresh_stop_and_shutdown_cancel_inflight_provider_calls() {
     entered.notified().await;
     running.stop().await.unwrap();
     assert_eq!(dropped.load(Ordering::SeqCst), 2);
-    connection.close().await;
+    connection.close().await.unwrap();
 }
 
 struct ReconnectingChannel {
