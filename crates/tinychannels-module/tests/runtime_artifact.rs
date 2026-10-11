@@ -47,11 +47,13 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     let broker = Broker::new();
     let modules = ModuleHost::new(broker.clone());
     let loaded = modules.load_file(&staged).unwrap();
-    assert!(loaded.manifest.provides.iter().any(|p| {
-        p.methods
-            .iter()
-            .any(|m| m.as_str() == methods::RESERVE_RUNTIME)
-    }));
+    let provided = loaded.manifest.provides.first().unwrap();
+    let actual: Vec<_> = provided
+        .methods
+        .iter()
+        .map(|method| method.as_str())
+        .collect();
+    assert_eq!(actual, tinychannels_bus::METHODS);
     let (client, broker_transport) = MemoryTransport::pair();
     broker.attach(Arc::new(broker_transport));
     let connection = Connection::connect(Box::new(client)).await.unwrap();
@@ -85,6 +87,64 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         .proxy(BUS_NAME, &second.object_path, BUS_NAME)
         .unwrap();
     let _: Vec<String> = first_client.call(methods::LIST_CHANNELS, ()).await.unwrap();
+
+    use tinychannels_bus::module_inbound::{
+        ChannelInboundSource, PrepareChannelIdentityRequest, PrepareChannelInboundRequest,
+        PreparedChannelIdentity, PreparedChannelInbound,
+    };
+    let identity = PrepareChannelIdentityRequest {
+        channel: "telegram:bot".into(),
+        sender: None,
+        reply_target: Some("chat".into()),
+        thread_ts: Some("topic".into()),
+    };
+    let ordinary = first_client
+        .call::<PreparedChannelIdentity>(methods::PREPARE_CHANNEL_IDENTITY, identity.clone())
+        .await;
+    assert_eq!(
+        ordinary.err().unwrap().wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    let prepared: PreparedChannelIdentity = first_client
+        .call_confidential(methods::PREPARE_CHANNEL_IDENTITY, identity)
+        .await
+        .unwrap();
+    assert_eq!(prepared.thread_id, "channel:telegram:bot/chat");
+    assert_eq!(prepared.client_id, "inbound");
+    let inbound = PrepareChannelInboundRequest {
+        source: ChannelInboundSource::Legacy {
+            message: tinychannels_bus::ChannelMessage {
+                id: "msg".into(),
+                channel: "discord".into(),
+                sender: "user".into(),
+                reply_target: "room".into(),
+                content: "fixture".into(),
+                ..Default::default()
+            },
+            envelope: None,
+        },
+        namespace: "tenant".into(),
+        session_policy: Default::default(),
+    };
+    let ordinary = first_client
+        .call::<PreparedChannelInbound>(methods::PREPARE_CHANNEL_INBOUND, inbound.clone())
+        .await;
+    assert_eq!(
+        ordinary.err().unwrap().wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    let prepared: PreparedChannelInbound = first_client
+        .call_confidential(methods::PREPARE_CHANNEL_INBOUND, inbound)
+        .await
+        .unwrap();
+    assert_eq!(prepared.history_key, "discord_user_room");
+    assert_eq!(prepared.thread_id, "channel:discord/user/room");
+    assert_eq!(prepared.client_id, "inbound:discord:user");
+    assert_eq!(
+        prepared.session_key,
+        "tenant:discord:default:unknown:room:user"
+    );
+    assert_eq!(prepared.envelope.text, "fixture");
 
     use tinychannels_bus::module_runtime::{
         ChannelIngressKind, ChannelMessagePreparation, ConfiguredChannelInfo, PreparedChannelIntent,

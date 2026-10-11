@@ -1,0 +1,22 @@
+use super::*;
+
+#[test]
+fn inbound_vocabulary_preserves_optional_sender_and_existing_message_wire_shape() {
+    let wire = serde_json::json!({"channel":"telegram","sender":null,"reply_target":null,"thread_ts":null});
+    let request: PrepareChannelIdentityRequest = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(request).unwrap(), wire);
+    let request = PrepareChannelInboundRequest {
+        source: ChannelInboundSource::Legacy {
+            message: ChannelMessage::default(),
+            envelope: None,
+        },
+        namespace: "tenant".into(),
+        session_policy: Default::default(),
+    };
+    let wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(wire["source"]["kind"], "legacy");
+    assert_eq!(wire["source"]["envelope"], serde_json::Value::Null);
+    assert!(wire["source"]["message"].get("sender_name").is_none());
+    let restored: PrepareChannelInboundRequest = serde_json::from_value(wire.clone()).unwrap();
+    assert_eq!(serde_json::to_value(restored).unwrap(), wire);
+}

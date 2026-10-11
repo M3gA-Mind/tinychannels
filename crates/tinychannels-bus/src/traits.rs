@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// `Default` is derived so a caller that fills only some fields can spread
 /// `..Default::default()` and keep compiling when an optional field is added.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ChannelMessage {
     pub id: String,
     pub sender: String,

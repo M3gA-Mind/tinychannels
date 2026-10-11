@@ -37,6 +37,8 @@ fn every_declared_member_appears_in_its_method_table() {
         methods::DESCRIBE_CONFIGURED_CHANNELS,
         methods::START_OUTBOUND_CHANNEL,
         methods::PREPARE_OUTBOUND_INTENT,
+        methods::PREPARE_CHANNEL_INBOUND,
+        methods::PREPARE_CHANNEL_IDENTITY,
     ] {
         assert!(METHODS.contains(&m), "{m} missing from METHODS");
     }
@@ -72,7 +74,7 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::CHANNEL_STATUS,
         ]
     );
-    assert_eq!(METHODS.len(), 28);
+    assert_eq!(METHODS.len(), 30);
     assert_eq!(
         &METHODS[13..],
         &[
@@ -91,6 +93,8 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::DESCRIBE_CONFIGURED_CHANNELS,
             methods::START_OUTBOUND_CHANNEL,
             methods::PREPARE_OUTBOUND_INTENT,
+            methods::PREPARE_CHANNEL_INBOUND,
+            methods::PREPARE_CHANNEL_IDENTITY,
         ]
     );
 }

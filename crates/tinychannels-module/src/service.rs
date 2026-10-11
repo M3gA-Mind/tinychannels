@@ -390,6 +390,110 @@ impl Channels {
             .await
     }
 
+    /// Preserve provider data and compute persisted identities inside the module.
+    #[tinybus(confidential)]
+    async fn prepare_channel_inbound(
+        &self,
+        request: tinychannels_bus::module_inbound::PrepareChannelInboundRequest,
+    ) -> BusResult<tinychannels_bus::module_inbound::PreparedChannelInbound> {
+        use tinychannels_bus::module_inbound::{ChannelInboundSource, PreparedChannelInbound};
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(BusError::failed("channel module is shutting down"));
+        }
+        if request.namespace.len() > 256
+            || serde_json::to_vec(&request)
+                .map_err(|_| BusError::failed("invalid inbound preparation"))?
+                .len()
+                > tinychannels_bus::module_runtime::PREPARATION_MESSAGE_BYTES
+        {
+            return Err(BusError::failed("inbound preparation exceeds its limit"));
+        }
+        let (message, envelope) = match request.source {
+            ChannelInboundSource::Legacy { message, envelope } => {
+                let envelope = envelope.unwrap_or_else(|| {
+                    tinychannels::inbound_envelope_from_legacy_message(&message)
+                });
+                if envelope.channel.id != message.channel
+                    || envelope.message_id != message.id
+                    || envelope.sender.id != message.sender
+                    || envelope.conversation.id != message.reply_target
+                {
+                    return Err(BusError::failed(
+                        "inbound envelope identity does not match message",
+                    ));
+                }
+                (message, envelope)
+            }
+            ChannelInboundSource::Envelope {
+                envelope,
+                timestamp,
+            } => (
+                tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp),
+                envelope,
+            ),
+        };
+        let prepared = PreparedChannelInbound {
+            history_key: tinychannels::context::conversation_history_key(&message),
+            thread_id: tinychannels::channel::derive_inbound_thread_id(
+                &message.channel,
+                Some(&message.sender),
+                Some(&message.reply_target),
+                message.thread_ts.as_deref(),
+            ),
+            client_id: tinychannels::channel::derive_inbound_client_id(
+                &message.channel,
+                Some(&message.sender),
+            ),
+            session_key: tinychannels::channel::build_session_key_for_inbound_envelope(
+                &request.namespace,
+                &envelope,
+                request.session_policy,
+            ),
+            message,
+            envelope,
+        };
+        if serde_json::to_vec(&prepared)
+            .map_err(|_| BusError::failed("invalid inbound preparation"))?
+            .len()
+            > 2 * tinychannels_bus::module_runtime::PREPARATION_MESSAGE_BYTES
+        {
+            return Err(BusError::failed(
+                "prepared inbound result exceeds its limit",
+            ));
+        }
+        Ok(prepared)
+    }
+
+    /// Hosted ingress retains its optional-sender legacy identity behavior.
+    #[tinybus(confidential)]
+    async fn prepare_channel_identity(
+        &self,
+        request: tinychannels_bus::module_inbound::PrepareChannelIdentityRequest,
+    ) -> BusResult<tinychannels_bus::module_inbound::PreparedChannelIdentity> {
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(BusError::failed("channel module is shutting down"));
+        }
+        if serde_json::to_vec(&request)
+            .map_err(|_| BusError::failed("invalid inbound identity"))?
+            .len()
+            > 4096
+        {
+            return Err(BusError::failed("inbound identity exceeds its limit"));
+        }
+        Ok(tinychannels_bus::module_inbound::PreparedChannelIdentity {
+            thread_id: tinychannels::channel::derive_inbound_thread_id(
+                &request.channel,
+                request.sender.as_deref(),
+                request.reply_target.as_deref(),
+                request.thread_ts.as_deref(),
+            ),
+            client_id: tinychannels::channel::derive_inbound_client_id(
+                &request.channel,
+                request.sender.as_deref(),
+            ),
+        })
+    }
+
     /// Preserve the existing legacy and typed message conversion and hashing.
     #[tinybus(confidential)]
     async fn prepare_outbound_intent(
@@ -1054,6 +1158,7 @@ pub(crate) mod exports {
             "StartChannelSupervised",
             "ReserveRuntime", "StartRuntime", "StopRuntime",
             "DescribeConfiguredChannels", "StartOutboundChannel", "PrepareOutboundIntent",
+            "PrepareChannelInbound", "PrepareChannelIdentity",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:
