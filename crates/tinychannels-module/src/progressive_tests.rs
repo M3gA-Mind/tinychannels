@@ -254,3 +254,59 @@ async fn shutdown_starts_every_close_before_waiting_for_blocked_delivery() {
     assert!(replies.state.lock().await.entries.is_empty());
     assert_eq!(callback.sends.lock().await.len(), 2);
 }
+
+#[tokio::test]
+async fn full_reply_within_content_limit_survives_json_expansion() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    // Quotes and backslashes expand under JSON escaping. Admission must
+    // permit the same content budget as the progressive state machine.
+    let text = "\"\\".repeat(MAX_CONTENT / 2);
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::Finish {
+                handle: handle.clone(),
+                text: text.clone()
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Closed
+    );
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    let sends = callback.sends.lock().await;
+    assert_eq!(sends.len(), 1);
+    assert_eq!(sends[0]["text"], text);
+}
+
+#[tokio::test]
+async fn oversized_terminal_content_is_rejected_without_closing_reply() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    assert!(
+        replies
+            .execute(ProgressiveCommand::Finish {
+                handle: handle.clone(),
+                text: "x".repeat(MAX_CONTENT + 1)
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::Finish {
+                handle: handle.clone(),
+                text: "valid reply".into()
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Closed
+    );
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    assert_eq!(callback.sends.lock().await[0]["text"], "valid reply");
+}
