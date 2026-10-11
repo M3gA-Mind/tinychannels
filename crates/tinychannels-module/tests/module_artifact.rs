@@ -246,6 +246,50 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
             .wire_name(),
         "ai.tinyhumans.tinychannels.Error.UnknownChannel"
     );
+    assert_eq!(
+        proxy
+            .call::<Vec<tinychannels_bus::ChannelHealthReport>>(
+                tinychannels_bus::methods::CHECK_CHANNEL_HEALTH,
+                (
+                    ChannelsConfig::default(),
+                    tinychannels_bus::HttpProxyPolicy::default(),
+                    10_000_u64
+                ),
+            )
+            .await
+            .unwrap_err()
+            .wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    let health: Vec<tinychannels_bus::ChannelHealthReport> = proxy
+        .call_confidential(
+            tinychannels_bus::methods::CHECK_CHANNEL_HEALTH,
+            (
+                ChannelsConfig::default(),
+                tinychannels_bus::HttpProxyPolicy::default(),
+                10_000_u64,
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(
+        health.is_empty(),
+        "empty configuration must not start providers"
+    );
+    assert!(
+        proxy
+            .call_confidential::<Vec<tinychannels_bus::ChannelHealthReport>>(
+                tinychannels_bus::methods::CHECK_CHANNEL_HEALTH,
+                (
+                    ChannelsConfig::default(),
+                    tinychannels_bus::HttpProxyPolicy::default(),
+                    0_u64
+                ),
+            )
+            .await
+            .is_err()
+    );
+
     // The configured member stays callable through the loaded artifact. An
     // absent channel gives the typed configuration error before any provider
     // or network resource is created.

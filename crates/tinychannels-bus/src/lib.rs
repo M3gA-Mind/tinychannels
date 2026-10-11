@@ -7,6 +7,7 @@ pub mod config;
 pub mod context;
 pub mod controllers;
 pub mod error;
+pub mod health;
 pub mod host;
 pub mod http;
 pub mod module_controller;
@@ -25,6 +26,7 @@ pub use channel::{
 pub use config::ChannelsConfig;
 pub use controllers::{ChannelAuthMode, ChannelDefinition};
 pub use error::{Result, TinyChannelsError};
+pub use health::{ChannelHealthReport, ChannelHealthState};
 pub use host::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult};
 pub use http::HttpProxyPolicy;
 pub use module_controller::{

@@ -268,6 +268,26 @@ impl Channels {
         self.start_channel_inner(name, config, &http).await
     }
 
+    /// Check configured providers using their native health methods without
+    /// starting listen loops. Credentials and proxy policy require attestation.
+    #[tinybus(confidential)]
+    async fn check_channel_health(
+        &self,
+        config: ChannelsConfig,
+        proxy: HttpProxyPolicy,
+        timeout_ms: u64,
+    ) -> BusResult<Vec<tinychannels_bus::ChannelHealthReport>> {
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(BusError::failed("channel module is shutting down"));
+        }
+        let budget = crate::health::health_budget(timeout_ms)?;
+        let http = ConfiguredHttpClients::new(proxy)
+            .map_err(|_| BusError::failed("invalid host HTTP proxy policy"))?;
+        let host: Arc<dyn ChannelHost> = Arc::new(tinychannels::NoopHost);
+        let providers = build_channels(&config, &host, &http);
+        Ok(crate::health::check_providers(&providers, budget).await)
+    }
+
     /// Dispatch one typed operation through TinyChannels' ChannelManager.
     ///
     /// The request can contain channel credentials and therefore requires a
@@ -868,6 +888,7 @@ pub(crate) mod exports {
             "StartChannelConfigured",
             "ChannelController",
             "ChannelInteraction",
+            "CheckChannelHealth",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:

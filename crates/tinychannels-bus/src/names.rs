@@ -20,6 +20,8 @@ pub const HOST_OBJECT_PATH: &str = "/ai/tinyhumans/tinychannels/ChannelsHost";
 
 /// One constant per method name on [`BUS_NAME`].
 pub mod methods {
+    /// Check configured providers without starting listeners; inputs are confidential.
+    pub const CHECK_CHANNEL_HEALTH: &str = "CheckChannelHealth";
     /// Reserve one idle relay handle before native startup.
     pub const RESERVE_RELAY: &str = "ReserveRelay";
     /// Start a reserved relay using confidential hydrated configuration.
@@ -97,7 +99,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 20] = [
+pub const METHODS: [&str; 21] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -118,6 +120,7 @@ pub const METHODS: [&str; 20] = [
     methods::START_CHANNEL_CONFIGURED,
     methods::CHANNEL_CONTROLLER,
     methods::CHANNEL_INTERACTION,
+    methods::CHECK_CHANNEL_HEALTH,
 ];
 
 /// All host-callback method names in declaration order.
