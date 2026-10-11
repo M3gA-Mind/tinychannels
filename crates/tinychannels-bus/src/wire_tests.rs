@@ -133,10 +133,15 @@ fn discord_controller_credentials_are_host_hydrated_in_the_confidential_module_r
     let request = ChannelControllerRequest::DiscordListGuilds {
         config: ChannelsConfig::default(),
         bot_token: "fixture-secret".into(),
+        proxy: HttpProxyPolicy::default(),
     };
     let wire = serde_json::to_value(&request).unwrap();
     assert_eq!(wire["operation"], "discord_list_guilds");
     assert_eq!(wire["request"]["bot_token"], "fixture-secret");
+    assert_eq!(
+        wire["request"]["proxy"],
+        serde_json::json!({"https_proxy":null,"http_proxy":null,"all_proxy":null,"no_proxy":[],"service_selectors":[]})
+    );
     assert!(matches!(
         serde_json::from_value::<ChannelControllerRequest>(wire).unwrap(),
         ChannelControllerRequest::DiscordListGuilds { bot_token, .. }
@@ -208,7 +213,7 @@ fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
     }
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible(CONTRACT_VERSION + 1));
-    assert_eq!(CONTRACT_VERSION, 4);
+    assert_eq!(CONTRACT_VERSION, 5);
     assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 6));
 }
 

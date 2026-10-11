@@ -74,6 +74,9 @@ pub enum ChannelControllerRequest {
         config: ChannelsConfig,
         /// Host-hydrated bot credential; this request is confidential.
         bot_token: String,
+        /// Host-selected proxy policy for Discord API requests.
+        #[serde(default)]
+        proxy: crate::HttpProxyPolicy,
     },
     /// List Discord channels in one guild.
     DiscordListChannels {
@@ -81,6 +84,9 @@ pub enum ChannelControllerRequest {
         guild_id: String,
         /// Host-hydrated bot credential; this request is confidential.
         bot_token: String,
+        /// Host-selected proxy policy for Discord API requests.
+        #[serde(default)]
+        proxy: crate::HttpProxyPolicy,
     },
     /// Check the configured bot's permissions in one Discord channel.
     DiscordCheckPermissions {
@@ -89,6 +95,9 @@ pub enum ChannelControllerRequest {
         channel_id: String,
         /// Host-hydrated bot credential; this request is confidential.
         bot_token: String,
+        /// Host-selected proxy policy for Discord API requests.
+        #[serde(default)]
+        proxy: crate::HttpProxyPolicy,
     },
 }
 

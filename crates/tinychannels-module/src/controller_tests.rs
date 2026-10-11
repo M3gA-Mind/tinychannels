@@ -220,7 +220,7 @@ async fn email_connect_verifies_provider_config_inside_module_before_host_persis
             credentials: email_credentials(),
             proxy: Default::default(),
         },
-        Arc::new(FakeDiscordApi),
+        Arc::new(FakeDiscordApi::default()),
         verifier,
         Arc::new(NativeYuanbaoVerifier),
     )
@@ -252,7 +252,7 @@ async fn successful_email_test_reports_verified_login() {
             auth_mode: ChannelAuthMode::ApiKey,
             credentials: email_credentials(),
         },
-        Arc::new(FakeDiscordApi),
+        Arc::new(FakeDiscordApi::default()),
         Arc::new(RecordingEmailVerifier {
             observed: observed.clone(),
             fail: false,
@@ -297,7 +297,7 @@ async fn yuanbao_connect_verifies_with_host_proxy_before_reporting_connected() {
             }),
             proxy: proxy.clone(),
         },
-        Arc::new(FakeDiscordApi),
+        Arc::new(FakeDiscordApi::default()),
         Arc::new(NativeEmailVerifier),
         verifier,
     )
@@ -342,13 +342,23 @@ async fn controller_manager_routes_thread_and_discord_results_through_backend_po
         }) if thread_id == "thread-fixture" && title == "release planning"
     ));
 
+    let observed_proxy = Arc::new(Mutex::new(Vec::new()));
+    let discord_api = Arc::new(FakeDiscordApi {
+        observed_proxy: observed_proxy.clone(),
+    });
+    let proxy = tinychannels_bus::HttpProxyPolicy {
+        https_proxy: Some("http://proxy.example.invalid:8080".into()),
+        service_selectors: vec!["channel.discord".into()],
+        ..Default::default()
+    };
     let guilds = dispatch_with(
         &host,
         ChannelControllerRequest::DiscordListGuilds {
             config: ChannelsConfig::default(),
             bot_token: "fixture-secret".into(),
+            proxy: proxy.clone(),
         },
-        Arc::new(FakeDiscordApi),
+        discord_api.clone(),
         Arc::new(NativeEmailVerifier),
         Arc::new(NativeYuanbaoVerifier),
     )
@@ -367,8 +377,9 @@ async fn controller_manager_routes_thread_and_discord_results_through_backend_po
             config: ChannelsConfig::default(),
             guild_id: "guild-1".into(),
             bot_token: "fixture-secret".into(),
+            proxy: proxy.clone(),
         },
-        Arc::new(FakeDiscordApi),
+        discord_api.clone(),
         Arc::new(NativeEmailVerifier),
         Arc::new(NativeYuanbaoVerifier),
     )
@@ -388,8 +399,9 @@ async fn controller_manager_routes_thread_and_discord_results_through_backend_po
             guild_id: "guild-1".into(),
             channel_id: "channel-1".into(),
             bot_token: "fixture-secret".into(),
+            proxy: proxy.clone(),
         },
-        Arc::new(FakeDiscordApi),
+        discord_api,
         Arc::new(NativeEmailVerifier),
         Arc::new(NativeYuanbaoVerifier),
     )
@@ -400,10 +412,53 @@ async fn controller_manager_routes_thread_and_discord_results_through_backend_po
         ChannelControllerResult::DiscordPermissions(result)
             if result.can_send_messages && result.missing_permissions.is_empty()
     ));
+    let observed_proxy = observed_proxy.lock().await;
+    assert_eq!(observed_proxy.len(), 3);
+    assert!(observed_proxy.iter().all(|observed| observed == &proxy));
     assert!(matches!(
         fixture.0.lock().await.as_slice(),
         [ChannelBackendRequest::CreateThread { .. }]
     ));
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn native_discord_controller_validates_host_proxy_before_network_access() {
+    let (host, fixture, _server) = connected_host().await;
+    let proxy = tinychannels_bus::HttpProxyPolicy {
+        https_proxy: Some("http://user:password@not a valid proxy".into()),
+        service_selectors: vec!["channel.discord".into()],
+        ..Default::default()
+    };
+    let requests = [
+        ChannelControllerRequest::DiscordListGuilds {
+            config: ChannelsConfig::default(),
+            bot_token: "fixture-secret".into(),
+            proxy: proxy.clone(),
+        },
+        ChannelControllerRequest::DiscordListChannels {
+            config: ChannelsConfig::default(),
+            guild_id: "guild-1".into(),
+            bot_token: "fixture-secret".into(),
+            proxy: proxy.clone(),
+        },
+        ChannelControllerRequest::DiscordCheckPermissions {
+            config: ChannelsConfig::default(),
+            guild_id: "guild-1".into(),
+            channel_id: "channel-1".into(),
+            bot_token: "fixture-secret".into(),
+            proxy,
+        },
+    ];
+
+    for request in requests {
+        let error = match dispatch(&host, request).await {
+            Ok(_) => panic!("invalid Discord proxy should be rejected before network access"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.ends_with(": invalid HTTPS proxy URL"));
+    }
+    assert!(fixture.0.lock().await.is_empty());
     host.shutdown().await.unwrap();
 }
 
@@ -495,7 +550,10 @@ async fn controller_manager_routes_managed_state_and_thread_operations() {
     host.shutdown().await.unwrap();
 }
 
-struct FakeDiscordApi;
+#[derive(Default)]
+struct FakeDiscordApi {
+    observed_proxy: Arc<Mutex<Vec<tinychannels_bus::HttpProxyPolicy>>>,
+}
 
 fn email_credentials() -> Value {
     serde_json::json!({
@@ -568,8 +626,10 @@ impl DiscordApi for FakeDiscordApi {
     async fn list_guilds(
         &self,
         token: &str,
+        proxy: &tinychannels_bus::HttpProxyPolicy,
     ) -> anyhow::Result<Vec<tinychannels::providers::discord::api::DiscordGuild>> {
         assert_eq!(token, "fixture-secret");
+        self.observed_proxy.lock().await.push(proxy.clone());
         Ok(vec![tinychannels::providers::discord::api::DiscordGuild {
             id: "guild-1".into(),
             name: "Fixture".into(),
@@ -581,8 +641,10 @@ impl DiscordApi for FakeDiscordApi {
         &self,
         token: &str,
         _guild_id: &str,
+        proxy: &tinychannels_bus::HttpProxyPolicy,
     ) -> anyhow::Result<Vec<tinychannels::providers::discord::api::DiscordTextChannel>> {
         assert_eq!(token, "fixture-secret");
+        self.observed_proxy.lock().await.push(proxy.clone());
         Ok(vec![
             tinychannels::providers::discord::api::DiscordTextChannel {
                 id: "channel-1".into(),
@@ -599,8 +661,10 @@ impl DiscordApi for FakeDiscordApi {
         token: &str,
         _guild_id: &str,
         _channel_id: &str,
+        proxy: &tinychannels_bus::HttpProxyPolicy,
     ) -> anyhow::Result<tinychannels::providers::discord::api::BotPermissionCheck> {
         assert_eq!(token, "fixture-secret");
+        self.observed_proxy.lock().await.push(proxy.clone());
         Ok(tinychannels::providers::discord::api::BotPermissionCheck {
             can_view_channel: true,
             can_send_messages: true,
