@@ -213,8 +213,8 @@ fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
     }
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible(CONTRACT_VERSION + 1));
-    assert_eq!(CONTRACT_VERSION, 7);
-    assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 8));
+    assert_eq!(CONTRACT_VERSION, 8);
+    assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 9));
 }
 
 #[test]
@@ -333,4 +333,29 @@ fn prepared_connection_is_additive_and_keeps_the_controller_request_shape() {
     assert_eq!(wire["result"], "prepared_connect");
     assert_eq!(wire["value"]["result"]["auth_action"], "fixture-action");
     assert!(wire["value"]["config_update"].is_null());
+}
+
+#[test]
+fn provider_health_report_has_a_transport_free_stable_wire() {
+    let report = ChannelHealthReport {
+        channel: "telegram".into(),
+        state: ChannelHealthState::Healthy,
+    };
+    let encoded = serde_json::to_value(&report).unwrap();
+    assert_eq!(
+        encoded,
+        serde_json::json!({"channel":"telegram", "state":"healthy"})
+    );
+    assert_eq!(
+        serde_json::from_value::<ChannelHealthReport>(encoded).unwrap(),
+        report
+    );
+    assert_eq!(
+        serde_json::to_value(ChannelHealthState::Unhealthy).unwrap(),
+        "unhealthy"
+    );
+    assert_eq!(
+        serde_json::to_value(ChannelHealthState::Timeout).unwrap(),
+        "timeout"
+    );
 }

@@ -5,13 +5,7 @@ use std::time::Duration;
 
 use crate::traits::Channel;
 
-/// Outcome of one channel's health check.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChannelHealthState {
-    Healthy,
-    Unhealthy,
-    Timeout,
-}
+pub use tinychannels_bus::ChannelHealthState;
 
 /// Classify a `health_check` run under a timeout.
 pub fn classify_health_result(

@@ -146,3 +146,12 @@ result. The host persists the update and retains credential custody. Email
 passwords and Yuanbao application secrets are removed from the update. Existing
 `Connect` requests and all member argument counts remain unchanged; this
 capability requires module operation contract 1.8.
+
+### Module-owned channel health checks
+
+`CheckChannelHealth(config, proxy, timeout_ms)` checks configured providers without
+starting their listeners. Hydrated credentials and proxy settings require a
+confidential TinyBus call. The per-provider budget is bounded to 1–60,000 ms;
+results retain provider order and distinguish healthy, unhealthy, and timeout.
+Hosts own credential hydration and presentation. `ChannelStatus(name)` keeps its
+existing arity and continues to report a running provider's state.

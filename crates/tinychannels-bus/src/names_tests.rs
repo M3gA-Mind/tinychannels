@@ -29,6 +29,7 @@ fn every_declared_member_appears_in_its_method_table() {
         methods::START_CHANNEL_CONFIGURED,
         methods::CHANNEL_CONTROLLER,
         methods::CHANNEL_INTERACTION,
+        methods::CHECK_CHANNEL_HEALTH,
     ] {
         assert!(METHODS.contains(&m), "{m} missing from METHODS");
     }
@@ -64,7 +65,7 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::CHANNEL_STATUS,
         ]
     );
-    assert_eq!(METHODS.len(), 20);
+    assert_eq!(METHODS.len(), 21);
     assert_eq!(
         &METHODS[13..],
         &[
@@ -75,6 +76,7 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::START_CHANNEL_CONFIGURED,
             methods::CHANNEL_CONTROLLER,
             methods::CHANNEL_INTERACTION,
+            methods::CHECK_CHANNEL_HEALTH,
         ]
     );
 }

@@ -17,6 +17,7 @@
 mod controller;
 mod delivery;
 mod email;
+mod health;
 pub mod host;
 mod interaction;
 mod prepare_connect;
