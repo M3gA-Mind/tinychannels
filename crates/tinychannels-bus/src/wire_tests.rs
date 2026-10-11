@@ -213,8 +213,8 @@ fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
     }
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible(CONTRACT_VERSION + 1));
-    assert_eq!(CONTRACT_VERSION, 6);
-    assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 7));
+    assert_eq!(CONTRACT_VERSION, 7);
+    assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 8));
 }
 
 #[test]
@@ -302,4 +302,35 @@ fn discord_provider_metadata_keeps_complete_legacy_wire_fields() {
             .position,
         0
     );
+}
+
+#[test]
+fn prepared_connection_is_additive_and_keeps_the_controller_request_shape() {
+    use module_controller::{
+        ChannelControllerRequest, ChannelControllerResult, PreparedChannelConnection,
+    };
+    let request = ChannelControllerRequest::PrepareConnect {
+        config: ChannelsConfig::default(),
+        channel: "telegram".into(),
+        auth_mode: ChannelAuthMode::BotToken,
+        credentials: serde_json::json!({"bot_token": "fixture"}),
+        proxy: Default::default(),
+    };
+    let wire = serde_json::to_value(&request).unwrap();
+    assert_eq!(wire["operation"], "prepare_connect");
+    assert_eq!(wire["request"]["channel"], "telegram");
+    let _: ChannelControllerRequest = serde_json::from_value(wire).unwrap();
+    let result = ChannelControllerResult::PreparedConnect(Box::new(PreparedChannelConnection {
+        result: controllers::ChannelConnectionResult {
+            status: "pending_auth".into(),
+            restart_required: false,
+            auth_action: Some("fixture-action".into()),
+            message: None,
+        },
+        config_update: None,
+    }));
+    let wire = serde_json::to_value(result).unwrap();
+    assert_eq!(wire["result"], "prepared_connect");
+    assert_eq!(wire["value"]["result"]["auth_action"], "fixture-action");
+    assert!(wire["value"]["config_update"].is_null());
 }

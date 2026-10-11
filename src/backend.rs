@@ -207,6 +207,32 @@ impl<B: ChannelBackend> ChannelManager<B> {
         auth_mode: ChannelAuthMode,
         credentials: Value,
     ) -> anyhow::Result<ChannelConnectionResult> {
+        self.connect_inner(channel, auth_mode, credentials, true)
+            .await
+    }
+
+    /// Validate and verify a connection using the saved provider configuration.
+    ///
+    /// Unlike the legacy Connect path, this preserves absent form fields instead
+    /// of expanding them into a new provider's defaults. The module prepares its
+    /// persistence update from that same saved configuration and form payload.
+    pub async fn prepare_connect(
+        &self,
+        channel: &str,
+        auth_mode: ChannelAuthMode,
+        credentials: Value,
+    ) -> anyhow::Result<ChannelConnectionResult> {
+        self.connect_inner(channel, auth_mode, credentials, false)
+            .await
+    }
+
+    async fn connect_inner(
+        &self,
+        channel: &str,
+        auth_mode: ChannelAuthMode,
+        credentials: Value,
+        normalize: bool,
+    ) -> anyhow::Result<ChannelConnectionResult> {
         let definition = self
             .describe(channel)
             .ok_or_else(|| anyhow::anyhow!("unknown channel: {channel}"))?;
@@ -229,7 +255,11 @@ impl<B: ChannelBackend> ChannelManager<B> {
         definition
             .validate_credentials(auth_mode, credentials_map)
             .map_err(anyhow::Error::msg)?;
-        let credentials = normalize_connect_credentials(channel, credentials)?;
+        let credentials = if normalize {
+            normalize_connect_credentials(channel, credentials)?
+        } else {
+            credentials
+        };
         self.backend
             .connect_channel(&self.config, channel, auth_mode, credentials)
             .await

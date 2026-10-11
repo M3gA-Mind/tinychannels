@@ -136,3 +136,13 @@ cargo test --features email,lark
 
 The [pure-contract relocation specification](docs/spec/pure-contract-relocation.md)
 records extension-trait source migrations and subsequent module-operation work.
+
+### Prepared channel connections
+
+`ChannelController` accepts the additive `PrepareConnect` request. TinyChannels
+validates credentials, verifies native email or Yuanbao authentication, and
+returns a typed provider configuration update alongside the existing connection
+result. The host persists the update and retains credential custody. Email
+passwords and Yuanbao application secrets are removed from the update. Existing
+`Connect` requests and all member argument counts remain unchanged; this
+capability requires module operation contract 1.8.

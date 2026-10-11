@@ -25,6 +25,16 @@ pub enum ChannelControllerRequest {
         #[serde(default)]
         proxy: crate::HttpProxyPolicy,
     },
+    /// Validate and verify a connection, returning its provider configuration
+    /// for host-owned persistence. The existing Connect operation is unchanged.
+    PrepareConnect {
+        config: ChannelsConfig,
+        channel: String,
+        auth_mode: ChannelAuthMode,
+        credentials: Value,
+        #[serde(default)]
+        proxy: crate::HttpProxyPolicy,
+    },
     /// Disconnect one channel through the configured host backend.
     Disconnect {
         config: ChannelsConfig,
@@ -107,6 +117,8 @@ pub enum ChannelControllerRequest {
 pub enum ChannelControllerResult {
     /// Result for a Connect request.
     Connected(ChannelConnectionResult),
+    /// Verified result and provider configuration for host persistence.
+    PreparedConnect(Box<PreparedChannelConnection>),
     /// Result for a Disconnect request.
     Disconnected(ChannelDisconnectResult),
     /// Result for a Status request.
@@ -167,4 +179,24 @@ pub enum ChannelBackendResult {
     SendReaction(ChannelReactionResult),
     Thread(ChannelThreadResult),
     Threads(ChannelThreadListResult),
+}
+
+/// Verified connection facts. The host retains credential custody and decides
+/// whether and where to persist the returned provider configuration.
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreparedChannelConnection {
+    pub result: ChannelConnectionResult,
+    pub config_update: Option<ChannelConfigUpdate>,
+}
+
+/// A single provider configuration prepared by the owning module.
+/// Email passwords and Yuanbao application secrets are deliberately absent.
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "provider", content = "config", rename_all = "snake_case")]
+pub enum ChannelConfigUpdate {
+    Telegram(crate::config::TelegramConfig),
+    Discord(crate::config::DiscordConfig),
+    IMessage(crate::config::IMessageConfig),
+    Email(crate::config::EmailConfig),
+    Yuanbao(Box<crate::config::YuanbaoConfig>),
 }
