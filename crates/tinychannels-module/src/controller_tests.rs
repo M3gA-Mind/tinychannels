@@ -271,6 +271,53 @@ async fn successful_email_test_reports_verified_login() {
 }
 
 #[tokio::test]
+async fn invalid_email_ports_are_rejected_before_verifier_or_host_persistence() {
+    let (host, fixture, _server) = connected_host().await;
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    for field in ["imap_port", "smtp_port"] {
+        let mut credentials = email_credentials();
+        credentials[field] = serde_json::json!("not-a-port");
+        for request in [
+            ChannelControllerRequest::TestChannel {
+                config: ChannelsConfig::default(),
+                channel: "email".into(),
+                auth_mode: ChannelAuthMode::ApiKey,
+                credentials: credentials.clone(),
+            },
+            ChannelControllerRequest::Connect {
+                config: ChannelsConfig::default(),
+                channel: "email".into(),
+                auth_mode: ChannelAuthMode::ApiKey,
+                credentials: credentials.clone(),
+                proxy: Default::default(),
+            },
+        ] {
+            let result = dispatch_with(
+                &host,
+                request,
+                Arc::new(FakeDiscordApi::default()),
+                Arc::new(RecordingEmailVerifier {
+                    observed: observed.clone(),
+                    fail: false,
+                }),
+                Arc::new(NativeYuanbaoVerifier),
+            )
+            .await;
+            assert!(result.is_err(), "invalid {field} must be refused");
+        }
+    }
+    assert!(
+        observed.lock().await.is_empty(),
+        "invalid ports must never reach IMAP verification"
+    );
+    assert!(
+        fixture.0.lock().await.is_empty(),
+        "invalid ports must never reach host persistence"
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn yuanbao_connect_verifies_with_host_proxy_before_reporting_connected() {
     let (host, fixture, _server) = connected_host().await;
     let observed = Arc::new(Mutex::new(Vec::new()));
