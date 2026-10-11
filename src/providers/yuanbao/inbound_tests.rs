@@ -183,6 +183,6 @@ async fn middleware_abort_preserves_error_and_malformed_json_fails_before_stages
     }
     assert!(matches!(
         pipeline.process(b"{invalid").await,
-        PipelineOutcome::Failed(YuanbaoError::Proto(_))
+        PipelineOutcome::Failed(YuanbaoError::ProtoDecode(_))
     ));
 }
