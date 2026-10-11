@@ -833,3 +833,48 @@ fn whatsapp_parse_without_contacts_has_no_name() {
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].sender_name, None);
 }
+
+#[test]
+fn sensitive_cloud_requests_require_https() {
+    assert!(ensure_https("https://graph.facebook.com/v18.0/123").is_ok());
+    for url in ["http://graph.facebook.com", "file:///token", ""] {
+        assert!(
+            ensure_https(url)
+                .unwrap_err()
+                .to_string()
+                .contains("non-HTTPS")
+        );
+    }
+}
+
+#[tokio::test]
+async fn injected_cloud_client_reports_connection_failure_and_listener_stays_idle() {
+    // An invalid proxy fails locally, before contacting Meta.
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all("http://127.0.0.1:0").unwrap())
+        .timeout(std::time::Duration::from_secs(1))
+        .build()
+        .unwrap();
+    let channel = WhatsAppChannel::with_http_client(
+        "token".into(),
+        "123".into(),
+        "verify".into(),
+        vec![],
+        client,
+    );
+    assert_eq!(channel.verify_token(), "verify");
+    assert!(
+        channel
+            .send(&SendMessage::new("hello", "+15551234567"))
+            .await
+            .is_err()
+    );
+    assert!(!channel.health_check().await);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), channel.listen(tx))
+            .await
+            .is_err()
+    );
+    assert!(rx.try_recv().is_err());
+}
