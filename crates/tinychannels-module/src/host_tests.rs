@@ -35,6 +35,7 @@ struct Callback {
     blocked: Arc<AtomicBool>,
     gate: Arc<tokio::sync::Notify>,
     transcription_blocked: Arc<AtomicBool>,
+    transcriptions_started: Arc<AtomicUsize>,
     transcription_started: Arc<tokio::sync::Notify>,
     transcription_gate: Arc<tokio::sync::Notify>,
     persist_failures: Arc<std::sync::atomic::AtomicUsize>,
@@ -52,6 +53,7 @@ impl Callback {
         request: tinychannels_bus::HostTranscriptionRequest,
     ) -> Result<tinychannels_bus::HostTranscriptionResult> {
         assert_eq!(request.mime_type.as_deref(), Some("audio/wav"));
+        self.transcriptions_started.fetch_add(1, Ordering::SeqCst);
         self.transcription_started.notify_one();
         while self.transcription_blocked.load(Ordering::SeqCst) {
             self.transcription_gate.notified().await;
@@ -246,6 +248,7 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         blocked: Arc::new(AtomicBool::new(false)),
         gate: Arc::new(tokio::sync::Notify::new()),
         transcription_blocked: Arc::new(AtomicBool::new(false)),
+        transcriptions_started: Arc::new(AtomicUsize::new(0)),
         transcription_started: Arc::new(tokio::sync::Notify::new()),
         transcription_gate: Arc::new(tokio::sync::Notify::new()),
         persist_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
@@ -362,11 +365,37 @@ async fn shutdown_joins_owned_transcription_after_waiter_cancellation() {
 
 #[tokio::test]
 async fn transcription_admission_refuses_when_its_owned_task_limit_is_reached() {
-    let (host, _callback, _server) = connected_host().await;
-    host.owner
-        .active_transcriptions
-        .store(super::MAX_ACTIVE_TRANSCRIPTIONS, Ordering::SeqCst);
-    let result = host
+    let (host, callback, _server) = connected_host().await;
+    callback.transcription_blocked.store(true, Ordering::SeqCst);
+
+    let mut active = Vec::new();
+    for _ in 0..super::MAX_ACTIVE_TRANSCRIPTIONS {
+        let host = host.clone();
+        active.push(tokio::spawn(async move {
+            host.transcribe(tinychannels_bus::HostTranscriptionRequest {
+                audio_base64: "UklGRg==".into(),
+                mime_type: Some("audio/wav".into()),
+                file_name: None,
+                language: None,
+            })
+            .await
+        }));
+    }
+
+    while callback.transcriptions_started.load(Ordering::SeqCst) < super::MAX_ACTIVE_TRANSCRIPTIONS
+    {
+        let notified = callback.transcription_started.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        if callback.transcriptions_started.load(Ordering::SeqCst)
+            >= super::MAX_ACTIVE_TRANSCRIPTIONS
+        {
+            break;
+        }
+        notified.await;
+    }
+
+    let refused = host
         .transcribe(tinychannels_bus::HostTranscriptionRequest {
             audio_base64: "UklGRg==".into(),
             mime_type: Some("audio/wav".into()),
@@ -374,8 +403,15 @@ async fn transcription_admission_refuses_when_its_owned_task_limit_is_reached() 
             language: None,
         })
         .await;
-    assert!(result.is_err());
-    host.owner.active_transcriptions.store(0, Ordering::SeqCst);
+    assert!(refused.is_err(), "the seventeenth held callback is refused");
+
+    callback
+        .transcription_blocked
+        .store(false, Ordering::SeqCst);
+    callback.transcription_gate.notify_waiters();
+    for transcription in active {
+        assert_eq!(transcription.await.unwrap().unwrap().text, "spoken words");
+    }
     host.shutdown().await.unwrap();
 }
 
