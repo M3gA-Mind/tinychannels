@@ -75,10 +75,35 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             )
             .await
             .unwrap();
-        proxy
-            .call_confidential::<()>(methods::START_RUNTIME, runtime.handle.clone())
-            .await
-            .unwrap();
+        if runtime.handle == first.handle {
+            let request = (
+                runtime.handle.clone(),
+                tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 2 },
+            );
+            assert_eq!(
+                proxy
+                    .call::<()>(methods::START_RUNTIME_WITH_DISPATCH, request.clone())
+                    .await
+                    .unwrap_err()
+                    .wire_name(),
+                tinybus::Error::CONFIDENTIALITY_REQUIRED
+            );
+            proxy
+                .call_confidential::<()>(methods::START_RUNTIME_WITH_DISPATCH, request)
+                .await
+                .unwrap();
+            assert!(
+                proxy
+                    .call_confidential::<()>(methods::START_RUNTIME, runtime.handle.clone())
+                    .await
+                    .is_err()
+            );
+        } else {
+            proxy
+                .call_confidential::<()>(methods::START_RUNTIME, runtime.handle.clone())
+                .await
+                .unwrap();
+        }
     }
     let first_client = connection
         .proxy(BUS_NAME, &first.object_path, BUS_NAME)

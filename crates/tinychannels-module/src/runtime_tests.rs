@@ -17,6 +17,55 @@ async fn fixture() -> (Arc<Runtimes>, Connection) {
 }
 
 #[tokio::test]
+async fn activated_runtime_dispatch_policy_is_immutable_and_legacy_start_stays_serial() {
+    let (runtimes, _client) = fixture().await;
+    let reservation = runtimes.reserve().await.unwrap();
+    let policy = tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 2 };
+    runtimes
+        .start_with_dispatch(reservation.handle.clone(), policy)
+        .await
+        .unwrap();
+    runtimes
+        .start_with_dispatch(reservation.handle.clone(), policy)
+        .await
+        .unwrap();
+    assert!(runtimes.start(reservation.handle.clone()).await.is_err());
+    assert!(
+        runtimes
+            .start_with_dispatch(
+                reservation.handle.clone(),
+                tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 3 }
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        *runtimes
+            .get(&reservation.handle)
+            .await
+            .unwrap()
+            .dispatch_limit
+            .lock()
+            .await,
+        Some(Some(8))
+    );
+    runtimes.stop(reservation.handle).await.unwrap();
+    let legacy = runtimes.reserve().await.unwrap();
+    runtimes.start(legacy.handle.clone()).await.unwrap();
+    assert_eq!(
+        *runtimes
+            .get(&legacy.handle)
+            .await
+            .unwrap()
+            .dispatch_limit
+            .lock()
+            .await,
+        Some(None)
+    );
+    runtimes.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn stopping_one_runtime_does_not_close_another_runtime_or_reuse_its_path() {
     let (runtimes, client) = fixture().await;
     let first = runtimes.reserve().await.unwrap();

@@ -88,6 +88,9 @@ pub mod methods {
 pub mod host_methods {
     /// `DeliverInbound` — hand the host one authenticated inbound envelope.
     pub const DELIVER_INBOUND: &str = "DeliverInbound";
+    /// Complete one admitted turn. Opt-in runtimes invoke bounded concurrent
+    /// callbacks and retain each call until flush/stop has drained it.
+    pub const PROCESS_INBOUND: &str = "ProcessInbound";
     /// `ReportStatus` — report a provider connection state transition.
     pub const REPORT_STATUS: &str = "ReportStatus";
     /// `PersistAllowedIdentity` — persist a provider-authorized identity host-side.
@@ -119,7 +122,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 30] = [
+pub const METHODS: [&str; 31] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -150,10 +153,11 @@ pub const METHODS: [&str; 30] = [
     methods::PREPARE_OUTBOUND_INTENT,
     methods::PREPARE_CHANNEL_INBOUND,
     methods::PREPARE_CHANNEL_IDENTITY,
+    methods::START_RUNTIME_WITH_DISPATCH,
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 14] = [
+pub const HOST_METHODS: [&str; 15] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,

@@ -298,9 +298,11 @@ impl Channels {
         handle: String,
         policy: tinychannels_bus::ChannelRuntimeDispatchPolicy,
     ) -> BusResult<()> {
-        self.runtimes.as_ref()
+        self.runtimes
+            .as_ref()
             .ok_or_else(|| BusError::failed("nested channel runtimes are unavailable"))?
-            .start_with_dispatch(handle, policy).await
+            .start_with_dispatch(handle, policy)
+            .await
     }
 
     /// Stop this identity's providers, relay and callbacks, joining pending startup.
@@ -1168,7 +1170,7 @@ pub(crate) mod exports {
             "ChannelInteraction",
             "CheckChannelHealth",
             "StartChannelSupervised",
-            "ReserveRuntime", "StartRuntime", "StopRuntime",
+            "ReserveRuntime", "StartRuntime", "StartRuntimeWithDispatch", "StopRuntime",
             "DescribeConfiguredChannels", "StartOutboundChannel", "PrepareOutboundIntent",
             "PrepareChannelInbound", "PrepareChannelIdentity",
         ],

@@ -143,7 +143,11 @@ impl HostChannels {
         Self::new_at_inner(connection, object_path, None)
     }
 
-    fn new_at_inner(connection: Connection, object_path: String, dispatch_limit: Option<usize>) -> Self {
+    fn new_at_inner(
+        connection: Connection,
+        object_path: String,
+        dispatch_limit: Option<usize>,
+    ) -> Self {
         let object_path: Arc<str> = object_path.into();
         let callback_path = object_path.clone();
         let (outbox, mut inbox) = mpsc::channel(OUTBOX_CAPACITY);
@@ -151,12 +155,19 @@ impl HostChannels {
         let task_failure = failure.clone();
         let callback_connection = connection.clone();
         let worker = tokio::spawn(async move {
-            let mut dispatcher = dispatch_limit.map(|limit| dispatch::InboundDispatcher::new(
-                callback_connection.clone(), callback_path.clone(), task_failure.clone(), limit,
-            ));
+            let mut dispatcher = dispatch_limit.map(|limit| {
+                dispatch::InboundDispatcher::new(
+                    callback_connection.clone(),
+                    callback_path.clone(),
+                    task_failure.clone(),
+                    limit,
+                )
+            });
             while let Some(notification) = inbox.recv().await {
                 if let Notification::Barrier { stop, reply } = notification {
-                    if let Some(dispatcher) = dispatcher.as_ref() { dispatcher.flush().await; }
+                    if let Some(dispatcher) = dispatcher.as_ref() {
+                        dispatcher.flush().await;
+                    }
                     let _ = reply.send(());
                     if stop {
                         break;
@@ -255,7 +266,9 @@ impl HostChannels {
                     }
                 }
             }
-            if let Some(dispatcher) = dispatcher.as_mut() { dispatcher.shutdown().await; }
+            if let Some(dispatcher) = dispatcher.as_mut() {
+                dispatcher.shutdown().await;
+            }
         });
         Self {
             outbox,

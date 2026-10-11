@@ -43,17 +43,36 @@ impl InboundDispatcher {
                 async move {
                     let _completion = completion;
                     let result = async {
-                        connection.proxy(HOST_BUS_NAME, path.as_ref(), HOST_BUS_NAME)?
-                            .call::<()>("ProcessInbound", message).await
-                    }.await;
-                    if let Err(error) = result { record_failure(&failure, error.to_string()); }
+                        connection
+                            .proxy(HOST_BUS_NAME, path.as_ref(), HOST_BUS_NAME)?
+                            .call_confidential::<()>(host_methods::PROCESS_INBOUND, message)
+                            .await
+                    }
+                    .await;
+                    if let Err(error) = result {
+                        record_failure(&failure, error.to_string());
+                    }
                 }
-            }).await;
+            })
+            .await;
         });
-        Self { sender: Some(sender), worker: Some(worker), accepted: 0, finished, changed }
+        Self {
+            sender: Some(sender),
+            worker: Some(worker),
+            accepted: 0,
+            finished,
+            changed,
+        }
     }
     pub(super) async fn enqueue(&mut self, channel: String, message: serde_json::Value) {
-        if self.sender.as_ref().expect("dispatcher is open").send((channel, message)).await.is_ok() {
+        if self
+            .sender
+            .as_ref()
+            .expect("dispatcher is open")
+            .send((channel, message))
+            .await
+            .is_ok()
+        {
             self.accepted += 1;
         }
     }
@@ -66,12 +85,16 @@ impl InboundDispatcher {
     }
     pub(super) async fn shutdown(&mut self) {
         self.sender.take();
-        if let Some(worker) = self.worker.as_mut() { let _ = worker.await; }
+        if let Some(worker) = self.worker.as_mut() {
+            let _ = worker.await;
+        }
         self.worker.take();
     }
 }
 impl Drop for InboundDispatcher {
     fn drop(&mut self) {
-        if let Some(worker) = self.worker.take() { worker.abort(); }
+        if let Some(worker) = self.worker.take() {
+            worker.abort();
+        }
     }
 }
