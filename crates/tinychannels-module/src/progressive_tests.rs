@@ -7,6 +7,7 @@ use tokio::sync::Notify;
 struct Callback {
     sends: Arc<Mutex<Vec<Value>>>,
     requests: Arc<Mutex<Vec<ProgressiveTransportRequest>>>,
+    result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
     block: bool,
     entered: Arc<Notify>,
     released: Arc<Notify>,
@@ -30,7 +31,9 @@ impl Callback {
             }
         }
         Ok(ChannelBackendResult::ProgressiveTransport(
-            ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"})),
+            self.result.lock().await.clone().unwrap_or_else(|| {
+                ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"}))
+            }),
         ))
     }
 }
@@ -452,4 +455,40 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
         matches!(&requests[1], ProgressiveTransportRequest::Delete { channel, message_id }
         if channel == "discord:room" && message_id == "message-id")
     );
+}
+
+#[tokio::test]
+async fn transport_failures_preserve_recovery_classification() {
+    let (replies, callback) = fixture(false).await;
+    let sender = Sender(replies.host.clone());
+    for result in [
+        ProgressiveTransportResult::Unavailable,
+        ProgressiveTransportResult::EditUnsupported,
+        ProgressiveTransportResult::MessageGone,
+        ProgressiveTransportResult::Failed,
+    ] {
+        *callback.result.lock().await = Some(result.clone());
+        let error = sender
+            .edit("discord:room", "message-id", "updated")
+            .await
+            .unwrap_err();
+        match result {
+            ProgressiveTransportResult::Unavailable => {
+                assert!(matches!(error, ProgressiveSendError::Unavailable))
+            }
+            ProgressiveTransportResult::EditUnsupported => {
+                assert!(matches!(error, ProgressiveSendError::EditUnsupported))
+            }
+            ProgressiveTransportResult::MessageGone => {
+                assert!(matches!(error, ProgressiveSendError::MessageGone))
+            }
+            ProgressiveTransportResult::Failed => {
+                let ProgressiveSendError::Other(error) = error else {
+                    panic!("expected opaque transport failure")
+                };
+                assert_eq!(error.to_string(), "progressive transport failed");
+            }
+            ProgressiveTransportResult::Success(_) => unreachable!(),
+        }
+    }
 }
