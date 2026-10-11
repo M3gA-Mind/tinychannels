@@ -1707,3 +1707,173 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
     );
     service.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn webhook_provider_requires_outbound_start_and_rejects_duplicate_ownership() {
+    let service = inbound_preparation_service().await;
+    let config = ChannelsConfig {
+        linq: Some(tinychannels_bus::config::LinqConfig {
+            api_token: "fixture-token".into(),
+            from_phone: "+15551234567".into(),
+            allowed_senders: vec![],
+        }),
+        ..Default::default()
+    };
+    let error = service
+        .start_channel("linq".into(), config.clone())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, BusError::MethodFailed { name, .. } if name == NO_INGRESS_ERROR));
+    assert!(service.list_channels().await.unwrap().is_empty());
+    service
+        .start_outbound_channel("linq".into(), config.clone(), Default::default())
+        .await
+        .unwrap();
+    assert_eq!(service.list_channels().await.unwrap(), ["linq"]);
+    let error = service
+        .start_outbound_channel("linq".into(), config.clone(), Default::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, BusError::MethodFailed { name, .. } if name == ALREADY_RUNNING_ERROR));
+    service.stop_channel("linq".into()).await.unwrap();
+    assert_eq!(
+        service.channel_status("linq".into()).await.unwrap(),
+        "stopped"
+    );
+    service
+        .start_outbound_channel("linq".into(), config.clone(), Default::default())
+        .await
+        .unwrap();
+    service.shutdown().await.unwrap();
+    assert!(
+        service
+            .start_outbound_channel("linq".into(), config, Default::default())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("shutting down")
+    );
+}
+
+#[tokio::test]
+async fn channel_start_variants_refuse_missing_configuration_and_excessive_backoff() {
+    let service = inbound_preparation_service().await;
+    let config = ChannelsConfig::default();
+    let error = service
+        .start_channel_configured("unknown".into(), config.clone(), Default::default())
+        .await
+        .unwrap_err();
+    assert!(matches!(error, BusError::MethodFailed { name, .. } if name == NOT_CONFIGURED_ERROR));
+    let error = service
+        .start_channel_supervised(
+            "unknown".into(),
+            config.clone(),
+            Default::default(),
+            Default::default(),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(error, BusError::MethodFailed { name, .. } if name == NOT_CONFIGURED_ERROR));
+    for policy in [
+        tinychannels_bus::ChannelSupervisionPolicy {
+            initial_backoff_secs: 86_401,
+            max_backoff_secs: 1,
+        },
+        tinychannels_bus::ChannelSupervisionPolicy {
+            initial_backoff_secs: 1,
+            max_backoff_secs: 86_401,
+        },
+    ] {
+        assert!(
+            service
+                .start_channel_supervised(
+                    "unknown".into(),
+                    config.clone(),
+                    Default::default(),
+                    policy
+                )
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("exceeds one day")
+        );
+    }
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn identity_scoped_services_refuse_nested_runtime_management() {
+    let service = inbound_preparation_service().await;
+    assert!(
+        service
+            .reserve_runtime()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("unavailable")
+    );
+    assert!(
+        service
+            .start_runtime("handle".into())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("unavailable")
+    );
+    assert!(
+        service
+            .start_runtime_with_dispatch("handle".into(), Default::default())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("unavailable")
+    );
+    assert!(
+        service
+            .stop_runtime("handle".into())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("unavailable")
+    );
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn health_and_controller_operations_refuse_requests_after_shutdown() {
+    let service = inbound_preparation_service().await;
+    assert!(
+        service
+            .check_channel_health(Default::default(), Default::default(), 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let result = service
+        .channel_controller(tinychannels_bus::ChannelControllerRequest::Status {
+            config: Default::default(),
+            channel: None,
+        })
+        .await;
+    assert!(result.is_err(), "no host backend is served");
+    service.shutdown().await.unwrap();
+    assert!(
+        service
+            .check_channel_health(Default::default(), Default::default(), 100)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("shutting down")
+    );
+    assert!(
+        service
+            .channel_controller(tinychannels_bus::ChannelControllerRequest::Status {
+                config: Default::default(),
+                channel: None,
+            })
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("shutting down")
+    );
+}
