@@ -11,7 +11,6 @@ struct TurnCallback {
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
 impl TurnCallback {
-    #[tinybus(confidential)]
     async fn process_inbound(&self, _channel: String, message: serde_json::Value) -> Result<()> {
         self.started.fetch_add(1, Ordering::SeqCst);
         self.changed.notify_one();
@@ -52,14 +51,14 @@ async fn fixture(limit: usize) -> (HostChannels, TurnCallback, Connection) {
     )
 }
 
-async fn started(callback: &TurnCallback, count: usize) {
+async fn started(host: &HostChannels, callback: &TurnCallback, count: usize) {
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
         while callback.started.load(Ordering::SeqCst) < count {
             callback.changed.notified().await;
         }
     })
     .await
-    .expect("held first turn must not prevent another admitted turn");
+    .unwrap_or_else(|error| panic!("held first turn must not prevent another admitted turn: {error}; delivery failure: {:?}", host.owner.failure.lock().unwrap()));
 }
 
 #[tokio::test]
@@ -69,10 +68,10 @@ async fn bounded_dispatch_admits_other_turns_while_the_first_is_held() {
         host.deliver_inbound("telegram", serde_json::json!({"id":id}))
             .await;
     }
-    started(&callback, 2).await;
+    started(&host, &callback, 2).await;
     assert_eq!(callback.started.load(Ordering::SeqCst), 2);
     callback.release.add_permits(1);
-    started(&callback, 3).await;
+    started(&host, &callback, 3).await;
     callback.release.add_permits(2);
     host.flush().await.unwrap();
     host.shutdown().await.unwrap();
@@ -83,7 +82,7 @@ async fn stopped_dispatch_drains_accepted_turns_even_when_the_waiter_is_canceled
     let (host, callback, _server) = fixture(2).await;
     host.deliver_inbound("discord", serde_json::json!({"id":1}))
         .await;
-    started(&callback, 1).await;
+    started(&host, &callback, 1).await;
     let closing = host.clone();
     let waiter = tokio::spawn(async move { closing.shutdown().await });
     while !host.owner.terminal.load(Ordering::SeqCst) {
@@ -110,7 +109,7 @@ async fn failed_turns_do_not_stop_dispatch_and_flush_observes_accepted_frontier(
         .await;
     host.deliver_inbound("telegram", serde_json::json!({"id":2}))
         .await;
-    started(&callback, 2).await;
+    started(&host, &callback, 2).await;
     let flushing = host.clone();
     let waiter = tokio::spawn(async move { flushing.flush().await });
     tokio::task::yield_now().await;
@@ -125,7 +124,7 @@ async fn failed_turns_do_not_stop_dispatch_and_flush_observes_accepted_frontier(
     );
     host.deliver_inbound("telegram", serde_json::json!({"id":3}))
         .await;
-    started(&callback, 3).await;
+    started(&host, &callback, 3).await;
     callback.release.add_permits(1);
     host.shutdown().await.unwrap();
 }

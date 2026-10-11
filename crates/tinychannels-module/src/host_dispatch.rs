@@ -45,7 +45,7 @@ impl InboundDispatcher {
                     let result = async {
                         connection
                             .proxy(HOST_BUS_NAME, path.as_ref(), HOST_BUS_NAME)?
-                            .call_confidential::<()>(host_methods::PROCESS_INBOUND, message)
+                            .call::<()>(host_methods::PROCESS_INBOUND, message)
                             .await
                     }
                     .await;

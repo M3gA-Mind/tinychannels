@@ -172,6 +172,7 @@ pub const HOST_METHODS: [&str; 15] = [
     host_methods::TRANSCRIBE,
     host_methods::PUBLISH_EVENT,
     host_methods::DISPATCH_CONTROLLER_BACKEND,
+    host_methods::PROCESS_INBOUND,
 ];
 
 #[cfg(test)]

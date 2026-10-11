@@ -1170,9 +1170,9 @@ pub(crate) mod exports {
             "ChannelInteraction",
             "CheckChannelHealth",
             "StartChannelSupervised",
-            "ReserveRuntime", "StartRuntime", "StartRuntimeWithDispatch", "StopRuntime",
+            "ReserveRuntime", "StartRuntime", "StopRuntime",
             "DescribeConfiguredChannels", "StartOutboundChannel", "PrepareOutboundIntent",
-            "PrepareChannelInbound", "PrepareChannelIdentity",
+            "PrepareChannelInbound", "PrepareChannelIdentity", "StartRuntimeWithDispatch",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:
