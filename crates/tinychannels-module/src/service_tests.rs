@@ -1086,3 +1086,174 @@ async fn full_durable_queue_applies_backpressure_before_provider_send() {
         .clear();
     channels.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn configured_catalog_reports_webhook_mode_without_starting_a_listener() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    let channels = Channels::new(host.clone(), None);
+    let config = ChannelsConfig {
+        linq: Some(tinychannels_bus::config::LinqConfig {
+            api_token: "fixture-token".into(),
+            from_phone: "+15550000001".into(),
+            allowed_senders: vec![],
+        }),
+        ..Default::default()
+    };
+    let result = tinybus::Interface::call(
+        &channels,
+        &tinybus::MemberName::try_from("DescribeConfiguredChannels").unwrap(),
+        serde_json::json!([config, HttpProxyPolicy::default()]),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.as_array().unwrap().len(), 1);
+    assert_eq!(result[0]["name"], "linq");
+    assert_eq!(result[0]["ingress"], "external_webhook");
+    assert!(channels.running.lock().await.is_empty());
+    channels.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io() {
+    use tinychannels_bus::module_runtime::ChannelMessagePreparation;
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    let channels = Channels::new(host.clone(), None);
+    let legacy =
+        serde_json::json!({"text":"fixture", "idempotencyKey":"original-key", "threadId":"topic"});
+    let prepared = channels
+        .prepare_outbound_intent(
+            "telegram".into(),
+            ChannelMessagePreparation::Legacy(legacy.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(prepared.intent.idempotency_key, "original-key");
+    assert_eq!(prepared.legacy_message, legacy);
+    let typed = SendMessage::new("fixture", "recipient").in_thread(Some("topic".into()));
+    let expected = tinychannels::outbound_intent_from_send_message("telegram", &typed);
+    let prepared = channels
+        .prepare_outbound_intent("telegram".into(), ChannelMessagePreparation::Typed(typed))
+        .await
+        .unwrap();
+    assert_eq!(prepared.intent.idempotency_key, expected.idempotency_key);
+    assert_eq!(prepared.intent.thread_id.as_deref(), Some("topic"));
+    assert_eq!(
+        prepared.legacy_message["idempotencyKey"],
+        prepared.intent.idempotency_key
+    );
+    assert!(
+        channels
+            .prepare_outbound_intent(
+                "telegram".into(),
+                ChannelMessagePreparation::Legacy(serde_json::json!({"text":"a".repeat(tinychannels_bus::module_runtime::PREPARATION_MESSAGE_BYTES)}))
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        channels
+            .prepare_outbound_intent(
+                "telegram".into(),
+                ChannelMessagePreparation::Legacy(
+                    serde_json::json!({"text": "a".repeat(256*1024)})
+                ),
+            )
+            .await
+            .is_ok(),
+        "large legacy sends must not acquire a smaller callback-queue limit"
+    );
+    let original = tinychannels_bus::ChannelOutboundIntent {
+        channel_id: "telegram".into(),
+        idempotency_key: "existing-required-key".into(),
+        durability: tinychannels_bus::DeliveryDurability::Required,
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "fixture".into(),
+        },
+        ..Default::default()
+    };
+    let rendered = channels
+        .prepare_outbound_intent(
+            "telegram".into(),
+            ChannelMessagePreparation::Intent(original.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(rendered.intent.idempotency_key, original.idempotency_key);
+    assert_eq!(rendered.intent.durability, original.durability);
+    assert_eq!(rendered.legacy_message["text"], "fixture");
+    assert_eq!(
+        rendered.legacy_message["idempotencyKey"],
+        "existing-required-key"
+    );
+    assert!(
+        channels
+            .prepare_outbound_intent(
+                "discord".into(),
+                ChannelMessagePreparation::Intent(original)
+            )
+            .await
+            .is_err()
+    );
+    assert!(channels.running.lock().await.is_empty());
+    channels.shutdown().await.unwrap();
+}
+
+struct OutboundOnlyFixture(tokio::sync::mpsc::Sender<SendMessage>);
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for OutboundOnlyFixture {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+        self.0.send(message.clone()).await?;
+        Ok(())
+    }
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        panic!("external webhook providers must not start a native listener")
+    }
+}
+
+#[tokio::test]
+async fn outbound_only_worker_sends_and_joins_without_polling_webhook_listener() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    let (sent, mut received) = tokio::sync::mpsc::channel(1);
+    let running = Running::start_outbound(
+        Arc::new(OutboundOnlyFixture(sent)),
+        Arc::new(Hooks::default()),
+        host.clone(),
+    );
+    running
+        .send(SendMessage::new("fixture", "recipient"))
+        .await
+        .unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(received.recv().await.unwrap().content, "fixture");
+    assert!(!running.is_finished());
+    running.stop().await.unwrap();
+    assert!(running.is_finished());
+    assert!(
+        running
+            .send(SendMessage::new("closed", "recipient"))
+            .await
+            .is_err()
+    );
+    host.shutdown().await.unwrap();
+}

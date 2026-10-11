@@ -125,6 +125,7 @@ impl Channels {
         config: ChannelsConfig,
         http: &dyn HttpClientFactory,
         supervision: Option<tinychannels_bus::ChannelSupervisionPolicy>,
+        outbound_only: bool,
     ) -> BusResult<()> {
         let mut running = self.running.lock().await;
         if self.terminal.load(Ordering::SeqCst) {
@@ -154,7 +155,7 @@ impl Channels {
                 message: format!("channel {name} is not present in the supplied config"),
             })?;
 
-        if is_webhook_backed(&name, &config) {
+        if is_webhook_backed(&name, &config) && !outbound_only {
             return Err(BusError::MethodFailed {
                 name: NO_INGRESS_ERROR.to_owned(),
                 message: format!(
@@ -165,8 +166,14 @@ impl Channels {
             });
         }
 
+        if outbound_only && !is_webhook_backed(&name, &config) {
+            return Err(BusError::failed(
+                "outbound-only startup requires an external-webhook provider",
+            ));
+        }
         let provider = match supervision {
             Some(policy) => Running::start_supervised(channel, hooks, self.host.clone(), policy),
+            None if outbound_only => Running::start_outbound(channel, hooks, self.host.clone()),
             None => Running::start(channel, hooks, self.host.clone()),
         };
         running.insert(name.clone(), provider);
@@ -296,7 +303,7 @@ impl Channels {
 
     /// Connect `name` from `config` and start receiving.
     async fn start_channel(&self, name: String, config: ChannelsConfig) -> BusResult<()> {
-        self.start_channel_inner(name, config, &DefaultHttpClients, None)
+        self.start_channel_inner(name, config, &DefaultHttpClients, None, false)
             .await
     }
 
@@ -313,7 +320,8 @@ impl Channels {
     ) -> BusResult<()> {
         let http = ConfiguredHttpClients::new(proxy)
             .map_err(|_| BusError::failed("invalid host HTTP proxy policy"))?;
-        self.start_channel_inner(name, config, &http, None).await
+        self.start_channel_inner(name, config, &http, None, false)
+            .await
     }
 
     /// Start a provider with confidential configuration and module-owned reconnects.
@@ -331,8 +339,97 @@ impl Channels {
         }
         let http = ConfiguredHttpClients::new(proxy)
             .map_err(|_| BusError::failed("invalid host HTTP proxy policy"))?;
-        self.start_channel_inner(name, config, &http, Some(policy))
+        self.start_channel_inner(name, config, &http, Some(policy), false)
             .await
+    }
+
+    /// Resolve instance-specific facts without starting native listeners or webhook ingress.
+    #[tinybus(confidential)]
+    async fn describe_configured_channels(
+        &self,
+        config: ChannelsConfig,
+        proxy: HttpProxyPolicy,
+    ) -> BusResult<Vec<tinychannels_bus::module_runtime::ConfiguredChannelInfo>> {
+        use tinychannels_bus::module_runtime::{ChannelIngressKind, ConfiguredChannelInfo};
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(BusError::failed("channel module is shutting down"));
+        }
+        let http = ConfiguredHttpClients::new(proxy)
+            .map_err(|_| BusError::failed("invalid host HTTP proxy policy"))?;
+        let host: Arc<dyn ChannelHost> = Arc::new(tinychannels::NoopHost);
+        Ok(build_channels(&config, &host, &http)
+            .into_iter()
+            .map(|channel| ConfiguredChannelInfo {
+                name: channel.name().to_owned(),
+                ingress: if is_webhook_backed(channel.name(), &config) {
+                    ChannelIngressKind::ExternalWebhook
+                } else {
+                    ChannelIngressKind::Listener
+                },
+                interaction: tinychannels_bus::ChannelInteractionInfo {
+                    capabilities: channel.capabilities(),
+                    proactive_target: channel.proactive_target(),
+                    supports_reactions: channel.supports_reactions(),
+                    supports_draft_updates: channel.supports_draft_updates(),
+                },
+            })
+            .collect())
+    }
+
+    /// Keep webhook-backed providers sendable without claiming to serve their ingress.
+    #[tinybus(confidential)]
+    async fn start_outbound_channel(
+        &self,
+        name: String,
+        config: ChannelsConfig,
+        proxy: HttpProxyPolicy,
+    ) -> BusResult<()> {
+        let http = ConfiguredHttpClients::new(proxy)
+            .map_err(|_| BusError::failed("invalid host HTTP proxy policy"))?;
+        self.start_channel_inner(name, config, &http, None, true)
+            .await
+    }
+
+    /// Preserve the existing legacy and typed message conversion and hashing.
+    #[tinybus(confidential)]
+    async fn prepare_outbound_intent(
+        &self,
+        channel: String,
+        request: tinychannels_bus::module_runtime::ChannelMessagePreparation,
+    ) -> BusResult<tinychannels_bus::module_runtime::PreparedChannelIntent> {
+        use tinychannels_bus::module_runtime::{ChannelMessagePreparation, PreparedChannelIntent};
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(BusError::failed("channel module is shutting down"));
+        }
+        if channel.is_empty()
+            || channel.len() > 256
+            || serde_json::to_vec(&request)
+                .map_err(|_| BusError::failed("invalid channel message"))?
+                .len()
+                > tinychannels_bus::module_runtime::PREPARATION_MESSAGE_BYTES
+        {
+            return Err(BusError::failed("channel message exceeds its limit"));
+        }
+        let intent = match request {
+            ChannelMessagePreparation::Legacy(message) => {
+                tinychannels::outbound_intent_from_legacy_message(channel, message)
+            }
+            ChannelMessagePreparation::Typed(message) => {
+                tinychannels::outbound_intent_from_send_message(channel, &message)
+            }
+            ChannelMessagePreparation::Intent(intent) => {
+                if intent.channel_id != channel {
+                    return Err(BusError::failed(
+                        "intent destination does not match channel",
+                    ));
+                }
+                intent
+            }
+        };
+        Ok(PreparedChannelIntent {
+            legacy_message: tinychannels::legacy_message_value_from_outbound_intent(&intent),
+            intent,
+        })
     }
 
     /// Check configured providers using their native health methods without
@@ -956,6 +1053,7 @@ pub(crate) mod exports {
             "CheckChannelHealth",
             "StartChannelSupervised",
             "ReserveRuntime", "StartRuntime", "StopRuntime",
+            "DescribeConfiguredChannels", "StartOutboundChannel", "PrepareOutboundIntent",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:

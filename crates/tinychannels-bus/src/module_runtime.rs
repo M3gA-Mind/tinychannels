@@ -23,3 +23,43 @@ pub struct ChannelRuntimeReservation {
 #[cfg(test)]
 #[path = "module_runtime_tests.rs"]
 mod tests;
+
+/// How a configured provider receives incoming messages.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChannelIngressKind {
+    /// The module owns its native listener and reconnect loop.
+    Listener,
+    /// An external webhook supplies incoming traffic; outbound remains available.
+    ExternalWebhook,
+}
+
+/// Provider facts resolved by the module's configured factory without starting it.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ConfiguredChannelInfo {
+    pub name: String,
+    pub ingress: ChannelIngressKind,
+    pub interaction: crate::ChannelInteractionInfo,
+}
+
+/// Legacy message vocabulary whose normalization and hashing stay in the module.
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", content = "message", rename_all = "snake_case")]
+pub enum ChannelMessagePreparation {
+    /// Preserve the rich JSON accepted by the existing controller.
+    Legacy(serde_json::Value),
+    /// Preserve the existing typed channel send and its idempotency algorithm.
+    Typed(crate::SendMessage),
+    /// Render an already prepared intent without changing its key or durability.
+    Intent(crate::ChannelOutboundIntent),
+}
+
+/// An intent and the corresponding legacy backend JSON prepared inside the module.
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PreparedChannelIntent {
+    pub intent: crate::ChannelOutboundIntent,
+    pub legacy_message: serde_json::Value,
+}
+
+/// Encoded message limit leaving room for both returned payloads in a 16 MiB frame.
+pub const PREPARATION_MESSAGE_BYTES: usize = 8 * 1024 * 1024 - 4096;

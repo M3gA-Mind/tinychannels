@@ -20,6 +20,12 @@ pub const HOST_OBJECT_PATH: &str = "/ai/tinyhumans/tinychannels/ChannelsHost";
 
 /// One constant per method name on [`BUS_NAME`].
 pub mod methods {
+    /// Resolve provider facts from confidential hydrated configuration without listening.
+    pub const DESCRIBE_CONFIGURED_CHANNELS: &str = "DescribeConfiguredChannels";
+    /// Keep an external-webhook provider available for outbound operations.
+    pub const START_OUTBOUND_CHANNEL: &str = "StartOutboundChannel";
+    /// Normalize legacy messages and produce deterministic intent keys in the module.
+    pub const PREPARE_OUTBOUND_INTENT: &str = "PrepareOutboundIntent";
     /// Reserve one inert identity-scoped runtime with immutable callback paths.
     pub const RESERVE_RUNTIME: &str = "ReserveRuntime";
     /// Activate the private provider object for a known runtime handle.
@@ -107,7 +113,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 25] = [
+pub const METHODS: [&str; 28] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -133,6 +139,9 @@ pub const METHODS: [&str; 25] = [
     methods::RESERVE_RUNTIME,
     methods::START_RUNTIME,
     methods::STOP_RUNTIME,
+    methods::DESCRIBE_CONFIGURED_CHANNELS,
+    methods::START_OUTBOUND_CHANNEL,
+    methods::PREPARE_OUTBOUND_INTENT,
 ];
 
 /// All host-callback method names in declaration order.
