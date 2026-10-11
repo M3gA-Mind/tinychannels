@@ -6,18 +6,32 @@ use tinychannels::delivery::{
 use tinychannels_bus::module_delivery::{
     DELIVERY_PENDING_CAPACITY, DELIVERY_RECORD_BYTES, DELIVERY_RESULT_TTL_SECONDS,
 };
-use tinychannels_bus::names::{HOST_BUS_NAME, HOST_OBJECT_PATH, host_methods};
+#[cfg(test)]
+use tinychannels_bus::names::HOST_OBJECT_PATH;
+use tinychannels_bus::names::{HOST_BUS_NAME, host_methods};
 
 /// Typed callback adapter. A missing host method is an error; required sends
 /// never substitute an in-memory or no-op store.
 #[derive(Clone)]
 pub(crate) struct HostDeliveryStore {
     connection: Connection,
+    object_path: std::sync::Arc<str>,
 }
 
 impl HostDeliveryStore {
+    #[cfg(test)]
     pub(crate) fn new(connection: Connection) -> Self {
-        Self { connection }
+        Self {
+            connection,
+            object_path: HOST_OBJECT_PATH.into(),
+        }
+    }
+
+    pub(crate) fn from_host(host: &crate::host::HostChannels) -> Self {
+        Self {
+            connection: host.connection(),
+            object_path: host.object_path(),
+        }
     }
 
     async fn call<A, R>(&self, method: &str, args: A) -> Result<R, DeliveryQueueError>
@@ -26,7 +40,7 @@ impl HostDeliveryStore {
         R: serde::de::DeserializeOwned,
     {
         self.connection
-            .proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME)
+            .proxy(HOST_BUS_NAME, self.object_path.as_ref(), HOST_BUS_NAME)
             .map_err(store_error)?
             .call(method, args)
             .await
