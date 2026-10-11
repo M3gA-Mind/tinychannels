@@ -9,7 +9,8 @@ pub use tinychannels_bus::controllers::types;
 pub use credentials::{channel_credential_provider, parse_allowed_users};
 pub use definitions::{
     AuthModeSpec, ChannelAuthMode, ChannelCapability, ChannelDefinition, ChannelDefinitionExt,
-    FieldRequirement, all_channel_definitions, channel_config_connected, find_channel_definition,
+    FieldRequirement, all_channel_definitions, channel_config_connected,
+    channel_presence_connected, find_channel_definition,
 };
 pub use forms::{build_email_config, parse_email_senders, parse_optional_bool, parse_port_field};
 pub use schemas::{

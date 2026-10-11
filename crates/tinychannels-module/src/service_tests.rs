@@ -1584,6 +1584,31 @@ async fn host_control_facts_preserve_module_timeout_floor_and_overflow_classific
             .unwrap(),
         Response::Overflow(false)
     );
+    for (mode, expected) in [
+        (tinychannels_bus::ChannelAuthMode::BotToken, true),
+        (tinychannels_bus::ChannelAuthMode::ManagedDm, false),
+    ] {
+        assert_eq!(
+            service
+                .prepare_channel_control(Request::Connected {
+                    configured: vec!["telegram".into()],
+                    channel: "telegram".into(),
+                    mode
+                })
+                .await
+                .unwrap(),
+            Response::Connected(expected)
+        );
+    }
+    assert_eq!(
+        service
+            .prepare_channel_control(Request::Capabilities {
+                channel: "tg:fixture".into()
+            })
+            .await
+            .unwrap(),
+        Response::Capabilities(tinychannels::capabilities_for("tg:fixture"))
+    );
     service.shutdown().await.unwrap();
     assert!(
         service
@@ -1668,6 +1693,17 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
             "shell",
             "echo fixture"
         ))
+    );
+    assert_eq!(
+        service
+            .prepare_channel_control(Request::Acknowledgment {
+                content: "hello fixture".into()
+            })
+            .await
+            .unwrap(),
+        Response::Acknowledgment(
+            tinychannels::runtime::select_acknowledgment_reaction("hello fixture").to_owned()
+        )
     );
     service.shutdown().await.unwrap();
 }

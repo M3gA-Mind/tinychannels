@@ -23,11 +23,13 @@ pub(crate) async fn prepare(host: &HostChannels, request: Request) -> Result<Res
             max_in_flight: tinychannels::runtime::compute_max_in_flight_messages(listener_count),
         },
         Request::Connected {
-            config,
+            configured,
             channel,
             mode,
-        } => Response::Connected(tinychannels::controllers::channel_config_connected(
-            &config, &channel, mode,
+        } => Response::Connected(tinychannels::controllers::channel_presence_connected(
+            &configured,
+            &channel,
+            mode,
         )),
         Request::Overflow { message } => Response::Overflow(
             tinychannels::context::is_context_window_overflow_message(&message),
@@ -35,6 +37,9 @@ pub(crate) async fn prepare(host: &HostChannels, request: Request) -> Result<Res
         Request::Capabilities { channel } => {
             Response::Capabilities(tinychannels::capabilities_for(&channel))
         }
+        Request::Acknowledgment { content } => Response::Acknowledgment(
+            tinychannels::runtime::select_acknowledgment_reaction(&content).to_owned(),
+        ),
         Request::Approval {
             tool_name,
             action_summary,

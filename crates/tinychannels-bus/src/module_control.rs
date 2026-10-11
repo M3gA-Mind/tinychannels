@@ -1,6 +1,6 @@
 //! Requests for module-owned channel command and presentation preparation.
 use crate::module_remote::RemoteRoute;
-use crate::{ChannelCapabilities, ChannelMessage, ChannelsConfig};
+use crate::{ChannelCapabilities, ChannelMessage};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -27,7 +27,7 @@ pub enum ChannelControlRequest {
         listener_count: usize,
     },
     Connected {
-        config: Box<ChannelsConfig>,
+        configured: Vec<String>,
         channel: String,
         mode: crate::ChannelAuthMode,
     },
@@ -36,6 +36,9 @@ pub enum ChannelControlRequest {
     },
     Capabilities {
         channel: String,
+    },
+    Acknowledgment {
+        content: String,
     },
     Approval {
         tool_name: String,
@@ -59,4 +62,5 @@ pub enum ChannelControlResult {
     Overflow(bool),
     Capabilities(ChannelCapabilities),
     Approval(String),
+    Acknowledgment(String),
 }
