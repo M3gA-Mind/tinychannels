@@ -546,7 +546,8 @@ async fn host_adapters_propagate_callback_failures() {
         .await
         .unwrap();
     let host = HostChannels::new(connection);
-    // No host object is served: each adapter must surface the bus failure.
+    // Once host callbacks stop, adapters must surface admission failures.
+    host.shutdown().await.unwrap();
     assert!(
         ModuleAllowlist(host.clone())
             .persist_allowed_identity("fixture", "member")
