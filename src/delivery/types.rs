@@ -133,3 +133,7 @@ pub struct DurabilityNegotiation {
     pub durability: crate::channel::DeliveryDurability,
     pub missing_capabilities: Vec<crate::channel::DurableFinalDeliveryCapability>,
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;
