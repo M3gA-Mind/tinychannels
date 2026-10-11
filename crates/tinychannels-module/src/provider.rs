@@ -58,8 +58,13 @@ async fn dispatch_interaction(
                         biased;
                         _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
                         _ = tokio::time::sleep(interval) => {
-                            if let Err(error) = refresh_channel.start_typing(&refresh_recipient).await {
+                            let refresh = refresh_channel.start_typing(&refresh_recipient);
+                            tokio::select! {
+                                biased;
+                                _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
+                                result = refresh => if let Err(error) = result {
                                 tracing::debug!(channel = refresh_channel.name(), "typing refresh failed: {error}");
+                                }
                             }
                         }
                     }
