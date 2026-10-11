@@ -40,7 +40,9 @@ async fn dispatch_interaction(
             interval_secs,
         } => {
             if interval_secs == 0 || interval_secs > MAX_TYPING_REFRESH_INTERVAL_SECS {
-                return Err(Error::failed("typing refresh interval is outside its limit"));
+                return Err(Error::failed(
+                    "typing refresh interval is outside its limit",
+                ));
             }
             if !typing.contains_key(&recipient) && typing.len() >= MAX_TYPING_REFRESH_RECIPIENTS {
                 return Err(Error::failed("typing refresh capacity is full"));
@@ -318,7 +320,8 @@ impl Running {
                             .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
                             .map_err(|error| Error::failed(error.to_string())),
                         ProviderOperation::Interaction(interaction) => {
-                            dispatch_interaction(send_channel.clone(), interaction, &mut typing).await
+                            dispatch_interaction(send_channel.clone(), interaction, &mut typing)
+                                .await
                         }
                     };
                     let _ = command.reply.send(result);

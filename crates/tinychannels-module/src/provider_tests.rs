@@ -194,13 +194,15 @@ async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
         "the module refreshes the indicator after its interval"
     );
 
-    assert!(running
-        .interact(Op::StartTypingRefresh {
-            recipient: "other".into(),
-            interval_secs: 0,
-        })
-        .await
-        .is_err());
+    assert!(
+        running
+            .interact(Op::StartTypingRefresh {
+                recipient: "other".into(),
+                interval_secs: 0,
+            })
+            .await
+            .is_err()
+    );
     running
         .interact(Op::StopTypingRefresh {
             recipient: "room".into(),
