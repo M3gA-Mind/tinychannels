@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Additive module operation vocabulary; original version-one members remain.
-pub const MODULE_OPERATION_VERSION: (u32, u32) = (1, 14);
+pub const MODULE_OPERATION_VERSION: (u32, u32) = (1, 17);
 /// Maximum relay messages awaiting an outbound result.
 pub const RELAY_OUTBOUND_QUEUE: usize = 32;
 /// Maximum received relay frame/message bytes, before JSON allocation.

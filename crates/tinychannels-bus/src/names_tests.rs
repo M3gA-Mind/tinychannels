@@ -40,6 +40,9 @@ fn every_declared_member_appears_in_its_method_table() {
         methods::PREPARE_CHANNEL_INBOUND,
         methods::PREPARE_CHANNEL_IDENTITY,
         methods::EXECUTE_PROGRESSIVE,
+        methods::EXECUTE_REMOTE,
+        methods::PREPARE_CHANNEL_CONTROL,
+        methods::START_RUNTIME_WITH_DISPATCH,
         methods::PREPARE_RUNTIME_COMMAND,
     ] {
         assert!(METHODS.contains(&m), "{m} missing from METHODS");
@@ -59,6 +62,7 @@ fn every_declared_member_appears_in_its_method_table() {
         host_methods::TRANSCRIBE,
         host_methods::PUBLISH_EVENT,
         host_methods::DISPATCH_CONTROLLER_BACKEND,
+        host_methods::PROCESS_INBOUND,
     ] {
         assert!(HOST_METHODS.contains(&m), "{m} missing from HOST_METHODS");
     }
@@ -76,7 +80,7 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::CHANNEL_STATUS,
         ]
     );
-    assert_eq!(METHODS.len(), 32);
+    assert_eq!(METHODS.len(), 35);
     assert_eq!(
         &METHODS[13..],
         &[
@@ -98,6 +102,9 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::PREPARE_CHANNEL_INBOUND,
             methods::PREPARE_CHANNEL_IDENTITY,
             methods::EXECUTE_PROGRESSIVE,
+            methods::EXECUTE_REMOTE,
+            methods::PREPARE_CHANNEL_CONTROL,
+            methods::START_RUNTIME_WITH_DISPATCH,
             methods::PREPARE_RUNTIME_COMMAND,
         ]
     );

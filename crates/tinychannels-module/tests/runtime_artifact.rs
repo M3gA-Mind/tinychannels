@@ -99,10 +99,35 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             )
             .await
             .unwrap();
-        proxy
-            .call_confidential::<()>(methods::START_RUNTIME, runtime.handle.clone())
-            .await
-            .unwrap();
+        if runtime.handle == first.handle {
+            let request = (
+                runtime.handle.clone(),
+                tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 2 },
+            );
+            assert_eq!(
+                proxy
+                    .call::<()>(methods::START_RUNTIME_WITH_DISPATCH, request.clone())
+                    .await
+                    .unwrap_err()
+                    .wire_name(),
+                tinybus::Error::CONFIDENTIALITY_REQUIRED
+            );
+            proxy
+                .call_confidential::<()>(methods::START_RUNTIME_WITH_DISPATCH, request)
+                .await
+                .unwrap();
+            assert!(
+                proxy
+                    .call_confidential::<()>(methods::START_RUNTIME, runtime.handle.clone())
+                    .await
+                    .is_err()
+            );
+        } else {
+            proxy
+                .call_confidential::<()>(methods::START_RUNTIME, runtime.handle.clone())
+                .await
+                .unwrap();
+        }
     }
     let first_client = connection
         .proxy(BUS_NAME, &first.object_path, BUS_NAME)
@@ -168,6 +193,72 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         assert_eq!(result, ProgressiveResult::Closed);
     }
     assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 1);
+    use tinychannels_bus::module_remote::{RemoteOperation, RemoteOperationResult, RemoteRoute};
+    let remote_workspace = tempfile::tempdir().unwrap();
+    use tinychannels_bus::module_control::{ChannelControlRequest, ChannelControlResult};
+    let control = ChannelControlRequest::RuntimeLimits {
+        timeout_secs: 1,
+        listener_count: 100,
+    };
+    assert!(
+        first_client
+            .call::<ChannelControlResult>(methods::PREPARE_CHANNEL_CONTROL, control.clone())
+            .await
+            .is_err()
+    );
+    let facts: ChannelControlResult = first_client
+        .call_confidential(methods::PREPARE_CHANNEL_CONTROL, control)
+        .await
+        .unwrap();
+    assert_eq!(
+        facts,
+        ChannelControlResult::RuntimeLimits {
+            timeout_secs: 30,
+            max_in_flight: 64
+        }
+    );
+
+    let request = RemoteOperation::Execute {
+        workspace_dir: remote_workspace.path().to_str().unwrap().into(),
+        message: tinychannels_bus::ChannelMessage {
+            id: "fixture".into(),
+            sender: "sender".into(),
+            reply_target: "chat".into(),
+            content: "/HELP@FixtureBot".into(),
+            channel: "telegram".into(),
+            timestamp: 1,
+            thread_ts: None,
+            sender_name: None,
+        },
+        route: RemoteRoute {
+            provider: "fixture".into(),
+            model: "fixture".into(),
+        },
+        history_len: 0,
+    };
+    assert!(
+        first_client
+            .call::<RemoteOperationResult>(methods::EXECUTE_REMOTE, request.clone())
+            .await
+            .is_err()
+    );
+    let remote: RemoteOperationResult = first_client
+        .call_confidential(methods::EXECUTE_REMOTE, request)
+        .await
+        .unwrap();
+    assert!(remote.reply.unwrap().contains("Remote control:"));
+    let _: RemoteOperationResult = first_client
+        .call_confidential(
+            methods::EXECUTE_REMOTE,
+            RemoteOperation::MarkTurn {
+                workspace_dir: remote_workspace.path().to_str().unwrap().into(),
+                channel: "telegram".into(),
+                reply_target: "chat".into(),
+                busy: true,
+            },
+        )
+        .await
+        .unwrap();
     let identity = PrepareChannelIdentityRequest {
         channel: "telegram:bot".into(),
         sender: None,

@@ -1518,3 +1518,192 @@ async fn progressive_reply_is_opened_owned_and_closed_inside_the_module() {
             .is_err()
     );
 }
+
+#[tokio::test]
+async fn remote_help_is_parsed_and_rendered_inside_the_module() {
+    use tinychannels_bus::module_remote::{RemoteOperation, RemoteRoute};
+    let service = inbound_preparation_service().await;
+    let message = serde_json::from_value(serde_json::json!({
+        "id":"fixture", "sender":"sender", "reply_target":"chat",
+        "content":"/HELP@FixtureBot", "channel":"telegram", "timestamp":1
+    }))
+    .unwrap();
+    let result = service
+        .execute_remote(RemoteOperation::Execute {
+            workspace_dir: ".".into(),
+            message,
+            route: RemoteRoute {
+                provider: "fixture".into(),
+                model: "fixture".into(),
+            },
+            history_len: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        result.reply.as_deref(),
+        Some(tinychannels::remote::build_remote_help_response().as_str())
+    );
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn host_control_facts_preserve_module_timeout_floor_and_overflow_classification() {
+    use tinychannels_bus::module_control::{
+        ChannelControlRequest as Request, ChannelControlResult as Response,
+    };
+    let service = inbound_preparation_service().await;
+    assert_eq!(
+        service
+            .prepare_channel_control(Request::RuntimeLimits {
+                timeout_secs: 1,
+                listener_count: 100
+            })
+            .await
+            .unwrap(),
+        Response::RuntimeLimits {
+            timeout_secs: 30,
+            max_in_flight: 64
+        }
+    );
+    assert_eq!(
+        service
+            .prepare_channel_control(Request::Overflow {
+                message: "maximum context length exceeded".into()
+            })
+            .await
+            .unwrap(),
+        Response::Overflow(true)
+    );
+    assert_eq!(
+        service
+            .prepare_channel_control(Request::Overflow {
+                message: "ordinary failure".into()
+            })
+            .await
+            .unwrap(),
+        Response::Overflow(false)
+    );
+    for (mode, expected) in [
+        (tinychannels_bus::ChannelAuthMode::BotToken, true),
+        (tinychannels_bus::ChannelAuthMode::ManagedDm, false),
+    ] {
+        assert_eq!(
+            service
+                .prepare_channel_control(Request::Connected {
+                    configured: vec!["telegram".into()],
+                    channel: "telegram".into(),
+                    mode
+                })
+                .await
+                .unwrap(),
+            Response::Connected(expected)
+        );
+    }
+    assert_eq!(
+        service
+            .prepare_channel_control(Request::Capabilities {
+                channel: "tg:fixture".into()
+            })
+            .await
+            .unwrap(),
+        Response::Capabilities(tinychannels::capabilities_for("tg:fixture"))
+    );
+    service.shutdown().await.unwrap();
+    assert!(
+        service
+            .prepare_channel_control(Request::Approval {
+                tool_name: "shell".into(),
+                action_summary: "echo fixture".into()
+            })
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn route_preparation_preserves_aliases_history_resets_and_ordinary_messages() {
+    use tinychannels_bus::module_control::{
+        ChannelControlRequest as Request, ChannelControlResult as Response, ProviderDescriptor,
+    };
+    use tinychannels_bus::module_remote::RemoteRoute;
+    let service = inbound_preparation_service().await;
+    let request = |content: &str, channel: &str| {
+        Request::Route {
+        workspace_dir: ".".into(),
+        message: serde_json::from_value(serde_json::json!({"id":"fixture","sender":"sender","reply_target":"chat","content":content,"channel":channel,"timestamp":1})).unwrap(),
+        route: RemoteRoute { provider: "old".into(), model: "model".into() }, history_len: 3,
+        providers: vec![ProviderDescriptor { name: "approved".into(), aliases: vec!["alias".into()] }],
+    }
+    };
+    assert_eq!(service.prepare_channel_control(request("/models ALIAS", "telegram")).await.unwrap(), Response::Route {
+        reply: Some("Provider switched to `approved` for this sender session. Current model is `model`.\nUse `/model <model-id>` to set a provider-compatible model.".into()),
+        next_route: Some(RemoteRoute { provider: "approved".into(), model: "model".into() }), clear_history: true,
+    });
+    assert_eq!(
+        service
+            .prepare_channel_control(request("/model `next`", "discord"))
+            .await
+            .unwrap(),
+        Response::Route {
+            reply: Some(
+                "Model switched to `next` for provider `old` in this sender session.".into()
+            ),
+            next_route: Some(RemoteRoute {
+                provider: "old".into(),
+                model: "next".into()
+            }),
+            clear_history: true,
+        }
+    );
+    for (content, channel) in [("ordinary message", "telegram"), ("/model next", "email")] {
+        assert_eq!(
+            service
+                .prepare_channel_control(request(content, channel))
+                .await
+                .unwrap(),
+            Response::Route {
+                reply: None,
+                next_route: None,
+                clear_history: false
+            }
+        );
+    }
+    let Response::Route {
+        reply: Some(help),
+        next_route: None,
+        clear_history: false,
+    } = service
+        .prepare_channel_control(request("/HELP@FixtureBot", "telegram"))
+        .await
+        .unwrap()
+    else {
+        panic!("missing remote help")
+    };
+    assert_eq!(help, tinychannels::remote::build_remote_help_response());
+    assert_eq!(
+        service
+            .prepare_channel_control(Request::Approval {
+                tool_name: "shell".into(),
+                action_summary: "echo fixture".into()
+            })
+            .await
+            .unwrap(),
+        Response::Approval(tinychannels::approvals::format_approval_prompt(
+            "shell",
+            "echo fixture"
+        ))
+    );
+    assert_eq!(
+        service
+            .prepare_channel_control(Request::Acknowledgment {
+                content: "hello fixture".into()
+            })
+            .await
+            .unwrap(),
+        Response::Acknowledgment(
+            tinychannels::runtime::select_acknowledgment_reaction("hello fixture").to_owned()
+        )
+    );
+    service.shutdown().await.unwrap();
+}

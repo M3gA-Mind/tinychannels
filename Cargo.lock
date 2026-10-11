@@ -2582,7 +2582,7 @@ dependencies = [
 
 [[package]]
 name = "tinychannels"
-version = "0.1.23"
+version = "0.1.26"
 dependencies = [
  "anyhow",
  "async-imap",
@@ -2632,7 +2632,7 @@ dependencies = [
 
 [[package]]
 name = "tinychannels-bus"
-version = "0.1.23"
+version = "0.1.26"
 dependencies = [
  "base64 0.23.1",
  "schemars",
@@ -2644,7 +2644,7 @@ dependencies = [
 
 [[package]]
 name = "tinychannels-module"
-version = "0.1.23"
+version = "0.1.26"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2655,6 +2655,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
  "tinybus",
  "tinybus-module",
  "tinychannels",
@@ -2667,7 +2668,7 @@ dependencies = [
 
 [[package]]
 name = "tinychannels-runtime"
-version = "0.1.23"
+version = "0.1.26"
 dependencies = [
  "anyhow",
  "async-trait",

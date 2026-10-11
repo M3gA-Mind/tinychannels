@@ -153,6 +153,267 @@ async fn provider_actor_orders_interactions_with_sends_and_rejects_after_stop() 
     ));
 }
 
+#[tokio::test(start_paused = true)]
+async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
+    use tinychannels_bus::ChannelInteraction as Op;
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channel = Arc::new(InteractionChannel::default());
+    let running = Running::start(
+        channel.clone(),
+        Arc::new(Hooks::default()),
+        HostChannels::new(connection.clone()),
+    );
+
+    running
+        .interact(Op::StartTyping {
+            recipient: "room".into(),
+        })
+        .await
+        .unwrap();
+    let first_handle = running
+        .interact(Op::StartTypingRefresh {
+            recipient: "room".into(),
+            interval_secs: 4,
+        })
+        .await
+        .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::TypingRefresh {
+        handle: first_handle,
+    } = first_handle
+    else {
+        panic!("provider did not return a refresh handle")
+    };
+    let second_handle = running
+        .interact(Op::StartTypingRefresh {
+            recipient: "room".into(),
+            interval_secs: 4,
+        })
+        .await
+        .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::TypingRefresh {
+        handle: second_handle,
+    } = second_handle
+    else {
+        panic!("provider did not return a refresh handle")
+    };
+    assert_ne!(first_handle, second_handle);
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(4)).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        channel.0.lock().unwrap().len(),
+        3,
+        "both refresh handles remain independently active"
+    );
+
+    assert!(
+        running
+            .interact(Op::StartTypingRefresh {
+                recipient: "other".into(),
+                interval_secs: 0,
+            })
+            .await
+            .is_err()
+    );
+    running
+        .interact(Op::StopTypingRefresh {
+            handle: first_handle,
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(4)).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(channel.0.lock().unwrap().len(), 4);
+    running
+        .interact(Op::StopTypingRefresh {
+            handle: second_handle.clone(),
+        })
+        .await
+        .unwrap();
+    running
+        .interact(Op::StopTyping {
+            recipient: "room".into(),
+        })
+        .await
+        .unwrap();
+    running.stop().await.unwrap();
+    assert!(matches!(
+        running
+            .interact(Op::StopTypingRefresh {
+                handle: second_handle,
+            })
+            .await,
+        Err(RunningSendError::NotDispatched(_))
+    ));
+    assert_eq!(
+        *channel.0.lock().unwrap(),
+        [
+            "typing:room",
+            "typing:room",
+            "typing:room",
+            "typing:room",
+            "stop:room"
+        ]
+    );
+    connection.close().await.unwrap();
+}
+
+struct PendingTypingChannel {
+    entered: Arc<tokio::sync::Notify>,
+    dropped: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl Channel for PendingTypingChannel {
+    fn name(&self) -> &str {
+        "pending-typing"
+    }
+
+    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+
+    async fn start_typing(&self, _: &str) -> anyhow::Result<()> {
+        struct DropMark(Arc<std::sync::atomic::AtomicUsize>);
+        impl Drop for DropMark {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let _drop_mark = DropMark(Arc::clone(&self.dropped));
+        self.entered.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn typing_refresh_stop_and_shutdown_cancel_inflight_provider_calls() {
+    use tinychannels_bus::ChannelInteraction as Op;
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let channel = Arc::new(PendingTypingChannel {
+        entered: Arc::clone(&entered),
+        dropped: Arc::clone(&dropped),
+    });
+    let running = Running::start(
+        channel,
+        Arc::new(Hooks::default()),
+        HostChannels::new(connection.clone()),
+    );
+
+    let stop_handle = running
+        .interact(Op::StartTypingRefresh {
+            recipient: "stop-case".into(),
+            interval_secs: 1,
+        })
+        .await
+        .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::TypingRefresh {
+        handle: stop_handle,
+    } = stop_handle
+    else {
+        panic!("provider did not return a refresh handle")
+    };
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(1)).await;
+    entered.notified().await;
+    running
+        .interact(Op::StopTypingRefresh {
+            handle: stop_handle,
+        })
+        .await
+        .unwrap();
+    assert_eq!(dropped.load(Ordering::SeqCst), 1);
+
+    let shutdown_handle = running
+        .interact(Op::StartTypingRefresh {
+            recipient: "shutdown-case".into(),
+            interval_secs: 1,
+        })
+        .await
+        .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle: _ } = shutdown_handle
+    else {
+        panic!("provider did not return a refresh handle")
+    };
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(1)).await;
+    entered.notified().await;
+    running.stop().await.unwrap();
+    assert_eq!(dropped.load(Ordering::SeqCst), 2);
+    connection.close().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn typing_refresh_capacity_counts_handles_not_recipients() {
+    use tinychannels_bus::ChannelInteraction as Op;
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channel = Arc::new(InteractionChannel::default());
+    let running = Running::start(
+        channel,
+        Arc::new(Hooks::default()),
+        HostChannels::new(connection.clone()),
+    );
+    let mut handles = Vec::new();
+    for _ in 0..MAX_TYPING_REFRESH_RECIPIENTS {
+        let result = running
+            .interact(Op::StartTypingRefresh {
+                recipient: "same-room".into(),
+                interval_secs: MAX_TYPING_REFRESH_INTERVAL_SECS,
+            })
+            .await
+            .unwrap();
+        let tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle } = result else {
+            panic!("provider did not return a refresh handle")
+        };
+        handles.push(handle);
+    }
+    assert!(
+        running
+            .interact(Op::StartTypingRefresh {
+                recipient: "same-room".into(),
+                interval_secs: MAX_TYPING_REFRESH_INTERVAL_SECS,
+            })
+            .await
+            .is_err()
+    );
+    for handle in handles {
+        running
+            .interact(Op::StopTypingRefresh { handle })
+            .await
+            .unwrap();
+    }
+    running.stop().await.unwrap();
+    connection.close().await.unwrap();
+}
+
 struct ReconnectingChannel {
     attempts: StdMutex<Vec<oneshot::Sender<()>>>,
 }

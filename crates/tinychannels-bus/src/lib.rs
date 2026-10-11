@@ -10,6 +10,7 @@ pub mod error;
 pub mod health;
 pub mod host;
 pub mod http;
+pub mod module_control;
 pub mod module_controller;
 pub mod module_delivery;
 pub mod module_email;
@@ -17,6 +18,7 @@ pub mod module_inbound;
 pub mod module_interaction;
 pub mod module_progressive;
 pub mod module_relay;
+pub mod module_remote;
 pub mod module_routes;
 pub mod module_runtime;
 pub mod module_supervision;
@@ -56,4 +58,4 @@ pub use module_interaction::{
 
 pub use module_supervision::ChannelSupervisionPolicy;
 
-pub use module_runtime::ChannelRuntimeReservation;
+pub use module_runtime::{ChannelRuntimeDispatchPolicy, ChannelRuntimeReservation};

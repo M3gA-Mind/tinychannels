@@ -21,8 +21,10 @@ use tokio::task::JoinHandle;
 
 const MAX_ACTIVE: usize = 16;
 const MAX_RETAINED: usize = 128;
-const MAX_REQUEST: usize = 128 * 1024;
 const MAX_CONTENT: usize = 384 * 1024;
+// Both text and thinking can fill their content budget in one feed. JSON
+// escaping expands a byte to at most six bytes; retain bounded envelope space.
+const MAX_REQUEST: usize = MAX_CONTENT * 12 + 64 * 1024;
 const TURN_LIFETIME: Duration = Duration::from_secs(180);
 
 struct Sender(HostChannels);
@@ -174,6 +176,9 @@ impl Replies {
                 Ok(ProgressiveResult::Updated)
             }
             ProgressiveCommand::Finish { handle, text } => {
+                if text.len() > MAX_CONTENT {
+                    return Err(Error::failed("progressive content exceeds its limit"));
+                }
                 let entry = self.entry(&handle).await?;
                 close_entry(entry, text, false).await?;
                 Ok(ProgressiveResult::Closed)

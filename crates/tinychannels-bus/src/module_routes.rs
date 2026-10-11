@@ -4,14 +4,7 @@ use crate::context::ChannelRouteSelection;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-/// Provider identity and accepted command aliases supplied by the host.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ProviderDescriptor {
-    /// Canonical provider name.
-    pub name: String,
-    /// Case-insensitive alternate names.
-    pub aliases: Vec<String>,
-}
+pub use crate::module_control::ProviderDescriptor;
 
 /// Host-resolved catalog snapshot; no storage paths cross the contract.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
