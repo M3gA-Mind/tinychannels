@@ -787,3 +787,80 @@ async fn absent_optional_host_ignores_status_but_reports_inbound_failure() {
     assert!(host.flush().await.is_err());
     host.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn runtime_callbacks_and_delivery_storage_do_not_follow_the_default_user() {
+    let (legacy, default_user, server) = connected_host().await;
+    let mut runtime_user = default_user.clone();
+    runtime_user.events = Arc::new(Mutex::new(Vec::new()));
+    runtime_user.delivery_scope = Arc::new(Mutex::new("runtime-user".into()));
+    let path = format!("{HOST_OBJECT_PATH}/runtime_a");
+    server
+        .serve_at(path.clone().try_into().unwrap(), runtime_user.clone())
+        .await
+        .unwrap();
+    let scoped = HostChannels::new_at(legacy.connection(), path);
+    scoped
+        .deliver_inbound("telegram", serde_json::json!({"text":"private"}))
+        .await;
+    scoped.report_status("telegram", "connected", None).await;
+    scoped
+        .persist_allowed_identity("telegram", "allowed")
+        .await
+        .unwrap();
+    scoped.flush().await.unwrap();
+    assert!(
+        default_user.events.lock().await.is_empty(),
+        "runtime callbacks must never reach the current default user"
+    );
+    assert_eq!(
+        runtime_user.events.lock().await.as_slice(),
+        [
+            "inbound:telegram:private",
+            "status:telegram:connected",
+            "allowlist:telegram:allowed"
+        ]
+    );
+    use tinychannels::delivery::DeliveryQueueStore as _;
+    let scoped_store = crate::delivery::HostDeliveryStore::from_host(&scoped);
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "runtime-key".into(),
+        channel_id: "telegram".into(),
+        ..Default::default()
+    };
+    let entry = tinychannels::delivery::QueuedDelivery::new("runtime-key", intent, 42);
+    scoped_store.save_pending(entry.clone()).await.unwrap();
+    assert_eq!(
+        scoped_store.load_pending("runtime-key").await.unwrap(),
+        Some(entry)
+    );
+    let default_store = crate::delivery::HostDeliveryStore::from_host(&legacy);
+    assert!(default_store.load_pending_all().await.unwrap().is_empty());
+    scoped.shutdown().await.unwrap();
+    legacy.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn runtime_only_callback_host_has_no_legacy_delivery_store_and_refuses_required_send() {
+    use tinychannels::delivery::{
+        DeliveryQueueError, DeliveryQueueStore as _, QueuedDelivery, enqueue_delivery,
+    };
+    let (host, _callback, server) = connected_host().await;
+    server.unserve(&HOST_OBJECT_PATH.try_into().unwrap()).await;
+    let store = crate::delivery::HostDeliveryStore::from_host(&host);
+    assert!(matches!(
+        store.load_pending_all().await,
+        Err(DeliveryQueueError::Unsupported)
+    ));
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "missing-store".into(),
+        durability: tinychannels_bus::DeliveryDurability::Required,
+        ..Default::default()
+    };
+    assert!(
+        enqueue_delivery(&store, QueuedDelivery::new("missing-store", intent, 0))
+            .await
+            .is_err()
+    );
+    host.shutdown().await.unwrap();
+}

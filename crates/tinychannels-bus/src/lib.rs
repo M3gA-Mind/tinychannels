@@ -15,6 +15,7 @@ pub mod module_delivery;
 pub mod module_email;
 pub mod module_interaction;
 pub mod module_relay;
+pub mod module_runtime;
 pub mod module_supervision;
 pub mod names;
 pub mod relay;
@@ -51,3 +52,5 @@ pub use module_interaction::{
 };
 
 pub use module_supervision::ChannelSupervisionPolicy;
+
+pub use module_runtime::ChannelRuntimeReservation;

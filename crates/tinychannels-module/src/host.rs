@@ -111,6 +111,7 @@ pub struct HostChannels {
     outbox: mpsc::Sender<Notification>,
     owner: Arc<Owner>,
     connection: Connection,
+    object_path: Arc<str>,
 }
 impl std::fmt::Debug for HostChannels {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -123,6 +124,13 @@ impl HostChannels {
     /// Start one owned callback consumer. Explicit shutdown drains and joins it.
     #[must_use]
     pub fn new(connection: Connection) -> Self {
+        Self::new_at(connection, HOST_OBJECT_PATH.to_owned())
+    }
+
+    /// Bind all callbacks to an immutable runtime-specific host object.
+    pub(crate) fn new_at(connection: Connection, object_path: String) -> Self {
+        let object_path: Arc<str> = object_path.into();
+        let callback_path = object_path.clone();
         let (outbox, mut inbox) = mpsc::channel(OUTBOX_CAPACITY);
         let failure = Arc::new(StdMutex::new(None));
         let task_failure = failure.clone();
@@ -145,7 +153,7 @@ impl HostChannels {
                     let result = async {
                         let proxy = callback_connection.proxy(
                             HOST_BUS_NAME,
-                            HOST_OBJECT_PATH,
+                            callback_path.as_ref(),
                             HOST_BUS_NAME,
                         )?;
                         proxy
@@ -160,7 +168,7 @@ impl HostChannels {
                     let result = async {
                         let proxy = callback_connection.proxy(
                             HOST_BUS_NAME,
-                            HOST_OBJECT_PATH,
+                            callback_path.as_ref(),
                             HOST_BUS_NAME,
                         )?;
                         proxy
@@ -190,7 +198,7 @@ impl HostChannels {
                 let result = async {
                     let proxy = callback_connection.proxy(
                         HOST_BUS_NAME,
-                        HOST_OBJECT_PATH,
+                        callback_path.as_ref(),
                         HOST_BUS_NAME,
                     )?;
                     match notification {
@@ -226,6 +234,7 @@ impl HostChannels {
         Self {
             outbox,
             connection,
+            object_path,
             owner: Arc::new(Owner {
                 worker: Mutex::new(Some(worker)),
                 terminal: AtomicBool::new(false),
@@ -235,6 +244,10 @@ impl HostChannels {
                 failure,
             }),
         }
+    }
+
+    pub(crate) fn object_path(&self) -> Arc<str> {
+        self.object_path.clone()
     }
 
     pub(crate) fn connection(&self) -> Connection {
@@ -264,12 +277,13 @@ impl HostChannels {
         }
         let owner = self.owner.clone();
         let connection = self.connection.clone();
+        let object_path = self.object_path.clone();
         let (reply, wait) = oneshot::channel();
         drop(publication);
         tokio::spawn(async move {
             let _active = ActiveHostCallback(owner);
             let result = async {
-                let proxy = connection.proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME)?;
+                let proxy = connection.proxy(HOST_BUS_NAME, object_path.as_ref(), HOST_BUS_NAME)?;
                 proxy.call(host_methods::TRANSCRIBE, request).await
             }
             .await;
@@ -300,12 +314,13 @@ impl HostChannels {
         }
         let owner = self.owner.clone();
         let connection = self.connection.clone();
+        let object_path = self.object_path.clone();
         let (reply, wait) = oneshot::channel();
         drop(publication);
         tokio::spawn(async move {
             let _active = ActiveHostCallback(owner);
             let result = async {
-                let proxy = connection.proxy(HOST_BUS_NAME, HOST_OBJECT_PATH, HOST_BUS_NAME)?;
+                let proxy = connection.proxy(HOST_BUS_NAME, object_path.as_ref(), HOST_BUS_NAME)?;
                 let result: ChannelBackendResult = proxy
                     .call(host_methods::DISPATCH_CONTROLLER_BACKEND, request)
                     .await?;

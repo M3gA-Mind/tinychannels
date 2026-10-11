@@ -20,6 +20,12 @@ pub const HOST_OBJECT_PATH: &str = "/ai/tinyhumans/tinychannels/ChannelsHost";
 
 /// One constant per method name on [`BUS_NAME`].
 pub mod methods {
+    /// Reserve one inert identity-scoped runtime with immutable callback paths.
+    pub const RESERVE_RUNTIME: &str = "ReserveRuntime";
+    /// Activate the private provider object for a known runtime handle.
+    pub const START_RUNTIME: &str = "StartRuntime";
+    /// Stop and join all resources belonging to one runtime handle.
+    pub const STOP_RUNTIME: &str = "StopRuntime";
     /// Start a provider with module-owned reconnect supervision and host-selected timing.
     pub const START_CHANNEL_SUPERVISED: &str = "StartChannelSupervised";
     /// Check configured providers without starting listeners; inputs are confidential.
@@ -101,7 +107,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 22] = [
+pub const METHODS: [&str; 25] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -124,6 +130,9 @@ pub const METHODS: [&str; 22] = [
     methods::CHANNEL_INTERACTION,
     methods::CHECK_CHANNEL_HEALTH,
     methods::START_CHANNEL_SUPERVISED,
+    methods::RESERVE_RUNTIME,
+    methods::START_RUNTIME,
+    methods::STOP_RUNTIME,
 ];
 
 /// All host-callback method names in declaration order.

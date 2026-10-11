@@ -47,5 +47,32 @@ and proxy credentials require a confidential call.
 drains accepted sends and inbound callbacks, and runs native shutdown hooks.
 Legacy `StartChannel` and `StartChannelConfigured` preserve their original
 arguments and one-listener behavior. The new member is advertised in contract
-revision 9 and module operation version 1.10. Webhook-only providers still
+revision 10 and module operation version 1.11. Webhook-only providers still
 require the separately pending ingress surface.
+
+
+### Identity-scoped runtime leases
+
+Hosts reserve an opaque runtime before installing its immutable callback
+adapter, activate the runtime, and use the existing Channels operations at the
+returned private object path. Provider names are local to that runtime.
+`StopRuntime` cancels and joins pending activation, drains providers, relay,
+delivery and callbacks, then removes only that runtime's object. Sign-out stops
+the old handle without shutting down the cached process-wide module.
+
+Reservations are inert, limited to sixteen, and expire after sixty seconds
+unless activated. Activation and cleanup remain owned when a bus reply waiter
+is canceled. All callback methods retain their existing arities; each runtime
+routes them to its reserved host object path, including durable-delivery and
+controller callbacks. Hosts must bind that object to the original identity and
+keep it registered until cleanup completes, rather than resolving the current
+signed-in user's credentials in a callback.
+
+`ReserveRuntime`, `StartRuntime` and `StopRuntime` are confidential additive
+operations. Original singleton operations remain available for older callers;
+runtime objects cannot allocate nested runtimes. Core shutdown drains both
+legacy singleton resources and every identity-scoped runtime.
+
+Runtime object publication consumes TinyBus 0.1.3's upstream dispatch fix:
+TinyBus snapshots the target and drops the object-tree lock before invoking
+module code. The module retains ABI v1 compatibility with older hosts.

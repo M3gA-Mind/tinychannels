@@ -22,4 +22,4 @@ if [[ ! -f "$artifact" ]]; then
 fi
 
 TINYCHANNELS_MODULE_ARTIFACT="$artifact" \
-  cargo test -p tinychannels-module --test module_artifact -- --ignored --nocapture
+  cargo test -p tinychannels-module --test module_artifact --test runtime_artifact -- --ignored --nocapture

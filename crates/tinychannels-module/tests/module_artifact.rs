@@ -218,6 +218,173 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
             tinychannels_bus::BUS_NAME,
         )
         .unwrap();
+    // Identity scopes use separate objects and preserve all callback arities.
+    assert_eq!(
+        proxy
+            .call::<tinychannels_bus::ChannelRuntimeReservation>("ReserveRuntime", ())
+            .await
+            .unwrap_err()
+            .wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    let first: tinychannels_bus::ChannelRuntimeReservation =
+        proxy.call_confidential("ReserveRuntime", ()).await.unwrap();
+    let second: tinychannels_bus::ChannelRuntimeReservation =
+        proxy.call_confidential("ReserveRuntime", ()).await.unwrap();
+    let first_callbacks = Callback(
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(Mutex::new(DeliveryState::default())),
+    );
+    let second_callbacks = Callback(
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(Mutex::new(DeliveryState::default())),
+    );
+    connection
+        .serve_at(
+            first.host_object_path.clone().try_into().unwrap(),
+            first_callbacks.clone(),
+        )
+        .await
+        .unwrap();
+    connection
+        .serve_at(
+            second.host_object_path.clone().try_into().unwrap(),
+            second_callbacks.clone(),
+        )
+        .await
+        .unwrap();
+    for scope in [&first, &second] {
+        assert_eq!(
+            proxy
+                .call::<()>("StartRuntime", scope.handle.clone())
+                .await
+                .unwrap_err()
+                .wire_name(),
+            tinybus::Error::CONFIDENTIALITY_REQUIRED
+        );
+        proxy
+            .call_confidential::<()>("StartRuntime", scope.handle.clone())
+            .await
+            .unwrap();
+    }
+    let first_proxy = connection
+        .proxy(
+            tinychannels_bus::BUS_NAME,
+            &first.object_path,
+            tinychannels_bus::BUS_NAME,
+        )
+        .unwrap();
+    let second_proxy = connection
+        .proxy(
+            tinychannels_bus::BUS_NAME,
+            &second.object_path,
+            tinychannels_bus::BUS_NAME,
+        )
+        .unwrap();
+    let nested = first_proxy
+        .call_confidential::<tinychannels_bus::ChannelRuntimeReservation>("ReserveRuntime", ())
+        .await
+        .unwrap_err();
+    assert_eq!(nested.wire_name(), tinybus::Error::FAILED);
+    assert_eq!(
+        nested.wire_message(),
+        "nested channel runtimes are unavailable"
+    );
+
+    for (scoped, key) in [
+        (&first_proxy, "first-scope"),
+        (&second_proxy, "second-scope"),
+    ] {
+        let result = scoped
+            .call_confidential::<tinychannels_bus::ChannelControllerResult>(
+                "ChannelController",
+                tinychannels_bus::ChannelControllerRequest::SendReaction {
+                    config: ChannelsConfig::default(),
+                    channel: "telegram".into(),
+                    reaction: serde_json::json!({"message_id":key,"emoji":"ok"}),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            result,
+            tinychannels_bus::ChannelControllerResult::SendReaction(_)
+        ));
+        let intent = ChannelOutboundIntent {
+            idempotency_key: key.into(),
+            channel_id: "not-running".into(),
+            durability: tinychannels_bus::DeliveryDurability::Required,
+            payload: OutboundPayload::Text {
+                text: "scoped delivery".into(),
+            },
+            ..Default::default()
+        };
+        assert!(
+            scoped
+                .call::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                    "SendChannelIntent",
+                    ("not-running", intent)
+                )
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(first_callbacks.0.lock().await.len(), 1);
+    assert_eq!(second_callbacks.0.lock().await.len(), 1);
+    assert!(callbacks.0.lock().await.is_empty());
+    assert!(
+        first_callbacks
+            .1
+            .lock()
+            .await
+            .pending
+            .contains_key("first-scope")
+    );
+    assert!(
+        !first_callbacks
+            .1
+            .lock()
+            .await
+            .pending
+            .contains_key("second-scope")
+    );
+    assert!(
+        second_callbacks
+            .1
+            .lock()
+            .await
+            .pending
+            .contains_key("second-scope")
+    );
+    assert!(callbacks.1.lock().await.pending.is_empty());
+    assert_eq!(
+        proxy
+            .call::<()>("StopRuntime", first.handle.clone())
+            .await
+            .unwrap_err()
+            .wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    proxy
+        .call_confidential::<()>("StopRuntime", first.handle.clone())
+        .await
+        .unwrap();
+    assert!(
+        first_proxy
+            .call::<Vec<String>>("ListChannels", ())
+            .await
+            .is_err()
+    );
+    let _: Vec<String> = second_proxy.call("ListChannels", ()).await.unwrap();
+    proxy
+        .call_confidential::<()>("StopRuntime", second.handle.clone())
+        .await
+        .unwrap();
+    proxy
+        .call_confidential::<()>("StopRuntime", first.handle)
+        .await
+        .unwrap();
+
     let interaction = tinychannels_bus::ChannelInteractionRequest {
         channel: "missing".into(),
         interaction: tinychannels_bus::ChannelInteraction::StartTyping {

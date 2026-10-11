@@ -23,6 +23,7 @@ mod interaction;
 mod prepare_connect;
 mod provider;
 mod relay;
+mod runtime;
 mod service;
 
 /// Constructs this module for registration with an in-process TinyBus host.

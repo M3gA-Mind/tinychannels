@@ -93,6 +93,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         running: Arc::new(Mutex::new(running)),
         relays: Arc::new(Relays::new(host.clone())),
         terminal: AtomicBool::new(false),
+        runtimes: None,
         shutdown_task: Mutex::new(None),
         delivery_admission: Arc::new(Mutex::new(())),
     };
@@ -145,6 +146,7 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
         running: Arc::new(Mutex::new(running)),
         relays: Arc::new(Relays::new(host.clone())),
         terminal: AtomicBool::new(false),
+        runtimes: None,
         shutdown_task: Mutex::new(None),
         delivery_admission: Arc::new(Mutex::new(())),
     };
@@ -444,6 +446,7 @@ async fn channels_with_store(
         running: Arc::new(Mutex::new(running)),
         relays,
         terminal: AtomicBool::new(false),
+        runtimes: None,
         shutdown_task: Mutex::new(None),
         delivery_admission: Arc::new(Mutex::new(())),
     };

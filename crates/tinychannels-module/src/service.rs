@@ -88,13 +88,14 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
 }
 
 /// The served object.
-struct Channels {
-    host: HostChannels,
+pub(crate) struct Channels {
+    pub(crate) host: HostChannels,
     email: EmailSender,
     /// Shared with each listener task so it can retire its own entry.
-    running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    pub(crate) running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
     relays: Arc<Relays>,
-    terminal: AtomicBool,
+    pub(crate) terminal: AtomicBool,
+    runtimes: Option<Arc<crate::runtime::Runtimes>>,
     shutdown_task: Mutex<Option<JoinHandle<BusResult<()>>>>,
     delivery_admission: Arc<Mutex<()>>,
 }
@@ -105,6 +106,19 @@ struct ModuleDeliveryHandler {
 }
 
 impl Channels {
+    pub(crate) fn new(host: HostChannels, runtimes: Option<Arc<crate::runtime::Runtimes>>) -> Self {
+        Self {
+            relays: Arc::new(Relays::new(host.clone())),
+            host,
+            email: EmailSender::new(),
+            running: Arc::new(Mutex::new(HashMap::new())),
+            terminal: AtomicBool::new(false),
+            runtimes,
+            shutdown_task: Mutex::new(None),
+            delivery_admission: Arc::new(Mutex::new(())),
+        }
+    }
+
     async fn start_channel_inner(
         &self,
         name: String,
@@ -249,6 +263,37 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
 )]
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.Channels")]
 impl Channels {
+    /// Reserve an inert identity-scoped runtime and immutable callback paths.
+    #[tinybus(confidential)]
+    async fn reserve_runtime(&self) -> BusResult<tinychannels_bus::ChannelRuntimeReservation> {
+        self.runtimes
+            .as_ref()
+            .ok_or_else(|| BusError::failed("nested channel runtimes are unavailable"))?
+            .reserve()
+            .await
+    }
+
+    /// Activate a reserved runtime after its callback object is registered.
+    /// The returned object's provider methods retain their existing arities.
+    #[tinybus(confidential)]
+    async fn start_runtime(&self, handle: String) -> BusResult<()> {
+        self.runtimes
+            .as_ref()
+            .ok_or_else(|| BusError::failed("nested channel runtimes are unavailable"))?
+            .start(handle)
+            .await
+    }
+
+    /// Stop this identity's providers, relay and callbacks, joining pending startup.
+    #[tinybus(confidential)]
+    async fn stop_runtime(&self, handle: String) -> BusResult<()> {
+        self.runtimes
+            .as_ref()
+            .ok_or_else(|| BusError::failed("nested channel runtimes are unavailable"))?
+            .stop(handle)
+            .await
+    }
+
     /// Connect `name` from `config` and start receiving.
     async fn start_channel(&self, name: String, config: ChannelsConfig) -> BusResult<()> {
         self.start_channel_inner(name, config, &DefaultHttpClients, None)
@@ -486,7 +531,7 @@ impl Channels {
             .delivery_admission
             .try_lock()
             .map_err(|_| BusError::failed("required delivery queue is busy"))?;
-        let store = HostDeliveryStore::new(self.host.connection());
+        let store = HostDeliveryStore::from_host(&self.host);
         let id = intent.idempotency_key.clone();
 
         if let Some(result) = store.load_result(&id).await.map_err(delivery_store_error)? {
@@ -684,9 +729,12 @@ impl Channels {
         self.relays.send(id, intent).await
     }
     /// Freeze operations and join all native providers, relay and callbacks.
-    async fn shutdown(&self) -> BusResult<()> {
+    pub(crate) async fn shutdown(&self) -> BusResult<()> {
         self.terminal.store(true, Ordering::SeqCst);
         self.relays.freeze();
+        if let Some(runtimes) = &self.runtimes {
+            runtimes.shutdown().await?;
+        }
         let mut task = self.shutdown_task.lock().await;
         if task.is_none() {
             let providers = self.running.clone();
@@ -697,7 +745,7 @@ impl Channels {
             *task = Some(tokio::spawn(async move {
                 let mut failure = None;
                 let _delivery = delivery_admission.lock().await;
-                let delivery_store = HostDeliveryStore::new(host.connection());
+                let delivery_store = HostDeliveryStore::from_host(&host);
                 let delivery_handler = ModuleDeliveryHandler {
                     running: providers.clone(),
                     store: delivery_store.clone(),
@@ -770,7 +818,7 @@ async fn recover_delivery_channel(
     running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
     channel_id: &str,
 ) -> Result<(), DeliveryQueueError> {
-    let store = HostDeliveryStore::new(host.connection());
+    let store = HostDeliveryStore::from_host(host);
     let handler = ModuleDeliveryHandler {
         running: running.clone(),
         store: store.clone(),
@@ -829,15 +877,10 @@ async fn finish_start_admission(
 
 async fn setup(connection: Connection) -> BusResult<()> {
     let host = HostChannels::new(connection.clone());
-    let channels = Channels {
-        relays: Arc::new(Relays::new(host.clone())),
+    let channels = Channels::new(
         host,
-        email: EmailSender::new(),
-        running: Arc::new(Mutex::new(HashMap::new())),
-        terminal: AtomicBool::new(false),
-        shutdown_task: Mutex::new(None),
-        delivery_admission: Arc::new(Mutex::new(())),
-    };
+        Some(Arc::new(crate::runtime::Runtimes::new(connection.clone()))),
+    );
     connection
         .serve_at(OBJECT_PATH.try_into()?, channels)
         .await?;
@@ -912,6 +955,7 @@ pub(crate) mod exports {
             "ChannelInteraction",
             "CheckChannelHealth",
             "StartChannelSupervised",
+            "ReserveRuntime", "StartRuntime", "StopRuntime",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:
