@@ -1830,7 +1830,10 @@ async fn identity_scoped_services_refuse_nested_runtime_management() {
     );
     assert!(
         service
-            .start_runtime_with_dispatch("handle".into(), Default::default())
+            .start_runtime_with_dispatch(
+                "handle".into(),
+                tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 1 }
+            )
             .await
             .err()
             .expect("request must fail")
