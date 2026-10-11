@@ -47,7 +47,10 @@ fn typing_refresh_operations_are_additive_and_typed() {
     let decoded: ChannelInteractionRequest = serde_json::from_value(value).unwrap();
     assert!(matches!(
         decoded.interaction,
-        ChannelInteraction::StartTypingRefresh { interval_secs: 4, .. }
+        ChannelInteraction::StartTypingRefresh {
+            interval_secs: 4,
+            ..
+        }
     ));
 
     let stop = serde_json::to_value(ChannelInteraction::StopTypingRefresh {
