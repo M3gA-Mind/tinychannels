@@ -107,7 +107,7 @@ impl Channel for InteractionChannel {
 
 #[tokio::test]
 async fn provider_actor_orders_interactions_with_sends_and_rejects_after_stop() {
-    use tinychannels_bus::{ChannelInteraction as Op, ChannelInteractionResult};
+    use tinychannels_bus::ChannelInteraction as Op;
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
@@ -151,6 +151,82 @@ async fn provider_actor_orders_interactions_with_sends_and_rejects_after_stop() 
         running.interact(Op::Describe).await,
         Err(RunningSendError::NotDispatched(_))
     ));
+}
+
+#[tokio::test(start_paused = true)]
+async fn typing_refresh_is_bounded_and_joined_by_provider_owner() {
+    use tinychannels_bus::{ChannelInteraction as Op, ChannelInteractionResult};
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channel = Arc::new(InteractionChannel::default());
+    let running = Running::start(
+        channel.clone(),
+        Arc::new(Hooks::default()),
+        HostChannels::new(connection.clone()),
+    );
+
+    running
+        .interact(Op::StartTyping {
+            recipient: "room".into(),
+        })
+        .await
+        .unwrap();
+    running
+        .interact(Op::StartTypingRefresh {
+            recipient: "room".into(),
+            interval_secs: 4,
+        })
+        .await
+        .unwrap();
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(4)).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(
+        *channel.0.lock().unwrap(),
+        ["typing:room", "typing:room"],
+        "the module refreshes the indicator after its interval"
+    );
+
+    assert!(running
+        .interact(Op::StartTypingRefresh {
+            recipient: "other".into(),
+            interval_secs: 0,
+        })
+        .await
+        .is_err());
+    running
+        .interact(Op::StopTypingRefresh {
+            recipient: "room".into(),
+        })
+        .await
+        .unwrap();
+    running
+        .interact(Op::StopTyping {
+            recipient: "room".into(),
+        })
+        .await
+        .unwrap();
+    running.stop().await.unwrap();
+    assert!(matches!(
+        running
+            .interact(Op::StopTypingRefresh {
+                recipient: "room".into(),
+            })
+            .await,
+        Err(RunningSendError::NotDispatched(_))
+    ));
+    assert_eq!(
+        *channel.0.lock().unwrap(),
+        ["typing:room", "typing:room", "stop:room"]
+    );
+    connection.close().await;
 }
 
 struct ReconnectingChannel {
