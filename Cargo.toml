@@ -24,7 +24,7 @@ tinybus-module = { path = "vendor/tinybus/crates/tinybus-module" }
 version = "0.1.26"
 
 [package]
-rust-version = "1.88"
+rust-version = "1.94"
 name = "tinychannels"
 version.workspace = true
 edition = "2024"

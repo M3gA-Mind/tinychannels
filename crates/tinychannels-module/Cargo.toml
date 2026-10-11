@@ -1,5 +1,5 @@
 [package]
-rust-version = "1.88"
+rust-version = "1.94"
 name = "tinychannels-module"
 version.workspace = true
 edition = "2024"
