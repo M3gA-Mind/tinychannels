@@ -1,6 +1,7 @@
 //! Channel controller metadata and backend response types.
 
 pub mod definitions;
+pub mod discord;
 pub mod schemas;
 pub mod types;
 
@@ -20,3 +21,5 @@ pub use types::{
     DiscordLinkCheckResult, DiscordLinkStartResult, DiscordPermissionCheckResult,
     TelegramLoginCheckResult, TelegramLoginStartResult,
 };
+
+pub use discord::{BotPermissionCheck, DiscordGuild, DiscordTextChannel};
