@@ -141,7 +141,7 @@ async fn controller_manager_validates_credentials_before_host_backend_dispatch()
             config: ChannelsConfig::default(),
             channel: "telegram".into(),
             auth_mode: ChannelAuthMode::ManagedDm,
-            credentials: Value::Object(Default::default()),
+            credentials: Value::Null,
             proxy: Default::default(),
         },
     )
@@ -156,7 +156,51 @@ async fn controller_manager_validates_credentials_before_host_backend_dispatch()
         }) if status == "pending_auth"
     ));
     assert!(fixture.0.lock().await.is_empty());
+
+    let oauth_pending = dispatch(
+        &host,
+        ChannelControllerRequest::Connect {
+            config: ChannelsConfig::default(),
+            channel: "discord".into(),
+            auth_mode: ChannelAuthMode::OAuth,
+            credentials: Value::Null,
+            proxy: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        oauth_pending,
+        ChannelControllerResult::Connected(ChannelConnectionResult {
+            status,
+            auth_action: Some(action),
+            ..
+        }) if status == "pending_auth" && action == "discord_oauth"
+    ));
+    assert!(fixture.0.lock().await.is_empty());
     host.shutdown().await.unwrap();
+}
+
+#[test]
+fn controller_failures_keep_diagnostics_and_redact_request_credentials() {
+    let request = ChannelControllerRequest::Connect {
+        config: ChannelsConfig::default(),
+        channel: "telegram".into(),
+        auth_mode: ChannelAuthMode::BotToken,
+        credentials: serde_json::json!({"bot_token": "fixture-secret"}),
+        proxy: Default::default(),
+    };
+
+    let error = failed(
+        anyhow::anyhow!("provider rejected credential fixture-secret"),
+        &sensitive_values(&request),
+    );
+
+    assert_eq!(
+        error.wire_message(),
+        "provider rejected credential [redacted]"
+    );
+    assert!(!error.wire_message().contains("fixture-secret"));
 }
 
 #[tokio::test]

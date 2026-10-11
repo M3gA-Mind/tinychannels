@@ -272,14 +272,21 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         tinybus::Error::CONFIDENTIALITY_REQUIRED,
         "connect credentials and proxy settings must use the confidential module operation"
     );
-    assert!(
-        proxy
-            .call_confidential::<tinychannels_bus::ChannelControllerResult>(
-                "ChannelController",
-                connect_request,
-            )
-            .await
-            .is_err()
+    let connect_error = match proxy
+        .call_confidential::<tinychannels_bus::ChannelControllerResult>(
+            "ChannelController",
+            connect_request,
+        )
+        .await
+    {
+        Ok(_) => panic!("unknown channel must be rejected by controller dispatch"),
+        Err(error) => error,
+    };
+    assert_eq!(connect_error.wire_name(), tinybus::Error::FAILED);
+    assert_eq!(
+        connect_error.wire_message(),
+        "unknown channel: artifact-missing-channel",
+        "the confidential call must reach module controller validation"
     );
     assert_eq!(
         proxy

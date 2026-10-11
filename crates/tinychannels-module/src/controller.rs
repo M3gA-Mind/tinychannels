@@ -38,6 +38,7 @@ async fn dispatch_with(
     email: Arc<dyn EmailVerifier>,
     yuanbao: Arc<dyn YuanbaoVerifier>,
 ) -> tinybus::Result<ChannelControllerResult> {
+    let sensitive_values = sensitive_values(&request);
     match request {
         ChannelControllerRequest::Connect {
             config,
@@ -54,7 +55,7 @@ async fn dispatch_with(
                 .connect(&channel, auth_mode, credentials)
                 .await
                 .map(ChannelControllerResult::Connected)
-                .map_err(failed)
+                .map_err(|error| failed(error, &sensitive_values))
         }
         ChannelControllerRequest::Disconnect {
             config,
@@ -70,7 +71,7 @@ async fn dispatch_with(
                 .disconnect(&channel, auth_mode, clear_memory)
                 .await
                 .map(ChannelControllerResult::Disconnected)
-                .map_err(failed)
+                .map_err(|error| failed(error, &sensitive_values))
         }
         ChannelControllerRequest::Status { config, channel } => {
             let manager = ChannelManager::new(
@@ -81,7 +82,7 @@ async fn dispatch_with(
                 .status(channel.as_deref())
                 .await
                 .map(ChannelControllerResult::Status)
-                .map_err(failed)
+                .map_err(|error| failed(error, &sensitive_values))
         }
         ChannelControllerRequest::TestChannel {
             config,
@@ -97,7 +98,7 @@ async fn dispatch_with(
                 .test(&channel, auth_mode, credentials)
                 .await
                 .map(ChannelControllerResult::TestChannel)
-                .map_err(failed)
+                .map_err(|error| failed(error, &sensitive_values))
         }
         ChannelControllerRequest::SendReaction {
             config,
@@ -112,7 +113,7 @@ async fn dispatch_with(
                 .send_reaction(&channel, reaction)
                 .await
                 .map(ChannelControllerResult::SendReaction)
-                .map_err(failed)
+                .map_err(|error| failed(error, &sensitive_values))
         }
         ChannelControllerRequest::CreateThread {
             config,
@@ -127,7 +128,7 @@ async fn dispatch_with(
                 .create_thread(&channel, &title)
                 .await
                 .map(ChannelControllerResult::Thread)
-                .map_err(failed)
+                .map_err(|error| failed(error, &sensitive_values))
         }
         ChannelControllerRequest::UpdateThread {
             config,
@@ -143,7 +144,7 @@ async fn dispatch_with(
                 .update_thread(&channel, &thread_id, &action)
                 .await
                 .map(ChannelControllerResult::Thread)
-                .map_err(failed)
+                .map_err(|error| failed(error, &sensitive_values))
         }
         ChannelControllerRequest::ListThreads {
             config,
@@ -158,7 +159,7 @@ async fn dispatch_with(
                 .list_threads(&channel, active)
                 .await
                 .map(ChannelControllerResult::Threads)
-                .map_err(failed)
+                .map_err(|error| failed(error, &sensitive_values))
         }
         ChannelControllerRequest::DiscordListGuilds { config, bot_token } => {
             let manager = ChannelManager::new(
@@ -174,7 +175,7 @@ async fn dispatch_with(
                 .discord_list_guilds()
                 .await
                 .map(ChannelControllerResult::DiscordGuilds)
-                .map_err(failed)
+                .map_err(|error| failed(error, &sensitive_values))
         }
         ChannelControllerRequest::DiscordListChannels {
             config,
@@ -194,7 +195,7 @@ async fn dispatch_with(
                 .discord_list_channels(&guild_id)
                 .await
                 .map(ChannelControllerResult::DiscordChannels)
-                .map_err(failed)
+                .map_err(|error| failed(error, &sensitive_values))
         }
         ChannelControllerRequest::DiscordCheckPermissions {
             config,
@@ -215,13 +216,54 @@ async fn dispatch_with(
                 .discord_check_permissions(&guild_id, &channel_id)
                 .await
                 .map(ChannelControllerResult::DiscordPermissions)
-                .map_err(failed)
+                .map_err(|error| failed(error, &sensitive_values))
         }
     }
 }
 
-fn failed(_error: anyhow::Error) -> tinybus::Error {
-    tinybus::Error::failed("channel controller operation failed")
+fn failed(error: anyhow::Error, sensitive_values: &[String]) -> tinybus::Error {
+    let mut message = error.to_string();
+    for secret in sensitive_values {
+        if !secret.is_empty() {
+            message = message.replace(secret, "[redacted]");
+        }
+    }
+    tinybus::Error::failed(message)
+}
+
+fn sensitive_values(request: &ChannelControllerRequest) -> Vec<String> {
+    fn collect(value: &Value, inherited_sensitive: bool, output: &mut Vec<String>) {
+        match value {
+            Value::Object(fields) => {
+                for (name, value) in fields {
+                    let normalized = name.to_ascii_lowercase();
+                    let sensitive = inherited_sensitive
+                        || ["credential", "token", "secret", "password", "api_key"]
+                            .iter()
+                            .any(|marker| normalized.contains(marker));
+                    collect(value, sensitive, output);
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    collect(value, inherited_sensitive, output);
+                }
+            }
+            Value::String(value) if inherited_sensitive && !value.is_empty() => {
+                output.push(value.clone());
+            }
+            _ => {}
+        }
+    }
+
+    let Ok(value) = serde_json::to_value(request) else {
+        return Vec::new();
+    };
+    let mut values = Vec::new();
+    collect(&value, false, &mut values);
+    values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    values.dedup();
+    values
 }
 
 #[derive(Clone)]
