@@ -310,3 +310,124 @@ async fn oversized_terminal_content_is_rejected_without_closing_reply() {
         .unwrap();
     assert_eq!(callback.sends.lock().await[0]["text"], "valid reply");
 }
+
+#[tokio::test]
+async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::Feed {
+                handle: handle.clone(),
+                events: vec![
+                    ProgressiveEvent::ThinkingDelta("considering".into()),
+                    ProgressiveEvent::ToolCall("lookup".into()),
+                    ProgressiveEvent::ToolResult {
+                        tool_name: "lookup".into(),
+                        success: true
+                    },
+                    ProgressiveEvent::TextDelta("partial answer".into()),
+                ],
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Updated
+    );
+    replies
+        .execute(ProgressiveCommand::Finish {
+            handle: handle.clone(),
+            text: "complete answer".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        callback.sends.lock().await.last().unwrap()["text"],
+        "complete answer"
+    );
+    let error = replies
+        .execute(ProgressiveCommand::Feed {
+            handle: handle.clone(),
+            events: vec![ProgressiveEvent::TextDelta("late".into())],
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("closed"));
+    replies.shutdown().await.unwrap();
+    let error = replies
+        .execute(ProgressiveCommand::Feed {
+            handle,
+            events: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("shutting down"));
+}
+
+#[tokio::test]
+async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity() {
+    let (replies, _) = fixture(false).await;
+    for channel in [String::new(), "x".repeat(4097)] {
+        assert!(
+            replies
+                .execute(ProgressiveCommand::Open { channel })
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("invalid progressive target")
+        );
+    }
+    assert!(replies.state.lock().await.entries.is_empty());
+    let handle = open(&replies).await;
+    let error = replies
+        .execute(ProgressiveCommand::Feed {
+            handle: handle.clone(),
+            events: vec![ProgressiveEvent::TextDelta("x".into()); 33],
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("too many progressive events"));
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::Feed {
+                handle,
+                events: vec![]
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Updated
+    );
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::Close {
+                handle: "absent".into()
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Closed
+    );
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
+    let (replies, _) = fixture(false).await;
+    let mut reply =
+        ProgressiveReply::new(Arc::new(Sender(replies.host.clone())), "discord:fixture");
+    apply(
+        &mut reply,
+        vec![ProgressiveEvent::ThinkingDelta("x".repeat(MAX_CONTENT))],
+    )
+    .unwrap();
+    assert!(
+        apply(
+            &mut reply,
+            vec![
+                ProgressiveEvent::TextDelta("not committed".into()),
+                ProgressiveEvent::ThinkingDelta("extra".into())
+            ]
+        )
+        .is_err()
+    );
+    assert!(reply.state().content.is_empty());
+    assert_eq!(reply.state().thinking_accumulator.len(), MAX_CONTENT);
+}
