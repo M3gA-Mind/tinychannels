@@ -26,11 +26,14 @@ fn acknowledgement_categories_keep_their_context_and_priority() {
         ("yo", ["🤗", "😁"]),
         ("yo friend", ["🤗", "😁"]),
         ("what happened", ["🤔", "✍️"]),
-        ("something?", ["🤔", "✍️"]),
+        ("really?", ["🤔", "✍️"]),
         ("ordinary message", ["👀", "✍️"]),
         ("", ["👀", "✍️"]),
     ] {
-        assert!(choices.contains(&select_acknowledgment_reaction(content)));
+        assert!(
+            choices.contains(&select_acknowledgment_reaction(content)),
+            "{content}"
+        );
     }
     assert_eq!(compute_max_in_flight_messages(0), 8);
     assert_eq!(compute_max_in_flight_messages(3), 12);
