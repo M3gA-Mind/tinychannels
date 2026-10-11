@@ -357,7 +357,7 @@ async fn connect_validates_credentials_before_delegating() {
 }
 
 #[tokio::test]
-async fn connect_delegates_oauth_modes_without_required_credentials() {
+async fn connect_returns_oauth_pending_before_backend_dispatch() {
     let manager = ChannelManager::new(ChannelsConfig::default(), RecordingBackend::default());
 
     let result = manager
@@ -367,9 +367,33 @@ async fn connect_delegates_oauth_modes_without_required_credentials() {
 
     assert_eq!(result.status, "pending_auth");
     assert_eq!(result.auth_action.as_deref(), Some("discord_oauth"));
-    assert_eq!(
-        manager.backend.calls.lock().unwrap().as_slice(),
-        ["connect:discord"]
+    assert!(manager.backend.calls.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn connect_returns_auth_action_without_credentials() {
+    let manager = ChannelManager::new(ChannelsConfig::default(), RecordingBackend::default());
+
+    for (channel, auth_mode, action) in [
+        (
+            "telegram",
+            ChannelAuthMode::ManagedDm,
+            "telegram_managed_dm",
+        ),
+        ("discord", ChannelAuthMode::OAuth, "discord_oauth"),
+    ] {
+        let result = manager
+            .connect(channel, auth_mode, Value::Null)
+            .await
+            .unwrap();
+
+        assert_eq!(result.status, "pending_auth");
+        assert_eq!(result.auth_action.as_deref(), Some(action));
+    }
+
+    assert!(
+        manager.backend.calls.lock().unwrap().is_empty(),
+        "auth actions are decided before credentials reach the backend"
     );
 }
 
