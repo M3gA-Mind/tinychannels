@@ -26,7 +26,7 @@ impl Callback {
                 RemoteHostResult::Completed
             }
             RemoteHostRequest::ClearHistory { sender_key } => {
-                assert_eq!(sender_key, "telegram_sender");
+                assert_eq!(sender_key, "telegram_sender_chat");
                 tinychannels::remote::session_store::with_store_read(&self.workspace, |store| {
                     assert!(store.binding("telegram", "chat").is_none());
                     Ok(())
