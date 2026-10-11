@@ -392,6 +392,15 @@ impl Channels {
             .await
     }
 
+    /// Parse and execute remote chat commands inside the channel module.
+    #[tinybus(confidential)]
+    async fn execute_remote(
+        &self,
+        _request: tinychannels_bus::module_remote::RemoteOperation,
+    ) -> BusResult<tinychannels_bus::module_remote::RemoteOperationResult> {
+        Err(BusError::failed("remote operation is unavailable"))
+    }
+
     /// Drive progressive delivery without exposing its state to the host.
     #[tinybus(confidential)]
     async fn execute_progressive(
