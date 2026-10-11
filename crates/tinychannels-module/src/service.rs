@@ -10,6 +10,7 @@
 //! ListChannels()                     -> Vec<String>
 //! ChannelStatus(name)                -> ChannelState
 //! StartChannelConfigured(name, config, proxy) -> ()
+//! StartChannelSupervised(name, config, proxy, policy) -> ()
 //! ChannelController(request) -> ChannelControllerResult
 //! SendChannelIntent(name, intent)     -> ChannelSendMessageResult
 //! ```
@@ -109,6 +110,7 @@ impl Channels {
         name: String,
         config: ChannelsConfig,
         http: &dyn HttpClientFactory,
+        supervision: Option<tinychannels_bus::ChannelSupervisionPolicy>,
     ) -> BusResult<()> {
         let mut running = self.running.lock().await;
         if self.terminal.load(Ordering::SeqCst) {
@@ -149,10 +151,11 @@ impl Channels {
             });
         }
 
-        running.insert(
-            name.clone(),
-            Running::start(channel, hooks, self.host.clone()),
-        );
+        let provider = match supervision {
+            Some(policy) => Running::start_supervised(channel, hooks, self.host.clone(), policy),
+            None => Running::start(channel, hooks, self.host.clone()),
+        };
+        running.insert(name.clone(), provider);
         drop(running);
         finish_start_admission(
             &self.host,
@@ -248,7 +251,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
 impl Channels {
     /// Connect `name` from `config` and start receiving.
     async fn start_channel(&self, name: String, config: ChannelsConfig) -> BusResult<()> {
-        self.start_channel_inner(name, config, &DefaultHttpClients)
+        self.start_channel_inner(name, config, &DefaultHttpClients, None)
             .await
     }
 
@@ -265,7 +268,26 @@ impl Channels {
     ) -> BusResult<()> {
         let http = ConfiguredHttpClients::new(proxy)
             .map_err(|_| BusError::failed("invalid host HTTP proxy policy"))?;
-        self.start_channel_inner(name, config, &http).await
+        self.start_channel_inner(name, config, &http, None).await
+    }
+
+    /// Start a provider with confidential configuration and module-owned reconnects.
+    /// Legacy start operations keep their original arguments and single-listener behavior.
+    #[tinybus(confidential)]
+    async fn start_channel_supervised(
+        &self,
+        name: String,
+        config: ChannelsConfig,
+        proxy: HttpProxyPolicy,
+        policy: tinychannels_bus::ChannelSupervisionPolicy,
+    ) -> BusResult<()> {
+        if policy.initial_backoff_secs > 86_400 || policy.max_backoff_secs > 86_400 {
+            return Err(BusError::failed("provider retry delay exceeds one day"));
+        }
+        let http = ConfiguredHttpClients::new(proxy)
+            .map_err(|_| BusError::failed("invalid host HTTP proxy policy"))?;
+        self.start_channel_inner(name, config, &http, Some(policy))
+            .await
     }
 
     /// Check configured providers using their native health methods without
@@ -889,6 +911,7 @@ pub(crate) mod exports {
             "ChannelController",
             "ChannelInteraction",
             "CheckChannelHealth",
+            "StartChannelSupervised",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:

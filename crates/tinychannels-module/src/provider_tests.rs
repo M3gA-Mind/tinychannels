@@ -152,3 +152,106 @@ async fn provider_actor_orders_interactions_with_sends_and_rejects_after_stop() 
         Err(RunningSendError::NotDispatched(_))
     ));
 }
+
+struct ReconnectingChannel {
+    attempts: StdMutex<Vec<oneshot::Sender<()>>>,
+}
+#[async_trait::async_trait]
+impl Channel for ReconnectingChannel {
+    fn name(&self) -> &str {
+        "reconnect-fixture"
+    }
+    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
+        let last = {
+            let mut attempts = self.attempts.lock().unwrap();
+            let receipt = attempts.remove(0);
+            let _ = receipt.send(());
+            attempts.is_empty()
+        };
+        if last {
+            std::future::pending::<()>().await;
+        }
+        anyhow::bail!("fixture disconnected")
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn disconnected_module_provider_reconnects_and_stop_joins_the_new_listener() {
+    let (first, first_rx) = oneshot::channel();
+    let (second, mut second_rx) = oneshot::channel();
+    let channel = Arc::new(ReconnectingChannel {
+        attempts: StdMutex::new(vec![first, second]),
+    });
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    let running = Running::start_supervised(
+        channel,
+        Arc::new(Hooks::default()),
+        host.clone(),
+        ChannelSupervisionPolicy::default(),
+    );
+    first_rx.await.unwrap();
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(10)).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        second_rx.try_recv().is_ok(),
+        "the module must own provider reconnects"
+    );
+    assert!(!running.is_finished());
+    running.stop().await.unwrap();
+    assert!(running.is_finished());
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn stopping_during_selected_backoff_prevents_another_provider_attempt() {
+    let (first, first_rx) = oneshot::channel();
+    let (second, mut second_rx) = oneshot::channel();
+    let channel = Arc::new(ReconnectingChannel {
+        attempts: StdMutex::new(vec![first, second]),
+    });
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    let running = Running::start_supervised(
+        channel.clone(),
+        Arc::new(Hooks::default()),
+        host.clone(),
+        ChannelSupervisionPolicy {
+            initial_backoff_secs: 30,
+            max_backoff_secs: 60,
+        },
+    );
+    first_rx.await.unwrap();
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(5)).await;
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert!(matches!(
+        second_rx.try_recv(),
+        Err(oneshot::error::TryRecvError::Empty)
+    ));
+    running.stop().await.unwrap();
+    tokio::time::advance(Duration::from_secs(120)).await;
+    assert_eq!(channel.attempts.lock().unwrap().len(), 1);
+    assert!(running.is_finished());
+    host.shutdown().await.unwrap();
+}

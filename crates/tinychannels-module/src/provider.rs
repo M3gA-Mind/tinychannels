@@ -6,7 +6,7 @@ use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::host::{LifecycleRegistry, ShutdownHook};
 use tinychannels::{Channel, ChannelHostBuilder, SendMessage};
-use tinychannels_bus::{HostEventPublication, HostTranscriptionRequest};
+use tinychannels_bus::{ChannelSupervisionPolicy, HostEventPublication, HostTranscriptionRequest};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
@@ -134,6 +134,36 @@ impl tinychannels::host::EventSink for ModuleEvents {
     }
 }
 
+/// Reconnect execution stays in the module; raw provider errors never cross callbacks.
+async fn listen_with_supervision(
+    channel: Arc<dyn Channel>,
+    tx: mpsc::Sender<tinychannels::ChannelMessage>,
+    host: HostChannels,
+    policy: Option<ChannelSupervisionPolicy>,
+) -> anyhow::Result<()> {
+    let Some(policy) = policy else {
+        return channel.listen(tx).await;
+    };
+    let name = channel.name().to_owned();
+    let mut backoff = policy.initial_backoff_secs.max(1);
+    let maximum = policy.max_backoff_secs.max(backoff);
+    loop {
+        let result = channel.listen(tx.clone()).await;
+        if tx.is_closed() {
+            return result;
+        }
+        host.report_status(&name, "restarting", Some("provider disconnected".into()))
+            .await;
+        tokio::time::sleep(
+            Duration::from_secs(backoff)
+                + Duration::from_millis(tinychannels::runtime::jitter_millis(backoff)),
+        )
+        .await;
+        backoff = backoff.saturating_mul(2).min(maximum);
+        host.report_status(&name, "connecting", None).await;
+    }
+}
+
 /// A resource is retained until its owning task acknowledges cleanup.
 pub(crate) struct Running {
     pub(crate) channel: Arc<dyn Channel>,
@@ -148,6 +178,22 @@ impl Running {
         hooks: Arc<Hooks>,
         host: HostChannels,
     ) -> Arc<Self> {
+        Self::start_inner(channel, hooks, host, None)
+    }
+    pub(crate) fn start_supervised(
+        channel: Arc<dyn Channel>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        policy: ChannelSupervisionPolicy,
+    ) -> Arc<Self> {
+        Self::start_inner(channel, hooks, host, Some(policy))
+    }
+    fn start_inner(
+        channel: Arc<dyn Channel>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: Option<ChannelSupervisionPolicy>,
+    ) -> Arc<Self> {
         let (cancel, mut canceled) = watch::channel(false);
         let send_cancel = cancel.subscribe();
         let (send, mut sends) = mpsc::channel::<SendCommand>(256);
@@ -158,6 +204,7 @@ impl Running {
         let worker_cancel = cancel.clone();
         let worker = tokio::spawn(async move {
             let name = listen_channel.name().to_owned();
+            host.report_status(&name, "connecting", None).await;
             let (tx, mut rx) = tokio::sync::mpsc::channel(256);
             let forward_host = host.clone();
             let forward_name = name.clone();
@@ -168,8 +215,10 @@ impl Running {
                     }
                 }
             }));
-            let mut listener =
-                AbortOnDrop(tokio::spawn(async move { listen_channel.listen(tx).await }));
+            let listener_host = host.clone();
+            let mut listener = AbortOnDrop(tokio::spawn(async move {
+                listen_with_supervision(listen_channel, tx, listener_host, supervision).await
+            }));
             let mut send_cancel = send_cancel;
             let mut sender = AbortOnDrop(tokio::spawn(async move {
                 loop {
@@ -196,7 +245,6 @@ impl Running {
                         .send(Err(Error::failed("provider is stopping")));
                 }
             }));
-            host.report_status(&name, "connecting", None).await;
             let outcome = tokio::select! {biased;
                 _=async {let _=canceled.wait_for(|value|*value).await;}=>{listener.0.abort(); let _=(&mut listener.0).await;None},
                 outcome=&mut listener.0=>Some(outcome),

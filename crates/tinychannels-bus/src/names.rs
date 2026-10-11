@@ -20,6 +20,8 @@ pub const HOST_OBJECT_PATH: &str = "/ai/tinyhumans/tinychannels/ChannelsHost";
 
 /// One constant per method name on [`BUS_NAME`].
 pub mod methods {
+    /// Start a provider with module-owned reconnect supervision and host-selected timing.
+    pub const START_CHANNEL_SUPERVISED: &str = "StartChannelSupervised";
     /// Check configured providers without starting listeners; inputs are confidential.
     pub const CHECK_CHANNEL_HEALTH: &str = "CheckChannelHealth";
     /// Reserve one idle relay handle before native startup.
@@ -99,7 +101,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 21] = [
+pub const METHODS: [&str; 22] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -121,6 +123,7 @@ pub const METHODS: [&str; 21] = [
     methods::CHANNEL_CONTROLLER,
     methods::CHANNEL_INTERACTION,
     methods::CHECK_CHANNEL_HEALTH,
+    methods::START_CHANNEL_SUPERVISED,
 ];
 
 /// All host-callback method names in declaration order.
