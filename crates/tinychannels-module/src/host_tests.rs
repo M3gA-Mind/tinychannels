@@ -38,6 +38,10 @@ struct Callback {
     transcriptions_started: Arc<AtomicUsize>,
     transcription_started: Arc<tokio::sync::Notify>,
     transcription_gate: Arc<tokio::sync::Notify>,
+    controller_blocked: Arc<AtomicBool>,
+    controllers_started: Arc<AtomicUsize>,
+    controller_started: Arc<tokio::sync::Notify>,
+    controller_gate: Arc<tokio::sync::Notify>,
     persist_failures: Arc<std::sync::atomic::AtomicUsize>,
     event_failures: Arc<AtomicUsize>,
     delivery_scope: Arc<Mutex<String>>,
@@ -81,6 +85,35 @@ impl Callback {
             .await
             .push(format!("event:{}:{}", publication.domain, publication.kind));
         Ok(())
+    }
+
+    async fn dispatch_controller_backend(
+        &self,
+        request: tinychannels_bus::ChannelBackendRequest,
+    ) -> Result<tinychannels_bus::ChannelBackendResult> {
+        self.controllers_started.fetch_add(1, Ordering::SeqCst);
+        self.controller_started.notify_one();
+        while self.controller_blocked.load(Ordering::SeqCst) {
+            self.controller_gate.notified().await;
+        }
+        match request {
+            tinychannels_bus::ChannelBackendRequest::SendReaction { channel, .. } => {
+                self.events
+                    .lock()
+                    .await
+                    .push(format!("controller:{channel}:reaction"));
+                Ok(tinychannels_bus::ChannelBackendResult::SendReaction(
+                    tinychannels_bus::controllers::ChannelReactionResult {
+                        success: true,
+                        message: None,
+                        raw: None,
+                    },
+                ))
+            }
+            _ => Err(tinybus::Error::failed(
+                "unexpected controller fixture request",
+            )),
+        }
     }
 
     async fn deliver_inbound(&self, channel: String, message: serde_json::Value) -> Result<()> {
@@ -251,6 +284,10 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         transcriptions_started: Arc::new(AtomicUsize::new(0)),
         transcription_started: Arc::new(tokio::sync::Notify::new()),
         transcription_gate: Arc::new(tokio::sync::Notify::new()),
+        controller_blocked: Arc::new(AtomicBool::new(false)),
+        controllers_started: Arc::new(AtomicUsize::new(0)),
+        controller_started: Arc::new(tokio::sync::Notify::new()),
+        controller_gate: Arc::new(tokio::sync::Notify::new()),
         persist_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         event_failures: Arc::new(AtomicUsize::new(0)),
         delivery_scope: Arc::new(Mutex::new("scope-a".into())),
@@ -369,7 +406,7 @@ async fn transcription_admission_refuses_when_its_owned_task_limit_is_reached() 
     callback.transcription_blocked.store(true, Ordering::SeqCst);
 
     let mut active = Vec::new();
-    for _ in 0..super::MAX_ACTIVE_TRANSCRIPTIONS {
+    for _ in 0..super::MAX_ACTIVE_HOST_CALLBACKS {
         let host = host.clone();
         active.push(tokio::spawn(async move {
             host.transcribe(tinychannels_bus::HostTranscriptionRequest {
@@ -382,13 +419,13 @@ async fn transcription_admission_refuses_when_its_owned_task_limit_is_reached() 
         }));
     }
 
-    while callback.transcriptions_started.load(Ordering::SeqCst) < super::MAX_ACTIVE_TRANSCRIPTIONS
+    while callback.transcriptions_started.load(Ordering::SeqCst) < super::MAX_ACTIVE_HOST_CALLBACKS
     {
         let notified = callback.transcription_started.notified();
         tokio::pin!(notified);
         notified.as_mut().enable();
         if callback.transcriptions_started.load(Ordering::SeqCst)
-            >= super::MAX_ACTIVE_TRANSCRIPTIONS
+            >= super::MAX_ACTIVE_HOST_CALLBACKS
         {
             break;
         }
@@ -462,6 +499,83 @@ async fn module_host_exposes_typed_transcription_and_event_capabilities() {
         ["transcription:complete", "event:channel:reaction_sent"]
     );
     host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn module_host_forwards_typed_backend_requests_and_bounds_payloads() {
+    let (host, callback, _server) = connected_host().await;
+    let request = tinychannels_bus::ChannelBackendRequest::SendReaction {
+        channel: "discord".into(),
+        reaction: serde_json::json!({"message_id":"fixture-message","emoji":"✅"}),
+    };
+    let result = host.dispatch_controller_backend(request).await.unwrap();
+    assert!(matches!(
+        result,
+        tinychannels_bus::ChannelBackendResult::SendReaction(
+            tinychannels_bus::controllers::ChannelReactionResult { success: true, .. }
+        )
+    ));
+    assert_eq!(
+        callback.events.lock().await.last().map(String::as_str),
+        Some("controller:discord:reaction")
+    );
+
+    let oversized = tinychannels_bus::ChannelBackendRequest::SendReaction {
+        channel: "discord".into(),
+        reaction: serde_json::json!({"payload":"x".repeat(super::MAX_CONTROLLER_PAYLOAD_BYTES)}),
+    };
+    assert!(host.dispatch_controller_backend(oversized).await.is_err());
+    assert_eq!(callback.events.lock().await.len(), 1);
+    host.shutdown().await.unwrap();
+    assert!(
+        host.dispatch_controller_backend(tinychannels_bus::ChannelBackendRequest::SendReaction {
+            channel: "discord".into(),
+            reaction: serde_json::json!({"message_id":"fixture-message","emoji":"✅"}),
+        })
+        .await
+        .is_err(),
+        "the terminal host callback owner must refuse new controller work"
+    );
+}
+
+#[tokio::test]
+async fn shutdown_joins_owned_controller_callback_after_waiter_cancellation() {
+    let (host, callback, _server) = connected_host().await;
+    callback.controller_blocked.store(true, Ordering::SeqCst);
+
+    let controller_host = host.clone();
+    let waiter = tokio::spawn(async move {
+        controller_host
+            .dispatch_controller_backend(tinychannels_bus::ChannelBackendRequest::SendReaction {
+                channel: "discord".into(),
+                reaction: serde_json::json!({"message_id":"fixture-message","emoji":"✅"}),
+            })
+            .await
+    });
+    callback.controller_started.notified().await;
+    waiter.abort();
+    let _ = waiter.await;
+
+    let shutdown_host = host.clone();
+    let shutdown = tokio::spawn(async move { shutdown_host.shutdown().await });
+    while !host.owner.terminal.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !shutdown.is_finished(),
+        "shutdown must join an accepted host controller callback"
+    );
+    callback.controller_blocked.store(false, Ordering::SeqCst);
+    callback.controller_gate.notify_one();
+    shutdown.await.unwrap().unwrap();
+    assert!(
+        callback
+            .events
+            .lock()
+            .await
+            .contains(&"controller:discord:reaction".into()),
+        "shutdown must retain the callback after its waiter is canceled"
+    );
 }
 
 #[tokio::test]

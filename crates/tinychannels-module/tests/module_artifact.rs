@@ -137,11 +137,31 @@ impl Callback {
     ) -> Result<Option<tinychannels_bus::DeliveryTerminalResult>> {
         Ok(self.1.lock().await.results.get(&id).cloned())
     }
+
+    async fn dispatch_controller_backend(
+        &self,
+        request: tinychannels_bus::ChannelBackendRequest,
+    ) -> Result<tinychannels_bus::ChannelBackendResult> {
+        let tinychannels_bus::ChannelBackendRequest::SendReaction { channel, .. } = request else {
+            return Err(tinybus::Error::failed("unexpected backend fixture request"));
+        };
+        self.0.lock().await.push(serde_json::json!({
+            "kind":"controller",
+            "channel":channel,
+        }));
+        Ok(tinychannels_bus::ChannelBackendResult::SendReaction(
+            tinychannels_bus::controllers::ChannelReactionResult {
+                success: true,
+                message: None,
+                raw: None,
+            },
+        ))
+    }
 }
 
 #[tokio::test]
 #[ignore = "run through scripts/verify-module-artifact.sh"]
-async fn compiled_artifact_exposes_confidential_relay_lifecycle_and_real_websocket_send() {
+async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_lifecycle() {
     let artifact = std::env::var_os("TINYCHANNELS_MODULE_ARTIFACT")
         .expect("set TINYCHANNELS_MODULE_ARTIFACT to the built cdylib");
     let broker = Broker::new();
@@ -159,32 +179,17 @@ async fn compiled_artifact_exposes_confidential_relay_lifecycle_and_real_websock
             provided.version.interface.as_str() == "ai.tinyhumans.tinychannels.Channels"
         })
         .unwrap();
-    let members: Vec<_> = interface.methods.iter().map(ToString::to_string).collect();
-    for member in [
-        "StartChannel",
-        "StopChannel",
-        "SendMessage",
-        "ListChannels",
-        "ChannelStatus",
-        "ReserveRelay",
-        "StartRelay",
-        "StopRelay",
-        "RelayStatus",
-        "SendRelayIntent",
-        "SendChannelIntent",
-        "SendEmail",
-        "BeginEmailUpload",
-        "AppendEmailUploadChunk",
-        "SendEmailUpload",
-        "AbortEmailUpload",
-        "StartChannelConfigured",
-        "Shutdown",
-    ] {
-        assert!(
-            members.iter().any(|item| item == member),
-            "missing {member}"
-        );
-    }
+    let mut members: Vec<_> = interface.methods.iter().map(ToString::to_string).collect();
+    let mut contract: Vec<_> = tinychannels_bus::METHODS
+        .iter()
+        .map(|method| method.to_string())
+        .collect();
+    members.sort();
+    contract.sort();
+    assert_eq!(
+        members, contract,
+        "compiled artifact must match the bus contract"
+    );
 
     let (client_transport, broker_transport) = MemoryTransport::pair();
     broker.attach(Arc::new(broker_transport));
@@ -237,6 +242,93 @@ async fn compiled_artifact_exposes_confidential_relay_lifecycle_and_real_websock
         error.wire_name(),
         "ai.tinyhumans.tinychannels.Error.NotConfigured"
     );
+    let controller_request = tinychannels_bus::ChannelControllerRequest::TestChannel {
+        config: ChannelsConfig::default(),
+        channel: "telegram".into(),
+        auth_mode: tinychannels_bus::controllers::ChannelAuthMode::BotToken,
+        credentials: serde_json::json!({"bot_token":"fixture-secret"}),
+    };
+    let connect_request = tinychannels_bus::ChannelControllerRequest::Connect {
+        config: ChannelsConfig::default(),
+        channel: "artifact-missing-channel".into(),
+        auth_mode: tinychannels_bus::controllers::ChannelAuthMode::ApiKey,
+        credentials: serde_json::json!({}),
+        proxy: tinychannels_bus::HttpProxyPolicy {
+            https_proxy: Some("http://fixture-proxy.invalid:8080".into()),
+            service_selectors: vec!["channel.yuanbao".into()],
+            ..Default::default()
+        },
+    };
+    assert_eq!(
+        proxy
+            .call::<tinychannels_bus::ChannelControllerResult>(
+                "ChannelController",
+                connect_request.clone(),
+            )
+            .await
+            .err()
+            .unwrap()
+            .wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED,
+        "connect credentials and proxy settings must use the confidential module operation"
+    );
+    let connect_error = match proxy
+        .call_confidential::<tinychannels_bus::ChannelControllerResult>(
+            "ChannelController",
+            connect_request,
+        )
+        .await
+    {
+        Ok(_) => panic!("unknown channel must be rejected by controller dispatch"),
+        Err(error) => error,
+    };
+    assert_eq!(connect_error.wire_name(), tinybus::Error::FAILED);
+    assert_eq!(
+        connect_error.wire_message(),
+        "unknown channel: artifact-missing-channel",
+        "the confidential call must reach module controller validation"
+    );
+    assert_eq!(
+        proxy
+            .call::<tinychannels_bus::ChannelControllerResult>(
+                "ChannelController",
+                controller_request.clone(),
+            )
+            .await
+            .err()
+            .unwrap()
+            .wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED,
+        "controller credentials must use the confidential module operation"
+    );
+    assert!(matches!(
+        proxy
+            .call_confidential::<tinychannels_bus::ChannelControllerResult>(
+                "ChannelController",
+                controller_request,
+            )
+            .await
+            .unwrap(),
+        tinychannels_bus::ChannelControllerResult::TestChannel(
+            tinychannels_bus::controllers::ChannelTestResult { success: true, .. }
+        )
+    ));
+    assert!(matches!(
+        proxy
+            .call_confidential::<tinychannels_bus::ChannelControllerResult>(
+                "ChannelController",
+                tinychannels_bus::ChannelControllerRequest::SendReaction {
+                    config: ChannelsConfig::default(),
+                    channel: "discord".into(),
+                    reaction: serde_json::json!({"message_id":"artifact-message","emoji":"✅"}),
+                },
+            )
+            .await
+            .unwrap(),
+        tinychannels_bus::ChannelControllerResult::SendReaction(
+            tinychannels_bus::controllers::ChannelReactionResult { success: true, .. }
+        )
+    ));
     // Exercise every original argument shape on the loaded cdylib. The
     // expected NotConfigured/Unknown outcomes prove dispatch reached handlers.
     assert!(

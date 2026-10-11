@@ -58,7 +58,8 @@ pub use providers::{
     WhatsAppChannel, WhatsAppWebChannel, YuanbaoChannel,
 };
 pub use tinychannels_bus::{
-    BUS_NAME, CONTRACT_VERSION, ChannelAuthMode, ChannelCapabilities, ChannelDefinition,
+    BUS_NAME, CONTRACT_VERSION, ChannelAuthMode, ChannelBackendRequest, ChannelBackendResult,
+    ChannelCapabilities, ChannelControllerRequest, ChannelControllerResult, ChannelDefinition,
     ChannelInboundEnvelope, ChannelMessage, ChannelOutboundIntent, ChannelsConfig,
     DeliveryDurability, HOST_BUS_NAME, HOST_OBJECT_PATH, HostEventPublication,
     HostTranscriptionRequest, HostTranscriptionResult, HttpProxyPolicy, METHODS, OBJECT_PATH,

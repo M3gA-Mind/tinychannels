@@ -210,6 +210,19 @@ impl<B: ChannelBackend> ChannelManager<B> {
         let definition = self
             .describe(channel)
             .ok_or_else(|| anyhow::anyhow!("unknown channel: {channel}"))?;
+        if let Some(action) = definition
+            .auth_mode_spec(auth_mode)
+            .and_then(|auth| auth.auth_action)
+        {
+            return Ok(ChannelConnectionResult {
+                status: "pending_auth".to_owned(),
+                restart_required: false,
+                auth_action: Some(action.to_owned()),
+                message: Some(format!(
+                    "Initiate '{action}' auth flow on the frontend. Ignore if you are already in the auth flow."
+                )),
+            });
+        }
         let credentials_map = credentials
             .as_object()
             .ok_or_else(|| anyhow::anyhow!("credentials must be a JSON object"))?;
