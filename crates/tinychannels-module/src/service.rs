@@ -91,6 +91,7 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
 pub(crate) struct Channels {
     pub(crate) host: HostChannels,
     email: EmailSender,
+    progressive: Arc<crate::progressive::Replies>,
     /// Shared with each listener task so it can retire its own entry.
     pub(crate) running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
     relays: Arc<Relays>,
@@ -108,6 +109,7 @@ struct ModuleDeliveryHandler {
 impl Channels {
     pub(crate) fn new(host: HostChannels, runtimes: Option<Arc<crate::runtime::Runtimes>>) -> Self {
         Self {
+            progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
             relays: Arc::new(Relays::new(host.clone())),
             host,
             email: EmailSender::new(),
@@ -402,6 +404,44 @@ impl Channels {
             .map_err(|_| BusError::failed("invalid host HTTP proxy policy"))?;
         self.start_channel_inner(name, config, &http, None, true)
             .await
+    }
+
+    /// Prepare channel facts without executing host-owned policy.
+    #[tinybus(confidential)]
+    async fn prepare_channel_control(
+        &self,
+        request: tinychannels_bus::module_control::ChannelControlRequest,
+    ) -> BusResult<tinychannels_bus::module_control::ChannelControlResult> {
+        let _admission = self.delivery_admission.lock().await;
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(BusError::failed("channel module is shutting down"));
+        }
+        crate::control::prepare(&self.host, request).await
+    }
+
+    /// Parse and execute remote chat commands inside the channel module.
+    #[tinybus(confidential)]
+    async fn execute_remote(
+        &self,
+        request: tinychannels_bus::module_remote::RemoteOperation,
+    ) -> BusResult<tinychannels_bus::module_remote::RemoteOperationResult> {
+        let _admission = self.delivery_admission.lock().await;
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(BusError::failed("channel module is shutting down"));
+        }
+        crate::remote::execute(&self.host, request).await
+    }
+
+    /// Drive progressive delivery without exposing its state to the host.
+    #[tinybus(confidential)]
+    async fn execute_progressive(
+        &self,
+        request: tinychannels_bus::module_progressive::ProgressiveCommand,
+    ) -> BusResult<tinychannels_bus::module_progressive::ProgressiveResult> {
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(BusError::failed("channel module is shutting down"));
+        }
+        self.progressive.execute(request).await
     }
 
     /// Preserve provider data and compute persisted identities inside the module.
@@ -952,13 +992,16 @@ impl Channels {
         }
         let mut task = self.shutdown_task.lock().await;
         if task.is_none() {
+            let progressive = self.progressive.clone();
             let providers = self.running.clone();
             let relay = self.relays.clone();
             let email = self.email.clone();
             let host = self.host.clone();
             let delivery_admission = self.delivery_admission.clone();
             *task = Some(tokio::spawn(async move {
-                let mut failure = None;
+                let progressive_result = progressive.shutdown().await;
+                let progressive_pending = progressive_result.is_err();
+                let mut failure = progressive_result.err();
                 let _delivery = delivery_admission.lock().await;
                 let delivery_store = HostDeliveryStore::from_host(&host);
                 let delivery_handler = ModuleDeliveryHandler {
@@ -1003,7 +1046,7 @@ impl Channels {
                 {
                     failure = Some(error);
                 }
-                if !pending && relay.is_empty().await {
+                if !pending && !progressive_pending && relay.is_empty().await {
                     match host.shutdown().await {
                         Err(error) if failure.is_none() => failure = Some(error),
                         _ => {}
@@ -1172,7 +1215,7 @@ pub(crate) mod exports {
             "StartChannelSupervised",
             "ReserveRuntime", "StartRuntime", "StopRuntime",
             "DescribeConfiguredChannels", "StartOutboundChannel", "PrepareOutboundIntent",
-            "PrepareChannelInbound", "PrepareChannelIdentity", "StartRuntimeWithDispatch",
+            "PrepareChannelInbound", "PrepareChannelIdentity", "ExecuteProgressive", "ExecuteRemote", "PrepareChannelControl", "StartRuntimeWithDispatch",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:

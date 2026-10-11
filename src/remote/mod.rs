@@ -99,32 +99,8 @@ pub fn build_status_response(
     )
 }
 
-/// The model route a sender's turns currently use.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteRoute {
-    pub provider: String,
-    pub model: String,
-}
-
-/// A host conversation thread, as `/sessions` lists it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteThreadSummary {
-    pub id: String,
-    pub title: String,
-    pub message_count: usize,
-    /// Sort key, most recent first. Any consistently ordered string (RFC 3339
-    /// timestamps sort correctly).
-    pub last_message_at: String,
-}
-
-/// A thread for the host to create on `/new`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NewRemoteThread {
-    pub id: String,
-    pub title: String,
-    pub created_at: String,
-    pub labels: Vec<String>,
-}
+/// Shared remote conversation vocabulary, re-exported for existing library clients.
+pub use tinychannels_bus::module_remote::{NewRemoteThread, RemoteRoute, RemoteThreadSummary};
 
 /// Host side of remote control: the parts only the host owns.
 #[async_trait]
@@ -135,6 +111,12 @@ pub trait RemoteControlHost: Send + Sync {
     fn history_len(&self, sender_key: &str) -> usize;
     /// Drop the in-memory history for `sender_key`.
     fn clear_history(&self, sender_key: &str);
+    /// Async bridge used by modules whose host history lives across TinyBus.
+    /// Existing synchronous hosts retain their original behavior.
+    async fn clear_history_async(&self, sender_key: &str) -> anyhow::Result<()> {
+        self.clear_history(sender_key);
+        Ok(())
+    }
     /// List the host's conversation threads.
     async fn list_threads(&self) -> anyhow::Result<Vec<RemoteThreadSummary>>;
     /// Create a conversation thread.
@@ -291,7 +273,11 @@ async fn new_session(
         return format!("Failed to create session: {error}");
     }
 
-    host.clear_history(&ctx.sender_key);
+    if let Err(error) = host.clear_history_async(&ctx.sender_key).await {
+        return format!(
+            "Created thread `{thread_id}` but failed to clear channel history: {error}"
+        );
+    }
 
     let workspace_dir = ctx.workspace_dir.clone();
     let (channel, reply_target) = (ctx.channel.clone(), ctx.reply_target.clone());

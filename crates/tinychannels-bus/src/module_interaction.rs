@@ -18,8 +18,19 @@ pub enum ChannelInteraction {
     StartTyping {
         recipient: String,
     },
+    /// Refresh an active typing indicator inside the provider owner. The
+    /// initial indicator is started by `StartTyping`; this keeps subsequent
+    /// provider calls and their cancellation under the module lifecycle.
+    StartTypingRefresh {
+        recipient: String,
+        interval_secs: u64,
+    },
     StopTyping {
         recipient: String,
+    },
+    /// Stop and join the module-owned refresh task before acknowledging.
+    StopTypingRefresh {
+        handle: String,
     },
     SendDraft {
         message: SendMessage,
@@ -53,6 +64,7 @@ pub enum ChannelInteractionResult {
     Completed,
     Draft(Option<String>),
     Info(ChannelInteractionInfo),
+    TypingRefresh { handle: String },
 }
 
 #[cfg(test)]

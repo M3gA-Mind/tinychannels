@@ -27,11 +27,7 @@ struct ModelCacheEntry {
     models: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProviderDescriptor {
-    pub name: String,
-    pub aliases: Vec<String>,
-}
+pub use tinychannels_bus::module_control::ProviderDescriptor;
 
 #[derive(Debug, Clone)]
 pub struct RouteCommandContext {

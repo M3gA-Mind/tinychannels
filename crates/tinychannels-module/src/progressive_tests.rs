@@ -1,0 +1,256 @@
+use super::*;
+use tinybus::broker::Broker;
+use tinybus::transport::memory::MemoryBus;
+use tokio::sync::Notify;
+
+#[derive(Clone, Default)]
+struct Callback {
+    sends: Arc<Mutex<Vec<Value>>>,
+    block: bool,
+    entered: Arc<Notify>,
+    released: Arc<Notify>,
+}
+
+#[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
+impl Callback {
+    async fn dispatch_controller_backend(
+        &self,
+        request: ChannelBackendRequest,
+    ) -> Result<ChannelBackendResult> {
+        let ChannelBackendRequest::ProgressiveTransport(request) = request else {
+            return Err(Error::failed("unexpected callback"));
+        };
+        if let ProgressiveTransportRequest::Send { message, .. } = request {
+            self.sends.lock().await.push(message);
+            if self.block {
+                self.entered.notify_one();
+                self.released.notified().await;
+            }
+        }
+        Ok(ChannelBackendResult::ProgressiveTransport(
+            ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"})),
+        ))
+    }
+}
+
+async fn fixture(block: bool) -> (Replies, Callback) {
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    connection
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    let callback = Callback {
+        block,
+        ..Default::default()
+    };
+    connection
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            callback.clone(),
+        )
+        .await
+        .unwrap();
+    (Replies::new(HostChannels::new(connection)), callback)
+}
+
+async fn open(replies: &Replies) -> String {
+    match replies
+        .execute(ProgressiveCommand::Open {
+            channel: "discord:fixture".into(),
+        })
+        .await
+        .unwrap()
+    {
+        ProgressiveResult::Opened { handle } => handle,
+        _ => panic!("expected opened handle"),
+    }
+}
+
+#[tokio::test]
+async fn terminal_retry_reuses_one_module_send_and_rejects_changed_content() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    for _ in 0..2 {
+        assert_eq!(
+            replies
+                .execute(ProgressiveCommand::Finish {
+                    handle: handle.clone(),
+                    text: "final fixture".into()
+                })
+                .await
+                .unwrap(),
+            ProgressiveResult::Closed
+        );
+    }
+    assert!(
+        replies
+            .execute(ProgressiveCommand::Finish {
+                handle: handle.clone(),
+                text: "changed fixture".into()
+            })
+            .await
+            .is_err()
+    );
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    let sends = callback.sends.lock().await;
+    assert_eq!(sends.len(), 1);
+    assert_eq!(sends[0]["text"], "final fixture");
+    assert!(
+        sends[0]["idempotencyKey"]
+            .as_str()
+            .is_some_and(|key| !key.is_empty())
+    );
+}
+
+#[tokio::test]
+async fn cancelling_the_close_caller_preserves_terminal_delivery_and_cleanup() {
+    let (replies, callback) = fixture(true).await;
+    let replies = Arc::new(replies);
+    let handle = open(&replies).await;
+    let retained = replies.clone();
+    let closing_handle = handle.clone();
+    let caller = tokio::spawn(async move {
+        retained
+            .execute(ProgressiveCommand::Finish {
+                handle: closing_handle,
+                text: "retained fixture".into(),
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(10), callback.entered.notified())
+        .await
+        .unwrap();
+    caller.abort();
+    let _ = caller.await;
+    callback.released.notify_one();
+    replies
+        .execute(ProgressiveCommand::Finish {
+            handle,
+            text: "retained fixture".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(callback.sends.lock().await.len(), 1);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn handles_cannot_cross_private_runtime_reply_stores() {
+    let (first, _) = fixture(false).await;
+    let (second, _) = fixture(false).await;
+    let handle = open(&first).await;
+    assert!(
+        second
+            .execute(ProgressiveCommand::Feed {
+                handle: handle.clone(),
+                events: vec![ProgressiveEvent::TextDelta("fixture".into())]
+            })
+            .await
+            .is_err()
+    );
+    first
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    first.shutdown().await.unwrap();
+    second.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
+    let (replies, _) = fixture(false).await;
+    let mut reply =
+        ProgressiveReply::new(Arc::new(Sender(replies.host.clone())), "discord:fixture");
+    apply(
+        &mut reply,
+        vec![ProgressiveEvent::TextDelta("x".repeat(MAX_CONTENT))],
+    )
+    .unwrap();
+    assert!(
+        apply(
+            &mut reply,
+            vec![
+                ProgressiveEvent::ToolCall("fixture-tool".into()),
+                ProgressiveEvent::TextDelta("extra".into())
+            ]
+        )
+        .is_err()
+    );
+    assert_eq!(reply.state().content.len(), MAX_CONTENT);
+    assert!(reply.state().last_tool.is_none());
+    let handle = open(&replies).await;
+    assert!(
+        replies
+            .execute(ProgressiveCommand::Feed {
+                handle: handle.clone(),
+                events: vec![ProgressiveEvent::ThinkingDelta("x".repeat(MAX_REQUEST))]
+            })
+            .await
+            .is_err()
+    );
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn reply_capacity_refuses_seventeenth_and_shutdown_drains_every_worker() {
+    let (replies, callback) = fixture(false).await;
+    for _ in 0..MAX_ACTIVE {
+        open(&replies).await;
+    }
+    assert!(
+        replies
+            .execute(ProgressiveCommand::Open {
+                channel: "discord:overflow".into()
+            })
+            .await
+            .is_err()
+    );
+    replies.shutdown().await.unwrap();
+    assert_eq!(callback.sends.lock().await.len(), MAX_ACTIVE);
+    assert!(replies.state.lock().await.entries.is_empty());
+    assert!(
+        replies
+            .execute(ProgressiveCommand::Open {
+                channel: "discord:after-shutdown".into()
+            })
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn shutdown_starts_every_close_before_waiting_for_blocked_delivery() {
+    let (replies, callback) = fixture(true).await;
+    let replies = Arc::new(replies);
+    open(&replies).await;
+    open(&replies).await;
+    let retained = replies.clone();
+    let shutdown = tokio::spawn(async move { retained.shutdown().await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let entered = callback.entered.notified();
+            if callback.sends.lock().await.len() == 2 {
+                break;
+            }
+            entered.await;
+        }
+    })
+    .await
+    .expect("every reply must begin closing even while another delivery is blocked");
+    assert!(shutdown.await.unwrap().is_err());
+    assert_eq!(replies.state.lock().await.entries.len(), 2);
+    callback.released.notify_waiters();
+    replies.shutdown().await.unwrap();
+    assert!(replies.state.lock().await.entries.is_empty());
+    assert_eq!(callback.sends.lock().await.len(), 2);
+}

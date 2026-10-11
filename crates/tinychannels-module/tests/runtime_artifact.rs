@@ -3,10 +3,33 @@ use std::{fs, path::PathBuf, sync::Arc};
 use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory::MemoryTransport};
 use tinychannels_bus::{BUS_NAME, ChannelRuntimeReservation, HOST_BUS_NAME, OBJECT_PATH, methods};
 
-struct Callback;
+#[derive(Clone, Default)]
+struct Callback {
+    sends: Arc<std::sync::atomic::AtomicUsize>,
+}
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
 impl Callback {
+    async fn dispatch_controller_backend(
+        &self,
+        request: tinychannels_bus::ChannelBackendRequest,
+    ) -> tinybus::Result<tinychannels_bus::ChannelBackendResult> {
+        use tinychannels_bus::module_progressive::{
+            ProgressiveTransportRequest, ProgressiveTransportResult,
+        };
+        let tinychannels_bus::ChannelBackendRequest::ProgressiveTransport(request) = request else {
+            return Err(tinybus::Error::failed("unexpected backend callback"));
+        };
+        if matches!(request, ProgressiveTransportRequest::Send { .. }) {
+            self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        Ok(
+            tinychannels_bus::ChannelBackendResult::ProgressiveTransport(
+                ProgressiveTransportResult::Success(serde_json::json!({"id": "artifact-message"})),
+            ),
+        )
+    }
+
     async fn report_status(
         &self,
         _channel: String,
@@ -67,11 +90,12 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         .call_confidential(methods::RESERVE_RUNTIME, ())
         .await
         .unwrap();
+    let callback = Callback::default();
     for runtime in [&first, &second] {
         connection
             .serve_at(
                 runtime.host_object_path.clone().try_into().unwrap(),
-                Callback,
+                callback.clone(),
             )
             .await
             .unwrap();
@@ -117,6 +141,124 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         ChannelInboundSource, PrepareChannelIdentityRequest, PrepareChannelInboundRequest,
         PreparedChannelIdentity, PreparedChannelInbound,
     };
+    use tinychannels_bus::module_progressive::{
+        ProgressiveCommand, ProgressiveEvent, ProgressiveResult,
+    };
+    let ordinary = first_client
+        .call::<ProgressiveResult>(
+            methods::EXECUTE_PROGRESSIVE,
+            ProgressiveCommand::Open {
+                channel: "discord:artifact".into(),
+            },
+        )
+        .await;
+    assert_eq!(
+        ordinary.err().unwrap().wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    let opened: ProgressiveResult = first_client
+        .call_confidential(
+            methods::EXECUTE_PROGRESSIVE,
+            ProgressiveCommand::Open {
+                channel: "discord:artifact".into(),
+            },
+        )
+        .await
+        .unwrap();
+    let ProgressiveResult::Opened { handle } = opened else {
+        panic!("missing progressive artifact handle");
+    };
+    let updated: ProgressiveResult = first_client
+        .call_confidential(
+            methods::EXECUTE_PROGRESSIVE,
+            ProgressiveCommand::Feed {
+                handle: handle.clone(),
+                events: vec![ProgressiveEvent::TextDelta("artifact draft".into())],
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(updated, ProgressiveResult::Updated);
+    for _ in 0..2 {
+        let result: ProgressiveResult = first_client
+            .call_confidential(
+                methods::EXECUTE_PROGRESSIVE,
+                ProgressiveCommand::Finish {
+                    handle: handle.clone(),
+                    text: "artifact final".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(result, ProgressiveResult::Closed);
+    }
+    assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 1);
+    use tinychannels_bus::module_remote::{RemoteOperation, RemoteOperationResult, RemoteRoute};
+    let remote_workspace = tempfile::tempdir().unwrap();
+    use tinychannels_bus::module_control::{ChannelControlRequest, ChannelControlResult};
+    let control = ChannelControlRequest::RuntimeLimits {
+        timeout_secs: 1,
+        listener_count: 100,
+    };
+    assert!(
+        first_client
+            .call::<ChannelControlResult>(methods::PREPARE_CHANNEL_CONTROL, control.clone())
+            .await
+            .is_err()
+    );
+    let facts: ChannelControlResult = first_client
+        .call_confidential(methods::PREPARE_CHANNEL_CONTROL, control)
+        .await
+        .unwrap();
+    assert_eq!(
+        facts,
+        ChannelControlResult::RuntimeLimits {
+            timeout_secs: 30,
+            max_in_flight: 64
+        }
+    );
+
+    let request = RemoteOperation::Execute {
+        workspace_dir: remote_workspace.path().to_str().unwrap().into(),
+        message: tinychannels_bus::ChannelMessage {
+            id: "fixture".into(),
+            sender: "sender".into(),
+            reply_target: "chat".into(),
+            content: "/HELP@FixtureBot".into(),
+            channel: "telegram".into(),
+            timestamp: 1,
+            thread_ts: None,
+            sender_name: None,
+        },
+        route: RemoteRoute {
+            provider: "fixture".into(),
+            model: "fixture".into(),
+        },
+        history_len: 0,
+    };
+    assert!(
+        first_client
+            .call::<RemoteOperationResult>(methods::EXECUTE_REMOTE, request.clone())
+            .await
+            .is_err()
+    );
+    let remote: RemoteOperationResult = first_client
+        .call_confidential(methods::EXECUTE_REMOTE, request)
+        .await
+        .unwrap();
+    assert!(remote.reply.unwrap().contains("Remote control:"));
+    let _: RemoteOperationResult = first_client
+        .call_confidential(
+            methods::EXECUTE_REMOTE,
+            RemoteOperation::MarkTurn {
+                workspace_dir: remote_workspace.path().to_str().unwrap().into(),
+                channel: "telegram".into(),
+                reply_target: "chat".into(),
+                busy: true,
+            },
+        )
+        .await
+        .unwrap();
     let identity = PrepareChannelIdentityRequest {
         channel: "telegram:bot".into(),
         sender: None,

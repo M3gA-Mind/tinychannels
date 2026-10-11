@@ -1,5 +1,6 @@
 //! Owned provider listener, lifecycle hooks and ordered inbound forwarding.
 use crate::host::HostChannels;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
@@ -22,12 +23,105 @@ enum ProviderOperation {
     Interaction(tinychannels_bus::ChannelInteraction),
 }
 
+struct TypingRefreshTask {
+    recipient: String,
+    cancel: watch::Sender<bool>,
+    task: JoinHandle<()>,
+}
+
+type TypingRefreshes = HashMap<String, TypingRefreshTask>;
+
+const MAX_TYPING_REFRESH_RECIPIENTS: usize = 64;
+const MAX_TYPING_REFRESH_INTERVAL_SECS: u64 = 60;
+
+async fn dispatch_interaction(
+    channel: Arc<dyn Channel>,
+    interaction: tinychannels_bus::ChannelInteraction,
+    typing: &mut TypingRefreshes,
+) -> Result<tinychannels_bus::ChannelInteractionResult> {
+    use tinychannels_bus::ChannelInteraction as Op;
+    match interaction {
+        Op::StartTypingRefresh {
+            recipient,
+            interval_secs,
+        } => {
+            if interval_secs == 0 || interval_secs > MAX_TYPING_REFRESH_INTERVAL_SECS {
+                return Err(Error::failed(
+                    "typing refresh interval is outside its limit",
+                ));
+            }
+            if typing.len() >= MAX_TYPING_REFRESH_RECIPIENTS {
+                return Err(Error::failed("typing refresh capacity is full"));
+            }
+            let (cancel, mut canceled) = watch::channel(false);
+            let refresh_channel = Arc::clone(&channel);
+            let refresh_recipient = recipient.clone();
+            let interval = Duration::from_secs(interval_secs);
+            let task = tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
+                        _ = tokio::time::sleep(interval) => {
+                            let refresh = refresh_channel.start_typing(&refresh_recipient);
+                            tokio::select! {
+                                biased;
+                                _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
+                                result = refresh => if let Err(error) = result {
+                                tracing::debug!(channel = refresh_channel.name(), "typing refresh failed: {error}");
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            let handle = loop {
+                let candidate = uuid::Uuid::new_v4().simple().to_string();
+                if !typing.contains_key(&candidate) {
+                    break candidate;
+                }
+            };
+            typing.insert(
+                handle.clone(),
+                TypingRefreshTask {
+                    recipient,
+                    cancel,
+                    task,
+                },
+            );
+            Ok(tinychannels_bus::ChannelInteractionResult::TypingRefresh { handle })
+        }
+        Op::StopTypingRefresh { handle } => {
+            stop_typing_refresh(&handle, typing).await;
+            Ok(tinychannels_bus::ChannelInteractionResult::Completed)
+        }
+        interaction => crate::interaction::dispatch(channel.as_ref(), interaction).await,
+    }
+}
+
+async fn stop_typing_refresh(handle: &str, typing: &mut TypingRefreshes) {
+    if let Some(refresh) = typing.remove(handle) {
+        refresh.cancel.send_replace(true);
+        if let Err(error) = refresh.task.await {
+            tracing::debug!(%handle, recipient = %refresh.recipient, "typing refresh task join failed: {error}");
+        }
+    }
+}
+
+async fn stop_all_typing_refreshes(typing: &mut TypingRefreshes) {
+    let handles = typing.keys().cloned().collect::<Vec<_>>();
+    for handle in handles {
+        stop_typing_refresh(&handle, typing).await;
+    }
+}
+
 struct SendCommand {
     operation: ProviderOperation,
     reply: oneshot::Sender<Result<tinychannels_bus::ChannelInteractionResult>>,
     started: oneshot::Sender<()>,
 }
 
+#[derive(Debug)]
 pub(crate) enum RunningSendError {
     NotDispatched(String),
     AfterDispatch(String),
@@ -236,6 +330,7 @@ impl Running {
             }));
             let mut send_cancel = send_cancel;
             let mut sender = AbortOnDrop(tokio::spawn(async move {
+                let mut typing = TypingRefreshes::new();
                 loop {
                     let command = tokio::select! {biased;
                         _=async {let _=send_cancel.wait_for(|value|*value).await;}=>break,
@@ -249,11 +344,13 @@ impl Running {
                             .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
                             .map_err(|error| Error::failed(error.to_string())),
                         ProviderOperation::Interaction(interaction) => {
-                            crate::interaction::dispatch(send_channel.as_ref(), interaction).await
+                            dispatch_interaction(send_channel.clone(), interaction, &mut typing)
+                                .await
                         }
                     };
                     let _ = command.reply.send(result);
                 }
+                stop_all_typing_refreshes(&mut typing).await;
                 while let Ok(command) = sends.try_recv() {
                     let _ = command
                         .reply

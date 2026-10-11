@@ -14,6 +14,7 @@
 //! caught panics contain ordinary misbehaviour, not a segfault. Modules are
 //! first-party code that ships separately.
 
+mod control;
 mod controller;
 mod delivery;
 mod email;
@@ -21,8 +22,10 @@ mod health;
 pub mod host;
 mod interaction;
 mod prepare_connect;
+mod progressive;
 mod provider;
 mod relay;
+mod remote;
 mod runtime;
 mod service;
 

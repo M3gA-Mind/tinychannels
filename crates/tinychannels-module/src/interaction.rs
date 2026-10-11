@@ -18,6 +18,11 @@ pub(crate) async fn dispatch(
         }
         Op::StartTyping { recipient } => provider.start_typing(&recipient).await,
         Op::StopTyping { recipient } => provider.stop_typing(&recipient).await,
+        Op::StartTypingRefresh { .. } | Op::StopTypingRefresh { .. } => {
+            return Err(tinybus::Error::failed(
+                "typing refresh must be owned by the running provider",
+            ));
+        }
         Op::SendDraft { message } => {
             return provider
                 .send_draft(&message)
