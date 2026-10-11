@@ -168,6 +168,49 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         assert_eq!(result, ProgressiveResult::Closed);
     }
     assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 1);
+    use tinychannels_bus::module_remote::{RemoteOperation, RemoteOperationResult, RemoteRoute};
+    let remote_workspace = tempfile::tempdir().unwrap();
+    let request = RemoteOperation::Execute {
+        workspace_dir: remote_workspace.path().to_str().unwrap().into(),
+        message: tinychannels_bus::ChannelMessage {
+            id: "fixture".into(),
+            sender: "sender".into(),
+            reply_target: "chat".into(),
+            content: "/HELP@FixtureBot".into(),
+            channel: "telegram".into(),
+            timestamp: 1,
+            thread_ts: None,
+            sender_name: None,
+        },
+        route: RemoteRoute {
+            provider: "fixture".into(),
+            model: "fixture".into(),
+        },
+        history_len: 0,
+    };
+    assert!(
+        first_client
+            .call::<RemoteOperationResult>(methods::EXECUTE_REMOTE, request.clone())
+            .await
+            .is_err()
+    );
+    let remote: RemoteOperationResult = first_client
+        .call_confidential(methods::EXECUTE_REMOTE, request)
+        .await
+        .unwrap();
+    assert!(remote.reply.unwrap().contains("Remote control:"));
+    let _: RemoteOperationResult = first_client
+        .call_confidential(
+            methods::EXECUTE_REMOTE,
+            RemoteOperation::MarkTurn {
+                workspace_dir: remote_workspace.path().to_str().unwrap().into(),
+                channel: "telegram".into(),
+                reply_target: "chat".into(),
+                busy: true,
+            },
+        )
+        .await
+        .unwrap();
     let identity = PrepareChannelIdentityRequest {
         channel: "telegram:bot".into(),
         sender: None,
