@@ -270,6 +270,23 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         error.wire_name(),
         "ai.tinyhumans.tinychannels.Error.NotConfigured"
     );
+    let prepared: tinychannels_bus::ChannelControllerResult = proxy
+        .call_confidential("ChannelController", tinychannels_bus::ChannelControllerRequest::PrepareConnect {
+            config: ChannelsConfig::default(), channel: "discord".into(),
+            auth_mode: tinychannels_bus::ChannelAuthMode::BotToken,
+            credentials: serde_json::json!({"bot_token":"fixture-token", "allowed_users":"@Alice, ALICE"}),
+            proxy: Default::default(),
+        }).await.unwrap();
+    let tinychannels_bus::ChannelControllerResult::PreparedConnect(prepared) = prepared else {
+        panic!("compiled artifact returned the wrong prepared connection result");
+    };
+    let Some(tinychannels_bus::module_controller::ChannelConfigUpdate::Discord(config)) =
+        prepared.config_update
+    else {
+        panic!("compiled artifact did not prepare the provider configuration");
+    };
+    assert_eq!(config.allowed_users, ["alice"]);
+    assert_eq!(prepared.result.status, "connected");
     let controller_request = tinychannels_bus::ChannelControllerRequest::TestChannel {
         config: ChannelsConfig::default(),
         channel: "telegram".into(),

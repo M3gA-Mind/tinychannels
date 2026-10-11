@@ -720,3 +720,250 @@ impl DiscordApi for FakeDiscordApi {
         })
     }
 }
+
+#[tokio::test]
+async fn prepared_discord_connection_preserves_omitted_and_cleared_allowlists() {
+    let (host, fixture, _server) = connected_host().await;
+    for cleared in [false, true] {
+        let mut config = ChannelsConfig::default();
+        config.discord = Some(tinychannels_bus::config::DiscordConfig {
+            bot_token: "old-token".into(),
+            guild_id: None,
+            channel_id: None,
+            allowed_users: vec!["saved-user".into()],
+            listen_to_bots: true,
+            mention_only: true,
+        });
+        let mut credentials = serde_json::json!({"bot_token": "new-token"});
+        if cleared {
+            credentials["allowed_users"] = serde_json::json!("");
+        }
+        let response = dispatch(
+            &host,
+            ChannelControllerRequest::PrepareConnect {
+                config,
+                channel: "discord".into(),
+                auth_mode: ChannelAuthMode::BotToken,
+                credentials,
+                proxy: Default::default(),
+            },
+        )
+        .await
+        .unwrap();
+        let ChannelControllerResult::PreparedConnect(prepared) = response else {
+            panic!("wrong reply")
+        };
+        let Some(tinychannels_bus::module_controller::ChannelConfigUpdate::Discord(config)) =
+            prepared.config_update
+        else {
+            panic!("missing config")
+        };
+        assert_eq!(config.bot_token, "new-token");
+        assert!(config.listen_to_bots && config.mention_only);
+        assert_eq!(
+            config.allowed_users,
+            if cleared { vec![] } else { vec!["saved-user"] }
+        );
+        assert_eq!(prepared.result.status, "connected");
+    }
+    assert!(
+        fixture.0.lock().await.is_empty(),
+        "preparation must not persist host state"
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_email_connection_returns_verified_config_without_password() {
+    let (host, fixture, _server) = connected_host().await;
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let response = dispatch_with(
+        &host,
+        ChannelControllerRequest::PrepareConnect {
+            config: ChannelsConfig::default(),
+            channel: "email".into(),
+            auth_mode: ChannelAuthMode::ApiKey,
+            credentials: email_credentials(),
+            proxy: Default::default(),
+        },
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(RecordingEmailVerifier {
+            observed: observed.clone(),
+            fail: false,
+        }),
+        Arc::new(NativeYuanbaoVerifier),
+    )
+    .await
+    .unwrap();
+    let ChannelControllerResult::PreparedConnect(prepared) = response else {
+        panic!("wrong reply")
+    };
+    let Some(tinychannels_bus::module_controller::ChannelConfigUpdate::Email(config)) =
+        prepared.config_update
+    else {
+        panic!("missing config")
+    };
+    assert!(
+        config.password.is_empty(),
+        "password must remain in host custody"
+    );
+    let verified = observed.lock().await;
+    assert_eq!(verified.len(), 1);
+    assert_eq!(config.imap_host, verified[0].imap_host);
+    assert_eq!(config.smtp_host, verified[0].smtp_host);
+    assert!(fixture.0.lock().await.is_empty());
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_connection_refuses_bad_credentials_without_host_persistence() {
+    let (host, fixture, _server) = connected_host().await;
+    let result = dispatch(
+        &host,
+        ChannelControllerRequest::PrepareConnect {
+            config: ChannelsConfig::default(),
+            channel: "telegram".into(),
+            auth_mode: ChannelAuthMode::BotToken,
+            credentials: serde_json::json!({}),
+            proxy: Default::default(),
+        },
+    )
+    .await;
+    assert!(result.is_err());
+    assert!(fixture.0.lock().await.is_empty());
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_yuanbao_configuration_matches_the_verified_override_cluster() {
+    let (host, fixture, _server) = connected_host().await;
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let response = dispatch_with(&host, ChannelControllerRequest::PrepareConnect {
+        config: ChannelsConfig::default(), channel: "yuanbao".into(),
+        auth_mode: ChannelAuthMode::ApiKey,
+        credentials: serde_json::json!({ "app_key": " fixture-key ", "app_secret": " fixture-secret ",
+            "env": "pre", "api_domain": "https://fixture.invalid" }),
+        proxy: Default::default(),
+    }, Arc::new(FakeDiscordApi::default()), Arc::new(NativeEmailVerifier),
+        Arc::new(RecordingYuanbaoVerifier { observed: observed.clone(), fail: false })).await.unwrap();
+    let ChannelControllerResult::PreparedConnect(prepared) = response else {
+        panic!("wrong reply")
+    };
+    let Some(tinychannels_bus::module_controller::ChannelConfigUpdate::Yuanbao(config)) =
+        prepared.config_update
+    else {
+        panic!("missing config")
+    };
+    assert!(config.app_secret.is_empty());
+    let verified = observed.lock().await;
+    assert_eq!(verified.len(), 1);
+    assert_eq!(config.app_key, verified[0].app_key);
+    assert_eq!(config.env, verified[0].env);
+    assert_eq!(config.api_domain, verified[0].api_domain);
+    assert_eq!(verified[0].app_secret, "fixture-secret");
+    assert!(fixture.0.lock().await.is_empty());
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_yuanbao_connection_preserves_saved_endpoint_overrides() {
+    let (host, fixture, _server) = connected_host().await;
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let mut config = ChannelsConfig::default();
+    config.yuanbao = Some(tinychannels_bus::config::YuanbaoConfig {
+        env: "pre".into(),
+        api_domain: "https://saved-api.invalid".into(),
+        ws_domain: "wss://saved-ws.invalid".into(),
+        ..Default::default()
+    });
+    let response = dispatch_with(&host, ChannelControllerRequest::PrepareConnect {
+        config, channel: "yuanbao".into(), auth_mode: ChannelAuthMode::ApiKey,
+        credentials: serde_json::json!({"app_key":"fixture-key", "app_secret":"fixture-secret"}),
+        proxy: Default::default(),
+    }, Arc::new(FakeDiscordApi::default()), Arc::new(NativeEmailVerifier),
+        Arc::new(RecordingYuanbaoVerifier { observed: observed.clone(), fail: false })).await.unwrap();
+    let ChannelControllerResult::PreparedConnect(prepared) = response else {
+        panic!("wrong reply")
+    };
+    let Some(tinychannels_bus::module_controller::ChannelConfigUpdate::Yuanbao(config)) =
+        prepared.config_update
+    else {
+        panic!("missing config")
+    };
+    let verified = observed.lock().await;
+    assert_eq!(verified.len(), 1);
+    assert_eq!(config.api_domain, "https://saved-api.invalid");
+    assert_eq!(config.env, "pre");
+    assert_eq!(config.api_domain, verified[0].api_domain);
+    assert_eq!(config.env, verified[0].env);
+    assert!(fixture.0.lock().await.is_empty());
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_telegram_connection_preserves_streaming_policy_and_clears_omitted_target() {
+    let (host, fixture, _server) = connected_host().await;
+    let mut config = ChannelsConfig::default();
+    config.telegram = Some(tinychannels_bus::config::TelegramConfig {
+        bot_token: "old-token".into(),
+        chat_id: Some("old-target".into()),
+        allowed_users: vec!["old-user".into()],
+        stream_mode: tinychannels_bus::config::StreamMode::Partial,
+        draft_update_interval_ms: 750,
+        silent_streaming: false,
+        mention_only: true,
+    });
+    let response = dispatch(&host, ChannelControllerRequest::PrepareConnect {
+        config, channel: "telegram".into(), auth_mode: ChannelAuthMode::BotToken,
+        credentials: serde_json::json!({"bot_token":"new-token", "allowed_users":"@Alice, ALICE"}), proxy: Default::default(),
+    }).await.unwrap();
+    let ChannelControllerResult::PreparedConnect(prepared) = response else {
+        panic!("wrong reply")
+    };
+    let Some(tinychannels_bus::module_controller::ChannelConfigUpdate::Telegram(config)) =
+        prepared.config_update
+    else {
+        panic!("missing config")
+    };
+    assert_eq!(config.bot_token, "new-token");
+    assert_eq!(config.chat_id, None);
+    assert_eq!(config.allowed_users, ["alice"]);
+    assert_eq!(
+        config.stream_mode,
+        tinychannels_bus::config::StreamMode::Partial
+    );
+    assert_eq!(config.draft_update_interval_ms, 750);
+    assert!(!config.silent_streaming);
+    assert!(config.mention_only);
+    assert!(fixture.0.lock().await.is_empty());
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn prepared_managed_connection_preserves_pending_auth_without_configuration() {
+    let (host, fixture, _server) = connected_host().await;
+    let response = dispatch(
+        &host,
+        ChannelControllerRequest::PrepareConnect {
+            config: ChannelsConfig::default(),
+            channel: "discord".into(),
+            auth_mode: ChannelAuthMode::OAuth,
+            credentials: Value::Null,
+            proxy: Default::default(),
+        },
+    )
+    .await
+    .unwrap();
+    let ChannelControllerResult::PreparedConnect(prepared) = response else {
+        panic!("wrong reply")
+    };
+    assert_eq!(prepared.result.status, "pending_auth");
+    assert_eq!(
+        prepared.result.auth_action.as_deref(),
+        Some("discord_oauth")
+    );
+    assert!(!prepared.result.restart_required);
+    assert!(prepared.config_update.is_none());
+    assert!(fixture.0.lock().await.is_empty());
+    host.shutdown().await.unwrap();
+}

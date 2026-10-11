@@ -19,6 +19,7 @@ mod delivery;
 mod email;
 pub mod host;
 mod interaction;
+mod prepare_connect;
 mod provider;
 mod relay;
 mod service;

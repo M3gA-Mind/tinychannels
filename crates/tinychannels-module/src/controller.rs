@@ -57,6 +57,34 @@ async fn dispatch_with(
                 .map(ChannelControllerResult::Connected)
                 .map_err(|error| failed(error, &sensitive_values))
         }
+        ChannelControllerRequest::PrepareConnect {
+            config,
+            channel,
+            auth_mode,
+            credentials,
+            proxy,
+        } => {
+            let mut backend = HostBackend::new(host.clone(), discord.clone(), email.clone(), None);
+            backend.yuanbao = yuanbao.clone();
+            backend.proxy = proxy;
+            let manager = ChannelManager::new(config.clone(), backend);
+            let result = manager
+                .prepare_connect(&channel, auth_mode, credentials.clone())
+                .await
+                .map_err(|error| failed(error, &sensitive_values))?;
+            let config_update = if result.status == "connected" {
+                crate::prepare_connect::config_update(&config, &channel, auth_mode, &credentials)
+                    .map_err(|error| failed(error, &sensitive_values))?
+            } else {
+                None
+            };
+            Ok(ChannelControllerResult::PreparedConnect(Box::new(
+                tinychannels_bus::module_controller::PreparedChannelConnection {
+                    result,
+                    config_update,
+                },
+            )))
+        }
         ChannelControllerRequest::Disconnect {
             config,
             channel,
@@ -443,14 +471,16 @@ impl ChannelBackend for HostBackend {
             let credential_fields = credentials
                 .as_object()
                 .ok_or_else(|| anyhow::anyhow!("credentials must be a JSON object"))?;
-            let app_key = credential_fields
-                .get("app_key")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("missing required app_key"))?;
-            let app_secret = credential_fields
-                .get("app_secret")
-                .and_then(Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("missing required app_secret"))?;
+            let app_key = tinychannels::providers::yuanbao::connect::require_yuanbao_field(
+                credential_fields,
+                "app_key",
+            )
+            .map_err(anyhow::Error::msg)?;
+            let app_secret = tinychannels::providers::yuanbao::connect::require_yuanbao_field(
+                credential_fields,
+                "app_secret",
+            )
+            .map_err(anyhow::Error::msg)?;
             let effective =
                 tinychannels::providers::yuanbao::connect::build_effective_yuanbao_config(
                     config.yuanbao.clone().unwrap_or_default(),
@@ -458,7 +488,7 @@ impl ChannelBackend for HostBackend {
                     app_key.to_owned(),
                 );
             self.yuanbao
-                .verify(&effective, app_secret, &self.proxy)
+                .verify(&effective, &app_secret, &self.proxy)
                 .await?;
         }
         let definition = tinychannels::controllers::find_channel_definition(channel)
