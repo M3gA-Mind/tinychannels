@@ -55,24 +55,57 @@ pub fn channel_config_connected(
     channel_id: &str,
     mode: ChannelAuthMode,
 ) -> bool {
-    match (channel_id, mode) {
-        ("telegram", ChannelAuthMode::BotToken) => channels.telegram.is_some(),
-        ("discord", ChannelAuthMode::BotToken) => channels.discord.is_some(),
-        ("slack", _) => channels.slack.is_some(),
-        ("mattermost", _) => channels.mattermost.is_some(),
-        ("imessage", ChannelAuthMode::ManagedDm) => channels.imessage.is_some(),
-        ("matrix", _) => channels.matrix.is_some(),
-        ("signal", _) => channels.signal.is_some(),
-        ("whatsapp", _) => channels.whatsapp.is_some(),
-        ("linq", _) => channels.linq.is_some(),
-        ("email", _) => channels.email.is_some(),
-        ("irc", _) => channels.irc.is_some(),
-        ("lark", _) => channels.lark.is_some(),
-        ("dingtalk", _) => channels.dingtalk.is_some(),
-        ("qq", _) => channels.qq.is_some(),
-        ("yuanbao", ChannelAuthMode::ApiKey) => channels.yuanbao.is_some(),
-        _ => false,
-    }
+    let configured: Vec<String> = [
+        ("telegram", channels.telegram.is_some()),
+        ("discord", channels.discord.is_some()),
+        ("slack", channels.slack.is_some()),
+        ("mattermost", channels.mattermost.is_some()),
+        ("imessage", channels.imessage.is_some()),
+        ("matrix", channels.matrix.is_some()),
+        ("signal", channels.signal.is_some()),
+        ("whatsapp", channels.whatsapp.is_some()),
+        ("linq", channels.linq.is_some()),
+        ("email", channels.email.is_some()),
+        ("irc", channels.irc.is_some()),
+        ("lark", channels.lark.is_some()),
+        ("dingtalk", channels.dingtalk.is_some()),
+        ("qq", channels.qq.is_some()),
+        ("yuanbao", channels.yuanbao.is_some()),
+    ]
+    .into_iter()
+    .filter(|(_, present)| *present)
+    .map(|(name, _)| name.to_owned())
+    .collect();
+    channel_presence_connected(&configured, channel_id, mode)
+}
+
+/// Interpret configuration presence without accepting channel credentials.
+pub fn channel_presence_connected(
+    configured: &[String],
+    channel_id: &str,
+    mode: ChannelAuthMode,
+) -> bool {
+    let applicable = matches!(
+        (channel_id, mode),
+        ("telegram" | "discord", ChannelAuthMode::BotToken)
+            | ("imessage", ChannelAuthMode::ManagedDm)
+            | ("yuanbao", ChannelAuthMode::ApiKey)
+            | (
+                "slack"
+                    | "mattermost"
+                    | "matrix"
+                    | "signal"
+                    | "whatsapp"
+                    | "linq"
+                    | "email"
+                    | "irc"
+                    | "lark"
+                    | "dingtalk"
+                    | "qq",
+                _
+            )
+    );
+    applicable && configured.iter().any(|name| name == channel_id)
 }
 
 #[cfg(test)]

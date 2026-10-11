@@ -170,6 +170,29 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 1);
     use tinychannels_bus::module_remote::{RemoteOperation, RemoteOperationResult, RemoteRoute};
     let remote_workspace = tempfile::tempdir().unwrap();
+    use tinychannels_bus::module_control::{ChannelControlRequest, ChannelControlResult};
+    let control = ChannelControlRequest::RuntimeLimits {
+        timeout_secs: 1,
+        listener_count: 100,
+    };
+    assert!(
+        first_client
+            .call::<ChannelControlResult>(methods::PREPARE_CHANNEL_CONTROL, control.clone())
+            .await
+            .is_err()
+    );
+    let facts: ChannelControlResult = first_client
+        .call_confidential(methods::PREPARE_CHANNEL_CONTROL, control)
+        .await
+        .unwrap();
+    assert_eq!(
+        facts,
+        ChannelControlResult::RuntimeLimits {
+            timeout_secs: 30,
+            max_in_flight: 64
+        }
+    );
+
     let request = RemoteOperation::Execute {
         workspace_dir: remote_workspace.path().to_str().unwrap().into(),
         message: tinychannels_bus::ChannelMessage {

@@ -392,6 +392,19 @@ impl Channels {
             .await
     }
 
+    /// Prepare channel facts without executing host-owned policy.
+    #[tinybus(confidential)]
+    async fn prepare_channel_control(
+        &self,
+        request: tinychannels_bus::module_control::ChannelControlRequest,
+    ) -> BusResult<tinychannels_bus::module_control::ChannelControlResult> {
+        let _admission = self.delivery_admission.lock().await;
+        if self.terminal.load(Ordering::Acquire) {
+            return Err(BusError::failed("channel module is shutting down"));
+        }
+        crate::control::prepare(&self.host, request).await
+    }
+
     /// Parse and execute remote chat commands inside the channel module.
     #[tinybus(confidential)]
     async fn execute_remote(
@@ -1188,7 +1201,7 @@ pub(crate) mod exports {
             "StartChannelSupervised",
             "ReserveRuntime", "StartRuntime", "StopRuntime",
             "DescribeConfiguredChannels", "StartOutboundChannel", "PrepareOutboundIntent",
-            "PrepareChannelInbound", "PrepareChannelIdentity", "ExecuteProgressive", "ExecuteRemote",
+            "PrepareChannelInbound", "PrepareChannelIdentity", "ExecuteProgressive", "ExecuteRemote", "PrepareChannelControl",
         ],
         signals = [],
         // The host callback object is resolved per call, not required at load:

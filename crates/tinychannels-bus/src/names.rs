@@ -20,6 +20,8 @@ pub const HOST_OBJECT_PATH: &str = "/ai/tinyhumans/tinychannels/ChannelsHost";
 
 /// One constant per method name on [`BUS_NAME`].
 pub mod methods {
+    /// Prepare module-owned channel facts and runtime command responses.
+    pub const PREPARE_CHANNEL_CONTROL: &str = "PrepareChannelControl";
     /// Run module-owned remote commands and persisted turn state.
     pub const EXECUTE_REMOTE: &str = "ExecuteRemote";
     /// Drive a module-owned progressive reply through an opaque handle.
@@ -121,7 +123,7 @@ pub mod host_methods {
 }
 
 /// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 32] = [
+pub const METHODS: [&str; 33] = [
     methods::START_CHANNEL,
     methods::STOP_CHANNEL,
     methods::SEND_MESSAGE,
@@ -154,6 +156,7 @@ pub const METHODS: [&str; 32] = [
     methods::PREPARE_CHANNEL_IDENTITY,
     methods::EXECUTE_PROGRESSIVE,
     methods::EXECUTE_REMOTE,
+    methods::PREPARE_CHANNEL_CONTROL,
 ];
 
 /// All host-callback method names in declaration order.
