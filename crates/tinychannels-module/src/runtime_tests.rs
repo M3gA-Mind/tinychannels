@@ -90,17 +90,37 @@ async fn held_turn_returns_pending_stop_and_retains_a_retryable_runtime_owner() 
         started: Arc::new(tokio::sync::Notify::new()),
         release: Arc::new(tokio::sync::Semaphore::new(0)),
     };
-    client.request_name(tinychannels_bus::HOST_BUS_NAME).await.unwrap();
-    client.serve_at(reservation.host_object_path.clone().try_into().unwrap(), callback.clone()).await.unwrap();
-    runtimes.start_with_dispatch(reservation.handle.clone(), tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 1 }).await.unwrap();
+    client
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    client
+        .serve_at(
+            reservation.host_object_path.clone().try_into().unwrap(),
+            callback.clone(),
+        )
+        .await
+        .unwrap();
+    runtimes
+        .start_with_dispatch(
+            reservation.handle.clone(),
+            tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 1 },
+        )
+        .await
+        .unwrap();
     let slot = runtimes.get(&reservation.handle).await.unwrap();
     let child = slot.child.lock().await.as_ref().unwrap().clone();
-    child.host.deliver_inbound("telegram", serde_json::json!({"id":1})).await;
+    child
+        .host
+        .deliver_inbound("telegram", serde_json::json!({"id":1}))
+        .await;
     callback.started.notified().await;
     let owner = runtimes.clone();
     let id = reservation.handle.clone();
     let stopping = tokio::spawn(async move { owner.stop(id).await });
-    while !child.terminal.load(Ordering::SeqCst) { tokio::task::yield_now().await; }
+    while !child.terminal.load(Ordering::SeqCst) {
+        tokio::task::yield_now().await;
+    }
     tokio::task::yield_now().await;
     tokio::time::advance(Duration::from_secs(11)).await;
     let error = stopping.await.unwrap().unwrap_err();

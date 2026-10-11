@@ -28,6 +28,24 @@ module serializes these operations with ordinary sends in its bounded provider
 queue; stopping a provider joins admitted work and rejects subsequent calls.
 Contract version 6 adds the member without changing existing method arity.
 
+Contract version 13 adds confidential `StartRuntimeWithDispatch(handle,
+ChannelRuntimeDispatchPolicy)`. The listener count selects the existing module
+admission rule (four turns per listener, clamped to 8–64). This opt-in runtime
+calls its immutable host object's `ProcessInbound(channel, message)` for each
+turn with bounded concurrency. The host supplies only its turn execution and
+product policy; the compiled module owns the queue, admission, completion
+frontier, failures, and drain. Like the existing `DeliverInbound` host callback,
+`ProcessInbound` is a normal callback to the host process, not a confidential
+call to an attested module recipient.
+
+Existing `StartRuntime` and ordered `DeliverInbound` behavior remain unchanged.
+Dispatch mode and effective limit cannot change after activation. Flush waits
+for preceding accepted turns; stop freezes admission and retains pending work
+across canceled waiters. The existing module cleanup deadline reports pending
+cleanup after ten seconds while retaining the owner for a later stop retry.
+This source contract still requires a compatible published native module before
+a downstream host can claim released composition.
+
 The controller vocabulary includes complete Discord guild, text-channel and
 permission DTOs. Provider APIs re-export these types at their existing paths;
 REST calls and permission calculations remain implementation behavior.
