@@ -17,7 +17,7 @@ pub struct ProviderDescriptor {
 pub enum ChannelControlRequest {
     Route {
         workspace_dir: String,
-        message: ChannelMessage,
+        message: Box<ChannelMessage>,
         route: RemoteRoute,
         history_len: usize,
         providers: Vec<ProviderDescriptor>,
