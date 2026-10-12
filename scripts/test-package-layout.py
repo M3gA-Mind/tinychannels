@@ -25,13 +25,14 @@ class PackageTests(unittest.TestCase):
             uname.chmod(0o755)
             archive = fixture/"module.tar.gz"
             with tarfile.open(archive, "w:gz") as package:
-                for name, data in [("modules.toml", b""), ("libtinychannels_module.dylib", b"module")]:
+                for name, data in [("modules.toml", b""), ("libtinychannels_module.so", b"module")]:
                     member = tarfile.TarInfo(name); member.size = len(data)
                     package.addfile(member, io.BytesIO(data))
             cargo = bindir/"cargo"
             cargo.write_text("#!/usr/bin/env python3\nimport os,sys\nfrom pathlib import Path\n"
                 "module = os.environ.get('TINYJUICE_TEST_MODULE') or os.environ.get('TINYCHANNELS_MODULE_ARTIFACT') or sys.argv[-1]\n"
-                "Path(os.environ['RECORDED_MODULE_PATH']).write_text(module)\n")
+                "Path(os.environ['RECORDED_MODULE_PATH']).write_text(module)\n"
+                "Path(os.environ['RECORDED_MODULE_PATH']+'.exists').write_text(str(Path(module).is_file()))\n")
             cargo.chmod(0o755)
             env = dict(os.environ, HOME=str(home), PATH=str(bindir)+os.pathsep+os.environ["PATH"],
                 RECORDED_MODULE_PATH=str(fixture/"loaded-module-path"))
@@ -41,7 +42,7 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             module_path = Path((fixture/"loaded-module-path").read_text())
             self.assertTrue(module_path.is_relative_to(home/".cache"), module_path)
-            self.assertTrue(module_path.is_file(), module_path)
+            self.assertEqual(Path(str(fixture/"loaded-module-path")+".exists").read_text(), "True")
 
     def test_arch_package_install_disables_only_landlock_sandbox(self):
         script = (ROOT / "scripts/test-distro.sh").read_text()
