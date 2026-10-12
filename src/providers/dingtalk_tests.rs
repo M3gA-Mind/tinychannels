@@ -293,6 +293,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
             ("alice", "second")
         );
         drop(rx);
+        release_tx.send(()).unwrap();
         assert!(
             listening
                 .await
