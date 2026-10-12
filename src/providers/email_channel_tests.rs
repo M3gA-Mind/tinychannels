@@ -819,7 +819,7 @@ async fn listen_delivers_new_mail_and_reconnects_after_failures() {
     });
 
     let first = recv(&mut rx).await;
-    assert_eq!(first.id, "<a1@example.com>".trim_matches(['<', '>']));
+    assert_eq!(first.id, "a1@example.com");
     assert_eq!(first.sender, "alice@example.com");
     assert_eq!(first.reply_target, "alice@example.com");
     assert_eq!(first.channel, "email");
@@ -1001,20 +1001,18 @@ async fn listen_retries_a_failing_server() {
     listen.abort();
 }
 
-#[test]
-fn an_invalid_imap_host_fails_before_tls() {
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    rt.block_on(async {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let mut channel = imap_channel(&["*"], 30);
-        // An IP literal is not a DNS name the rustls SNI accepts.
-        channel.config.imap_port = port;
-        assert!(channel.connect_imap().await.is_err());
-    });
+#[tokio::test]
+async fn an_ip_literal_imap_host_fails_before_tls() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut channel = imap_channel(&["*"], 30);
+    // An IP literal is not a DNS name the SNI conversion accepts.
+    channel.config.imap_port = port;
+    let result = timeout(HANG_GUARD, channel.connect_imap())
+        .await
+        .expect("fails without waiting on a handshake");
+    assert!(result.is_err());
+    drop(listener);
 }
 
 // ── message text extraction ────────────────────────────────────
@@ -1131,13 +1129,7 @@ fn building_a_message_rejects_a_bad_address() {
 // ── Channel::send subject handling ─────────────────────────────
 
 async fn send_and_capture(content: &str) -> String {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    drop(listener);
-    let (port, server) = {
-        let _ = port;
-        blocking_smtp_server()
-    };
+    let (port, server) = blocking_smtp_server();
     let channel = EmailChannel::new(smtp_config(port, false));
     channel
         .send(&SendMessage::new(content, "to@example.com"))
