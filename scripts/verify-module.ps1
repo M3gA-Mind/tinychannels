@@ -43,7 +43,7 @@ try {
     $library = Join-Path $work 'tinychannels_module.dll'
     if (-not (Test-Path (Join-Path $work 'modules.toml'))) { throw 'modules.toml missing from archive' }
     $env:TINYCHANNELS_MODULE_ARTIFACT = $library
-    cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test module_artifact --test runtime_artifact -- --ignored
+    cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test module_artifact --test routing_artifact --test runtime_artifact -- --ignored
     if ($LASTEXITCODE -ne 0) { throw 'tinychannels module verification failed' }
 } finally {
     Remove-Item -LiteralPath $work -Recurse -Force

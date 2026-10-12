@@ -1,13 +1,9 @@
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-use std::{fs, path::PathBuf};
-use tinybus::broker::Broker;
-use tinybus::module::ModuleHost;
-use tinybus::transport::memory::MemoryTransport;
-use tinybus::{Connection, Result};
+use tinybus::Result;
+use tinybus::test_support::{admit_module, start_bus, wait_until_serving};
 use tinychannels::relay::{CapabilityDescriptor, ConnectorToGatewayFrame, GatewayToConnectorFrame};
 use tinychannels_bus::module_email::EmailSendRequest;
 use tinychannels_bus::module_relay::RelayReservation;
@@ -162,15 +158,13 @@ impl Callback {
 #[tokio::test]
 #[ignore = "run through scripts/verify-module-artifact.sh"]
 async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_lifecycle() {
-    let artifact = std::env::var_os("TINYCHANNELS_MODULE_ARTIFACT")
-        .expect("set TINYCHANNELS_MODULE_ARTIFACT to the built cdylib");
-    let broker = Broker::new();
-    let module_host = ModuleHost::new(broker.clone());
-    // The local artifact is allowlisted by its current bytes so TinyBus can
-    // attest it for this process's confidential-call test. This is a fixture,
-    // not a release digest or a host pin.
-    let (_staged, staged_artifact) = stage_allowlisted_artifact(PathBuf::from(artifact));
-    let info = module_host.load_file(&staged_artifact).unwrap();
+    let (module_host, connection, _broker_task) = start_bus().await.unwrap();
+    let info = admit_module(
+        &module_host,
+        "TINYCHANNELS_MODULE_ARTIFACT",
+        "tinychannels-module",
+    )
+    .unwrap();
     let interface = info
         .manifest
         .provides
@@ -191,11 +185,6 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         "compiled artifact must match the bus contract"
     );
 
-    let (client_transport, broker_transport) = MemoryTransport::pair();
-    broker.attach(Arc::new(broker_transport));
-    let connection = Connection::connect(Box::new(client_transport))
-        .await
-        .unwrap();
     let callbacks = Callback(
         Arc::new(Mutex::new(Vec::new())),
         Arc::new(Mutex::new(DeliveryState::default())),
@@ -211,6 +200,13 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         .request_name(tinychannels_bus::HOST_BUS_NAME)
         .await
         .unwrap();
+    wait_until_serving(
+        &connection,
+        tinychannels_bus::BUS_NAME,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
     let proxy = connection
         .proxy(
             tinychannels_bus::BUS_NAME,
@@ -1045,37 +1041,6 @@ async fn smtp_server() -> (
         received
     });
     (port, started_rx, release, task)
-}
-
-struct StagedArtifact(PathBuf);
-
-impl Drop for StagedArtifact {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn stage_allowlisted_artifact(artifact: PathBuf) -> (StagedArtifact, PathBuf) {
-    let hash = hex::encode(Sha256::digest(fs::read(&artifact).unwrap()));
-    let directory = artifact
-        .parent()
-        .expect("artifact has a parent directory")
-        .join(format!(
-            "tinychannels-artifact-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-    fs::create_dir(&directory).unwrap();
-    let staged = directory.join(artifact.file_name().unwrap());
-    fs::copy(artifact, &staged).unwrap();
-    fs::write(
-        directory.join("modules.toml"),
-        format!(
-            "{:?} = {hash:?}\n",
-            staged.file_name().unwrap().to_str().unwrap()
-        ),
-    )
-    .unwrap();
-    (StagedArtifact(directory), staged)
 }
 
 async fn relay_server() -> (String, tokio::task::JoinHandle<Vec<serde_json::Value>>) {

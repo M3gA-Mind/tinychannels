@@ -15,6 +15,19 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 
 class PackageTests(unittest.TestCase):
+    def test_e2e_verifiers_run_routing_artifact_test_on_each_shell(self):
+        for name in ["verify-module.sh", "verify-module.ps1"]:
+            with self.subTest(script=name):
+                script = (ROOT / "scripts" / name).read_text()
+                self.assertIn("--test routing_artifact", script)
+
+    def test_windows_e2e_entrypoint_exists(self):
+        self.assertTrue((ROOT / "scripts/test-e2e.ps1").is_file())
+
+    def test_windows_e2e_receives_host_and_version_from_shell(self):
+        script = (ROOT / "scripts/test-e2e.sh").read_text()
+        self.assertIn('pwsh -NoProfile -File scripts/test-e2e.ps1 -Target "$target" -Version "$version"', script)
+
     def test_verify_extracts_artifact_under_the_current_user_home(self):
         target = ROOT / "target"; target.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=target) as directory:

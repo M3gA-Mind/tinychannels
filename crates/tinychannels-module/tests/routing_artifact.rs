@@ -1,35 +1,20 @@
-use sha2::{Digest, Sha256};
-use std::{fs, path::PathBuf, sync::Arc};
-use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory::MemoryTransport};
+use std::time::Duration;
+use tinybus::test_support::{admit_module, start_bus, wait_until_serving};
 use tinychannels_bus::{BUS_NAME, OBJECT_PATH};
 
 #[tokio::test]
 #[ignore = "run through scripts/verify-module-artifact.sh"]
 async fn compiled_runtime_commands_preserve_alias_unknown_and_help_behavior() {
-    let artifact = PathBuf::from(std::env::var_os("TINYCHANNELS_MODULE_ARTIFACT").unwrap());
-    let directory = artifact
-        .parent()
-        .unwrap()
-        .join(format!("routing-host-{}", uuid::Uuid::new_v4()));
-    fs::create_dir_all(&directory).unwrap();
-    let _staged = StagedArtifact(directory.clone());
-    let staged = directory.join(artifact.file_name().unwrap());
-    fs::copy(&artifact, &staged).unwrap();
-    let hash = hex::encode(Sha256::digest(fs::read(&staged).unwrap()));
-    fs::write(
-        directory.join("modules.toml"),
-        format!(
-            "{:?} = {hash:?}\n",
-            staged.file_name().unwrap().to_str().unwrap()
-        ),
+    let (modules, connection, _broker_task) = start_bus().await.unwrap();
+    admit_module(
+        &modules,
+        "TINYCHANNELS_MODULE_ARTIFACT",
+        "tinychannels-module",
     )
     .unwrap();
-    let broker = Broker::new();
-    let modules = ModuleHost::new(broker.clone());
-    let _loaded = modules.load_file(&staged).unwrap();
-    let (client, transport) = MemoryTransport::pair();
-    broker.attach(Arc::new(transport));
-    let connection = Connection::connect(Box::new(client)).await.unwrap();
+    wait_until_serving(&connection, BUS_NAME, Duration::from_secs(5))
+        .await
+        .unwrap();
     let proxy = connection.proxy(BUS_NAME, OBJECT_PATH, BUS_NAME).unwrap();
     let request = |channel: &str, content: &str| {
         serde_json::json!({
@@ -103,11 +88,4 @@ async fn compiled_runtime_commands_preserve_alias_unknown_and_help_behavior() {
         .call::<()>(tinychannels_bus::methods::SHUTDOWN, ())
         .await
         .unwrap();
-}
-
-struct StagedArtifact(PathBuf);
-impl Drop for StagedArtifact {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
 }
