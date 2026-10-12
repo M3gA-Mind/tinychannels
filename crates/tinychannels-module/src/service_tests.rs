@@ -1419,6 +1419,110 @@ async fn inbound_preparation_service() -> Channels {
 }
 
 #[tokio::test]
+async fn runtime_command_preparation_covers_supported_commands_and_limits() {
+    use tinychannels_bus::context::ChannelRouteSelection;
+    use tinychannels_bus::module_routes::{
+        ModelCatalog, ModelCatalogEntry, PrepareRuntimeCommandRequest, PreparedRuntimeCommand,
+        ProviderDescriptor,
+    };
+
+    let service = inbound_preparation_service().await;
+    let request = |content: &str| PrepareRuntimeCommandRequest {
+        channel: "telegram".into(),
+        content: content.into(),
+        current: ChannelRouteSelection {
+            provider: "anthropic".into(),
+            model: "claude-fixture".into(),
+        },
+        providers: vec![ProviderDescriptor {
+            name: "anthropic".into(),
+            aliases: vec!["claude".into()],
+        }],
+        model_catalog: ModelCatalog {
+            entries: vec![ModelCatalogEntry {
+                provider: "anthropic".into(),
+                models: vec!["first-model".into(), "second-model".into()],
+            }],
+        },
+    };
+
+    assert_eq!(
+        service
+            .prepare_runtime_command(request("/models claude"))
+            .await
+            .unwrap(),
+        Some(PreparedRuntimeCommand::SetProvider {
+            requested: "claude".into(),
+            provider: Some("anthropic".into()),
+        })
+    );
+    assert_eq!(
+        service
+            .prepare_runtime_command(request("/models unknown"))
+            .await
+            .unwrap(),
+        Some(PreparedRuntimeCommand::SetProvider {
+            requested: "unknown".into(),
+            provider: None,
+        })
+    );
+    assert_eq!(
+        service
+            .prepare_runtime_command(request("/model custom model"))
+            .await
+            .unwrap(),
+        Some(PreparedRuntimeCommand::SetModel("custom model".into()))
+    );
+    assert_eq!(
+        service
+            .prepare_runtime_command(request("/models"))
+            .await
+            .unwrap(),
+        Some(PreparedRuntimeCommand::ShowProviders(
+            "Current provider: `anthropic`\nCurrent model: `claude-fixture`\n\nSwitch provider with `/models <provider>`.\nSwitch model with `/model <model-id>`.\n\nAvailable providers:\n- anthropic (aliases: claude)\n".into()
+        ))
+    );
+    assert_eq!(
+        service
+            .prepare_runtime_command(request("/model"))
+            .await
+            .unwrap(),
+        Some(PreparedRuntimeCommand::ShowModel(
+            "Current provider: `anthropic`\nCurrent model: `claude-fixture`\n\nSwitch model with `/model <model-id>`.\n\nCached model IDs (top 2):\n- `first-model`\n- `second-model`\n".into()
+        ))
+    );
+    assert_eq!(
+        service
+            .prepare_runtime_command(request("/unknown"))
+            .await
+            .unwrap(),
+        None
+    );
+
+    let mut unsupported_channel = request("/models");
+    unsupported_channel.channel = "email".into();
+    assert_eq!(
+        service
+            .prepare_runtime_command(unsupported_channel)
+            .await
+            .unwrap(),
+        None
+    );
+
+    let mut oversized = request("/models");
+    oversized.content = "x".repeat(tinychannels_bus::module_runtime::PREPARATION_MESSAGE_BYTES);
+    assert!(service.prepare_runtime_command(oversized).await.is_err());
+
+    service.shutdown().await.unwrap();
+    assert!(
+        service
+            .prepare_runtime_command(request("/models"))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
 async fn hosted_identity_preserves_absent_sender_and_telegram_topic_rules() {
     use tinychannels_bus::module_inbound::PrepareChannelIdentityRequest;
     let service = inbound_preparation_service().await;
