@@ -34,6 +34,22 @@ reject_symlink_components "$HOME"
 stage_parent="$HOME/.cache"
 mkdir -p "$stage_parent"
 reject_symlink_components "$stage_parent"
+[[ -O "$stage_parent" ]] || {
+  echo "verification cache is not owned by the current user: $stage_parent" >&2
+  exit 2
+}
+if ! cache_mode="$(stat -c '%a' "$stage_parent" 2>/dev/null)"; then
+  cache_mode="$(stat -f '%Lp' "$stage_parent")"
+fi
+[[ "$cache_mode" =~ ^[0-7]{3,4}$ ]] || {
+  echo "could not determine verification cache permissions: $stage_parent" >&2
+  exit 2
+}
+cache_permissions=$((8#$cache_mode))
+if (( (cache_permissions & 0022) != 0 && (cache_permissions & 01000) == 0 )); then
+  echo "verification cache is group or world writable without sticky-bit protection: $stage_parent" >&2
+  exit 2
+fi
 work="$(mktemp -d "$stage_parent/tinychannels-module-verify-XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 case "$archive" in
