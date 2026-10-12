@@ -76,7 +76,7 @@ class PackageTests(unittest.TestCase):
 
     def test_verifier_rejects_writable_cache_without_sticky_bit(self):
         target = ROOT / "target"; target.mkdir(exist_ok=True)
-        for mode, should_succeed in [(0o777, False), (0o1777, True)]:
+        for mode, should_succeed in [(0o777, False), (0o770, False), (0o1777, True)]:
             with self.subTest(mode=oct(mode)), tempfile.TemporaryDirectory(dir=target) as directory:
                 fixture = Path(directory); home = fixture/"home"; home.mkdir()
                 cache = home/".cache"; cache.mkdir(); cache.chmod(mode)
