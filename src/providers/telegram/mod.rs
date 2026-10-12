@@ -30,3 +30,7 @@ pub use crate::remote::{
 #[cfg(any(test, debug_assertions))]
 #[path = "mod_test_support_tests.rs"]
 pub mod test_support;
+
+#[cfg(test)]
+#[path = "fixtures_tests.rs"]
+mod fixtures;

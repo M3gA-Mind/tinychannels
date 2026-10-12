@@ -541,3 +541,7 @@ Ensure only one `openhuman` process is using this bot token."
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "channel_ops_tests.rs"]
+mod tests;

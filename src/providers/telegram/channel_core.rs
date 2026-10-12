@@ -342,3 +342,7 @@ impl TelegramChannel {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "channel_core_tests.rs"]
+mod tests;
