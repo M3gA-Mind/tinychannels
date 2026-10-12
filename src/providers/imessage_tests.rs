@@ -1,4 +1,5 @@
 use super::*;
+use tokio::time::timeout;
 
 #[test]
 fn creates_with_contacts() {
@@ -818,7 +819,7 @@ async fn next_delivery(
     loop {
         for (handle, text) in [(2, "from a stranger"), (1, "   "), (1, "hello")] {
             *rowid += 1;
-            insert_message(writer, *rowid, handle, &format!("{text}"));
+            insert_message(writer, *rowid, handle, text);
         }
         if let Ok(Some(message)) = timeout(Duration::from_millis(200), rx.recv()).await {
             return message;
@@ -837,11 +838,8 @@ async fn listen_delivers_only_allowed_non_blank_messages() {
              INSERT INTO handle (ROWID, id) VALUES (2, '+19999999999');",
         )
         .unwrap();
-    let mut rowid = 0;
-    insert_message(&writer, {
-        rowid += 1;
-        rowid
-    }, 1, "before startup");
+    insert_message(&writer, 1, 1, "before startup");
+    let mut rowid = 1;
 
     let channel = channel_on(&db_path, &["+15555550123"]);
     let (tx, mut rx) = mpsc::channel(8);
