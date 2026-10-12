@@ -94,6 +94,12 @@ impl Peer {
             .unwrap();
         self.writer.flush().await.unwrap();
     }
+
+    /// Close the connection cleanly (TLS `close_notify`), which the client
+    /// reads as end of stream.
+    async fn close(mut self) {
+        self.writer.shutdown().await.unwrap();
+    }
 }
 
 async fn recv(rx: &mut mpsc::Receiver<ChannelMessage>) -> ChannelMessage {
@@ -225,7 +231,7 @@ async fn listen_continues_without_sasl_when_the_server_refuses_it() {
     peer.say("PING").await;
     peer.expect("PONG :").await;
 
-    drop(peer);
+    peer.close().await;
     let error = tokio::time::timeout(GUARD, listen)
         .await
         .unwrap()
