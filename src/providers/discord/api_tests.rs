@@ -453,3 +453,231 @@ async fn check_channel_permissions_errors_on_member_lookup_failure() {
         "rewrapped message must not contain 'unauthorized': {err}"
     );
 }
+
+// ── Public entry points (base override) ───────────────────────
+
+thread_local! {
+    static API_BASE_OVERRIDE: std::cell::RefCell<Option<String>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Consulted by `api_base()` so the public helpers can be driven against a
+/// loopback mock on the current (test) thread.
+pub(super) fn api_base_override() -> Option<String> {
+    API_BASE_OVERRIDE.with(|b| b.borrow().clone())
+}
+
+/// Points the public helpers at `base` until the guard drops.
+struct BaseOverride;
+
+impl BaseOverride {
+    fn set(base: &str) -> Self {
+        API_BASE_OVERRIDE.with(|b| *b.borrow_mut() = Some(base.to_string()));
+        Self
+    }
+}
+
+impl Drop for BaseOverride {
+    fn drop(&mut self) {
+        API_BASE_OVERRIDE.with(|b| *b.borrow_mut() = None);
+    }
+}
+
+#[test]
+fn api_base_defaults_to_discord_v10() {
+    assert_eq!(api_base(), DISCORD_API_BASE);
+    let guard = BaseOverride::set("http://127.0.0.1:1");
+    assert_eq!(api_base(), "http://127.0.0.1:1");
+    drop(guard);
+    assert_eq!(api_base(), "https://discord.com/api/v10");
+}
+
+#[tokio::test]
+async fn public_list_bot_guilds_sends_bot_auth_header() {
+    let app = Router::new().route(
+        "/users/@me/guilds",
+        get(|headers: axum::http::HeaderMap| async move {
+            if headers.get("authorization").and_then(|v| v.to_str().ok()) != Some("Bot tok") {
+                return Err(StatusCode::BAD_REQUEST);
+            }
+            Ok(Json(json!([{ "id": "g9", "name": "Nine", "icon": null }])))
+        }),
+    );
+    let base = spawn_mock(app).await;
+    let _guard = BaseOverride::set(&base);
+    let guilds = list_bot_guilds("tok").await.unwrap();
+    assert_eq!(guilds.len(), 1);
+    assert_eq!(guilds[0].id, "g9");
+    // A wrong token is rejected by the mock and surfaces as an error.
+    let err = list_bot_guilds("other").await.unwrap_err().to_string();
+    assert!(err.contains("list_guilds failed (400"), "{err}");
+}
+
+#[tokio::test]
+async fn public_list_guild_channels_returns_sorted_text_channels() {
+    let app = Router::new().route(
+        "/guilds/{guild_id}/channels",
+        get(|Path(guild_id): Path<String>| async move {
+            if guild_id != "g7" {
+                return Err(StatusCode::NOT_FOUND);
+            }
+            Ok(Json(json!([
+                {"id": "b", "name": "b", "type": 0, "position": 5, "parent_id": "cat"},
+                {"id": "a", "name": "a", "type": 0, "position": 1, "parent_id": null},
+                {"id": "v", "name": "v", "type": 2, "position": 0, "parent_id": null}
+            ])))
+        }),
+    );
+    let base = spawn_mock(app).await;
+    let _guard = BaseOverride::set(&base);
+    let channels = list_guild_channels("t", "g7").await.unwrap();
+    let ids: Vec<&str> = channels.iter().map(|c| c.id.as_str()).collect();
+    assert_eq!(ids, ["a", "b"]);
+    let err = list_guild_channels("t", "missing")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("list_channels failed (404"), "{err}");
+}
+
+#[tokio::test]
+async fn public_check_channel_permissions_applies_role_and_member_overwrites() {
+    // Base: @everyone grants nothing. Channel overwrites: the bot's role
+    // allows VIEW + HISTORY, the bot member allows SEND; overwrites for a
+    // foreign role / foreign member are ignored.
+    let member = json!({ "roles": ["role-a"], "user": { "id": "bot-1" } });
+    let roles = json!([
+        { "id": "guild-1", "permissions": "0" },
+        { "id": "role-a", "permissions": "not-a-number" },
+        { "id": "role-z", "permissions": "8" }
+    ]);
+    let channel = json!({
+        "permission_overwrites": [
+            { "id": "role-a", "type": 0, "allow": (VIEW_CHANNEL | READ_MESSAGE_HISTORY).to_string(), "deny": "0" },
+            { "id": "bot-1", "type": 1, "allow": SEND_MESSAGES.to_string(), "deny": "0" },
+            { "id": "role-other", "type": 0, "allow": "0", "deny": (VIEW_CHANNEL | SEND_MESSAGES).to_string() },
+            { "id": "someone-else", "type": 1, "allow": "0", "deny": READ_MESSAGE_HISTORY.to_string() }
+        ]
+    });
+    let base = spawn_mock(permissions_mock(member, roles, channel)).await;
+    let _guard = BaseOverride::set(&base);
+    let out = check_channel_permissions("t", "guild-1", "channel-1")
+        .await
+        .unwrap();
+    assert!(out.can_view_channel);
+    assert!(out.can_send_messages);
+    assert!(out.can_read_message_history);
+    assert!(out.missing_permissions.is_empty());
+}
+
+#[tokio::test]
+async fn check_channel_permissions_member_overwrite_deny_beats_role_allow() {
+    let everything = VIEW_CHANNEL | SEND_MESSAGES | READ_MESSAGE_HISTORY;
+    let member = json!({ "roles": ["role-a"], "user": { "id": "bot-1" } });
+    let roles = json!([{ "id": "role-a", "permissions": everything.to_string() }]);
+    let channel = json!({
+        "permission_overwrites": [
+            { "id": "role-a", "type": 0, "allow": SEND_MESSAGES.to_string(), "deny": "0" },
+            { "id": "bot-1", "type": 1, "allow": "0", "deny": SEND_MESSAGES.to_string() }
+        ]
+    });
+    let base = spawn_mock(permissions_mock(member, roles, channel)).await;
+    let out = check_channel_permissions_at_base(&base, "t", "guild-1", "channel-1")
+        .await
+        .unwrap();
+    assert!(out.can_view_channel);
+    assert!(!out.can_send_messages);
+    assert!(out.can_read_message_history);
+    assert_eq!(out.missing_permissions, vec!["SEND_MESSAGES".to_string()]);
+}
+
+#[tokio::test]
+async fn check_channel_permissions_errors_when_bot_user_lookup_fails() {
+    let app = Router::new().route(
+        "/users/@me",
+        get(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "boom") }),
+    );
+    let base = spawn_mock(app).await;
+    let err = check_channel_permissions_at_base(&base, "t", "g", "c")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("get_bot_user failed (500"), "{err}");
+    assert!(err.contains("boom"), "{err}");
+}
+
+#[tokio::test]
+async fn check_channel_permissions_errors_when_bot_user_id_is_blank() {
+    let app = Router::new().route("/users/@me", get(|| async { Json(json!({ "id": "  " })) }));
+    let base = spawn_mock(app).await;
+    let err = check_channel_permissions_at_base(&base, "t", "g", "c")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert_eq!(err, "Discord get bot user returned empty id");
+}
+
+#[tokio::test]
+async fn check_channel_permissions_errors_when_roles_lookup_fails() {
+    let app = Router::new()
+        .route("/users/@me", get(|| async { Json(json!({ "id": "bot-1" })) }))
+        .route(
+            "/guilds/{guild_id}/members/{member_id}",
+            get(|| async { Json(json!({ "roles": [] })) }),
+        )
+        .route(
+            "/guilds/{guild_id}/roles",
+            get(|| async { (StatusCode::FORBIDDEN, "Missing Access") }),
+        );
+    let base = spawn_mock(app).await;
+    let err = check_channel_permissions_at_base(&base, "t", "g", "c")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("get_guild_roles"), "{err}");
+    assert!(err.contains("Settings → Channels → Discord"), "{err}");
+    assert!(!err.contains("403"), "{err}");
+}
+
+#[tokio::test]
+async fn check_channel_permissions_errors_when_channel_lookup_fails() {
+    let app = Router::new()
+        .route("/users/@me", get(|| async { Json(json!({ "id": "bot-1" })) }))
+        .route(
+            "/guilds/{guild_id}/members/{member_id}",
+            get(|| async { Json(json!({ "roles": [] })) }),
+        )
+        .route("/guilds/{guild_id}/roles", get(|| async { Json(json!([])) }))
+        .route(
+            "/channels/{channel_id}",
+            get(|| async { (StatusCode::NOT_FOUND, "Unknown Channel") }),
+        );
+    let base = spawn_mock(app).await;
+    let err = check_channel_permissions_at_base(&base, "t", "g", "c")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("get_channel failed (404"), "{err}");
+    assert!(err.contains("Unknown Channel"), "{err}");
+}
+
+#[tokio::test]
+async fn check_channel_permissions_without_overwrites_uses_base_permissions() {
+    // No `permission_overwrites` key at all, and the member has no `user`
+    // object: base role permissions decide alone.
+    let member = json!({ "roles": ["role-a"] });
+    let roles = json!([{ "id": "role-a", "permissions": VIEW_CHANNEL.to_string() }]);
+    let channel = json!({ "id": "channel-1" });
+    let base = spawn_mock(permissions_mock(member, roles, channel)).await;
+    let out = check_channel_permissions_at_base(&base, "t", "guild-1", "channel-1")
+        .await
+        .unwrap();
+    assert!(out.can_view_channel);
+    assert_eq!(
+        out.missing_permissions,
+        vec![
+            "SEND_MESSAGES".to_string(),
+            "READ_MESSAGE_HISTORY".to_string()
+        ]
+    );
+}
