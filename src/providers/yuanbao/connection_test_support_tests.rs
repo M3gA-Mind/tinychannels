@@ -252,6 +252,7 @@ pub async fn wait_for_state(conn: &YuanbaoConnection, state: ConnectionState) {
     .expect("connection never reached the expected state");
 }
 
+#[cfg(test)]
 /// Timings that make reconnect immediate and never fire a heartbeat
 /// unless a test asks for one.
 pub(crate) fn fast_timings() -> ConnTimings {
