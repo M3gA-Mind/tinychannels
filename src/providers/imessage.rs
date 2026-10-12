@@ -1,4 +1,5 @@
 use crate::traits::{Channel, ChannelMessage, SendMessage};
+use anyhow::Context as _;
 use async_trait::async_trait;
 use directories::UserDirs;
 use rusqlite::{Connection, OpenFlags};
@@ -176,7 +177,7 @@ end tell"#
         // The database is at ~/Library/Messages/chat.db
         let db_path = self
             .messages_db_path()
-            .ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
+            .context("Cannot find home directory")?;
 
         if !db_path.exists() {
             anyhow::bail!(
@@ -210,7 +211,7 @@ end tell"#
                 },
             )
             .await
-            .map_err(|e| anyhow::anyhow!("iMessage poll worker join error: {e}"))?;
+            .context("iMessage poll worker join error")?;
             conn = returned_conn;
 
             match poll_result {

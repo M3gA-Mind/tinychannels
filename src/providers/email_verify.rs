@@ -1,6 +1,7 @@
 //! Live verification of email (IMAP) credentials before they are persisted.
 
 use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
 use super::email_channel::{EmailChannel, EmailConfig};
@@ -21,7 +22,7 @@ pub async fn verify_email_credentials(cfg: &EmailConfig) -> Result<(), String> {
 
 /// Maps a login probe's outcome, bounded by `limit`, to the user-facing result.
 async fn verify_with_probe(
-    probe: impl Future<Output = bool>,
+    probe: Pin<Box<dyn Future<Output = bool> + Send + '_>>,
     imap_host: &str,
     limit: Duration,
 ) -> Result<(), String> {

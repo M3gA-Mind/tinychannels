@@ -2,13 +2,13 @@ use super::*;
 
 #[tokio::test]
 async fn a_successful_probe_verifies() {
-    let result = verify_with_probe(async { true }, "imap.example.com", Duration::from_secs(5)).await;
+    let result = verify_with_probe(Box::pin(async { true }), "imap.example.com", Duration::from_secs(5)).await;
     assert_eq!(result, Ok(()));
 }
 
 #[tokio::test]
 async fn a_failed_probe_reports_a_login_failure() {
-    let error = verify_with_probe(async { false }, "imap.example.com", Duration::from_secs(5))
+    let error = verify_with_probe(Box::pin(async { false }), "imap.example.com", Duration::from_secs(5))
         .await
         .unwrap_err();
     assert!(error.starts_with("IMAP connection failed"), "{error}");
@@ -17,7 +17,7 @@ async fn a_failed_probe_reports_a_login_failure() {
 #[tokio::test]
 async fn a_stalled_probe_reports_a_timeout_naming_the_host() {
     let error = verify_with_probe(
-        std::future::pending::<bool>(),
+        Box::pin(std::future::pending::<bool>()),
         "imap.example.com",
         Duration::from_millis(10),
     )

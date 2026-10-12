@@ -956,16 +956,53 @@ async fn health_check_fails_on_a_rejected_login() {
     );
 }
 
+/// A server that accepts but never greets stalls the probe past its budget.
 #[tokio::test]
 async fn health_check_fails_when_the_probe_stalls() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let holder = tokio::spawn(async move {
+        let (sock, _) = listener.accept().await.unwrap();
+        std::future::pending::<()>().await;
+        drop(sock);
+    });
     let channel = imap_channel(&["*"], 30);
-    let stalled =
-        std::future::pending::<Result<Session<tokio::net::TcpStream>>>();
     assert!(
         !channel
-            .health_check_with(stalled, Duration::from_millis(10))
+            .health_check_with(plain_session(&channel, port), Duration::from_millis(50))
             .await
     );
+    holder.abort();
+}
+
+/// After the IDLE budget elapses the session re-checks the mailbox and
+/// delivers what arrived meanwhile; unparsable fetches are skipped unmarked.
+#[tokio::test]
+async fn an_idle_timeout_rechecks_the_mailbox() {
+    let (port, server) = fake_imap(vec![ConnScript {
+        searches: vec![vec![(6, b"")], vec![(1, ALICE)]],
+        idles: vec![IdleStep::WaitForDone, IdleStep::Truncate],
+        ..Default::default()
+    }])
+    .await;
+    let channel = imap_channel(&["*"], 0);
+    let (tx, mut rx) = mpsc::channel(8);
+    let listen = tokio::spawn(async move {
+        channel
+            .listen_with_reconnect(&tx, || plain_session(&channel, port))
+            .await
+    });
+    let message = recv(&mut rx).await;
+    assert_eq!(message.sender, "alice@example.com");
+    let commands = timeout(HANG_GUARD, server)
+        .await
+        .expect("server finished")
+        .unwrap()
+        .remove(0);
+    listen.abort();
+    let stores: Vec<_> = commands.iter().filter(|l| l.contains("UID STORE")).collect();
+    assert_eq!(stores.len(), 1, "only the parsed fetch is marked: {commands:?}");
+    assert!(stores[0].contains("UID STORE 1 "), "{commands:?}");
 }
 
 /// The real TLS probe refuses a plaintext server instead of logging in.
