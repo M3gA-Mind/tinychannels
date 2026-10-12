@@ -193,6 +193,7 @@ struct DurableHost {
     fail_pending_write: Arc<std::sync::atomic::AtomicBool>,
     fail_queue_read: Arc<std::sync::atomic::AtomicBool>,
     lose_result_reply: Arc<std::sync::atomic::AtomicBool>,
+    pending_reads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
@@ -262,6 +263,7 @@ impl DurableHost {
     async fn load_pending_deliveries(
         &self,
     ) -> tinybus::Result<Vec<tinychannels_bus::DeliveryQueueEntry>> {
+        self.pending_reads.fetch_add(1, Ordering::SeqCst);
         if self.fail_queue_read.load(Ordering::SeqCst) {
             return Err(tinybus::Error::failed("fixture pending read failed"));
         }
@@ -1013,6 +1015,103 @@ async fn shutdown_store_failure_still_joins_provider_and_can_retry_persistence()
         1,
         "a stopped provider leaves the durable entry for the next start"
     );
+}
+
+#[derive(Clone)]
+struct FailingRuntimeDeliveryHost(Arc<std::sync::atomic::AtomicBool>);
+
+#[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
+impl FailingRuntimeDeliveryHost {
+    async fn load_pending_deliveries(
+        &self,
+    ) -> tinybus::Result<Vec<tinychannels_bus::DeliveryQueueEntry>> {
+        if self.0.load(Ordering::SeqCst) {
+            return Err(tinybus::Error::failed("fixture runtime store unavailable"));
+        }
+        Ok(Vec::new())
+    }
+}
+
+#[tokio::test]
+async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let module = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host_server = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let root_callbacks = DurableHost::default();
+    host_server
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            root_callbacks.clone(),
+        )
+        .await
+        .unwrap();
+    host_server
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+
+    let root_host = HostChannels::new(module.clone());
+    let runtimes = Arc::new(crate::runtime::Runtimes::new(module.clone()));
+    let channels = Channels::new(root_host.clone(), Some(runtimes.clone()));
+    let (sent, _received) = tokio::sync::mpsc::channel(1);
+    let provider = Running::start(
+        Arc::new(CaptureChannel(sent)),
+        Arc::new(Hooks::default()),
+        root_host.clone(),
+    );
+    channels
+        .running
+        .lock()
+        .await
+        .insert("fixture".into(), provider.clone());
+    channels.relays.reserve().await.unwrap();
+
+    let reservation = runtimes.reserve().await.unwrap();
+    let fail_runtime_store = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    host_server
+        .serve_at(
+            reservation.host_object_path.clone().try_into().unwrap(),
+            FailingRuntimeDeliveryHost(fail_runtime_store.clone()),
+        )
+        .await
+        .unwrap();
+    runtimes.start(reservation.handle.clone()).await.unwrap();
+
+    assert!(channels.shutdown().await.is_err());
+    assert!(
+        runtimes.stop(reservation.handle.clone()).await.is_err(),
+        "the failed nested runtime owner must remain retryable"
+    );
+    assert!(
+        provider.is_finished(),
+        "root providers must be joined despite a nested runtime stop error"
+    );
+    assert!(channels.running.lock().await.is_empty());
+    assert!(channels.relays.is_empty().await);
+    assert!(root_callbacks.pending_reads.load(Ordering::SeqCst) > 0);
+    assert!(
+        channels
+            .email
+            .send(tinychannels_bus::module_email::EmailSendRequest {
+                config: tinychannels_bus::config::EmailConfig::default(),
+                recipient: "recipient@example.test".into(),
+                subject: "fixture".into(),
+                body: "fixture".into(),
+                attachments: Vec::new(),
+            })
+            .await
+            .is_err(),
+        "email admission must be closed even when nested runtime cleanup fails"
+    );
+    assert!(root_host.flush().await.is_err());
+    fail_runtime_store.store(false, Ordering::SeqCst);
+    channels.shutdown().await.unwrap();
+    assert!(runtimes.start(reservation.handle).await.is_err());
 }
 
 #[tokio::test]

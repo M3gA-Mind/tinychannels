@@ -1,5 +1,5 @@
 use sha2::{Digest, Sha256};
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory::MemoryTransport};
 use tinychannels_bus::{BUS_NAME, ChannelRuntimeReservation, HOST_BUS_NAME, OBJECT_PATH, methods};
 
@@ -82,6 +82,10 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     let connection = Connection::connect(Box::new(client)).await.unwrap();
     connection.request_name(HOST_BUS_NAME).await.unwrap();
     let proxy = connection.proxy(BUS_NAME, OBJECT_PATH, BUS_NAME).unwrap();
+    let bounded_proxy = connection
+        .proxy(BUS_NAME, OBJECT_PATH, BUS_NAME)
+        .unwrap()
+        .with_timeout(Duration::from_millis(350));
     let first: ChannelRuntimeReservation = proxy
         .call_confidential(methods::RESERVE_RUNTIME, ())
         .await
@@ -112,7 +116,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
                     .wire_name(),
                 tinybus::Error::CONFIDENTIALITY_REQUIRED
             );
-            proxy
+            bounded_proxy
                 .call_confidential::<()>(methods::START_RUNTIME_WITH_DISPATCH, request)
                 .await
                 .unwrap();
@@ -419,6 +423,23 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             .call::<Vec<String>>(methods::LIST_CHANNELS, ())
             .await
             .is_err()
+    );
+    let root_limits: tinychannels_bus::module_control::ChannelControlResult = bounded_proxy
+        .call_confidential(
+            methods::PREPARE_CHANNEL_CONTROL,
+            tinychannels_bus::module_control::ChannelControlRequest::RuntimeLimits {
+                timeout_secs: 1,
+                listener_count: 100,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        root_limits,
+        tinychannels_bus::module_control::ChannelControlResult::RuntimeLimits {
+            timeout_secs: 30,
+            max_in_flight: 64,
+        }
     );
     let _: Vec<String> = second_client
         .call(methods::LIST_CHANNELS, ())
