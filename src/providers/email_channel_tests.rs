@@ -846,11 +846,13 @@ async fn listen_delivers_new_mail_and_reconnects_after_failures() {
     assert_eq!(transcripts.len(), 3);
     let first_conn = transcripts[0].join("\n");
     assert!(first_conn.contains("SELECT \"INBOX\""), "{first_conn}");
-    assert!(first_conn.contains("UID FETCH 1,2 RFC822"), "{first_conn}");
-    assert!(
-        first_conn.contains("UID STORE 1,2 +FLAGS (\\Seen)"),
-        "{first_conn}"
-    );
+    // The UID set comes from a search result set, so its order is open.
+    let either = |prefix: &str, suffix: &str| {
+        first_conn.contains(&format!("{prefix} 1,2 {suffix}"))
+            || first_conn.contains(&format!("{prefix} 2,1 {suffix}"))
+    };
+    assert!(either("UID FETCH", "RFC822"), "{first_conn}");
+    assert!(either("UID STORE", "+FLAGS (\\Seen)"), "{first_conn}");
     assert!(first_conn.contains("DONE"), "{first_conn}");
     assert!(
         !transcripts[1].iter().any(|l| l.contains("SELECT")),
