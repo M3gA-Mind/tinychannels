@@ -228,7 +228,23 @@ pub async fn upload_to_cos(
     creds: &CosCredentials,
     data: &[u8],
     filename: &str,
+    content_type: String,
+) -> Result<UploadResult, YuanbaoError> {
+    upload_to_cos_via(http, creds, data, filename, content_type, None).await
+}
+
+/// [`upload_to_cos`] with an optional endpoint override.
+///
+/// `endpoint` replaces the `https://<cos_host>` origin the PUT is sent to
+/// (the signed `host` header still names the real COS host). Production
+/// always passes `None`; tests point it at a local mock server.
+pub(crate) async fn upload_to_cos_via(
+    http: &reqwest::Client,
+    creds: &CosCredentials,
+    data: &[u8],
+    filename: &str,
     mut content_type: String,
+    endpoint: Option<&str>,
 ) -> Result<UploadResult, YuanbaoError> {
     if creds.secret_id.is_empty() || creds.secret_key.is_empty() || creds.location.is_empty() {
         return Err(YuanbaoError::Media(
@@ -250,6 +266,14 @@ pub async fn upload_to_cos(
     };
     let encoded_key = encode_cos_key(&creds.location);
     let cos_url = format!("https://{cos_host}/{}", encoded_key.trim_start_matches('/'));
+    let put_url = match endpoint {
+        Some(origin) => format!(
+            "{}/{}",
+            origin.trim_end_matches('/'),
+            encoded_key.trim_start_matches('/')
+        ),
+        None => cos_url.clone(),
+    };
 
     let now = unix_now();
     let start = if creds.start_time != 0 {
@@ -287,7 +311,7 @@ pub async fn upload_to_cos(
         data.len()
     );
     let resp = http
-        .put(&cos_url)
+        .put(&put_url)
         .header("Authorization", sig)
         .header("Content-Type", content_type.as_str())
         .header("x-cos-security-token", &creds.session_token)
