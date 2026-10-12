@@ -238,14 +238,8 @@ pub async fn check_channel_permissions_with_client(
     guild_id: &str,
     channel_id: &str,
 ) -> anyhow::Result<BotPermissionCheck> {
-    check_channel_permissions_at_base_with_client(
-        &api_base(),
-        client,
-        token,
-        guild_id,
-        channel_id,
-    )
-    .await
+    check_channel_permissions_at_base_with_client(&api_base(), client, token, guild_id, channel_id)
+        .await
 }
 
 /// Test seam: see [`check_channel_permissions`].

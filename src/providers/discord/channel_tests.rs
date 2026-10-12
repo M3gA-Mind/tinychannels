@@ -588,7 +588,9 @@ fn proactive_target_uses_configured_channel_id() {
 
 // ── REST + Gateway against loopback mocks ─────────────────────
 
-use axum::{Json, Router, extract::Path, http::HeaderMap, http::StatusCode, routing::get, routing::post};
+use axum::{
+    Json, Router, extract::Path, http::HeaderMap, http::StatusCode, routing::get, routing::post,
+};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -617,21 +619,20 @@ fn channel_at(base: &str, channel_id: Option<&str>) -> DiscordChannel {
 }
 
 fn outbound(content: &str, recipient: &str) -> SendMessage {
-    SendMessage {
-        content: content.to_string(),
-        recipient: recipient.to_string(),
-        subject: None,
-        thread_ts: None,
-    }
+    SendMessage::new(content, recipient)
 }
 
 /// Mock that records `(channel_id, authorization, content)` per POSTed message.
-async fn message_sink(status: StatusCode) -> (String, mpsc::UnboundedReceiver<(String, String, String)>) {
+async fn message_sink(
+    status: StatusCode,
+) -> (String, mpsc::UnboundedReceiver<(String, String, String)>) {
     let (tx, rx) = mpsc::unbounded_channel();
     let app = Router::new().route(
         "/channels/{channel_id}/messages",
         post(
-            move |Path(channel_id): Path<String>, headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+            move |Path(channel_id): Path<String>,
+                  headers: HeaderMap,
+                  Json(body): Json<serde_json::Value>| {
                 let tx = tx.clone();
                 async move {
                     let auth = headers
@@ -682,7 +683,9 @@ async fn send_without_recipient_uses_configured_channel_and_splits_long_text() {
     assert_eq!(second.0, "default-chan");
     assert!(discord_units(&first.2) <= DISCORD_MAX_MESSAGE_LENGTH);
     assert_eq!(
-        format!("{}{}", first.2, second.2).split_whitespace().count(),
+        format!("{}{}", first.2, second.2)
+            .split_whitespace()
+            .count(),
         500
     );
 }
@@ -802,7 +805,9 @@ async fn next_json(ws: &mut WsStream) -> serde_json::Value {
 }
 
 async fn send_json(ws: &mut WsStream, value: serde_json::Value) {
-    ws.send(Message::Text(value.to_string().into())).await.unwrap();
+    ws.send(Message::Text(value.to_string().into()))
+        .await
+        .unwrap();
 }
 
 fn message_create(d: serde_json::Value) -> serde_json::Value {
@@ -821,12 +826,12 @@ async fn listen_filters_gateway_events_and_forwards_allowed_messages() {
         send_json(&mut ws, json!({"op": 0, "t": "MESSAGE_CREATE"})).await;
         let base = json!({"id": "m", "guild_id": "g1", "channel_id": "c1", "content": "x"});
         for (author, patch) in [
-            (json!({"id": "123456"}), json!({})),               // the bot itself
-            (json!({"id": "u1", "bot": true}), json!({})),      // another bot
-            (json!({"id": "intruder"}), json!({})),             // not allowlisted
-            (json!({"id": "u1"}), json!({"guild_id": "g2"})),   // other guild
+            (json!({"id": "123456"}), json!({})),          // the bot itself
+            (json!({"id": "u1", "bot": true}), json!({})), // another bot
+            (json!({"id": "intruder"}), json!({})),        // not allowlisted
+            (json!({"id": "u1"}), json!({"guild_id": "g2"})), // other guild
             (json!({"id": "u1"}), json!({"channel_id": "c2"})), // other channel
-            (json!({"id": "u1"}), json!({"content": ""})),      // empty content
+            (json!({"id": "u1"}), json!({"content": ""})), // empty content
         ] {
             let mut d = base.clone();
             d["author"] = author;
@@ -861,7 +866,10 @@ async fn listen_filters_gateway_events_and_forwards_allowed_messages() {
         .await
         .expect("listen returns on op 7")
         .unwrap();
-    tokio::time::timeout(HANG_GUARD, server).await.unwrap().unwrap();
+    tokio::time::timeout(HANG_GUARD, server)
+        .await
+        .unwrap()
+        .unwrap();
 
     let msg = rx.try_recv().expect("one forwarded message");
     assert_eq!(msg.id, "discord_m-ok");
@@ -899,12 +907,22 @@ async fn listen_handles_dm_mentions_and_bots_then_stops_on_invalid_session() {
         .await
         .expect("listen returns on op 9")
         .unwrap();
-    tokio::time::timeout(HANG_GUARD, server).await.unwrap().unwrap();
+    tokio::time::timeout(HANG_GUARD, server)
+        .await
+        .unwrap()
+        .unwrap();
 
     let msg = rx.try_recv().unwrap();
-    assert!(msg.id.starts_with("discord_") && msg.id.len() > "discord_".len() + 30, "{}", msg.id);
+    assert!(
+        msg.id.starts_with("discord_") && msg.id.len() > "discord_".len() + 30,
+        "{}",
+        msg.id
+    );
     assert_eq!(msg.sender, "u7");
-    assert_eq!(msg.reply_target, "u7", "DM without channel id replies to author");
+    assert_eq!(
+        msg.reply_target, "u7",
+        "DM without channel id replies to author"
+    );
     assert_eq!(msg.content, "ping");
     assert!(rx.try_recv().is_err());
 }
@@ -921,7 +939,10 @@ async fn listen_returns_when_gateway_closes() {
         .await
         .expect("listen returns on close")
         .unwrap();
-    tokio::time::timeout(HANG_GUARD, server).await.unwrap().unwrap();
+    tokio::time::timeout(HANG_GUARD, server)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
@@ -929,7 +950,9 @@ async fn listen_stops_when_receiver_is_gone() {
     let (base, server) = spawn_gateway(|mut ws| async move {
         send_json(
             &mut ws,
-            message_create(json!({"id": "1", "channel_id": "c", "content": "hi", "author": {"id": "u"}})),
+            message_create(
+                json!({"id": "1", "channel_id": "c", "content": "hi", "author": {"id": "u"}}),
+            ),
         )
         .await;
         // Keep the socket open until the client goes away.
@@ -943,7 +966,10 @@ async fn listen_stops_when_receiver_is_gone() {
         .await
         .expect("listen returns once delivery fails")
         .unwrap();
-    tokio::time::timeout(HANG_GUARD, server).await.unwrap().unwrap();
+    tokio::time::timeout(HANG_GUARD, server)
+        .await
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]

@@ -620,7 +620,10 @@ async fn check_channel_permissions_errors_when_bot_user_id_is_blank() {
 #[tokio::test]
 async fn check_channel_permissions_errors_when_roles_lookup_fails() {
     let app = Router::new()
-        .route("/users/@me", get(|| async { Json(json!({ "id": "bot-1" })) }))
+        .route(
+            "/users/@me",
+            get(|| async { Json(json!({ "id": "bot-1" })) }),
+        )
         .route(
             "/guilds/{guild_id}/members/{member_id}",
             get(|| async { Json(json!({ "roles": [] })) }),
@@ -642,12 +645,18 @@ async fn check_channel_permissions_errors_when_roles_lookup_fails() {
 #[tokio::test]
 async fn check_channel_permissions_errors_when_channel_lookup_fails() {
     let app = Router::new()
-        .route("/users/@me", get(|| async { Json(json!({ "id": "bot-1" })) }))
+        .route(
+            "/users/@me",
+            get(|| async { Json(json!({ "id": "bot-1" })) }),
+        )
         .route(
             "/guilds/{guild_id}/members/{member_id}",
             get(|| async { Json(json!({ "roles": [] })) }),
         )
-        .route("/guilds/{guild_id}/roles", get(|| async { Json(json!([])) }))
+        .route(
+            "/guilds/{guild_id}/roles",
+            get(|| async { Json(json!([])) }),
+        )
         .route(
             "/channels/{channel_id}",
             get(|| async { (StatusCode::NOT_FOUND, "Unknown Channel") }),
