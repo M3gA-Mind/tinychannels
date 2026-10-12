@@ -909,6 +909,14 @@ fn should_respond_in_group(mentions: &[serde_json::Value]) -> bool {
 #[path = "lark_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "lark_api_tests.rs"]
+mod api_tests;
+
+#[cfg(test)]
+#[path = "lark_ws_tests.rs"]
+mod ws_tests;
+
 #[cfg(any(test, debug_assertions))]
 #[path = "lark_test_support_tests.rs"]
 pub mod test_support;
