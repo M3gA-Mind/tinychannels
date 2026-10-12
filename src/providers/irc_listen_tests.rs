@@ -294,10 +294,7 @@ async fn health_check_completes_a_tls12_handshake_and_quits() {
     });
 
     assert!(IrcChannel::new(config(port)).health_check().await);
-    let line = tokio::time::timeout(GUARD, server)
-        .await
-        .unwrap()
-        .unwrap();
+    let line = tokio::time::timeout(GUARD, server).await.unwrap().unwrap();
     assert_eq!(line, "QUIT :health check");
 }
 

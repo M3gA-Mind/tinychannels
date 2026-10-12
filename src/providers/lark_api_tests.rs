@@ -93,7 +93,10 @@ async fn send_fetches_a_token_once_and_posts_a_text_message() {
     );
 
     let send = &requests[1];
-    assert_eq!(send.target, "/open-apis/im/v1/messages?receive_id_type=chat_id");
+    assert_eq!(
+        send.target,
+        "/open-apis/im/v1/messages?receive_id_type=chat_id"
+    );
     assert_eq!(header(send, "authorization"), Some("Bearer t-1"));
     assert_eq!(
         header(send, "content-type"),
@@ -102,8 +105,7 @@ async fn send_fetches_a_token_once_and_posts_a_text_message() {
     assert_eq!(send.body["receive_id"], "oc_chat");
     assert_eq!(send.body["msg_type"], "text");
     assert_eq!(
-        serde_json::from_str::<serde_json::Value>(send.body["content"].as_str().unwrap())
-            .unwrap(),
+        serde_json::from_str::<serde_json::Value>(send.body["content"].as_str().unwrap()).unwrap(),
         serde_json::json!({"text": "hello lark"})
     );
     assert_eq!(header(&requests[2], "authorization"), Some("Bearer t-1"));
@@ -181,13 +183,8 @@ async fn send_reports_failures_with_and_without_a_token_refresh() {
 
 #[tokio::test]
 async fn token_errors_fail_send_and_health_check() {
-    let server = HttpsServer::start(|_| {
-        (
-            200,
-            r#"{"code":10003,"msg":"invalid app_secret"}"#.into(),
-        )
-    })
-    .await;
+    let server =
+        HttpsServer::start(|_| (200, r#"{"code":10003,"msg":"invalid app_secret"}"#.into())).await;
     let channel = channel_with(&server, true);
     assert!(!channel.health_check().await);
     let error = channel
@@ -216,8 +213,8 @@ async fn token_errors_fail_send_and_health_check() {
 
 #[tokio::test]
 async fn ws_endpoint_errors_stop_listen_before_connecting() {
-    let server = HttpsServer::start(|_| (200, r#"{"code":1000040345,"msg":"bad app"}"#.into()))
-        .await;
+    let server =
+        HttpsServer::start(|_| (200, r#"{"code":1000040345,"msg":"bad app"}"#.into())).await;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let error = channel_with(&server, true).listen(tx).await.unwrap_err();
     assert_eq!(
@@ -235,7 +232,10 @@ async fn ws_endpoint_errors_stop_listen_before_connecting() {
     let server = HttpsServer::start(|_| (200, r#"{"code":1}"#.into())).await;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let error = channel_with(&server, false).listen(tx).await.unwrap_err();
-    assert_eq!(error.to_string(), "Lark WS endpoint failed: code=1 msg=(none)");
+    assert_eq!(
+        error.to_string(),
+        "Lark WS endpoint failed: code=1 msg=(none)"
+    );
     let requests = server.requests.lock().unwrap().clone();
     assert_eq!(header(&requests[0], "locale"), Some("en"));
 
@@ -261,13 +261,7 @@ fn webhook_event(open_id: &str, text: &str) -> serde_json::Value {
 
 #[tokio::test]
 async fn webhook_mode_requires_a_port() {
-    let mut channel = LarkChannel::new(
-        "a".into(),
-        "s".into(),
-        "verify-token".into(),
-        None,
-        vec![],
-    );
+    let mut channel = LarkChannel::new("a".into(), "s".into(), "verify-token".into(), None, vec![]);
     channel.receive_mode = crate::config::LarkReceiveMode::Webhook;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let error = channel.listen(tx).await.unwrap_err();
@@ -304,10 +298,7 @@ async fn webhook_server_forwards_verified_events() {
         {
             Ok(response) => break response,
             Err(error) => {
-                assert!(
-                    Instant::now() < deadline,
-                    "webhook never came up: {error}"
-                );
+                assert!(Instant::now() < deadline, "webhook never came up: {error}");
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
         }

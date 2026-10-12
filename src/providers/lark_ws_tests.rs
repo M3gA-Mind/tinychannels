@@ -192,7 +192,9 @@ async fn ws_listener_acks_reassembles_filters_and_forwards_messages() {
     ws.send(frame(3, 0, &[("type", "pong")], Some(pong_cfg)))
         .await
         .unwrap();
-    ws.send(frame(4, 0, &[("type", "pong")], None)).await.unwrap();
+    ws.send(frame(4, 0, &[("type", "pong")], None))
+        .await
+        .unwrap();
 
     // Non-event DATA is acknowledged but not dispatched.
     send_data(&mut ws, 100, &[("type", "card")], b"{}".to_vec()).await;
@@ -203,21 +205,36 @@ async fn ws_listener_acks_reassembles_filters_and_forwards_messages() {
     send_data(
         &mut ws,
         101,
-        &[("type", "event"), ("message_id", "om_frag"), ("sum", "3"), ("seq", "0")],
+        &[
+            ("type", "event"),
+            ("message_id", "om_frag"),
+            ("sum", "3"),
+            ("seq", "0"),
+        ],
         head.to_vec(),
     )
     .await;
     send_data(
         &mut ws,
         102,
-        &[("type", "event"), ("message_id", "om_frag"), ("sum", "2"), ("seq", "0")],
+        &[
+            ("type", "event"),
+            ("message_id", "om_frag"),
+            ("sum", "2"),
+            ("seq", "0"),
+        ],
         head.to_vec(),
     )
     .await;
     send_data(
         &mut ws,
         103,
-        &[("type", "event"), ("message_id", "om_frag"), ("sum", "2"), ("seq", "1")],
+        &[
+            ("type", "event"),
+            ("message_id", "om_frag"),
+            ("sum", "2"),
+            ("seq", "1"),
+        ],
         tail.to_vec(),
     )
     .await;
@@ -242,8 +259,18 @@ async fn ws_listener_acks_reassembles_filters_and_forwards_messages() {
     send_event(&mut ws, 107, from_bot.to_string().into_bytes()).await;
     send_event(&mut ws, 108, event("om_m", "ou_mallory", text("let me in"))).await;
 
-    send_event(&mut ws, 109, event("om_2", "ou_alice", text("hello @_user_1 there"))).await;
-    send_event(&mut ws, 110, event("om_2", "ou_alice", text("hello @_user_1 there"))).await;
+    send_event(
+        &mut ws,
+        109,
+        event("om_2", "ou_alice", text("hello @_user_1 there")),
+    )
+    .await;
+    send_event(
+        &mut ws,
+        110,
+        event("om_2", "ou_alice", text("hello @_user_1 there")),
+    )
+    .await;
     send_event(
         &mut ws,
         111,
@@ -310,7 +337,12 @@ async fn ws_listener_acks_reassembles_filters_and_forwards_messages() {
     }
     assert_eq!(
         delivered,
-        ["fragmented hello", "hello there", "Title\n\nBody", "group hi"]
+        [
+            "fragmented hello",
+            "hello there",
+            "Title\n\nBody",
+            "group hi"
+        ]
     );
 }
 
@@ -324,7 +356,12 @@ async fn ws_listener_stops_when_the_receiver_is_dropped() {
     next_frame(&mut ws).await;
 
     drop(rx);
-    send_event(&mut ws, 1, event("om_1", "ou_anyone", text("into the void"))).await;
+    send_event(
+        &mut ws,
+        1,
+        event("om_1", "ou_anyone", text("into the void")),
+    )
+    .await;
     tokio::time::timeout(GUARD, listen)
         .await
         .unwrap()
