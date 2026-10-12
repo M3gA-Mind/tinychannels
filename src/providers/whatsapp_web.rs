@@ -478,46 +478,50 @@ impl WhatsAppWebChannel {
 }
 
 #[cfg(feature = "whatsapp-web")]
-#[async_trait]
-impl Channel for WhatsAppWebChannel {
-    fn name(&self) -> &str {
-        "whatsapp"
+impl WhatsAppWebChannel {
+    /// The production WebSocket transport, aimed at `ws_url` when one is
+    /// configured (`WHATSAPP_WS_URL`) and at WhatsApp's default endpoint
+    /// otherwise. Building it opens no connection.
+    fn websocket_transport(
+        ws_url: Option<String>,
+    ) -> whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory {
+        let mut transport_factory =
+            whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
+        if let Some(ws_url) = ws_url {
+            transport_factory = transport_factory.with_url(ws_url);
+        }
+        transport_factory
     }
 
-    async fn send(&self, message: &SendMessage) -> Result<()> {
+    /// The live outbound client, or the "not connected" error every outbound
+    /// path reports before the bot is built.
+    fn connected_client(&self) -> Result<Arc<dyn OutboundClient>> {
         let client = self.client.lock().clone();
         let Some(client) = client else {
             anyhow::bail!("WhatsApp Web client not connected. Initialize the bot first.");
         };
-
-        if !self.should_allow_outbound(&message.recipient) {
-            tracing::warn!(
-                "WhatsApp Web: recipient {} not in allowed list",
-                Self::redact_recipient(&message.recipient)
-            );
-            return Ok(());
-        }
-
-        let to = self.recipient_to_jid(&message.recipient)?;
-        let outgoing = whatsapp_rust::waproto::whatsapp::Message {
-            conversation: Some(message.content.clone()),
-            ..Default::default()
-        };
-
-        client.send_message(to, outgoing).await?;
-        tracing::debug!("WhatsApp Web: sent message to {}", message.recipient);
-        Ok(())
+        Ok(client)
     }
 
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()> {
+    /// Body of [`Channel::listen`] over an injected network stack: the
+    /// transport the bot connects through and the HTTP client it fetches the
+    /// app version with. Production passes the WebSocket transport and the
+    /// ureq client; tests pass offline doubles.
+    async fn listen_with<T, H>(
+        &self,
+        tx: tokio::sync::mpsc::Sender<ChannelMessage>,
+        transport_factory: T,
+        http_client: H,
+    ) -> Result<()>
+    where
+        T: whatsapp_rust::transport::TransportFactory + 'static,
+        H: whatsapp_rust::http::HttpClient + 'static,
+    {
         *self.tx.lock() = Some(tx.clone());
 
         use whatsapp_rust::TokioRuntime;
         use whatsapp_rust::bot::Bot;
         use whatsapp_rust::pair_code::PairCodeOptions;
-        use whatsapp_rust::types::events::Event;
-        use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
-        use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
         tracing::info!(
             "WhatsApp Web channel starting (session: {})",
@@ -536,153 +540,19 @@ impl Channel for WhatsAppWebChannel {
         let backend: Arc<dyn whatsapp_rust::store::Backend> =
             Arc::new(wacore::store::InMemoryBackend::new());
 
-        let mut transport_factory = TokioWebSocketTransportFactory::new();
-        if let Ok(ws_url) = std::env::var("WHATSAPP_WS_URL") {
-            transport_factory = transport_factory.with_url(ws_url);
-        }
-
-        let http_client = UreqHttpClient::new();
-
-        let tx_for_handler = tx.clone();
-        let allowed_numbers = self.allowed_numbers.clone();
-        let connected_for_handler = Arc::clone(&self.connected);
-        let allowed_groups_for_handler = Arc::clone(&self.allowed_groups);
+        let state = InboundState {
+            tx,
+            allowed_numbers: self.allowed_numbers.clone(),
+            connected: Arc::clone(&self.connected),
+            allowed_groups: Arc::clone(&self.allowed_groups),
+        };
 
         let mut builder = Bot::builder()
             .with_backend_arc(backend)
             .with_transport_factory(transport_factory)
             .with_http_client(http_client)
             .with_runtime(TokioRuntime)
-            .on_event(move |event, _client| {
-                let tx_inner = tx_for_handler.clone();
-                let allowed_numbers = allowed_numbers.clone();
-                let connected = Arc::clone(&connected_for_handler);
-                let allowed_groups = Arc::clone(&allowed_groups_for_handler);
-                async move {
-                    match event.as_ref() {
-                        Event::Messages(batch) => {
-                            for inbound in Self::non_self_echoes(
-                                &batch.messages,
-                                |inbound: &wacore::types::events::InboundMessage| {
-                                    inbound.info.source.is_from_me
-                                },
-                            ) {
-                                let msg = &inbound.message;
-                                let info = &inbound.info;
-                                // Self-echoes (messages this user sent from another
-                                // linked device) are mirrored to all devices via
-                                // the WhatsApp protocol. Drop them so the agent
-                                // doesn't react to its own outgoing messages.
-                                let text = Self::extract_message_text(
-                                    msg.conversation.as_deref(),
-                                    msg.extended_text_message.text.as_deref(),
-                                );
-
-                                // Sender JID can use either the legacy `s.whatsapp.net`
-                                // server (phone-number addressing) or the newer `lid`
-                                // server (privacy-preserving identifier): a phone in
-                                // E.164, or a LID kept as a JID (`sender_identity`).
-                                let (normalized, allow_forms) = Self::sender_identity(
-                                    &info.source.sender,
-                                    info.source.sender_alt.as_ref(),
-                                );
-                                // The name the sender set for themselves, if any.
-                                let sender_name = Some(info.push_name.trim())
-                                    .filter(|name| !name.is_empty())
-                                    .map(str::to_string);
-                                let chat = info.source.chat.to_string();
-                                let reply_target = Self::compute_reply_target(&chat, &normalized);
-
-                                // Routine logs only carry coarse metadata — no raw
-                                // sender identifier, no message body — so PII does
-                                // not leak into application logs at any level.
-                                // For DM chats `chat` is `<phone>@s.whatsapp.net`,
-                                // which still carries the participant's phone
-                                // number. Redact the user part so the routine
-                                // log keeps only the server suffix (DM vs group)
-                                // and a coarse identifier tail.
-                                tracing::info!(
-                                    "📨 WhatsApp inbound: chat={} sender={} text_len={}",
-                                    Self::redact_recipient(&chat),
-                                    Self::redact_recipient(&normalized),
-                                    text.len()
-                                );
-
-                                if allowed_numbers.is_empty()
-                                    || allowed_numbers
-                                        .iter()
-                                        .any(|n| n == "*" || allow_forms.contains(n))
-                                {
-                                    // Record group provenance: this group has had at
-                                    // least one allow-listed participant message in,
-                                    // so subsequent outbound replies into the same
-                                    // group are legitimate. Outbound to groups
-                                    // without provenance is rejected by
-                                    // `should_allow_outbound`.
-                                    if Self::is_group_jid(&chat) {
-                                        allowed_groups.lock().insert(chat.clone());
-                                    }
-                                    if let Err(e) = tx_inner
-                                        .send(ChannelMessage {
-                                            id: uuid::Uuid::new_v4().to_string(),
-                                            channel: "whatsapp".to_string(),
-                                            sender: normalized.clone(),
-                                            reply_target,
-                                            content: text,
-                                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                            thread_ts: None,
-                                            sender_name,
-                                        })
-                                        .await
-                                    {
-                                        tracing::error!(
-                                            "Failed to forward WhatsApp message to channel: {}",
-                                            e
-                                        );
-                                    }
-                                } else {
-                                    tracing::warn!(
-                                        "WhatsApp Web: message from {} not in allowed list",
-                                        Self::redact_recipient(&normalized)
-                                    );
-                                }
-                            }
-                        }
-                        Event::Connected(_) => {
-                            connected.store(true, Ordering::Release);
-                            tracing::info!("✅ WhatsApp Web connected successfully!");
-                        }
-                        Event::LoggedOut(_) => {
-                            connected.store(false, Ordering::Release);
-                            tracing::warn!("❌ WhatsApp Web was logged out!");
-                        }
-                        Event::StreamError(stream_error) => {
-                            connected.store(false, Ordering::Release);
-                            tracing::error!("❌ WhatsApp Web stream error: {:?}", stream_error);
-                        }
-                        // The pair code and QR payload are short-lived link
-                        // credentials — anyone reading the logs while they
-                        // are valid can hijack the session. Surface only a
-                        // non-sensitive notice; the raw payload is never
-                        // logged at any level. Surfacing the code to the
-                        // user is the responsibility of an upstream UX
-                        // path (e.g. a JSON-RPC event the frontend renders).
-                        Event::PairingCode { .. } => {
-                            tracing::info!(
-                                "🔑 WhatsApp Web pair code received. Enter the code shown on \
-                                 your linking surface into WhatsApp > Linked Devices."
-                            );
-                        }
-                        Event::PairingQrCode { .. } => {
-                            tracing::info!(
-                                "📱 WhatsApp Web QR code received. Render via QR generator and \
-                                 scan with WhatsApp > Linked Devices."
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-            });
+            .on_event(move |event, _client| state.clone().handle_owned(event));
 
         if let Some(ref phone) = self.pair_phone {
             tracing::info!("WhatsApp Web: pair-code flow enabled for configured phone number");
@@ -749,16 +619,44 @@ impl Channel for WhatsAppWebChannel {
 
         Ok(())
     }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl Channel for WhatsAppWebChannel {
+    fn name(&self) -> &str {
+        "whatsapp"
+    }
+
+    async fn send(&self, message: &SendMessage) -> Result<()> {
+        let client = self.connected_client()?;
+
+        if !self.should_allow_outbound(&message.recipient) {
+            tracing::warn!(
+                "WhatsApp Web: recipient {} not in allowed list",
+                Self::redact_recipient(&message.recipient)
+            );
+            return Ok(());
+        }
+
+        let to = self.recipient_to_jid(&message.recipient)?;
+        client.send_text(to, message.content.clone()).await?;
+        tracing::debug!("WhatsApp Web: sent message to {}", message.recipient);
+        Ok(())
+    }
+
+    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()> {
+        let transport = Self::websocket_transport(std::env::var("WHATSAPP_WS_URL").ok());
+        let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();
+        self.listen_with(tx, transport, http_client).await
+    }
 
     async fn health_check(&self) -> bool {
         self.connected.load(Ordering::Acquire)
     }
 
     async fn start_typing(&self, recipient: &str) -> Result<()> {
-        let client = self.client.lock().clone();
-        let Some(client) = client else {
-            anyhow::bail!("WhatsApp Web client not connected. Initialize the bot first.");
-        };
+        let client = self.connected_client()?;
 
         if !self.should_allow_outbound(recipient) {
             tracing::warn!(
@@ -770,7 +668,6 @@ impl Channel for WhatsAppWebChannel {
 
         let to = self.recipient_to_jid(recipient)?;
         client
-            .chatstate()
             .send_composing(&to)
             .await
             .map_err(|e| anyhow!("Failed to send typing state (composing): {e}"))?;
@@ -780,10 +677,7 @@ impl Channel for WhatsAppWebChannel {
     }
 
     async fn stop_typing(&self, recipient: &str) -> Result<()> {
-        let client = self.client.lock().clone();
-        let Some(client) = client else {
-            anyhow::bail!("WhatsApp Web client not connected. Initialize the bot first.");
-        };
+        let client = self.connected_client()?;
 
         if !self.should_allow_outbound(recipient) {
             tracing::warn!(
@@ -795,7 +689,6 @@ impl Channel for WhatsAppWebChannel {
 
         let to = self.recipient_to_jid(recipient)?;
         client
-            .chatstate()
             .send_paused(&to)
             .await
             .map_err(|e| anyhow!("Failed to send typing state (paused): {e}"))?;
