@@ -66,9 +66,13 @@ async fn verify_credentials_accepts_valid_sign_token_response() {
         .expect(1)
         .mount(&server)
         .await;
-    verify_yuanbao_credentials(reqwest::Client::new(), &verify_config(&server.uri()), "secret")
-        .await
-        .unwrap();
+    verify_yuanbao_credentials(
+        reqwest::Client::new(),
+        &verify_config(&server.uri()),
+        "secret",
+    )
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
@@ -81,10 +85,16 @@ async fn verify_credentials_reports_rejected_secret() {
         )
         .mount(&server)
         .await;
-    let err =
-        verify_yuanbao_credentials(reqwest::Client::new(), &verify_config(&server.uri()), "nope")
-            .await
-            .unwrap_err();
-    assert!(err.starts_with("yuanbao credential verification failed:"), "{err}");
+    let err = verify_yuanbao_credentials(
+        reqwest::Client::new(),
+        &verify_config(&server.uri()),
+        "nope",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.starts_with("yuanbao credential verification failed:"),
+        "{err}"
+    );
     assert!(err.contains("bad signature"), "{err}");
 }

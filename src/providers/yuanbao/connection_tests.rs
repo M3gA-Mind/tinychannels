@@ -437,7 +437,10 @@ async fn connect_once_fails_when_gateway_is_unreachable() {
     let url = closed_port_url().await;
     let (conn, _rx) = connect(&url, fast_timings());
     let (_sd_tx, handle) = spawn_connect_once(&conn);
-    assert!(matches!(join(handle).await, Err(YuanbaoError::WebSocket(_))));
+    assert!(matches!(
+        join(handle).await,
+        Err(YuanbaoError::WebSocket(_))
+    ));
 }
 
 #[tokio::test]
@@ -475,7 +478,10 @@ async fn connect_once_fails_when_gateway_drops_during_auth() {
     let mut s = gw.accept().await;
     s.recv_frame().await;
     drop(s);
-    assert!(matches!(join(handle).await, Err(YuanbaoError::WebSocket(_))));
+    assert!(matches!(
+        join(handle).await,
+        Err(YuanbaoError::WebSocket(_))
+    ));
 }
 
 #[tokio::test]
