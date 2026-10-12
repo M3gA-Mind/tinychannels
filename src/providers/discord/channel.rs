@@ -1,3 +1,4 @@
+use super::api::DISCORD_API_BASE;
 use crate::channel::LengthUnit;
 use crate::text::{ChunkMode, TextChunkOptions, chunk_text_with_options};
 use crate::traits::{Channel, ChannelMessage, SendMessage};
@@ -18,6 +19,7 @@ pub struct DiscordChannel {
     mention_only: bool,
     typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     http_client: reqwest::Client,
+    api_base: String,
 }
 
 impl DiscordChannel {
@@ -38,6 +40,7 @@ impl DiscordChannel {
             mention_only,
             typing_handle: Mutex::new(None),
             http_client: reqwest::Client::new(),
+            api_base: DISCORD_API_BASE.to_string(),
         }
     }
 
@@ -59,7 +62,17 @@ impl DiscordChannel {
             mention_only,
             typing_handle: Mutex::new(None),
             http_client,
+            api_base: DISCORD_API_BASE.to_string(),
         }
+    }
+
+    /// Override the Discord REST base (default `https://discord.com/api/v10`),
+    /// e.g. to route through a proxy or a local mock. Trailing slashes are
+    /// trimmed.
+    #[must_use]
+    pub fn with_api_base(mut self, api_base: impl Into<String>) -> Self {
+        self.api_base = api_base.into().trim_end_matches('/').to_string();
+        self
     }
 
     fn http_client(&self) -> reqwest::Client {
@@ -261,7 +274,7 @@ impl Channel for DiscordChannel {
         let chunks = split_message_for_discord(&message.content);
 
         for (i, chunk) in chunks.iter().enumerate() {
-            let url = format!("https://discord.com/api/v10/channels/{recipient}/messages");
+            let url = format!("{}/channels/{recipient}/messages", self.api_base);
 
             let body = json!({ "content": chunk });
 
@@ -298,7 +311,7 @@ impl Channel for DiscordChannel {
         // Get Gateway URL
         let gw_resp: serde_json::Value = self
             .http_client()
-            .get("https://discord.com/api/v10/gateway/bot")
+            .get(format!("{}/gateway/bot", self.api_base))
             .header("Authorization", format!("Bot {}", self.bot_token))
             .send()
             .await?
@@ -504,7 +517,7 @@ impl Channel for DiscordChannel {
 
     async fn health_check(&self) -> bool {
         self.http_client()
-            .get("https://discord.com/api/v10/users/@me")
+            .get(format!("{}/users/@me", self.api_base))
             .header("Authorization", format!("Bot {}", self.bot_token))
             .send()
             .await
@@ -517,10 +530,9 @@ impl Channel for DiscordChannel {
 
         let client = self.http_client();
         let token = self.bot_token.clone();
-        let channel_id = recipient.to_string();
+        let url = format!("{}/channels/{recipient}/typing", self.api_base);
 
         let handle = tokio::spawn(async move {
-            let url = format!("https://discord.com/api/v10/channels/{channel_id}/typing");
             loop {
                 let _ = client
                     .post(&url)
