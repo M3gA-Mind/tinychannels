@@ -585,3 +585,372 @@ fn proactive_target_uses_configured_channel_id() {
     );
     assert_eq!(blank_channel.proactive_target(), None);
 }
+
+// ── REST + Gateway against loopback mocks ─────────────────────
+
+use axum::{Json, Router, extract::Path, http::HeaderMap, http::StatusCode, routing::get, routing::post};
+use std::sync::Arc;
+use tokio::sync::mpsc;
+
+/// `base64("123456")` — the bot user id embedded in the token.
+const BOT_TOKEN: &str = "MTIzNDU2.ts.hmac";
+const HANG_GUARD: std::time::Duration = std::time::Duration::from_secs(10);
+
+async fn spawn_http(app: Router) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://127.0.0.1:{}", addr.port())
+}
+
+fn channel_at(base: &str, channel_id: Option<&str>) -> DiscordChannel {
+    DiscordChannel::with_http_client(
+        BOT_TOKEN.into(),
+        None,
+        channel_id.map(str::to_string),
+        vec![],
+        false,
+        false,
+        reqwest::Client::new(),
+    )
+    .with_api_base(format!("{base}/"))
+}
+
+fn outbound(content: &str, recipient: &str) -> SendMessage {
+    SendMessage {
+        content: content.to_string(),
+        recipient: recipient.to_string(),
+        subject: None,
+        thread_ts: None,
+    }
+}
+
+/// Mock that records `(channel_id, authorization, content)` per POSTed message.
+async fn message_sink(status: StatusCode) -> (String, mpsc::UnboundedReceiver<(String, String, String)>) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let app = Router::new().route(
+        "/channels/{channel_id}/messages",
+        post(
+            move |Path(channel_id): Path<String>, headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                let tx = tx.clone();
+                async move {
+                    let auth = headers
+                        .get("authorization")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default()
+                        .to_string();
+                    let content = body["content"].as_str().unwrap_or_default().to_string();
+                    let _ = tx.send((channel_id, auth, content));
+                    (status, "rate limited body")
+                }
+            },
+        ),
+    );
+    (spawn_http(app).await, rx)
+}
+
+#[test]
+fn with_api_base_trims_trailing_slash_and_defaults_to_discord() {
+    let ch = DiscordChannel::new("t".into(), None, None, vec![], false, false);
+    assert_eq!(ch.api_base, "https://discord.com/api/v10");
+    let ch = ch.with_api_base("http://127.0.0.1:9/api//");
+    assert_eq!(ch.api_base, "http://127.0.0.1:9/api");
+}
+
+#[tokio::test]
+async fn send_posts_message_to_recipient_with_bot_auth() {
+    let (base, mut rx) = message_sink(StatusCode::OK).await;
+    let ch = channel_at(&base, Some("default-chan"));
+    ch.send(&outbound("hello there", "chan-1")).await.unwrap();
+    let (chan, auth, content) = rx.try_recv().unwrap();
+    assert_eq!(chan, "chan-1");
+    assert_eq!(auth, format!("Bot {BOT_TOKEN}"));
+    assert_eq!(content, "hello there");
+    assert!(rx.try_recv().is_err(), "exactly one request");
+}
+
+#[tokio::test]
+async fn send_without_recipient_uses_configured_channel_and_splits_long_text() {
+    let (base, mut rx) = message_sink(StatusCode::OK).await;
+    let ch = channel_at(&base, Some("default-chan"));
+    let long = "word ".repeat(500); // 2500 chars → two chunks
+    ch.send(&outbound(&long, "")).await.unwrap();
+    let first = rx.try_recv().unwrap();
+    let second = rx.try_recv().unwrap();
+    assert!(rx.try_recv().is_err());
+    assert_eq!(first.0, "default-chan");
+    assert_eq!(second.0, "default-chan");
+    assert!(discord_units(&first.2) <= DISCORD_MAX_MESSAGE_LENGTH);
+    assert_eq!(
+        format!("{}{}", first.2, second.2).split_whitespace().count(),
+        500
+    );
+}
+
+#[tokio::test]
+async fn send_without_any_target_fails_before_any_request() {
+    let (base, mut rx) = message_sink(StatusCode::OK).await;
+    let ch = channel_at(&base, None);
+    let err = ch.send(&outbound("hi", "")).await.unwrap_err().to_string();
+    assert!(err.contains("no target channel"), "{err}");
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn send_surfaces_non_success_status_and_body() {
+    let (base, _rx) = message_sink(StatusCode::TOO_MANY_REQUESTS).await;
+    let ch = channel_at(&base, None);
+    let err = ch.send(&outbound("hi", "c")).await.unwrap_err().to_string();
+    assert!(err.contains("Discord send message failed (429"), "{err}");
+    assert!(err.contains("rate limited body"), "{err}");
+}
+
+#[tokio::test]
+async fn health_check_reflects_users_me_status() {
+    let app = Router::new().route(
+        "/users/@me",
+        get(|headers: HeaderMap| async move {
+            if headers.get("authorization").and_then(|v| v.to_str().ok())
+                == Some(&format!("Bot {BOT_TOKEN}")[..])
+            {
+                StatusCode::OK
+            } else {
+                StatusCode::UNAUTHORIZED
+            }
+        }),
+    );
+    let base = spawn_http(app).await;
+    assert!(channel_at(&base, None).health_check().await);
+    let bad = DiscordChannel::new("wrong".into(), None, None, vec![], false, false)
+        .with_api_base(base.clone());
+    assert!(!bad.health_check().await);
+    // Unreachable endpoint → false rather than an error.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let dead = format!("http://{}", listener.local_addr().unwrap());
+    drop(listener);
+    assert!(!channel_at(&dead, None).health_check().await);
+}
+
+#[tokio::test]
+async fn start_typing_posts_typing_indicator_until_stopped() {
+    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
+    let app = Router::new().route(
+        "/channels/{channel_id}/typing",
+        post(move |Path(channel_id): Path<String>| {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(channel_id);
+                StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let base = spawn_http(app).await;
+    let ch = channel_at(&base, None);
+    ch.start_typing("chan-9").await.unwrap();
+    let hit = tokio::time::timeout(HANG_GUARD, rx.recv()).await.unwrap();
+    assert_eq!(hit.as_deref(), Some("chan-9"));
+    ch.stop_typing("chan-9").await.unwrap();
+    assert!(ch.typing_handle.lock().is_none());
+}
+
+// ── Gateway ───────────────────────────────────────────────────
+
+type WsStream = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
+
+/// Spawn a mock REST API whose `/gateway/bot` points at a fresh WebSocket
+/// listener, and run `script` against the first gateway connection after
+/// the Hello / Identify / first-heartbeat handshake.
+async fn spawn_gateway<F, Fut>(script: F) -> (String, tokio::task::JoinHandle<()>)
+where
+    F: FnOnce(WsStream) -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send + 'static,
+{
+    let ws_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let ws_url = Arc::new(format!("ws://{}", ws_listener.local_addr().unwrap()));
+    let app = Router::new().route(
+        "/gateway/bot",
+        get(move || {
+            let url = ws_url.clone();
+            async move { Json(serde_json::json!({ "url": *url })) }
+        }),
+    );
+    let base = spawn_http(app).await;
+    let server = tokio::spawn(async move {
+        let (socket, _) = ws_listener.accept().await.unwrap();
+        let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        ws.send(Message::Text(
+            json!({"op": 10, "d": {"heartbeat_interval": 60000}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let identify = next_json(&mut ws).await;
+        assert_eq!(identify["op"], 2);
+        assert_eq!(identify["d"]["token"], BOT_TOKEN);
+        assert_eq!(identify["d"]["intents"], 37377);
+        // The heartbeat timer fires immediately, before any sequence is known.
+        assert_eq!(next_json(&mut ws).await, json!({"op": 1, "d": null}));
+        script(ws).await;
+    });
+    (base, server)
+}
+
+async fn next_json(ws: &mut WsStream) -> serde_json::Value {
+    let frame = ws.next().await.unwrap().unwrap();
+    serde_json::from_str(&frame.to_string()).unwrap()
+}
+
+async fn send_json(ws: &mut WsStream, value: serde_json::Value) {
+    ws.send(Message::Text(value.to_string().into())).await.unwrap();
+}
+
+fn message_create(d: serde_json::Value) -> serde_json::Value {
+    json!({"op": 0, "t": "MESSAGE_CREATE", "s": 2, "d": d})
+}
+
+#[tokio::test]
+async fn listen_filters_gateway_events_and_forwards_allowed_messages() {
+    let (base, server) = spawn_gateway(|mut ws| async move {
+        // Server-requested heartbeat echoes the latest sequence.
+        send_json(&mut ws, json!({"op": 1, "s": 5})).await;
+        assert_eq!(next_json(&mut ws).await, json!({"op": 1, "d": 5}));
+        ws.send(Message::Binary(vec![1, 2].into())).await.unwrap();
+        ws.send(Message::Text("not json".into())).await.unwrap();
+        send_json(&mut ws, json!({"op": 0, "t": "GUILD_CREATE", "d": {}})).await;
+        send_json(&mut ws, json!({"op": 0, "t": "MESSAGE_CREATE"})).await;
+        let base = json!({"id": "m", "guild_id": "g1", "channel_id": "c1", "content": "x"});
+        for (author, patch) in [
+            (json!({"id": "123456"}), json!({})),               // the bot itself
+            (json!({"id": "u1", "bot": true}), json!({})),      // another bot
+            (json!({"id": "intruder"}), json!({})),             // not allowlisted
+            (json!({"id": "u1"}), json!({"guild_id": "g2"})),   // other guild
+            (json!({"id": "u1"}), json!({"guild_id": null})),   // DM? allowlist non-empty → allowed by guild, but channel mismatch
+            (json!({"id": "u1"}), json!({"channel_id": "c2"})), // other channel
+            (json!({"id": "u1"}), json!({"content": ""})),      // empty content
+        ] {
+            let mut d = base.clone();
+            d["author"] = author;
+            for (k, v) in patch.as_object().unwrap() {
+                d[k] = v.clone();
+            }
+            send_json(&mut ws, message_create(d)).await;
+        }
+        send_json(
+            &mut ws,
+            message_create(json!({
+                "id": "m-ok", "guild_id": "g1", "channel_id": "c1",
+                "content": "  hello  ", "author": {"id": "u1"}
+            })),
+        )
+        .await;
+        send_json(&mut ws, json!({"op": 7, "d": null})).await;
+    })
+    .await;
+
+    let ch = DiscordChannel::new(
+        BOT_TOKEN.into(),
+        Some("g1".into()),
+        Some("c1".into()),
+        vec!["u1".into()],
+        false,
+        false,
+    )
+    .with_api_base(base);
+    let (tx, mut rx) = mpsc::channel(16);
+    tokio::time::timeout(HANG_GUARD, ch.listen(tx))
+        .await
+        .expect("listen returns on op 7")
+        .unwrap();
+    tokio::time::timeout(HANG_GUARD, server).await.unwrap().unwrap();
+
+    let msg = rx.try_recv().expect("one forwarded message");
+    assert_eq!(msg.id, "discord_m-ok");
+    assert_eq!(msg.sender, "u1");
+    assert_eq!(msg.reply_target, "c1");
+    assert_eq!(msg.content, "hello");
+    assert_eq!(msg.channel, "discord");
+    assert!(rx.try_recv().is_err(), "everything else was filtered");
+}
+
+#[tokio::test]
+async fn listen_handles_dm_mentions_and_bots_then_stops_on_invalid_session() {
+    let (base, server) = spawn_gateway(|mut ws| async move {
+        send_json(
+            &mut ws,
+            message_create(json!({
+                "content": "<@!123456> ping", "author": {"id": "u7", "bot": true}
+            })),
+        )
+        .await;
+        // Not addressed to the bot → dropped in mention-only mode.
+        send_json(
+            &mut ws,
+            message_create(json!({"id": "x", "content": "ignore me", "author": {"id": "u7"}})),
+        )
+        .await;
+        send_json(&mut ws, json!({"op": 9, "d": false})).await;
+    })
+    .await;
+
+    let ch = DiscordChannel::new(BOT_TOKEN.into(), None, None, vec!["*".into()], true, true)
+        .with_api_base(base);
+    let (tx, mut rx) = mpsc::channel(16);
+    tokio::time::timeout(HANG_GUARD, ch.listen(tx))
+        .await
+        .expect("listen returns on op 9")
+        .unwrap();
+    tokio::time::timeout(HANG_GUARD, server).await.unwrap().unwrap();
+
+    let msg = rx.try_recv().unwrap();
+    assert!(msg.id.starts_with("discord_") && msg.id.len() > "discord_".len() + 30, "{}", msg.id);
+    assert_eq!(msg.sender, "u7");
+    assert_eq!(msg.reply_target, "u7", "DM without channel id replies to author");
+    assert_eq!(msg.content, "ping");
+    assert!(rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn listen_returns_when_gateway_closes() {
+    let (base, server) = spawn_gateway(|mut ws| async move {
+        ws.close(None).await.unwrap();
+    })
+    .await;
+    let ch = channel_at(&base, None);
+    let (tx, _rx) = mpsc::channel(1);
+    tokio::time::timeout(HANG_GUARD, ch.listen(tx))
+        .await
+        .expect("listen returns on close")
+        .unwrap();
+    tokio::time::timeout(HANG_GUARD, server).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn listen_stops_when_receiver_is_gone() {
+    let (base, server) = spawn_gateway(|mut ws| async move {
+        send_json(
+            &mut ws,
+            message_create(json!({"id": "1", "channel_id": "c", "content": "hi", "author": {"id": "u"}})),
+        )
+        .await;
+        // Keep the socket open until the client goes away.
+        while let Some(Ok(_)) = ws.next().await {}
+    })
+    .await;
+    let ch = channel_at(&base, None);
+    let (tx, rx) = mpsc::channel(1);
+    drop(rx);
+    tokio::time::timeout(HANG_GUARD, ch.listen(tx))
+        .await
+        .expect("listen returns once delivery fails")
+        .unwrap();
+    tokio::time::timeout(HANG_GUARD, server).await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn listen_fails_when_gateway_lookup_is_not_json() {
+    let app = Router::new().route("/gateway/bot", get(|| async { "<html>nope</html>" }));
+    let base = spawn_http(app).await;
+    let (tx, _rx) = mpsc::channel(1);
+    assert!(channel_at(&base, None).listen(tx).await.is_err());
+}
