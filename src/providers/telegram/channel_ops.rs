@@ -8,6 +8,36 @@ use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use std::time::Duration;
 
+impl TelegramChannel {
+    /// One iteration of the background typing refresher: post the chat action
+    /// and log (never fail) on rejection or transport error. Returns whether
+    /// Telegram accepted the refresh.
+    pub(crate) async fn refresh_typing_once(
+        client: &reqwest::Client,
+        url: &str,
+        body: &serde_json::Value,
+        recipient: &str,
+    ) -> bool {
+        match client.post(url).json(body).send().await {
+            Ok(resp) => {
+                let accepted = Self::telegram_api_ok(resp).await;
+                if !accepted {
+                    tracing::warn!(recipient, "Telegram typing refresh rejected");
+                }
+                accepted
+            }
+            Err(error) => {
+                tracing::warn!(
+                    recipient,
+                    %error,
+                    "Telegram typing refresh request failed"
+                );
+                false
+            }
+        }
+    }
+}
+
 #[async_trait]
 impl Channel for TelegramChannel {
     fn name(&self) -> &str {
@@ -501,23 +531,7 @@ Ensure only one `openhuman` process is using this bot token."
 
         let handle = tokio::spawn(async move {
             loop {
-                match client.post(&url).json(&body).send().await {
-                    Ok(resp) => {
-                        if !Self::telegram_api_ok(resp).await {
-                            tracing::warn!(
-                                recipient = recipient_for_log,
-                                "Telegram typing refresh rejected"
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            recipient = recipient_for_log,
-                            %error,
-                            "Telegram typing refresh request failed"
-                        );
-                    }
-                }
+                Self::refresh_typing_once(&client, &url, &body, &recipient_for_log).await;
                 // Telegram typing indicator expires after 5s; refresh at 4s
                 tokio::time::sleep(Duration::from_secs(4)).await;
             }

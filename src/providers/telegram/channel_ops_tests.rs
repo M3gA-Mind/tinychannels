@@ -404,28 +404,38 @@ async fn start_typing_sends_immediately_and_reuses_task_for_same_recipient() {
 }
 
 #[tokio::test]
-async fn typing_refresher_survives_rejected_refresh() {
+async fn typing_refresh_reports_acceptance_rejection_and_transport_error() {
     let server = mock_api().await;
-    mount_post(
-        &server,
-        "sendChatAction",
-        ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": false })),
-    )
-    .await;
-    let ch = channel_for(&server, &["*"]);
+    Mock::given(method("POST"))
+        .and(path("/accept"))
+        .respond_with(ok_with(serde_json::json!(true)))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/reject"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": false })))
+        .mount(&server)
+        .await;
+    let client = reqwest::Client::new();
+    let body = TelegramChannel::typing_body_for_recipient("100");
 
-    ch.start_typing("100").await.unwrap();
-    tokio::time::timeout(GUARD, async {
-        while json_bodies(&server, "sendChatAction").await.len() < 2 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("typing refresher posted");
-    // Let the refresher finish evaluating the rejected response.
-    tokio::task::yield_now().await;
-    assert!(!ch.typing_handle.lock().as_ref().unwrap().handle.is_finished());
-    ch.stop_typing("100").await.unwrap();
+    let accept = format!("{}/accept", server.uri());
+    let reject = format!("{}/reject", server.uri());
+    let dead = format!("{}/x", dead_base());
+    assert!(TelegramChannel::refresh_typing_once(&client, &accept, &body, "100").await);
+    assert!(!TelegramChannel::refresh_typing_once(&client, &reject, &body, "100").await);
+    assert!(!TelegramChannel::refresh_typing_once(&client, &dead, &body, "100").await);
+
+    let received = server.received_requests().await.unwrap();
+    assert_eq!(received.len(), 2);
+    let sent: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
+    assert_eq!(sent, serde_json::json!({ "chat_id": "100", "action": "typing" }));
+}
+
+#[test]
+fn telegram_advertises_reaction_support() {
+    let ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
+    assert!(ch.supports_reactions());
 }
 
 fn fast_backoff(mut ch: TelegramChannel) -> TelegramChannel {
