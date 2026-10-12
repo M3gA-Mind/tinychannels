@@ -601,10 +601,15 @@ fn handle_auth_response_rejects_unexpected_cmd_and_error_codes() {
 fn auth_bind_ok_helper_round_trips_connect_id() {
     let (tx, _rx) = mpsc::unbounded_channel();
     let conn = YuanbaoConnection::new(cfg(), tx, None);
-    let req = ConnFrame {
-        msg_id: "auth-x".into(),
-        ..Default::default()
-    };
+    let req = decode_conn_msg(&encode_conn_msg(
+        cmd_type::REQUEST,
+        cmd::AUTH_BIND,
+        1,
+        "auth-x",
+        module::CONN_ACCESS,
+        b"",
+    ))
+    .unwrap();
     conn.handle_auth_response(&auth_bind_ok(&req, "cid-z"))
         .unwrap();
     assert_eq!(conn.account().connect_id, "cid-z");
