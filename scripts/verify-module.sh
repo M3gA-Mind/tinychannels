@@ -68,4 +68,4 @@ case "$(uname -s)" in
   *) echo "verify-module.sh requires a Unix runner" >&2; exit 1 ;;
 esac
 test -f "$work/modules.toml"
-TINYCHANNELS_MODULE_ARTIFACT="$library" cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test module_artifact --test runtime_artifact -- --ignored
+TINYCHANNELS_MODULE_ARTIFACT="$library" cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test module_artifact --test routing_artifact --test runtime_artifact -- --ignored
