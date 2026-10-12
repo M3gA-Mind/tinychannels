@@ -343,7 +343,7 @@ impl Channel for TelegramChannel {
                 Ok(r) => r,
                 Err(e) => {
                     tracing::warn!("Telegram poll error: {e}");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(self.poll_error_backoff).await;
                     continue;
                 }
             };
@@ -352,7 +352,7 @@ impl Channel for TelegramChannel {
                 Ok(d) => d,
                 Err(e) => {
                     tracing::warn!("Telegram parse error: {e}");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(self.poll_error_backoff).await;
                     continue;
                 }
             };
@@ -388,13 +388,13 @@ impl Channel for TelegramChannel {
 Ensure only one `openhuman` process is using this bot token."
                         );
                     }
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    tokio::time::sleep(self.poll_conflict_backoff).await;
                 } else {
                     tracing::warn!(
                         "Telegram getUpdates API error (code={}): {description}",
                         error_code
                     );
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    tokio::time::sleep(self.poll_error_backoff).await;
                 }
                 continue;
             }

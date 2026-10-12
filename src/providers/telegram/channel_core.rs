@@ -1,6 +1,7 @@
 //! Telegram channel — constructor, configuration, auth/pairing, and API plumbing helpers.
 
 use super::channel_types::{
+    TELEGRAM_POLL_CONFLICT_BACKOFF, TELEGRAM_POLL_ERROR_BACKOFF,
     TELEGRAM_RECENT_UPDATE_CACHE_SIZE, TelegramChannel, TelegramUpdateWindow,
 };
 use super::text::{TELEGRAM_BIND_COMMAND, TELEGRAM_START_COMMAND};
@@ -64,6 +65,8 @@ impl TelegramChannel {
             bot_username: parking_lot::Mutex::new(None),
             recent_updates: parking_lot::Mutex::new(TelegramUpdateWindow::default()),
             recent_approval_prompts: parking_lot::Mutex::new(std::collections::HashMap::new()),
+            poll_error_backoff: TELEGRAM_POLL_ERROR_BACKOFF,
+            poll_conflict_backoff: TELEGRAM_POLL_CONFLICT_BACKOFF,
         }
     }
 
