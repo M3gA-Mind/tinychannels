@@ -403,3 +403,11 @@ async fn send_by_url_includes_caption_and_surfaces_rejections() {
         assert!(err.contains("wrong file identifier"), "{err}");
     }
 }
+
+#[test]
+fn parse_reaction_marker_without_closing_bracket_is_plain_text() {
+    assert_eq!(
+        TelegramChannel::parse_reaction_marker("[REACTION:👍 no close"),
+        ("[REACTION:👍 no close".to_string(), None)
+    );
+}

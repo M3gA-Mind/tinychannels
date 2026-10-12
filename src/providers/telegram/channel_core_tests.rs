@@ -197,3 +197,12 @@ async fn fetch_bot_username_fails_when_username_missing() {
     let err = ch.fetch_bot_username().await.unwrap_err().to_string();
     assert!(err.contains("Bot username not found"), "{err}");
 }
+
+#[test]
+fn track_update_id_rejects_stale_and_duplicate_ids() {
+    let ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
+    assert!(ch.track_update_id(10));
+    assert!(!ch.track_update_id(10), "duplicate");
+    assert!(!ch.track_update_id(9), "stale");
+    assert!(ch.track_update_id(11));
+}

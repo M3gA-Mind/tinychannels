@@ -711,3 +711,33 @@ async fn oversized_file_server() -> String {
     });
     format!("http://{addr}")
 }
+
+#[test]
+fn normalize_incoming_content_without_mention_collapses_whitespace() {
+    assert_eq!(
+        TelegramChannel::normalize_incoming_content("  a \n b  ", "bot").as_deref(),
+        Some("a b")
+    );
+    assert_eq!(TelegramChannel::normalize_incoming_content("   ", "bot"), None);
+}
+
+#[test]
+fn voice_content_without_caption_is_bare_transcript() {
+    let ctx = TelegramIncomingMessageContext {
+        sender_identity: "a".into(),
+        sender_name: None,
+        reply_target: "1".into(),
+        chat_id: "1".into(),
+        message_id: 1,
+        mention_text: None,
+    };
+    assert_eq!(
+        TelegramChannel::voice_message_content("words", Some("  "), &ctx, false),
+        "words"
+    );
+    assert_eq!(
+        TelegramChannel::voice_message_content("words", Some("cap"), &ctx, true),
+        "words",
+        "mention-only groups use the normalized mention text, not the raw caption"
+    );
+}
