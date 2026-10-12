@@ -201,6 +201,8 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
     ));
     let websocket = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
+        // Tungstenite fixes the callback error type to an unboxed HTTP response.
+        #[allow(clippy::result_large_err)]
         let mut ws = tokio_tungstenite::accept_hdr_async(
             socket,
             |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
