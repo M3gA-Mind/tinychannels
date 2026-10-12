@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::connection::YuanbaoConnection;
-use super::cos::{get_cos_credentials, upload_to_cos};
+use super::cos::{get_cos_credentials, upload_to_cos_via};
 use super::errors::YuanbaoError;
 use super::media::{build_file_msg_body, build_image_msg_body, download_url, parse_image_size};
 use super::proto_biz::{
@@ -64,6 +64,10 @@ pub struct OutboundSender {
     /// the sign cache hasn't been primed yet (e.g. send-before-auth races).
     config_bot_id: String,
     http: reqwest::Client,
+    /// COS origin override for the image upload PUT. Always `None` in
+    /// production (the real `<bucket>.cos.accelerate.myqcloud.com` host);
+    /// tests point it at a local mock server.
+    cos_endpoint: Option<String>,
 }
 
 impl OutboundSender {
@@ -79,7 +83,15 @@ impl OutboundSender {
             app_key,
             config_bot_id,
             http: reqwest::Client::new(),
+            cos_endpoint: None,
         }
+    }
+
+    /// Test-only: send COS uploads to `endpoint` instead of the real host.
+    #[cfg(test)]
+    pub(crate) fn with_cos_endpoint(mut self, endpoint: String) -> Self {
+        self.cos_endpoint = Some(endpoint);
+        self
     }
 
     /// Resolve the `from_account` to put on the next outbound frame.
@@ -155,7 +167,15 @@ impl OutboundSender {
             &self.http, api_domain, app_key, bot_id, token, route_env, &filename,
         )
         .await?;
-        let upload = upload_to_cos(&self.http, &creds, &bytes, &filename, mime.clone()).await?;
+        let upload = upload_to_cos_via(
+            &self.http,
+            &creds,
+            &bytes,
+            &filename,
+            mime.clone(),
+            self.cos_endpoint.as_deref(),
+        )
+        .await?;
 
         let final_width = if upload.width > 0 {
             upload.width

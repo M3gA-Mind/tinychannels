@@ -1,395 +1,42 @@
 name: Release
-
 on:
   workflow_dispatch:
     inputs:
-      bump:
-        description: Version bump to release
-        type: choice
+      tag:
+        description: Existing version tag (vX.Y.Z) committed through a reviewed PR
+        type: string
         required: true
-        options:
-          - patch
-          - minor
-          - major
-
+  push:
+    tags: ['v*']
+permissions: {}
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
   cancel-in-progress: false
-
-permissions:
-  contents: write
-
 jobs:
-  tag-release:
-    name: Tag Release
-    if: ${{ github.ref == 'refs/heads/main' }}
+  resolve:
     runs-on: ubuntu-latest
-    environment: Production
-    # Consumed by `native-bundles` and `github-release`: both check out the tag
-    # this job created, and the archive names embed the version it computed.
     outputs:
-      next_version: ${{ steps.version.outputs.next_version }}
-      tag: ${{ steps.version.outputs.tag }}
-    env:
-      CRATE_NAME: tinychannels
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          # Required to resolve the workspace: see the note in ci.yml.
-          submodules: true
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: .
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Run tests
-        run: cargo test
-
-      - name: Compute next version
-        id: version
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          current_version="$(cargo metadata --format-version 1 --no-deps | jq -r --arg crate "$CRATE_NAME" '.packages[] | select(.name == $crate) | .version')"
-          if [[ -z "$current_version" ]]; then
-            echo "Could not resolve current version for crate $CRATE_NAME" >&2
-            exit 1
-          fi
-
-          IFS=. read -r major minor patch <<< "$current_version"
-          case "${{ inputs.bump }}" in
-            major)
-              major=$((major + 1))
-              minor=0
-              patch=0
-              ;;
-            minor)
-              minor=$((minor + 1))
-              patch=0
-              ;;
-            patch)
-              patch=$((patch + 1))
-              ;;
-            *)
-              echo "Unsupported bump: ${{ inputs.bump }}" >&2
-              exit 1
-              ;;
-          esac
-
-          next_version="${major}.${minor}.${patch}"
-          tag="v${next_version}"
-
-          git fetch --tags origin
-          if git rev-parse --verify --quiet "refs/tags/${tag}"; then
-            echo "Tag ${tag} already exists" >&2
-            exit 1
-          fi
-
-          {
-            echo "current_version=${current_version}"
-            echo "next_version=${next_version}"
-            echo "tag=${tag}"
-          } >> "$GITHUB_OUTPUT"
-
-      # The version lives under `[workspace.package]` and every member inherits
-      # it with `version.workspace = true`, so this rewrites one value for all
-      # four crates. Targeting `[package]` (as this step used to) would
-      # silently match nothing and tag the previous version.
-      #
-      # Nothing rewrites a dependency requirement any more: the crates are not
-      # published and depend on each other by path alone, so there is no version
-      # requirement that could fall out of lockstep.
-      - name: Update crate version
-        env:
-          NEXT_VERSION: ${{ steps.version.outputs.next_version }}
-        run: |
-          perl -0pi -e 's/(\[workspace\.package\][\s\S]*?\nversion = ")[^"]+(")/$1$ENV{NEXT_VERSION}$2/' Cargo.toml
-          grep -q "^version = \"$NEXT_VERSION\"" Cargo.toml \
-            || { echo "version bump did not apply"; exit 1; }
-          # Refresh Cargo.lock's record of the workspace members' versions.
-          # `cargo metadata --no-deps` does NOT rewrite the lockfile — it answers
-          # from the manifests and leaves Cargo.lock untouched, so the assertion
-          # below caught it. `cargo update --workspace` re-resolves the members
-          # without touching third-party pins.
-          cargo update --workspace
-          # Assert the result rather than trusting the command: a lockfile that
-          # silently stayed behind would tag a release whose artifacts carry the
-          # previous version in their names.
-          for crate in "$CRATE_NAME" tinychannels-bus tinychannels-runtime tinychannels-module; do
-            grep -A1 "^name = \"$crate\"$" Cargo.lock \
-              | grep -q "^version = \"$NEXT_VERSION\"$" \
-              || { echo "Cargo.lock still not at $NEXT_VERSION for $crate"; exit 1; }
-          done
-
-      - name: Commit version bump and tag
-        env:
-          NEXT_VERSION: ${{ steps.version.outputs.next_version }}
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Cargo.toml Cargo.lock
-          git commit -m "Release ${RELEASE_TAG}"
-          git tag -a "${RELEASE_TAG}" -m "Release ${RELEASE_TAG}"
-
-      - name: Push release commit and tag
-        env:
-          RELEASE_TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          git push origin "HEAD:${GITHUB_REF_NAME}"
-          git push origin "${RELEASE_TAG}"
-
-  # The compiled `cdylib` is the deliverable. Nothing here is published to a
-  # package registry: every consumer takes this repository as a git submodule
-  # and a path dependency, and what a host *loads* is the artifact these jobs
-  # build. OpenHuman's `modules::registry` pins each one by a SHA-256 digest
-  # taken verbatim from a release, so without these jobs the module cannot be
-  # pinned and therefore cannot be loaded at all.
-  #
-  # The matrix is per-distro on purpose, not per-target. A `.so` built against
-  # glibc 2.39 fails to `dlopen` on a 2.35 host with a symbol-version error, so
-  # the host probes glibc and picks the newest build that could work — which
-  # only helps if the older build exists.
-  native-bundles:
-    name: Module bundle (${{ matrix.id }})
-    needs: tag-release
-    strategy:
-      # One unavailable runner should not cost the other ten artifacts; the
-      # asset-count check in `github-release` is what refuses a partial set.
-      fail-fast: false
-      matrix:
-        include:
-          - id: ubuntu-22.04-x86_64
-            os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-          - id: ubuntu-22.04-arm64
-            os: ubuntu-22.04-arm
-            target: aarch64-unknown-linux-gnu
-          - id: ubuntu-24.04-x86_64
-            os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
-          - id: ubuntu-24.04-arm64
-            os: ubuntu-24.04-arm
-            target: aarch64-unknown-linux-gnu
-          - id: macos-15-x86_64
-            os: macos-15-intel
-            target: x86_64-apple-darwin
-          - id: macos-15-arm64
-            os: macos-15
-            target: aarch64-apple-darwin
-          - id: macos-26-x86_64
-            os: macos-26-intel
-            target: x86_64-apple-darwin
-          - id: macos-26-arm64
-            os: macos-26
-            target: aarch64-apple-darwin
-          - id: windows-2022-x86_64
-            os: windows-2022
-            target: x86_64-pc-windows-msvc
-          - id: windows-2025-x86_64
-            os: windows-2025
-            target: x86_64-pc-windows-msvc
-          - id: windows-11-arm64
-            os: windows-11-arm
-            target: aarch64-pc-windows-msvc
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # The tag the version job just created, so the artifact matches the
-          # released source rather than whatever `main` has moved on to.
-          ref: ${{ needs.tag-release.outputs.tag }}
-          persist-credentials: false
-          submodules: true
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      # rust-cache's default key only knows OS family and CPU arch, so the
-      # ubuntu-22.04 and ubuntu-24.04 legs of this matrix shared one cache.
-      # A build script compiled on 24.04 (glibc 2.39) was restored onto the
-      # 22.04 runner (glibc 2.35) and failed to start (waproto, v0.1.9).
-      # Keying on the bundle id keeps every distro's artifacts separate.
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.id }}
-
-      # The whole point of the per-distro matrix is that each `id` describes the
-      # machine the artifact was built on. A runner image that silently changed
-      # architecture would produce a correctly-named artifact that cannot load.
-      - name: Verify native Rust target
+      - id: tag
         shell: bash
         env:
-          EXPECTED_TARGET: ${{ matrix.target }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || inputs.tag }}
         run: |
           set -euo pipefail
-          actual_target="$(rustc -vV | sed -n 's/^host: //p')"
-          [[ "$actual_target" == "$EXPECTED_TARGET" ]]
-
-      - name: Build installable module
-        run: cargo build --locked --release --package tinychannels-module
-
-      - name: Assemble Unix module package
-        if: ${{ runner.os != 'Windows' }}
-        id: unix_package
-        shell: bash
-        env:
-          BUNDLE_ID: ${{ matrix.id }}
-          VERSION: ${{ needs.tag-release.outputs.next_version }}
-        run: |
-          set -euo pipefail
-
-          library_name="tinychannels_module"
-          case "$RUNNER_OS" in
-            Linux) module="target/release/lib${library_name}.so" ;;
-            macOS) module="target/release/lib${library_name}.dylib" ;;
-            *) echo "unsupported Unix runner: ${RUNNER_OS}" >&2; exit 1 ;;
-          esac
-          package_name="tinychannels-module-${VERSION}-${BUNDLE_ID}"
-          package_root="dist/${package_name}"
-          mkdir -p "$package_root"
-          install -m 755 "$module" "$package_root/"
-          install -m 644 LICENSE README.md "$package_root/"
-          # The in-archive digest is the module's own; the release-level
-          # `checksum.toml` covers the archives. The host checks both.
-          module_name="$(basename "$module")"
-          # macOS runners don't ship GNU coreutils' `sha256sum`; only `shasum`
-          # is guaranteed. Prefer `sha256sum` where it exists (Linux) and fall
-          # back to `shasum -a 256` (macOS) rather than assuming either.
-          if command -v sha256sum >/dev/null 2>&1; then
-            module_hash="$(sha256sum "$package_root/$module_name" | awk '{print $1}')"
-          else
-            module_hash="$(shasum -a 256 "$package_root/$module_name" | awk '{print $1}')"
-          fi
-          printf '"%s" = "%s"\n' "$module_name" "$module_hash" \
-            > "$package_root/modules.toml"
-          tar -C "$package_root" -czf "dist/${package_name}.tar.gz" .
-          echo "archive=dist/${package_name}.tar.gz" >> "$GITHUB_OUTPUT"
-
-      - name: Assemble Windows module package
-        if: ${{ runner.os == 'Windows' }}
-        id: windows_package
-        shell: pwsh
-        env:
-          BUNDLE_ID: ${{ matrix.id }}
-          VERSION: ${{ needs.tag-release.outputs.next_version }}
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $libraryName = 'tinychannels_module'
-          $module = "target/release/$libraryName.dll"
-          $packageName = "tinychannels-module-$env:VERSION-$env:BUNDLE_ID"
-          $packageRoot = "dist/$packageName"
-          New-Item -ItemType Directory -Force $packageRoot | Out-Null
-          Copy-Item -LiteralPath $module, 'LICENSE', 'README.md' -Destination $packageRoot
-          $hash = (Get-FileHash -LiteralPath $module -Algorithm SHA256).Hash.ToLowerInvariant()
-          $moduleName = Split-Path -Leaf $module
-          "`"$moduleName`" = `"$hash`"`n" |
-            Set-Content -Path "$packageRoot/modules.toml" -Encoding utf8NoBOM
-          Compress-Archive -Path "$packageRoot/*" -DestinationPath "dist/$packageName.zip"
-          "archive=dist/$packageName.zip" >> $env:GITHUB_OUTPUT
-
-      - name: Upload Unix module package
-        if: ${{ runner.os != 'Windows' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: tinychannels-module-${{ matrix.id }}
-          path: ${{ steps.unix_package.outputs.archive }}
-          if-no-files-found: error
-
-      - name: Upload Windows module package
-        if: ${{ runner.os == 'Windows' }}
-        uses: actions/upload-artifact@v7
-        with:
-          name: tinychannels-module-${{ matrix.id }}
-          path: ${{ steps.windows_package.outputs.archive }}
-          if-no-files-found: error
-
-  github-release:
-    name: Create GitHub release
-    needs:
-      - tag-release
-      - native-bundles
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ needs.tag-release.outputs.tag }}
-          persist-credentials: false
-          submodules: true
-
-      - name: Download workflow artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: tinychannels-module-*
-          path: release-assets
-          merge-multiple: true
-
-      - uses: dtolnay/rust-toolchain@stable
-
-      # TinyBus writes the manifest the host compares against, so the format
-      # cannot drift from what the loader parses. `fail-fast: false` above means
-      # a missing runner yields a partial set — refuse it rather than publish a
-      # release some platforms silently cannot install from.
-      - name: Create release checksum manifest with TinyBus
-        shell: bash
-        run: |
-          set -euo pipefail
-          mapfile -t assets < <(
-            find release-assets -type f \
-              \( -name '*.tar.gz' -o -name '*.zip' \) \
-              | sort
-          )
-          if [[ ${#assets[@]} -ne 11 ]]; then
-            printf 'expected 11 module archives, found %s:\n' "${#assets[@]}" >&2
-            find release-assets -type f -print >&2 || true
-            exit 1
-          fi
-          checksum_args=()
-          for asset in "${assets[@]}"; do checksum_args+=(--path "$asset"); done
-          cargo run --manifest-path vendor/tinybus/Cargo.toml --locked \
-            --package tinybus --all-features --bin tinybus -- \
-            modules checksum "${checksum_args[@]}" --output release-assets/checksum.toml
-
-      - name: Create release and upload assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ needs.tag-release.outputs.tag }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          mapfile -t release_files < <(find release-assets -type f | sort)
-          gh release create "$RELEASE_TAG" "${release_files[@]}" \
-            --repo "$REPOSITORY" \
-            --verify-tag \
-            --title "$RELEASE_TAG" \
-            --generate-notes
-
-      # Downloads what was just released and loads it the way a host does, so a
-      # release that cannot actually be installed fails here rather than in the
-      # field on whichever platform nobody tested.
-      - name: Verify the released module through TinyBus
-        shell: bash
-        env:
-          RELEASE_TAG: ${{ needs.tag-release.outputs.tag }}
-          REPOSITORY: ${{ github.repository }}
-          VERSION: ${{ needs.tag-release.outputs.next_version }}
-        run: |
-          set -euo pipefail
-          archive="tinychannels-module-${VERSION}-ubuntu-24.04-x86_64.tar.gz"
-          release_url="https://github.com/${REPOSITORY}/releases/tag/${RELEASE_TAG}"
-          sha256="$(sed -n "s/^\"${archive}\" = \"\([0-9a-f]\{64\}\)\"$/\1/p" release-assets/checksum.toml)"
-          test -n "$sha256"
-          cargo run --manifest-path vendor/tinybus/Cargo.toml --locked \
-            --package tinybus --all-features --example github_module_host -- \
-            "$release_url" "$archive" "$sha256"
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] || {
+            echo "tag must be v-prefixed semver" >&2
+            exit 2
+          }
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+  module-release:
+    needs: resolve
+    permissions:
+      contents: write
+    uses: tinyhumansai/.github/.github/workflows/module-release.yml@3e87ade76b622844985d0c665a3b075313e4545c
+    with:
+      tag: ${{ needs.resolve.outputs.tag }}
+      version: ${{ needs.resolve.outputs.version }}
+      module-crate: tinychannels-module

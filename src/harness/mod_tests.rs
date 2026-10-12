@@ -109,3 +109,169 @@ fn media_event_projects_media_urls() {
     );
     assert_eq!(intents[0].thread_id.as_deref(), Some("topic-1"));
 }
+
+#[test]
+fn harness_events_preserve_text_and_routing_metadata() {
+    let events = [
+        (
+            ChannelOutputEvent::FinalMessage {
+                text: "final".into(),
+            },
+            "final",
+        ),
+        (
+            ChannelOutputEvent::ToolProgress {
+                label: "tool".into(),
+                message: Some("running".into()),
+            },
+            "tool: running",
+        ),
+        (
+            ChannelOutputEvent::ToolProgress {
+                label: "tool".into(),
+                message: None,
+            },
+            "tool",
+        ),
+        (
+            ChannelOutputEvent::Clarification {
+                prompt: "which?".into(),
+            },
+            "which?",
+        ),
+        (
+            ChannelOutputEvent::Cancellation {
+                reason: Some("stopped".into()),
+            },
+            "stopped",
+        ),
+        (
+            ChannelOutputEvent::Cancellation { reason: None },
+            "Cancelled.",
+        ),
+    ];
+    let mut turn = turn();
+    turn.envelope.message_id.clear();
+    turn.envelope.conversation.topic_id = None;
+    turn.envelope.conversation.thread_id = Some("thread".into());
+    for (event, text) in events {
+        let intents = translate_output_event(
+            &turn,
+            event,
+            &Default::default(),
+            &Default::default(),
+            BridgeTranslationOptions::default(),
+        );
+        assert_eq!(intents.len(), 1);
+        assert_eq!(
+            intents[0].payload,
+            OutboundPayload::Text { text: text.into() }
+        );
+        assert_eq!(intents[0].idempotency_key, "turn-1:text");
+        assert_eq!(intents[0].channel_id, "telegram");
+        assert_eq!(intents[0].conversation_id, "chat-1");
+        assert_eq!(intents[0].reply_to_id, None);
+        assert_eq!(intents[0].thread_id.as_deref(), Some("thread"));
+    }
+}
+
+#[test]
+fn native_approval_requires_enough_actions_and_a_nonempty_row() {
+    for (max_actions, max_actions_per_row, native) in [
+        (Some(2), Some(2), true),
+        (Some(2), None, true),
+        (Some(1), Some(2), false),
+        (Some(2), Some(0), false),
+    ] {
+        let intents = translate_output_event(
+            &turn(),
+            ChannelOutputEvent::ApprovalRequest {
+                id: "approval".into(),
+                prompt: "Run?".into(),
+                choices: vec!["yes".into(), "no".into()],
+            },
+            &Default::default(),
+            &ChannelPresentationCapabilities {
+                max_actions,
+                max_actions_per_row,
+                ..Default::default()
+            },
+            BridgeTranslationOptions::default(),
+        );
+        if native {
+            assert_eq!(
+                intents[0].payload,
+                OutboundPayload::PresentationBlocks {
+                    blocks: serde_json::json!({"kind": "approval", "id": "approval", "prompt": "Run?", "choices": ["yes", "no"]})
+                }
+            );
+        } else {
+            assert_eq!(
+                intents[0].payload,
+                OutboundPayload::Text {
+                    text: "Run?\n\nReply with one of: yes, no".into()
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn lifecycle_and_native_events_preserve_structured_data() {
+    let lifecycle = crate::harness::HarnessLifecycleEvent {
+        stage: "started".into(),
+        message: Some("ready".into()),
+    };
+    for (event, data) in [
+        (
+            ChannelOutputEvent::Lifecycle {
+                event: lifecycle.clone(),
+            },
+            serde_json::json!({"lifecycle": lifecycle}),
+        ),
+        (
+            ChannelOutputEvent::Native {
+                data: serde_json::json!({"custom": true}),
+            },
+            serde_json::json!({"custom": true}),
+        ),
+    ] {
+        let intents = translate_output_event(
+            &turn(),
+            event,
+            &Default::default(),
+            &Default::default(),
+            BridgeTranslationOptions::default(),
+        );
+        assert_eq!(
+            intents[0].payload,
+            OutboundPayload::NativeChannelData { data }
+        );
+        assert_eq!(intents[0].idempotency_key, "turn-1:native");
+    }
+}
+
+#[test]
+fn blocked_streaming_uses_text_even_when_edits_are_available() {
+    let intents = translate_output_event(
+        &turn(),
+        ChannelOutputEvent::TextDelta {
+            text: "delta".into(),
+        },
+        &ChannelStaticCapabilities {
+            block_streaming: true,
+            ..Default::default()
+        },
+        &ChannelPresentationCapabilities {
+            supports_edit: true,
+            ..Default::default()
+        },
+        BridgeTranslationOptions::default(),
+    );
+    assert_eq!(
+        intents[0].payload,
+        OutboundPayload::Text {
+            text: "delta".into()
+        }
+    );
+}

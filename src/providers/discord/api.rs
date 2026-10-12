@@ -1,6 +1,6 @@
 //! Discord REST API helpers for guild/channel discovery and permission checks.
 
-const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
+pub(crate) const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
 
 pub use tinychannels_bus::controllers::{BotPermissionCheck, DiscordGuild, DiscordTextChannel};
 
@@ -8,6 +8,17 @@ pub use tinychannels_bus::controllers::{BotPermissionCheck, DiscordGuild, Discor
 const VIEW_CHANNEL: u64 = 1 << 10; // 0x400
 const SEND_MESSAGES: u64 = 1 << 11; // 0x800
 const READ_MESSAGE_HISTORY: u64 = 1 << 16; // 0x10000
+
+/// The REST base the public helpers call. Always [`DISCORD_API_BASE`] in
+/// production; unit tests may point it at a loopback mock for the current
+/// thread so the public entry points are exercised end to end.
+fn api_base() -> String {
+    #[cfg(test)]
+    if let Some(base) = tests::api_base_override() {
+        return base;
+    }
+    DISCORD_API_BASE.to_string()
+}
 
 fn build_client() -> reqwest::Client {
     reqwest::Client::new()
@@ -87,7 +98,7 @@ pub async fn list_bot_guilds_with_client(
     client: &reqwest::Client,
     token: &str,
 ) -> anyhow::Result<Vec<DiscordGuild>> {
-    list_bot_guilds_at_base_with_client(DISCORD_API_BASE, client, token).await
+    list_bot_guilds_at_base_with_client(&api_base(), client, token).await
 }
 
 /// Test seam: list guilds against an arbitrary API base. Used by
@@ -147,7 +158,7 @@ pub async fn list_guild_channels_with_client(
     token: &str,
     guild_id: &str,
 ) -> anyhow::Result<Vec<DiscordTextChannel>> {
-    list_guild_channels_at_base_with_client(DISCORD_API_BASE, client, token, guild_id).await
+    list_guild_channels_at_base_with_client(&api_base(), client, token, guild_id).await
 }
 
 /// Test seam: list guild channels against an arbitrary API base.
@@ -227,14 +238,8 @@ pub async fn check_channel_permissions_with_client(
     guild_id: &str,
     channel_id: &str,
 ) -> anyhow::Result<BotPermissionCheck> {
-    check_channel_permissions_at_base_with_client(
-        DISCORD_API_BASE,
-        client,
-        token,
-        guild_id,
-        channel_id,
-    )
-    .await
+    check_channel_permissions_at_base_with_client(&api_base(), client, token, guild_id, channel_id)
+        .await
 }
 
 /// Test seam: see [`check_channel_permissions`].

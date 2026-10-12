@@ -1,103 +1,17 @@
 name: CI
-
 on:
   push:
+    branches: [main]
   pull_request:
-
+permissions:
+  contents: read
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-
-permissions:
-  contents: read
-
 jobs:
-  rust-sdk:
-    name: Rust SDK
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # This job executes repo code (cargo build/test); don't persist the
-          # token in git config.
-          persist-credentials: false
-          # `crates/tinychannels-module` has a path dependency on
-          # `vendor/tinybus`, and cargo resolves every workspace member before
-          # it builds any of them — so without the submodule even
-          # `cargo check -p tinychannels` fails, with a bare
-          # `No such file or directory (os error 2)` that names nothing useful.
-          submodules: true
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: .
-
-      - name: Check pure contract dependency closure
-        run: python3 scripts/check-bus-purity.py
-
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Clippy all features
-        run: cargo clippy --all-targets --all-features -- -D warnings
-
-      - name: Clippy email feature
-        run: cargo clippy --all-targets --features email -- -D warnings
-
-      - name: Clippy lark feature
-        run: cargo clippy --all-targets --features lark -- -D warnings
-
-      - name: Clippy email,lark features
-        run: cargo clippy --all-targets --features email,lark -- -D warnings
-
-      # `-p` and `--no-default-features` are both load-bearing. The lanes above
-      # run at the workspace root, where `tinychannels-module` depends on this
-      # crate with `features = ["email", "lark", "whatsapp-web"]`; cargo unifies
-      # those in, so `--features email` at the root is really an all-features
-      # build and cannot observe a gate being off. Scoping to the package is
-      # what makes this lane test the send-only surface it names.
-      - name: Clippy email-send only (send half, no IMAP stack)
-        run: cargo clippy -p tinychannels --all-targets --no-default-features --features email-send -- -D warnings
-
-      - name: Build
-        run: cargo build --all-targets
-
-      - name: Build all features
-        run: cargo build --all-targets --all-features
-
-      - name: Build email feature
-        run: cargo build --all-targets --features email
-
-      - name: Build lark feature
-        run: cargo build --all-targets --features lark
-
-      - name: Build email,lark features
-        run: cargo build --all-targets --features email,lark
-
-      - name: Build email-send only (send half, no IMAP stack)
-        run: cargo build -p tinychannels --all-targets --no-default-features --features email-send
-
-      - name: Test
-        run: cargo test
-
-      - name: Test all features
-        run: cargo test --all-features
-
-      - name: Test email feature
-        run: cargo test --features email
-
-      - name: Test lark feature
-        run: cargo test --features lark
-
-      - name: Test email,lark features
-        run: cargo test --features email,lark
-
-      - name: Test email-send only (send half, no IMAP stack)
-        run: cargo test -p tinychannels --no-default-features --features email-send
+  module-ci:
+    uses: tinyhumansai/.github/.github/workflows/module-ci.yml@3e87ade76b622844985d0c665a3b075313e4545c
+    with:
+      coverage-script: scripts/check-coverage.sh
+      module-e2e-script: scripts/test-e2e.sh
+      feature-test-script: scripts/test-features.sh

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// A channel controller operation dispatched through TinyChannels' own
-/// [`crate::ChannelManager`] inside the loaded module.
+/// `tinychannels::ChannelManager` inside the loaded module.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
 pub enum ChannelControllerRequest {

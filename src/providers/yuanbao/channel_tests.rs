@@ -275,3 +275,118 @@ async fn start_heartbeat_task_inserts_and_stop_removes() {
     // Stopping a recipient with no task is also a no-op.
     ch.stop_heartbeat_task("never-started").await;
 }
+
+#[tokio::test]
+async fn disconnected_sends_and_typing_return_errors_without_leaving_heartbeat_tasks() {
+    let ch = YuanbaoChannel::new(good_cfg()).unwrap();
+    ch.register_recipient_alias("alias", "original").await;
+    assert!(ch.send(&SendMessage::new("hello", "alias")).await.is_err());
+    assert!(
+        ch.finalize_draft("alias", "draft", "hello", Some("thread"))
+            .await
+            .is_err()
+    );
+    assert!(ch.start_typing("alias").await.is_err());
+    assert!(ch.heartbeat_tasks.lock().await.is_empty());
+    ch.start_heartbeat_task("original").await;
+    assert!(ch.stop_typing("alias").await.is_err());
+    assert!(ch.heartbeat_tasks.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn heartbeat_task_exits_when_disconnected_send_fails() {
+    let ch = YuanbaoChannel::new(good_cfg()).unwrap();
+    ch.start_heartbeat_task("alice").await;
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if ch
+                .heartbeat_tasks
+                .lock()
+                .await
+                .get("alice")
+                .unwrap()
+                .is_finished()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    ch.stop_heartbeat_task("alice").await;
+    assert!(ch.heartbeat_tasks.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn listener_dispatches_push_then_stops_on_kickout_and_second_listen_is_noop() {
+    let mut config = good_cfg();
+    config.ws_domain = "ws://127.0.0.1:0".into();
+    config.dm_access = "open".into();
+    let ch = YuanbaoChannel::new(config).unwrap();
+    let (incoming, rx) = mpsc::unbounded_channel();
+    *ch.inbound_rx.lock() = Some(rx);
+    incoming
+        .send(InboundEvent::Push(make_push_frame(
+            "inbound_message",
+            serde_json::to_vec(&serde_json::json!({
+                "from_account":"alice", "msg_id":"listener-message",
+                "msg_body":[{"msg_type":"TIMTextElem","msg_content":{"text":"hello"}}],
+            }))
+            .unwrap(),
+        )))
+        .unwrap();
+    incoming
+        .send(InboundEvent::Kickout("signed in elsewhere".into()))
+        .unwrap();
+    let (tx, mut received) = mpsc::channel(4);
+    tokio::time::timeout(Duration::from_secs(3), ch.listen(tx.clone()))
+        .await
+        .unwrap()
+        .unwrap();
+    let message = received.try_recv().unwrap();
+    assert_eq!(message.id, "listener-message");
+    assert_eq!(message.sender, "alice");
+    assert_eq!(message.content, "hello");
+    assert!(*ch.shutdown_tx.borrow());
+    ch.listen(tx).await.unwrap();
+    assert!(received.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn listener_stops_when_inbound_channel_closes() {
+    let mut config = good_cfg();
+    config.ws_domain = "ws://127.0.0.1:0".into();
+    let ch = YuanbaoChannel::new(config).unwrap();
+    let (incoming, rx) = mpsc::unbounded_channel();
+    *ch.inbound_rx.lock() = Some(rx);
+    drop(incoming);
+    let (tx, _rx) = mpsc::channel(1);
+    tokio::time::timeout(Duration::from_secs(3), ch.listen(tx))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(*ch.shutdown_tx.borrow());
+}
+
+#[tokio::test]
+async fn listener_stops_when_shutdown_is_signaled() {
+    let mut config = good_cfg();
+    config.ws_domain = "ws://127.0.0.1:0".into();
+    let ch = Arc::new(YuanbaoChannel::new(config).unwrap());
+    let (tx, _rx) = mpsc::channel(1);
+    let listener = {
+        let ch = ch.clone();
+        tokio::spawn(async move { ch.listen(tx).await })
+    };
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while ch.inbound_rx.lock().is_some() {
+            tokio::task::yield_now().await;
+        }
+        ch.shutdown_tx.send(true).unwrap();
+        listener.await.unwrap().unwrap();
+    })
+    .await
+    .unwrap();
+    assert!(!ch.connection.is_connected());
+}

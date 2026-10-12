@@ -1806,3 +1806,476 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
     );
     service.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn webhook_provider_requires_outbound_start_and_rejects_duplicate_ownership() {
+    let service = inbound_preparation_service().await;
+    let config = ChannelsConfig {
+        linq: Some(tinychannels_bus::config::LinqConfig {
+            api_token: "fixture-token".into(),
+            from_phone: "+15551234567".into(),
+            allowed_senders: vec![],
+        }),
+        ..Default::default()
+    };
+    let error = service
+        .start_channel("linq".into(), config.clone())
+        .await
+        .map(|_| ())
+        .expect_err("request must fail");
+    assert!(matches!(error, BusError::MethodFailed { name, .. } if name == NO_INGRESS_ERROR));
+    assert!(service.list_channels().await.unwrap().is_empty());
+    service
+        .start_outbound_channel("linq".into(), config.clone(), Default::default())
+        .await
+        .unwrap();
+    assert_eq!(service.list_channels().await.unwrap(), ["linq"]);
+    let error = service
+        .start_outbound_channel("linq".into(), config.clone(), Default::default())
+        .await
+        .map(|_| ())
+        .expect_err("request must fail");
+    assert!(matches!(error, BusError::MethodFailed { name, .. } if name == ALREADY_RUNNING_ERROR));
+    service.stop_channel("linq".into()).await.unwrap();
+    assert_eq!(
+        service.channel_status("linq".into()).await.unwrap(),
+        "stopped"
+    );
+    service
+        .start_outbound_channel("linq".into(), config.clone(), Default::default())
+        .await
+        .unwrap();
+    service.shutdown().await.unwrap();
+    assert!(
+        service
+            .start_outbound_channel("linq".into(), config, Default::default())
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("shutting down")
+    );
+}
+
+#[tokio::test]
+async fn channel_start_variants_refuse_missing_configuration_and_excessive_backoff() {
+    let service = inbound_preparation_service().await;
+    let config = ChannelsConfig::default();
+    let error = service
+        .start_channel_configured("unknown".into(), config.clone(), Default::default())
+        .await
+        .map(|_| ())
+        .expect_err("request must fail");
+    assert!(matches!(error, BusError::MethodFailed { name, .. } if name == NOT_CONFIGURED_ERROR));
+    let error = service
+        .start_channel_supervised(
+            "unknown".into(),
+            config.clone(),
+            Default::default(),
+            Default::default(),
+        )
+        .await
+        .map(|_| ())
+        .expect_err("request must fail");
+    assert!(matches!(error, BusError::MethodFailed { name, .. } if name == NOT_CONFIGURED_ERROR));
+    for policy in [
+        tinychannels_bus::ChannelSupervisionPolicy {
+            initial_backoff_secs: 86_401,
+            max_backoff_secs: 1,
+        },
+        tinychannels_bus::ChannelSupervisionPolicy {
+            initial_backoff_secs: 1,
+            max_backoff_secs: 86_401,
+        },
+    ] {
+        assert!(
+            service
+                .start_channel_supervised(
+                    "unknown".into(),
+                    config.clone(),
+                    Default::default(),
+                    policy
+                )
+                .await
+                .map(|_| ())
+                .expect_err("request must fail")
+                .to_string()
+                .contains("exceeds one day")
+        );
+    }
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn identity_scoped_services_refuse_nested_runtime_management() {
+    let service = inbound_preparation_service().await;
+    assert!(
+        service
+            .reserve_runtime()
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("unavailable")
+    );
+    assert!(
+        service
+            .start_runtime("handle".into())
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("unavailable")
+    );
+    assert!(
+        service
+            .start_runtime_with_dispatch(
+                "handle".into(),
+                tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 1 }
+            )
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("unavailable")
+    );
+    assert!(
+        service
+            .stop_runtime("handle".into())
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("unavailable")
+    );
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn health_and_controller_operations_refuse_requests_after_shutdown() {
+    let service = inbound_preparation_service().await;
+    assert!(
+        service
+            .check_channel_health(Default::default(), Default::default(), 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let result = service
+        .channel_controller(tinychannels_bus::ChannelControllerRequest::Status {
+            config: Default::default(),
+            channel: None,
+        })
+        .await;
+    assert!(result.is_err(), "no host backend is served");
+    service.shutdown().await.unwrap();
+    assert!(
+        service
+            .check_channel_health(Default::default(), Default::default(), 100)
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("shutting down")
+    );
+    assert!(
+        service
+            .channel_controller(tinychannels_bus::ChannelControllerRequest::Status {
+                config: Default::default(),
+                channel: None,
+            })
+            .await
+            .map(|_| ())
+            .expect_err("request must fail")
+            .to_string()
+            .contains("shutting down")
+    );
+}
+
+#[tokio::test]
+async fn legacy_send_and_interaction_route_to_live_provider_and_reject_unknown_channels() {
+    let (sent, mut received) = tokio::sync::mpsc::channel(2);
+    let (service, _callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
+    service
+        .send_message("fixture".into(), SendMessage::new("legacy", "room"))
+        .await
+        .unwrap();
+    assert_eq!(received.recv().await.unwrap().content, "legacy");
+    let result = service
+        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+            channel: "fixture".into(),
+            interaction: tinychannels_bus::ChannelInteraction::Describe,
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        result,
+        tinychannels_bus::ChannelInteractionResult::Info(_)
+    ));
+    assert_eq!(
+        service.channel_status("fixture".into()).await.unwrap(),
+        "connected"
+    );
+    assert!(
+        service
+            .send_message("missing".into(), SendMessage::new("hello", "room"))
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+                channel: "missing".into(),
+                interaction: tinychannels_bus::ChannelInteraction::Describe,
+            })
+            .await
+            .is_err()
+    );
+    let mut intent = required_intent("best-effort", "hello");
+    intent.durability = tinychannels::DeliveryDurability::BestEffort;
+    assert!(
+        service
+            .send_channel_intent("wrong".into(), intent.clone())
+            .await
+            .is_err()
+    );
+    intent.channel_id = "missing".into();
+    assert!(
+        service
+            .send_channel_intent("missing".into(), intent.clone())
+            .await
+            .is_err()
+    );
+    intent.channel_id = "fixture".into();
+    intent.payload = tinychannels::OutboundPayload::Text {
+        text: "x".repeat(tinychannels_bus::module_relay::RELAY_FRAME_BYTES),
+    };
+    assert!(
+        service
+            .send_channel_intent("fixture".into(), intent)
+            .await
+            .is_err()
+    );
+    service.shutdown().await.unwrap();
+    assert!(
+        service
+            .send_message("fixture".into(), SendMessage::new("hello", "room"))
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+                channel: "fixture".into(),
+                interaction: tinychannels_bus::ChannelInteraction::Describe,
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .send_channel_intent("fixture".into(), required_intent("closed", "hello"))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn service_send_failures_preserve_named_error_and_durable_queue_busy_refuses_admission() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (service, _callbacks, _server) =
+        channels_with_store(Arc::new(FailingChannel(calls.clone()))).await;
+    for error in [
+        service
+            .send_message("fixture".into(), SendMessage::new("hello", "room"))
+            .await
+            .expect_err("provider fails"),
+        service
+            .send_channel_intent(
+                "fixture".into(),
+                ChannelOutboundIntent {
+                    durability: tinychannels::DeliveryDurability::BestEffort,
+                    ..required_intent("best-effort", "hello")
+                },
+            )
+            .await
+            .map(|_| ())
+            .expect_err("provider fails"),
+    ] {
+        assert!(matches!(error, BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    let admission = service.delivery_admission.lock().await;
+    let error = service
+        .send_channel_intent("fixture".into(), required_intent("busy", "hello"))
+        .await
+        .map(|_| ())
+        .expect_err("queue busy");
+    assert!(error.to_string().contains("queue is busy"));
+    drop(admission);
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn service_email_upload_routes_chunks_abort_and_validation_and_freezes_on_shutdown() {
+    let service = inbound_preparation_service().await;
+    let begin = EmailUploadBegin {
+        config: tinychannels_bus::config::EmailConfig {
+            from_address: "from@example.test".into(),
+            ..Default::default()
+        },
+        recipient: "to@example.test".into(),
+        subject: "test".into(),
+        body: "body".into(),
+        attachments: vec![tinychannels_bus::EmailAttachmentUpload {
+            filename: "file.txt".into(),
+            content_type: "text/plain".into(),
+            byte_count: 3,
+        }],
+    };
+    let request = EmailSendRequest {
+        config: begin.config.clone(),
+        recipient: "invalid mailbox".into(),
+        subject: begin.subject.clone(),
+        body: begin.body.clone(),
+        attachments: vec![],
+    };
+    assert!(service.send_email(request.clone()).await.is_err());
+    let handle = service.begin_email_upload(begin.clone()).await.unwrap();
+    let chunk = EmailUploadChunk {
+        handle: handle.clone(),
+        attachment_index: 0,
+        sequence: 0,
+        bytes: b"abc".to_vec(),
+    };
+    assert_eq!(
+        service
+            .append_email_upload_chunk(chunk.clone())
+            .await
+            .unwrap(),
+        1
+    );
+    service.abort_email_upload(handle.clone()).await.unwrap();
+    assert!(service.send_email_upload(handle.clone()).await.is_err());
+    service.shutdown().await.unwrap();
+    assert!(service.send_email(request).await.is_err());
+    assert!(service.begin_email_upload(begin).await.is_err());
+    assert!(service.append_email_upload_chunk(chunk).await.is_err());
+    assert!(service.send_email_upload(handle).await.is_err());
+}
+
+#[tokio::test]
+async fn service_relay_reservations_are_single_use_and_shutdown_prevents_new_owners() {
+    let service = inbound_preparation_service().await;
+    let id = service.reserve_relay().await.unwrap();
+    assert_eq!(
+        service.relay_status(id.clone()).await.unwrap().state,
+        tinychannels_bus::module_relay::RelayPhase::Reserved
+    );
+    assert!(service.reserve_relay().await.is_err());
+    assert!(
+        service
+            .send_relay_intent(id.clone(), required_intent("relay", "hello"))
+            .await
+            .is_err()
+    );
+    service.stop_relay(id.clone()).await.unwrap();
+    assert!(service.relay_status(id.clone()).await.is_err());
+    assert!(service.start_relay(id, Default::default()).await.is_err());
+    service.shutdown().await.unwrap();
+    assert!(service.reserve_relay().await.is_err());
+}
+
+#[tokio::test]
+async fn service_runtime_wrappers_activate_stop_and_freeze_identity_owners() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let service = Channels::new(
+        HostChannels::new(connection.clone()),
+        Some(Arc::new(crate::runtime::Runtimes::new(connection))),
+    );
+    let legacy = service.reserve_runtime().await.unwrap();
+    service.start_runtime(legacy.handle.clone()).await.unwrap();
+    service.stop_runtime(legacy.handle).await.unwrap();
+    let dispatch = service.reserve_runtime().await.unwrap();
+    service
+        .start_runtime_with_dispatch(
+            dispatch.handle.clone(),
+            tinychannels_bus::ChannelRuntimeDispatchPolicy { listener_count: 2 },
+        )
+        .await
+        .unwrap();
+    service.stop_runtime(dispatch.handle).await.unwrap();
+    service.shutdown().await.unwrap();
+    assert!(service.reserve_runtime().await.is_err());
+}
+
+#[tokio::test]
+async fn shutdown_refuses_preparation_and_execution_before_host_work() {
+    let service = inbound_preparation_service().await;
+    service.shutdown().await.unwrap();
+    assert!(
+        service
+            .describe_configured_channels(Default::default(), Default::default())
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_channel_control(
+                tinychannels_bus::module_control::ChannelControlRequest::Acknowledgment {
+                    content: "hello".into()
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .execute_remote(tinychannels_bus::module_remote::RemoteOperation::MarkTurn {
+                workspace_dir: ".".into(),
+                channel: "fixture".into(),
+                reply_target: "room".into(),
+                busy: true,
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .execute_progressive(
+                tinychannels_bus::module_progressive::ProgressiveCommand::Open {
+                    channel: "fixture".into(),
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_channel_identity(
+                tinychannels_bus::module_inbound::PrepareChannelIdentityRequest {
+                    channel: "fixture".into(),
+                    sender: None,
+                    reply_target: None,
+                    thread_ts: None,
+                }
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .prepare_outbound_intent(
+                "fixture".into(),
+                tinychannels_bus::module_runtime::ChannelMessagePreparation::Legacy(
+                    serde_json::json!({"content": "hello", "recipient": "room"})
+                )
+            )
+            .await
+            .is_err()
+    );
+}

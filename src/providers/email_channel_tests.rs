@@ -625,3 +625,589 @@ async fn channel_send_delivers_over_the_async_transport() {
     assert!(transcript.contains("Subject: Greetings"), "{transcript}");
     assert!(transcript.contains("Body text"), "{transcript}");
 }
+
+// ── IMAP receive path against a scripted plaintext server ──────
+
+use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::TcpListener;
+
+const ALICE: &[u8] = b"From: Alice <alice@example.com>\r\nSubject: Hi\r\nMessage-ID: <a1@example.com>\r\nDate: Tue, 2 Jan 2024 03:04:05 +0000\r\n\r\nHello world\r\n";
+const MALLORY: &[u8] =
+    b"From: mallory@evil.test\r\nSubject: Spam\r\nMessage-ID: <m1@evil.test>\r\n\r\nBuy now\r\n";
+const ALICE_AGAIN: &[u8] = b"From: alice@example.com\r\nSubject: Hi again\r\nMessage-ID: <a1@example.com>\r\n\r\nSame id\r\n";
+const BOB_HTML: &[u8] = b"From: bob@example.com\r\nSubject: Html\r\nContent-Type: text/html\r\n\r\n<p>Hello <b>Bob</b></p>\r\n";
+const BAD_DATE: &[u8] = b"From: carol@example.com\r\nSubject: Odd date\r\nMessage-ID: <c1@example.com>\r\nDate: Sat, 31 Feb 2024 10:00:00 +0000\r\n\r\nWhen?\r\n";
+
+/// What the fake server does after answering one `IDLE` with `+ idling`.
+#[derive(Clone, Copy, Debug)]
+enum IdleStep {
+    /// Report new mail at once, then answer `DONE`.
+    NewMail,
+    /// Stay silent until the client sends `DONE`.
+    WaitForDone,
+    /// Send a truncated response and hang up.
+    Truncate,
+}
+
+/// The script for one accepted connection.
+#[derive(Clone, Default)]
+struct ConnScript {
+    reject_login: bool,
+    /// The i-th `UID SEARCH` answers with the i-th entry; later ones are empty.
+    searches: Vec<Vec<(u32, &'static [u8])>>,
+    idles: Vec<IdleStep>,
+}
+
+/// A plaintext IMAP server that serves `scripts` one connection each, then
+/// stops listening. Returns every command line received, per connection.
+async fn fake_imap(scripts: Vec<ConnScript>) -> (u16, tokio::task::JoinHandle<Vec<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = tokio::spawn(async move {
+        let mut transcripts = Vec::new();
+        for script in scripts {
+            let (sock, _) = listener.accept().await.unwrap();
+            transcripts.push(serve_connection(sock, script).await);
+        }
+        transcripts
+    });
+    (port, handle)
+}
+
+async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Vec<String> {
+    let (read, mut write) = sock.into_split();
+    let mut lines = BufReader::new(read).lines();
+    let mut seen = Vec::new();
+    let mut searches = script.searches.into_iter();
+    let mut idles = script.idles.into_iter();
+    let mut current: Vec<(u32, &'static [u8])> = Vec::new();
+    let mut idle_tag: Option<String> = None;
+    if write.write_all(b"* OK fake ready\r\n").await.is_err() {
+        return seen;
+    }
+    while let Ok(Some(line)) = lines.next_line().await {
+        seen.push(line.clone());
+        if line == "DONE" {
+            let tag = idle_tag.take().unwrap_or_default();
+            let _ = write
+                .write_all(format!("{tag} OK IDLE terminated\r\n").as_bytes())
+                .await;
+            continue;
+        }
+        let (tag, command) = line.split_once(' ').unwrap_or((line.as_str(), ""));
+        let upper = command.to_ascii_uppercase();
+        let mut reply = Vec::new();
+        if upper.starts_with("LOGIN") && script.reject_login {
+            reply.extend_from_slice(format!("{tag} NO bad credentials\r\n").as_bytes());
+            let _ = write.write_all(&reply).await;
+            continue;
+        } else if upper.starts_with("SELECT") {
+            reply.extend_from_slice(b"* 2 EXISTS\r\n* FLAGS (\\Seen)\r\n");
+        } else if upper.starts_with("UID SEARCH") {
+            current = searches.next().unwrap_or_default();
+            reply.extend_from_slice(b"* SEARCH");
+            for (uid, _) in &current {
+                reply.extend_from_slice(format!(" {uid}").as_bytes());
+            }
+            reply.extend_from_slice(b"\r\n");
+        } else if upper.starts_with("UID FETCH") {
+            for (seq, (uid, raw)) in current.iter().enumerate() {
+                reply.extend_from_slice(
+                    format!(
+                        "* {} FETCH (UID {uid} RFC822 {{{}}}\r\n",
+                        seq + 1,
+                        raw.len()
+                    )
+                    .as_bytes(),
+                );
+                reply.extend_from_slice(raw);
+                reply.extend_from_slice(b")\r\n");
+            }
+        } else if upper.starts_with("IDLE") {
+            idle_tag = Some(tag.to_string());
+            match idles.next() {
+                Some(IdleStep::NewMail) => {
+                    let _ = write.write_all(b"+ idling\r\n* 3 EXISTS\r\n").await;
+                }
+                Some(IdleStep::WaitForDone) => {
+                    let _ = write.write_all(b"+ idling\r\n").await;
+                }
+                Some(IdleStep::Truncate) | None => {
+                    let _ = write.write_all(b"+ idling\r\n* 3 EXI").await;
+                    break;
+                }
+            }
+            continue;
+        } else if upper.starts_with("LOGOUT") {
+            reply.extend_from_slice(b"* BYE\r\n");
+        }
+        reply.extend_from_slice(format!("{tag} OK done\r\n").as_bytes());
+        if write.write_all(&reply).await.is_err() || upper.starts_with("LOGOUT") {
+            break;
+        }
+    }
+    seen
+}
+
+fn imap_channel(allowed: &[&str], idle_timeout_secs: u64) -> EmailChannel {
+    let mut channel = EmailChannel::new(EmailConfig {
+        imap_host: "127.0.0.1".to_string(),
+        username: "bot".to_string(),
+        password: "pw".to_string(),
+        idle_timeout_secs,
+        allowed_senders: allowed.iter().map(|s| s.to_string()).collect(),
+        ..Default::default()
+    });
+    channel.reconnect_backoff = Duration::from_millis(1);
+    channel.max_reconnect_backoff = Duration::from_millis(2);
+    channel
+}
+
+async fn plain_session(
+    channel: &EmailChannel,
+    port: u16,
+) -> Result<Session<tokio::net::TcpStream>> {
+    let tcp = TcpStream::connect(("127.0.0.1", port)).await?;
+    channel.login_imap(tcp).await
+}
+
+const HANG_GUARD: Duration = Duration::from_secs(20);
+
+async fn recv(rx: &mut mpsc::Receiver<ChannelMessage>) -> ChannelMessage {
+    timeout(HANG_GUARD, rx.recv())
+        .await
+        .expect("message within the hang guard")
+        .expect("channel open")
+}
+
+/// One listen run across three connections: delivery with the allowlist and
+/// dedupe applied, IDLE new-mail wakeups, a dropped IDLE forcing a reconnect,
+/// a rejected login forcing another, and a closed receiver ending delivery.
+#[tokio::test]
+async fn listen_delivers_new_mail_and_reconnects_after_failures() {
+    let (port, server) = fake_imap(vec![
+        ConnScript {
+            searches: vec![
+                vec![(1, ALICE), (2, MALLORY)],
+                vec![(3, ALICE_AGAIN), (4, BOB_HTML)],
+                vec![],
+            ],
+            idles: vec![IdleStep::NewMail, IdleStep::NewMail, IdleStep::Truncate],
+            ..Default::default()
+        },
+        ConnScript {
+            reject_login: true,
+            ..Default::default()
+        },
+        ConnScript {
+            searches: vec![vec![(5, BAD_DATE)]],
+            idles: vec![IdleStep::Truncate],
+            ..Default::default()
+        },
+    ])
+    .await;
+
+    let channel = imap_channel(&["@example.com"], 30);
+    let (tx, mut rx) = mpsc::channel(8);
+    let listen = tokio::spawn(async move {
+        channel
+            .listen_with_reconnect(&tx, || plain_session(&channel, port))
+            .await
+    });
+
+    let first = recv(&mut rx).await;
+    assert_eq!(first.id, "a1@example.com");
+    assert_eq!(first.sender, "alice@example.com");
+    assert_eq!(first.reply_target, "alice@example.com");
+    assert_eq!(first.channel, "email");
+    assert_eq!(first.content.trim_end(), "Subject: Hi\n\nHello world");
+    assert_eq!(first.timestamp, 1_704_164_645);
+
+    // Mallory is blocked and Alice's repeat is deduped by Message-ID.
+    let second = recv(&mut rx).await;
+    assert_eq!(second.sender, "bob@example.com");
+    assert_eq!(second.content.trim_end(), "Subject: Html\n\nHello Bob");
+    assert!(second.id.starts_with("gen-"), "{}", second.id);
+    assert!(second.timestamp > 1_704_164_645);
+
+    let third = recv(&mut rx).await;
+    assert_eq!(third.sender, "carol@example.com");
+    assert_eq!(third.timestamp, 0, "an impossible date maps to 0");
+
+    let transcripts = timeout(HANG_GUARD, server)
+        .await
+        .expect("server finished")
+        .unwrap();
+    listen.abort();
+
+    assert_eq!(transcripts.len(), 3);
+    let first_conn = transcripts[0].join("\n");
+    assert!(first_conn.contains("SELECT \"INBOX\""), "{first_conn}");
+    // The UID set comes from a search result set, so its order is open.
+    let either = |prefix: &str, suffix: &str| {
+        first_conn.contains(&format!("{prefix} 1,2 {suffix}"))
+            || first_conn.contains(&format!("{prefix} 2,1 {suffix}"))
+    };
+    assert!(either("UID FETCH", "RFC822"), "{first_conn}");
+    assert!(either("UID STORE", "+FLAGS (\\Seen)"), "{first_conn}");
+    assert!(first_conn.contains("DONE"), "{first_conn}");
+    assert!(
+        !transcripts[1].iter().any(|l| l.contains("SELECT")),
+        "a rejected login never selects: {:?}",
+        transcripts[1]
+    );
+}
+
+/// A closed receiver ends delivery quietly instead of erroring the session.
+#[tokio::test]
+async fn processing_stops_when_the_receiver_is_gone() {
+    let (port, server) = fake_imap(vec![ConnScript {
+        searches: vec![vec![(1, ALICE), (4, BOB_HTML)]],
+        ..Default::default()
+    }])
+    .await;
+    let channel = imap_channel(&["*"], 30);
+    let (tx, rx) = mpsc::channel(8);
+    drop(rx);
+    let mut session = plain_session(&channel, port).await.unwrap();
+    session.select("INBOX").await.unwrap();
+    channel.process_unseen(&mut session, &tx).await.unwrap();
+    // Only the first message was offered before delivery stopped.
+    assert_eq!(channel.seen_messages.lock().await.len(), 1);
+    let _ = session.logout().await;
+    let transcripts = server.await.unwrap();
+    assert!(transcripts[0].iter().any(|l| l.contains("UID STORE")));
+}
+
+/// An empty mailbox fetches nothing and marks nothing.
+#[tokio::test]
+async fn an_empty_search_fetches_nothing() {
+    let (port, server) = fake_imap(vec![ConnScript::default()]).await;
+    let channel = imap_channel(&["*"], 30);
+    let mut session = plain_session(&channel, port).await.unwrap();
+    session.select("INBOX").await.unwrap();
+    assert!(channel.fetch_unseen(&mut session).await.unwrap().is_empty());
+    let _ = session.logout().await;
+    let commands = server.await.unwrap().remove(0).join("\n");
+    assert!(!commands.contains("UID FETCH"), "{commands}");
+    assert!(!commands.contains("UID STORE"), "{commands}");
+}
+
+/// The IDLE budget elapsing ends IDLE with `DONE` and hands back a usable
+/// session.
+#[tokio::test]
+async fn an_idle_timeout_returns_the_session() {
+    let (port, server) = fake_imap(vec![ConnScript {
+        idles: vec![IdleStep::WaitForDone],
+        ..Default::default()
+    }])
+    .await;
+    let channel = imap_channel(&["*"], 0);
+    let mut session = plain_session(&channel, port).await.unwrap();
+    session.select("INBOX").await.unwrap();
+    let (result, mut session) = channel.wait_for_changes(session).await.unwrap();
+    assert_eq!(result, IdleWaitResult::Timeout);
+    session.logout().await.unwrap();
+    let commands = server.await.unwrap().remove(0);
+    assert!(commands.iter().any(|l| l == "DONE"), "{commands:?}");
+}
+
+#[test]
+fn idle_responses_map_to_wait_results() {
+    assert_eq!(
+        IdleWaitResult::from_response(&IdleResponse::Timeout),
+        IdleWaitResult::Timeout
+    );
+    assert_eq!(
+        IdleWaitResult::from_response(&IdleResponse::ManualInterrupt),
+        IdleWaitResult::Interrupted
+    );
+}
+
+#[tokio::test]
+async fn health_check_passes_on_a_successful_login() {
+    let (port, server) = fake_imap(vec![ConnScript::default()]).await;
+    let channel = imap_channel(&["*"], 30);
+    assert!(
+        channel
+            .health_check_with(plain_session(&channel, port), HANG_GUARD)
+            .await
+    );
+    let commands = server.await.unwrap().remove(0).join("\n");
+    assert!(commands.contains("LOGIN"), "{commands}");
+    assert!(commands.contains("LOGOUT"), "{commands}");
+}
+
+#[tokio::test]
+async fn health_check_fails_on_a_rejected_login() {
+    let (port, _server) = fake_imap(vec![ConnScript {
+        reject_login: true,
+        ..Default::default()
+    }])
+    .await;
+    let channel = imap_channel(&["*"], 30);
+    assert!(
+        !channel
+            .health_check_with(plain_session(&channel, port), HANG_GUARD)
+            .await
+    );
+}
+
+/// A server that accepts but never greets stalls the probe past its budget.
+#[tokio::test]
+async fn health_check_fails_when_the_probe_stalls() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let holder = tokio::spawn(async move {
+        let (sock, _) = listener.accept().await.unwrap();
+        std::future::pending::<()>().await;
+        drop(sock);
+    });
+    let channel = imap_channel(&["*"], 30);
+    assert!(
+        !channel
+            .health_check_with(plain_session(&channel, port), Duration::from_millis(50))
+            .await
+    );
+    holder.abort();
+}
+
+/// After the IDLE budget elapses the session re-checks the mailbox and
+/// delivers what arrived meanwhile; unparsable fetches are skipped unmarked.
+#[tokio::test]
+async fn an_idle_timeout_rechecks_the_mailbox() {
+    let (port, server) = fake_imap(vec![ConnScript {
+        searches: vec![vec![(6, b"")], vec![(1, ALICE)]],
+        idles: vec![IdleStep::WaitForDone, IdleStep::Truncate],
+        ..Default::default()
+    }])
+    .await;
+    let channel = imap_channel(&["*"], 0);
+    let (tx, mut rx) = mpsc::channel(8);
+    let listen = tokio::spawn(async move {
+        channel
+            .listen_with_reconnect(&tx, || plain_session(&channel, port))
+            .await
+    });
+    let message = recv(&mut rx).await;
+    assert_eq!(message.sender, "alice@example.com");
+    let commands = timeout(HANG_GUARD, server)
+        .await
+        .expect("server finished")
+        .unwrap()
+        .remove(0);
+    listen.abort();
+    let stores: Vec<_> = commands
+        .iter()
+        .filter(|l| l.contains("UID STORE"))
+        .collect();
+    assert_eq!(
+        stores.len(),
+        1,
+        "only the parsed fetch is marked: {commands:?}"
+    );
+    assert!(stores[0].contains("UID STORE 1 "), "{commands:?}");
+}
+
+/// The real TLS probe refuses a plaintext server instead of logging in.
+#[tokio::test]
+async fn health_check_over_tls_fails_against_a_plaintext_server() {
+    let (port, _server) = fake_imap(vec![ConnScript::default()]).await;
+    let mut channel = imap_channel(&["*"], 30);
+    channel.config.imap_host = "localhost".to_string();
+    channel.config.imap_port = port;
+    assert!(!channel.health_check().await);
+}
+
+/// `listen` keeps reconnecting while the server keeps failing the TLS
+/// handshake, rather than giving up.
+#[tokio::test]
+async fn listen_retries_a_failing_server() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let accepts = tokio::spawn(async move {
+        for _ in 0..3 {
+            let (sock, _) = listener.accept().await.unwrap();
+            drop(sock);
+        }
+    });
+    let mut channel = imap_channel(&["*"], 30);
+    channel.config.imap_host = "localhost".to_string();
+    channel.config.imap_port = port;
+    let (tx, _rx) = mpsc::channel(1);
+    let listen = tokio::spawn(async move { channel.listen(tx).await });
+    timeout(HANG_GUARD, accepts)
+        .await
+        .expect("three connection attempts")
+        .unwrap();
+    assert!(!listen.is_finished(), "listen must keep retrying");
+    listen.abort();
+}
+
+#[tokio::test]
+async fn an_ip_literal_imap_host_fails_before_tls() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut channel = imap_channel(&["*"], 30);
+    // An IP literal is not a DNS name the SNI conversion accepts.
+    channel.config.imap_port = port;
+    let result = timeout(HANG_GUARD, channel.connect_imap())
+        .await
+        .expect("fails without waiting on a handshake");
+    assert!(result.is_err());
+    drop(listener);
+}
+
+// ── message text extraction ────────────────────────────────────
+
+#[test]
+fn a_text_attachment_is_used_when_there_is_no_body() {
+    let raw = b"From: a@example.com\r\nSubject: Att\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/csv\r\nContent-Disposition: attachment; filename=\"data.csv\"\r\n\r\na,b\r\n--b--\r\n";
+    let parsed = test_support::parse_email_fixture(raw).unwrap();
+    assert_eq!(parsed.text, "[Attachment: data.csv]\na,b");
+}
+
+#[test]
+fn a_message_with_only_binary_content_has_no_readable_text() {
+    let raw = b"From: a@example.com\r\nSubject: Bin\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: application/octet-stream\r\nContent-Disposition: attachment; filename=\"x.bin\"\r\n\r\nabc\r\n--b--\r\n";
+    let parsed = test_support::parse_email_fixture(raw).unwrap();
+    assert_eq!(parsed.text, "(no readable content)");
+}
+
+#[test]
+fn a_message_without_a_sender_is_unknown() {
+    let parsed = test_support::parse_email_fixture(b"Subject: Anon\r\n\r\nhi\r\n").unwrap();
+    assert_eq!(parsed.sender, "unknown");
+    assert_eq!(parsed.subject.as_deref(), Some("Anon"));
+}
+
+// ── blocking SMTP send ─────────────────────────────────────────
+
+/// A one-shot blocking SMTP server; returns the received transcript.
+fn blocking_smtp_server() -> (u16, std::thread::JoinHandle<String>) {
+    use std::io::{BufRead, Write};
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        let (sock, _) = listener.accept().unwrap();
+        let mut write = sock.try_clone().unwrap();
+        let mut reader = std::io::BufReader::new(sock);
+        let mut seen = Vec::new();
+        write.write_all(b"220 fake\r\n").unwrap();
+        let mut in_data = false;
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            let l = line.trim_end().to_string();
+            line.clear();
+            seen.push(l.clone());
+            let reply: &[u8] = match (in_data, l.as_str()) {
+                (true, ".") => {
+                    in_data = false;
+                    b"250 queued\r\n"
+                }
+                (true, _) => continue,
+                (false, l) if l.starts_with("DATA") => {
+                    in_data = true;
+                    b"354 go\r\n"
+                }
+                (false, l) if l.starts_with("QUIT") => {
+                    let _ = write.write_all(b"221 bye\r\n");
+                    break;
+                }
+                (false, l) if l.starts_with("EHLO") => b"250-fake\r\n250 AUTH PLAIN\r\n",
+                (false, l) if l.starts_with("AUTH") => b"235 authenticated\r\n",
+                _ => b"250 ok\r\n",
+            };
+            write.write_all(reply).unwrap();
+        }
+        seen.join("\n")
+    });
+    (port, handle)
+}
+
+#[test]
+fn send_message_delivers_over_blocking_smtp() {
+    let (port, server) = blocking_smtp_server();
+    let channel = EmailChannel::new(smtp_config(port, false));
+    let message = channel
+        .build_plain_message("to@example.com", "Blocking", "Plain body")
+        .unwrap();
+    channel.send_message(message).unwrap();
+    drop(channel);
+    let transcript = server.join().unwrap();
+    assert!(
+        transcript.contains("RCPT TO:<to@example.com>"),
+        "{transcript}"
+    );
+    assert!(transcript.contains("Subject: Blocking"), "{transcript}");
+}
+
+#[test]
+fn send_message_over_tls_refuses_a_plaintext_server() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = std::thread::spawn(move || {
+        use std::io::Write;
+        let (mut sock, _) = listener.accept().unwrap();
+        let _ = sock.write_all(b"220 fake\r\n");
+    });
+    let mut config = smtp_config(port, true);
+    config.smtp_host = "localhost".to_string();
+    let channel = EmailChannel::new(config);
+    let message = channel
+        .build_plain_message("to@example.com", "Tls", "body")
+        .unwrap();
+    assert!(channel.send_message(message).is_err());
+    server.join().unwrap();
+}
+
+#[test]
+fn building_a_message_rejects_a_bad_address() {
+    let channel = EmailChannel::new(smtp_config(25, false));
+    assert!(
+        channel
+            .build_plain_message("not an address", "s", "b")
+            .is_err()
+    );
+}
+
+// ── Channel::send subject handling ─────────────────────────────
+
+async fn send_and_capture(content: &str) -> String {
+    let (port, server) = blocking_smtp_server();
+    let channel = EmailChannel::new(smtp_config(port, false));
+    channel
+        .send(&SendMessage::new(content, "to@example.com"))
+        .await
+        .unwrap();
+    tokio::task::spawn_blocking(move || server.join().unwrap())
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn send_takes_the_subject_from_a_legacy_subject_line() {
+    let transcript = send_and_capture("Subject: Legacy\nThe body").await;
+    assert!(transcript.contains("Subject: Legacy"), "{transcript}");
+    assert!(transcript.contains("The body"), "{transcript}");
+}
+
+#[tokio::test]
+async fn send_uses_the_default_subject_for_a_lone_subject_line() {
+    let transcript = send_and_capture("Subject: no newline").await;
+    assert!(
+        transcript.contains("Subject: OpenHuman Message"),
+        "{transcript}"
+    );
+}
+
+#[tokio::test]
+async fn send_uses_the_default_subject_for_plain_content() {
+    let transcript = send_and_capture("just text").await;
+    assert!(
+        transcript.contains("Subject: OpenHuman Message"),
+        "{transcript}"
+    );
+    assert!(transcript.contains("just text"), "{transcript}");
+}

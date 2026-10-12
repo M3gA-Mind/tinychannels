@@ -12,3 +12,6 @@ dist/
 # Local secrets — never commit; copy .env.example to .env
 .env
 .DS_Store
+
+# Generated llvm-cov report from the local coverage gate.
+/coverage.json

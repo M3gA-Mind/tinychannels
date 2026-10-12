@@ -166,3 +166,7 @@ impl ChannelHost for CompositeHost {
         self.allowlist.clone()
     }
 }
+
+#[cfg(test)]
+#[path = "noop_tests.rs"]
+mod tests;

@@ -333,3 +333,52 @@ fn decode_msg_content_image_info_with_only_image_type_zero_defaults_to_one() {
     assert_eq!(got.msg_content.image_info_array[0].image_type, 1);
     assert_eq!(got.msg_content.image_info_array[0].url, "https://x/y.png");
 }
+
+#[test]
+fn rich_message_content_roundtrips_every_optional_media_field() {
+    let content = MsgContent {
+        text: Some("caption".into()),
+        uuid: Some("media-id".into()),
+        image_format: Some(2),
+        data: Some("custom payload".into()),
+        desc: Some("description".into()),
+        ext: Some("extension".into()),
+        sound: Some("sound-id".into()),
+        image_info_array: vec![ImageInfo {
+            image_type: 3,
+            size: 128,
+            width: 640,
+            height: 480,
+            url: "https://example.test/image".into(),
+        }],
+        index: Some(4),
+        url: Some("https://example.test/file".into()),
+        file_size: Some(256),
+        file_name: Some("file.txt".into()),
+    };
+    assert_eq!(
+        decode_msg_content(&encode_msg_content(&content)).unwrap(),
+        content
+    );
+}
+
+#[test]
+fn image_without_type_defaults_to_original_and_empty_image_is_ignored() {
+    let content = MsgContent {
+        image_info_array: vec![
+            ImageInfo {
+                url: "https://example.test/image".into(),
+                ..Default::default()
+            },
+            ImageInfo::default(),
+        ],
+        ..Default::default()
+    };
+    let decoded = decode_msg_content(&encode_msg_content(&content)).unwrap();
+    assert_eq!(decoded.image_info_array.len(), 1);
+    assert_eq!(decoded.image_info_array[0].image_type, 1);
+    assert_eq!(
+        decoded.image_info_array[0].url,
+        "https://example.test/image"
+    );
+}

@@ -611,6 +611,10 @@ impl Channel for IrcChannel {
 #[path = "irc_tests.rs"]
 mod tests;
 
+#[cfg(test)]
+#[path = "irc_listen_tests.rs"]
+mod listen_tests;
+
 #[cfg(any(test, debug_assertions))]
 #[path = "irc_test_support_tests.rs"]
 pub mod test_support;

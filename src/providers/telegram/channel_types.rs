@@ -5,7 +5,7 @@ use crate::security::PairingGuard;
 use parking_lot::Mutex;
 use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub(crate) const TELEGRAM_RECENT_UPDATE_CACHE_SIZE: usize = 4096;
 
@@ -17,6 +17,12 @@ pub(crate) const TELEGRAM_MAX_VOICE_FILE_BYTES: u64 = 20 * 1024 * 1024;
 /// De-bounce window for approval prompts: suppress duplicate prompts sent to the
 /// same chat+sender within this duration (prevents restart-race and rapid-fire spam).
 pub(crate) const APPROVAL_PROMPT_DEBOUNCE_SECS: u64 = 60;
+
+/// Delay before re-polling `getUpdates` after a transport, parse or API error.
+pub(crate) const TELEGRAM_POLL_ERROR_BACKOFF: Duration = Duration::from_secs(5);
+
+/// Delay before re-polling `getUpdates` after an unresolved 409 conflict.
+pub(crate) const TELEGRAM_POLL_CONFLICT_BACKOFF: Duration = Duration::from_secs(2);
 
 pub(crate) struct TelegramTypingTask {
     pub(crate) recipient: String,
@@ -84,4 +90,11 @@ pub struct TelegramChannel {
     /// Prevents duplicate prompts during restart-overlap races and rapid re-sends.
     /// Mirrors the `last_draft_edit` pattern.
     pub(crate) recent_approval_prompts: Mutex<std::collections::HashMap<String, Instant>>,
+    /// Back-off after a failed or rejected `getUpdates` poll (transport error,
+    /// unparseable body, non-409 API error). Defaults to
+    /// [`TELEGRAM_POLL_ERROR_BACKOFF`].
+    pub(crate) poll_error_backoff: Duration,
+    /// Back-off after a `getUpdates` 409 conflict that could not be cleared.
+    /// Defaults to [`TELEGRAM_POLL_CONFLICT_BACKOFF`].
+    pub(crate) poll_conflict_backoff: Duration,
 }
