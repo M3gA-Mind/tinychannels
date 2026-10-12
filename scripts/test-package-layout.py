@@ -24,6 +24,10 @@ class PackageTests(unittest.TestCase):
     def test_windows_e2e_entrypoint_exists(self):
         self.assertTrue((ROOT / "scripts/test-e2e.ps1").is_file())
 
+    def test_windows_e2e_receives_host_and_version_from_shell(self):
+        script = (ROOT / "scripts/test-e2e.sh").read_text()
+        self.assertIn('pwsh -NoProfile -File scripts/test-e2e.ps1 -Target "$target" -Version "$version"', script)
+
     def test_verify_extracts_artifact_under_the_current_user_home(self):
         target = ROOT / "target"; target.mkdir(exist_ok=True)
         with tempfile.TemporaryDirectory(dir=target) as directory:
