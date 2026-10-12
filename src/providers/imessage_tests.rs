@@ -4,7 +4,7 @@ use super::*;
 fn creates_with_contacts() {
     let ch = IMessageChannel::new(vec!["+1234567890".into()]);
     assert_eq!(ch.allowed_contacts.len(), 1);
-    assert_eq!(ch.poll_interval_secs, 3);
+    assert_eq!(ch.poll_interval, Duration::from_secs(3));
 }
 
 #[test]
@@ -669,4 +669,242 @@ async fn fetch_new_messages_large_rowid_edge_case() {
     // Very large rowid should return empty (no messages after this)
     let result = fetch_new_messages(&db_path, i64::MAX - 1).await.unwrap();
     assert!(result.is_empty());
+}
+
+// ══════════════════════════════════════════════════════════
+// Channel behaviour behind the db-path and script-runner seams
+// ══════════════════════════════════════════════════════════
+
+const HANG_GUARD: Duration = Duration::from_secs(20);
+
+fn channel_on(db_path: &Path, contacts: &[&str]) -> IMessageChannel {
+    let mut channel = IMessageChannel::new(contacts.iter().map(|c| c.to_string()).collect());
+    channel.db_path = Some(db_path.to_path_buf());
+    channel.poll_interval = Duration::from_millis(5);
+    channel
+}
+
+/// A runner that writes its `-e` script to `out` and exits with `code`.
+fn fake_runner(out: &Path, code: i32) -> Vec<String> {
+    vec![
+        "sh".to_string(),
+        "-c".to_string(),
+        format!(
+            "printf '%s' \"$2\" > '{}'; echo 'runner said no' >&2; exit {code}",
+            out.display()
+        ),
+        "fake-osascript".to_string(),
+    ]
+}
+
+#[tokio::test]
+async fn send_runs_the_escaped_script_through_the_runner() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("script.txt");
+    let mut channel = IMessageChannel::new(vec![]);
+    channel.script_command = fake_runner(&out, 0);
+
+    channel
+        .send(&SendMessage::new("say \"hi\"", "+15555550123"))
+        .await
+        .unwrap();
+
+    let script = std::fs::read_to_string(&out).unwrap();
+    assert!(script.contains("tell application \"Messages\""), "{script}");
+    assert!(script.contains("participant \"+15555550123\""), "{script}");
+    assert!(script.contains("send \"say \\\"hi\\\"\" to targetBuddy"), "{script}");
+}
+
+#[tokio::test]
+async fn send_reports_the_runner_stderr_on_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut channel = IMessageChannel::new(vec![]);
+    channel.script_command = fake_runner(&dir.path().join("script.txt"), 1);
+
+    let error = channel
+        .send(&SendMessage::new("hello", "user@example.com"))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("iMessage send failed"), "{error}");
+    assert!(error.contains("runner said no"), "{error}");
+}
+
+#[tokio::test]
+async fn send_rejects_an_invalid_target_before_running_anything() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("script.txt");
+    let mut channel = IMessageChannel::new(vec![]);
+    channel.script_command = fake_runner(&out, 0);
+
+    let error = channel
+        .send(&SendMessage::new("hello", "not a target"))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("Invalid iMessage target"), "{error}");
+    assert!(!out.exists(), "the runner must not be invoked");
+}
+
+#[tokio::test]
+async fn send_without_a_runner_is_an_error() {
+    let mut channel = IMessageChannel::new(vec![]);
+    channel.script_command = Vec::new();
+    assert!(
+        channel
+            .send(&SendMessage::new("hello", "+15555550123"))
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+fn the_default_database_lives_under_the_home_directory() {
+    let channel = IMessageChannel::new(vec![]);
+    if let Some(path) = channel.messages_db_path() {
+        assert!(path.ends_with("Library/Messages/chat.db"), "{path:?}");
+    }
+    assert_eq!(channel.script_command, vec!["osascript".to_string()]);
+}
+
+#[test]
+fn health_requires_macos_and_an_existing_database() {
+    let (_dir, db_path) = create_test_db();
+    let present = channel_on(&db_path, &[]);
+    assert!(present.is_healthy_on("macos"));
+    assert!(!present.is_healthy_on("linux"));
+
+    let missing = channel_on(&db_path.with_file_name("absent.db"), &[]);
+    assert!(!missing.is_healthy_on("macos"));
+}
+
+#[tokio::test]
+async fn health_check_reflects_the_host_os() {
+    let (_dir, db_path) = create_test_db();
+    let channel = channel_on(&db_path, &[]);
+    assert_eq!(
+        channel.health_check().await,
+        std::env::consts::OS == "macos"
+    );
+}
+
+#[tokio::test]
+async fn listen_fails_when_the_database_is_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let channel = channel_on(&dir.path().join("chat.db"), &["*"]);
+    let (tx, _rx) = mpsc::channel(1);
+    let error = channel.listen(tx).await.unwrap_err().to_string();
+    assert!(error.contains("Messages database not found"), "{error}");
+}
+
+fn insert_message(conn: &Connection, rowid: i64, handle: i64, text: &str) {
+    conn.execute(
+        "INSERT INTO message (ROWID, handle_id, text, is_from_me) VALUES (?1, ?2, ?3, 0)",
+        rusqlite::params![rowid, handle, text],
+    )
+    .unwrap();
+}
+
+/// Keeps adding one round of messages (a blocked sender, a blank text, then
+/// an allowed one) until the listener delivers something, and returns it.
+/// The listener only reports rows newer than its startup baseline, so the
+/// rounds keep coming until one lands after it.
+async fn next_delivery(
+    writer: &Connection,
+    rowid: &mut i64,
+    rx: &mut mpsc::Receiver<ChannelMessage>,
+) -> ChannelMessage {
+    let deadline = tokio::time::Instant::now() + HANG_GUARD;
+    loop {
+        for (handle, text) in [(2, "from a stranger"), (1, "   "), (1, "hello")] {
+            *rowid += 1;
+            insert_message(writer, *rowid, handle, &format!("{text}"));
+        }
+        if let Ok(Some(message)) = timeout(Duration::from_millis(200), rx.recv()).await {
+            return message;
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no delivery");
+    }
+}
+
+#[tokio::test]
+async fn listen_delivers_only_allowed_non_blank_messages() {
+    let (_dir, db_path) = create_test_db();
+    let writer = Connection::open(&db_path).unwrap();
+    writer
+        .execute_batch(
+            "INSERT INTO handle (ROWID, id) VALUES (1, '+15555550123');
+             INSERT INTO handle (ROWID, id) VALUES (2, '+19999999999');",
+        )
+        .unwrap();
+    let mut rowid = 0;
+    insert_message(&writer, {
+        rowid += 1;
+        rowid
+    }, 1, "before startup");
+
+    let channel = channel_on(&db_path, &["+15555550123"]);
+    let (tx, mut rx) = mpsc::channel(8);
+    let listen = tokio::spawn(async move { channel.listen(tx).await });
+
+    let first = next_delivery(&writer, &mut rowid, &mut rx).await;
+    assert_eq!(first.sender, "+15555550123");
+    assert_eq!(first.reply_target, "+15555550123");
+    assert_eq!(first.content, "hello");
+    assert_eq!(first.channel, "imessage");
+    assert_ne!(first.id, "1", "rows before startup are never replayed");
+    assert!(first.timestamp > 0);
+
+    // The receiver going away ends the listener cleanly.
+    drop(rx);
+    for _ in 0..3 {
+        rowid += 1;
+        insert_message(&writer, rowid, 1, "after close");
+    }
+    let result = timeout(HANG_GUARD, listen)
+        .await
+        .expect("listen returns once the receiver is gone")
+        .unwrap();
+    assert!(result.is_ok(), "{result:?}");
+}
+
+/// A poll that fails (here: the `handle` table is missing) is logged and
+/// retried rather than ending the listener.
+#[tokio::test]
+async fn listen_survives_failing_polls() {
+    let dir = tempfile::tempdir().unwrap();
+    let db_path = dir.path().join("chat.db");
+    let writer = Connection::open(&db_path).unwrap();
+    writer
+        .execute_batch(
+            "CREATE TABLE message (
+                ROWID INTEGER PRIMARY KEY,
+                handle_id INTEGER,
+                text TEXT,
+                is_from_me INTEGER DEFAULT 0
+            );",
+        )
+        .unwrap();
+
+    let channel = channel_on(&db_path, &["*"]);
+    let (tx, mut rx) = mpsc::channel(8);
+    let listen = tokio::spawn(async move { channel.listen(tx).await });
+
+    // Give the listener time to fail a few polls; the assertions below hold
+    // whether or not it did.
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!listen.is_finished(), "a failing poll must not end listen");
+
+    writer
+        .execute_batch(
+            "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT NOT NULL);
+             INSERT INTO handle (ROWID, id) VALUES (1, 'a@example.com');
+             INSERT INTO handle (ROWID, id) VALUES (2, 'b@example.com');",
+        )
+        .unwrap();
+    let mut rowid = 0;
+    let delivered = next_delivery(&writer, &mut rowid, &mut rx).await;
+    // With a wildcard allowlist the stranger is delivered too; blanks never are.
+    assert!(!delivered.content.trim().is_empty());
+    listen.abort();
 }
