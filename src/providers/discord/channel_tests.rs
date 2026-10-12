@@ -303,7 +303,8 @@ fn typing_handle_starts_as_none() {
 
 #[tokio::test]
 async fn start_typing_sets_handle() {
-    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false);
+    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
+        .with_api_base("http://127.0.0.1:9");
     let _ = ch.start_typing("123456").await;
     let guard = ch.typing_handle.lock();
     assert!(guard.is_some());
@@ -311,7 +312,8 @@ async fn start_typing_sets_handle() {
 
 #[tokio::test]
 async fn stop_typing_clears_handle() {
-    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false);
+    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
+        .with_api_base("http://127.0.0.1:9");
     let _ = ch.start_typing("123456").await;
     let _ = ch.stop_typing("123456").await;
     let guard = ch.typing_handle.lock();
@@ -320,14 +322,16 @@ async fn stop_typing_clears_handle() {
 
 #[tokio::test]
 async fn stop_typing_is_idempotent() {
-    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false);
+    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
+        .with_api_base("http://127.0.0.1:9");
     assert!(ch.stop_typing("123456").await.is_ok());
     assert!(ch.stop_typing("123456").await.is_ok());
 }
 
 #[tokio::test]
 async fn start_typing_replaces_existing_task() {
-    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false);
+    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
+        .with_api_base("http://127.0.0.1:9");
     let _ = ch.start_typing("111").await;
     let _ = ch.start_typing("222").await;
     let guard = ch.typing_handle.lock();

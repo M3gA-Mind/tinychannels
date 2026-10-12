@@ -4164,7 +4164,7 @@
 /home/enamakel/work/openhuman/vendor/tinychannels/worktrees/cov-discord/src/providers/discord/api.rs:
     1|       |//! Discord REST API helpers for guild/channel discovery and permission checks.
     2|       |
-    3|       |const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
+    3|       |pub(crate) const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
     4|       |
     5|       |pub use tinychannels_bus::controllers::{BotPermissionCheck, DiscordGuild, DiscordTextChannel};
     6|       |
@@ -4173,1089 +4173,1115 @@
     9|       |const SEND_MESSAGES: u64 = 1 << 11; // 0x800
    10|       |const READ_MESSAGE_HISTORY: u64 = 1 << 16; // 0x10000
    11|       |
-   12|     11|fn build_client() -> reqwest::Client {
-   13|     11|    reqwest::Client::new()
-   14|     11|}
-   15|       |
-   16|     25|fn auth_header(token: &str) -> String {
-   17|     25|    format!("Bot {token}")
-   18|     25|}
-   19|       |
-   20|       |/// Format a non-2xx response from the Discord REST API as a string
-   21|       |/// suitable for a JSON-RPC error result.
-   22|       |///
-   23|       |/// **Load-bearing for issue #2285**: the global JSON-RPC dispatcher
-   24|       |/// at `src/core/jsonrpc.rs::is_session_expired_error` matches any
-   25|       |/// error string that contains `"401"` AND `"unauthorized"` as a
-   26|       |/// signal that the OpenHuman backend session has expired, and
-   27|       |/// publishes a `DomainEvent::SessionExpired` event that signs the
-   28|       |/// user out. A raw upstream Discord 401 (revoked bot token) would
-   29|       |/// previously trip that classifier — opening the connected-Discord
-   30|       |/// card on the Channels page logged the user out of OpenHuman over
-   31|       |/// a *Discord* credentials problem.
-   32|       |///
-   33|       |/// The fix is to convert auth failures here into a Discord-domain
-   34|       |/// message that:
-   35|       |///
-   36|       |///  1. Does NOT contain both `"401"` and `"unauthorized"` as a pair
-   37|       |///     (so the global classifier ignores it).
-   38|       |///  2. Tells the user the actual remediation: rotate the bot token
-   39|       |///     at `Settings → Channels → Discord`.
-   40|       |///  3. Preserves the originating endpoint identifier in the message
-   41|       |///     so triage can still see WHICH Discord call failed without
-   42|       |///     plumbing a separate error code.
+   12|       |/// The REST base the public helpers call. Always [`DISCORD_API_BASE`] in
+   13|       |/// production; unit tests may point it at a loopback mock for the current
+   14|       |/// thread so the public entry points are exercised end to end.
+   15|      8|fn api_base() -> String {
+   16|       |    #[cfg(test)]
+   17|      8|    if let Some(base) = tests::api_base_override() {
+                              ^6
+   18|      6|        return base;
+   19|      2|    }
+   20|      2|    DISCORD_API_BASE.to_string()
+   21|      8|}
+   22|       |
+   23|     22|fn build_client() -> reqwest::Client {
+   24|     22|    reqwest::Client::new()
+   25|     22|}
+   26|       |
+   27|     50|fn auth_header(token: &str) -> String {
+   28|     50|    format!("Bot {token}")
+   29|     50|}
+   30|       |
+   31|       |/// Format a non-2xx response from the Discord REST API as a string
+   32|       |/// suitable for a JSON-RPC error result.
+   33|       |///
+   34|       |/// **Load-bearing for issue #2285**: the global JSON-RPC dispatcher
+   35|       |/// at `src/core/jsonrpc.rs::is_session_expired_error` matches any
+   36|       |/// error string that contains `"401"` AND `"unauthorized"` as a
+   37|       |/// signal that the OpenHuman backend session has expired, and
+   38|       |/// publishes a `DomainEvent::SessionExpired` event that signs the
+   39|       |/// user out. A raw upstream Discord 401 (revoked bot token) would
+   40|       |/// previously trip that classifier — opening the connected-Discord
+   41|       |/// card on the Channels page logged the user out of OpenHuman over
+   42|       |/// a *Discord* credentials problem.
    43|       |///
-   44|       |/// Other non-2xx statuses (400 / 404 / 5xx) pass through with a
-   45|       |/// `Discord API error` prefix — they don't match the
-   46|       |/// `is_session_expired_error` predicate even when verbatim.
-   47|      4|fn format_discord_http_error(endpoint: &str, status: reqwest::StatusCode, body: &str) -> String {
-   48|      4|    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
-                                                                    ^2
-   49|      3|        let kind = if status == reqwest::StatusCode::UNAUTHORIZED {
-   50|      2|            "bot token was rejected"
-   51|       |        } else {
-   52|      1|            "bot token lacks required Discord permissions"
-   53|       |        };
-   54|       |        // Spell out the HTTP code so `lower.contains("401")` does NOT
-   55|       |        // match — see #2285 rationale on this helper. Also avoid the
-   56|       |        // word `unauthorized` for the same reason; "rejected"/"forbidden"
-   57|       |        // are the user-visible equivalents.
-   58|      3|        let code_word = if status == reqwest::StatusCode::UNAUTHORIZED {
-   59|      2|            "four-oh-one"
-   60|       |        } else {
-   61|      1|            "four-oh-three"
-   62|       |        };
-   63|       |        // Deliberately do NOT splice the upstream body into this
-   64|       |        // user-facing message — Discord's auth-error bodies often
-   65|       |        // include the literal words "401" and "Unauthorized", which
-   66|       |        // would smuggle the cascade trigger back in. The body is
-   67|       |        // still in `tracing::debug!` logs above the call site for
-   68|       |        // triage; the user-facing message only needs the remediation.
-   69|      3|        let _ = body;
-   70|      3|        format!(
-   71|       |            "Discord {endpoint}: {kind} (upstream HTTP {code_word}). \
-   72|       |             Open Settings → Channels → Discord and rotate / reconnect the bot \
-   73|       |             token."
-   74|       |        )
-   75|       |    } else {
-   76|      1|        format!("Discord {endpoint} failed ({status}): {body}")
-   77|       |    }
-   78|      4|}
-   79|       |
-   80|       |/// List all guilds (servers) the bot is a member of.
-   81|      0|pub async fn list_bot_guilds(token: &str) -> anyhow::Result<Vec<DiscordGuild>> {
-   82|      0|    list_bot_guilds_with_client(&build_client(), token).await
-   83|      0|}
-   84|       |
-   85|       |/// List bot guilds using a caller-configured HTTP client.
-   86|      0|pub async fn list_bot_guilds_with_client(
-   87|      0|    client: &reqwest::Client,
-   88|      0|    token: &str,
-   89|      0|) -> anyhow::Result<Vec<DiscordGuild>> {
-   90|      0|    list_bot_guilds_at_base_with_client(DISCORD_API_BASE, client, token).await
-   91|      0|}
-   92|       |
-   93|       |/// Test seam: list guilds against an arbitrary API base. Used by
-   94|       |/// `list_bot_guilds` in production and by unit tests that drive a
-   95|       |/// local mock Discord API.
-   96|      3|async fn list_bot_guilds_at_base(base: &str, token: &str) -> anyhow::Result<Vec<DiscordGuild>> {
-   97|      3|    list_bot_guilds_at_base_with_client(base, &build_client(), token).await
-   98|      3|}
-   99|       |
-  100|      3|async fn list_bot_guilds_at_base_with_client(
-  101|      3|    base: &str,
-  102|      3|    client: &reqwest::Client,
-  103|      3|    token: &str,
-  104|      3|) -> anyhow::Result<Vec<DiscordGuild>> {
-  105|      3|    let url = format!("{base}/users/@me/guilds");
-  106|      3|    tracing::debug!("[discord-api] listing guilds for bot");
-  107|       |
-  108|      3|    let resp = client
-  109|      3|        .get(&url)
-  110|      3|        .header("Authorization", auth_header(token))
-  111|      3|        .send()
-  112|      3|        .await?;
+   44|       |/// The fix is to convert auth failures here into a Discord-domain
+   45|       |/// message that:
+   46|       |///
+   47|       |///  1. Does NOT contain both `"401"` and `"unauthorized"` as a pair
+   48|       |///     (so the global classifier ignores it).
+   49|       |///  2. Tells the user the actual remediation: rotate the bot token
+   50|       |///     at `Settings → Channels → Discord`.
+   51|       |///  3. Preserves the originating endpoint identifier in the message
+   52|       |///     so triage can still see WHICH Discord call failed without
+   53|       |///     plumbing a separate error code.
+   54|       |///
+   55|       |/// Other non-2xx statuses (400 / 404 / 5xx) pass through with a
+   56|       |/// `Discord API error` prefix — they don't match the
+   57|       |/// `is_session_expired_error` predicate even when verbatim.
+   58|      9|fn format_discord_http_error(endpoint: &str, status: reqwest::StatusCode, body: &str) -> String {
+   59|      9|    if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
+                                                                    ^7
+   60|      4|        let kind = if status == reqwest::StatusCode::UNAUTHORIZED {
+   61|      2|            "bot token was rejected"
+   62|       |        } else {
+   63|      2|            "bot token lacks required Discord permissions"
+   64|       |        };
+   65|       |        // Spell out the HTTP code so `lower.contains("401")` does NOT
+   66|       |        // match — see #2285 rationale on this helper. Also avoid the
+   67|       |        // word `unauthorized` for the same reason; "rejected"/"forbidden"
+   68|       |        // are the user-visible equivalents.
+   69|      4|        let code_word = if status == reqwest::StatusCode::UNAUTHORIZED {
+   70|      2|            "four-oh-one"
+   71|       |        } else {
+   72|      2|            "four-oh-three"
+   73|       |        };
+   74|       |        // Deliberately do NOT splice the upstream body into this
+   75|       |        // user-facing message — Discord's auth-error bodies often
+   76|       |        // include the literal words "401" and "Unauthorized", which
+   77|       |        // would smuggle the cascade trigger back in. The body is
+   78|       |        // still in `tracing::debug!` logs above the call site for
+   79|       |        // triage; the user-facing message only needs the remediation.
+   80|      4|        let _ = body;
+   81|      4|        format!(
+   82|       |            "Discord {endpoint}: {kind} (upstream HTTP {code_word}). \
+   83|       |             Open Settings → Channels → Discord and rotate / reconnect the bot \
+   84|       |             token."
+   85|       |        )
+   86|       |    } else {
+   87|      5|        format!("Discord {endpoint} failed ({status}): {body}")
+   88|       |    }
+   89|      9|}
+   90|       |
+   91|       |/// List all guilds (servers) the bot is a member of.
+   92|      2|pub async fn list_bot_guilds(token: &str) -> anyhow::Result<Vec<DiscordGuild>> {
+   93|      2|    list_bot_guilds_with_client(&build_client(), token).await
+   94|      2|}
+   95|       |
+   96|       |/// List bot guilds using a caller-configured HTTP client.
+   97|      2|pub async fn list_bot_guilds_with_client(
+   98|      2|    client: &reqwest::Client,
+   99|      2|    token: &str,
+  100|      2|) -> anyhow::Result<Vec<DiscordGuild>> {
+  101|      2|    list_bot_guilds_at_base_with_client(&api_base(), client, token).await
+  102|      2|}
+  103|       |
+  104|       |/// Test seam: list guilds against an arbitrary API base. Used by
+  105|       |/// `list_bot_guilds` in production and by unit tests that drive a
+  106|       |/// local mock Discord API.
+  107|      3|async fn list_bot_guilds_at_base(base: &str, token: &str) -> anyhow::Result<Vec<DiscordGuild>> {
+  108|      3|    list_bot_guilds_at_base_with_client(base, &build_client(), token).await
+  109|      3|}
+  110|       |
+  111|      5|async fn list_bot_guilds_at_base_with_client(
+  112|      5|    base: &str,
+  113|      5|    client: &reqwest::Client,
+  114|      5|    token: &str,
+  115|      5|) -> anyhow::Result<Vec<DiscordGuild>> {
+  116|      5|    let url = format!("{base}/users/@me/guilds");
+  117|      5|    tracing::debug!("[discord-api] listing guilds for bot");
+  118|       |
+  119|      5|    let resp = client
+  120|      5|        .get(&url)
+  121|      5|        .header("Authorization", auth_header(token))
+  122|      5|        .send()
+  123|      5|        .await?;
                             ^0
-  113|       |
-  114|      3|    if !resp.status().is_success() {
-  115|      2|        let status = resp.status();
-  116|      2|        let body = resp.text().await.unwrap_or_default();
-  117|      2|        tracing::debug!(
-  118|       |            target: "discord-api",
-  119|       |            endpoint = "list_guilds",
-  120|       |            %url,
-  121|       |            %status,
-  122|       |            body = %body,
-  123|       |            "[discord-api] non-success response"
-  124|       |        );
-  125|      2|        anyhow::bail!(
-  126|       |            "{}",
-  127|      2|            format_discord_http_error("list_guilds", status, &body)
-  128|       |        );
-  129|      1|    }
-  130|       |
-  131|      1|    let guilds: Vec<DiscordGuild> = resp.json().await?;
+  124|       |
+  125|      5|    if !resp.status().is_success() {
+  126|      3|        let status = resp.status();
+  127|      3|        let body = resp.text().await.unwrap_or_default();
+  128|      3|        tracing::debug!(
+  129|       |            target: "discord-api",
+  130|       |            endpoint = "list_guilds",
+  131|       |            %url,
+  132|       |            %status,
+  133|       |            body = %body,
+  134|       |            "[discord-api] non-success response"
+  135|       |        );
+  136|      3|        anyhow::bail!(
+  137|       |            "{}",
+  138|      3|            format_discord_http_error("list_guilds", status, &body)
+  139|       |        );
+  140|      2|    }
+  141|       |
+  142|      2|    let guilds: Vec<DiscordGuild> = resp.json().await?;
                                                                    ^0
-  132|      1|    tracing::debug!("[discord-api] found {} guilds", guilds.len());
+  143|      2|    tracing::debug!("[discord-api] found {} guilds", guilds.len());
                                                                    ^0     ^0
-  133|      1|    Ok(guilds)
-  134|      3|}
-  135|       |
-  136|       |/// List text channels in a guild. Filters to type=0 (text channels) only.
-  137|      0|pub async fn list_guild_channels(
-  138|      0|    token: &str,
-  139|      0|    guild_id: &str,
-  140|      0|) -> anyhow::Result<Vec<DiscordTextChannel>> {
-  141|      0|    list_guild_channels_with_client(&build_client(), token, guild_id).await
-  142|      0|}
-  143|       |
-  144|       |/// List guild channels using a caller-configured HTTP client.
-  145|      0|pub async fn list_guild_channels_with_client(
-  146|      0|    client: &reqwest::Client,
-  147|      0|    token: &str,
-  148|      0|    guild_id: &str,
-  149|      0|) -> anyhow::Result<Vec<DiscordTextChannel>> {
-  150|      0|    list_guild_channels_at_base_with_client(DISCORD_API_BASE, client, token, guild_id).await
-  151|      0|}
-  152|       |
-  153|       |/// Test seam: list guild channels against an arbitrary API base.
-  154|      3|async fn list_guild_channels_at_base(
-  155|      3|    base: &str,
-  156|      3|    token: &str,
-  157|      3|    guild_id: &str,
-  158|      3|) -> anyhow::Result<Vec<DiscordTextChannel>> {
-  159|      3|    list_guild_channels_at_base_with_client(base, &build_client(), token, guild_id).await
-  160|      3|}
-  161|       |
-  162|      3|async fn list_guild_channels_at_base_with_client(
-  163|      3|    base: &str,
-  164|      3|    client: &reqwest::Client,
-  165|      3|    token: &str,
-  166|      3|    guild_id: &str,
-  167|      3|) -> anyhow::Result<Vec<DiscordTextChannel>> {
-  168|      3|    let url = format!("{base}/guilds/{guild_id}/channels");
-  169|      3|    tracing::debug!("[discord-api] listing channels for guild {guild_id}");
-  170|       |
-  171|      3|    let resp = client
-  172|      3|        .get(&url)
-  173|      3|        .header("Authorization", auth_header(token))
-  174|      3|        .send()
-  175|      3|        .await?;
+  144|      2|    Ok(guilds)
+  145|      5|}
+  146|       |
+  147|       |/// List text channels in a guild. Filters to type=0 (text channels) only.
+  148|      2|pub async fn list_guild_channels(
+  149|      2|    token: &str,
+  150|      2|    guild_id: &str,
+  151|      2|) -> anyhow::Result<Vec<DiscordTextChannel>> {
+  152|      2|    list_guild_channels_with_client(&build_client(), token, guild_id).await
+  153|      2|}
+  154|       |
+  155|       |/// List guild channels using a caller-configured HTTP client.
+  156|      2|pub async fn list_guild_channels_with_client(
+  157|      2|    client: &reqwest::Client,
+  158|      2|    token: &str,
+  159|      2|    guild_id: &str,
+  160|      2|) -> anyhow::Result<Vec<DiscordTextChannel>> {
+  161|      2|    list_guild_channels_at_base_with_client(&api_base(), client, token, guild_id).await
+  162|      2|}
+  163|       |
+  164|       |/// Test seam: list guild channels against an arbitrary API base.
+  165|      3|async fn list_guild_channels_at_base(
+  166|      3|    base: &str,
+  167|      3|    token: &str,
+  168|      3|    guild_id: &str,
+  169|      3|) -> anyhow::Result<Vec<DiscordTextChannel>> {
+  170|      3|    list_guild_channels_at_base_with_client(base, &build_client(), token, guild_id).await
+  171|      3|}
+  172|       |
+  173|      5|async fn list_guild_channels_at_base_with_client(
+  174|      5|    base: &str,
+  175|      5|    client: &reqwest::Client,
+  176|      5|    token: &str,
+  177|      5|    guild_id: &str,
+  178|      5|) -> anyhow::Result<Vec<DiscordTextChannel>> {
+  179|      5|    let url = format!("{base}/guilds/{guild_id}/channels");
+  180|      5|    tracing::debug!("[discord-api] listing channels for guild {guild_id}");
+  181|       |
+  182|      5|    let resp = client
+  183|      5|        .get(&url)
+  184|      5|        .header("Authorization", auth_header(token))
+  185|      5|        .send()
+  186|      5|        .await?;
                             ^0
-  176|       |
-  177|      3|    if !resp.status().is_success() {
-  178|      1|        let status = resp.status();
-  179|      1|        let body = resp.text().await.unwrap_or_default();
-  180|      1|        tracing::debug!(
-  181|       |            target: "discord-api",
-  182|       |            endpoint = "list_guild_channels",
-  183|       |            %guild_id,
-  184|       |            %url,
-  185|       |            %status,
-  186|       |            body = %body,
-  187|       |            "[discord-api] non-success response"
-  188|       |        );
-  189|      1|        anyhow::bail!(
-  190|       |            "{}",
-  191|      1|            format_discord_http_error("list_channels", status, &body)
-  192|       |        );
-  193|      2|    }
-  194|       |
-  195|      2|    let all_channels: Vec<DiscordTextChannel> = resp.json().await?;
+  187|       |
+  188|      5|    if !resp.status().is_success() {
+  189|      2|        let status = resp.status();
+  190|      2|        let body = resp.text().await.unwrap_or_default();
+  191|      2|        tracing::debug!(
+  192|       |            target: "discord-api",
+  193|       |            endpoint = "list_guild_channels",
+  194|       |            %guild_id,
+  195|       |            %url,
+  196|       |            %status,
+  197|       |            body = %body,
+  198|       |            "[discord-api] non-success response"
+  199|       |        );
+  200|      2|        anyhow::bail!(
+  201|       |            "{}",
+  202|      2|            format_discord_http_error("list_channels", status, &body)
+  203|       |        );
+  204|      3|    }
+  205|       |
+  206|      3|    let all_channels: Vec<DiscordTextChannel> = resp.json().await?;
                                                                                ^0
-  196|       |
-  197|       |    // Filter to text channels (type 0) and sort by position
-  198|      2|    let mut text_channels: Vec<DiscordTextChannel> = all_channels
-  199|      2|        .into_iter()
-  200|      4|        .filter(|c| c.channel_type == 0)
-                       ^2
-  201|      2|        .collect();
-  202|      2|    text_channels.sort_by_key(|c| c.position);
-  203|       |
-  204|      2|    tracing::debug!(
-  205|       |        "[discord-api] found {} text channels in guild {guild_id}",
-  206|      0|        text_channels.len()
-  207|       |    );
-  208|      2|    Ok(text_channels)
-  209|      3|}
-  210|       |
-  211|       |/// Check bot permissions in a specific channel.
-  212|       |///
-  213|       |/// Uses `GET /channels/{channel_id}` combined with the bot's guild member
-  214|       |/// permissions to determine if the bot can view, send, and read history.
-  215|      0|pub async fn check_channel_permissions(
-  216|      0|    token: &str,
-  217|      0|    guild_id: &str,
-  218|      0|    channel_id: &str,
-  219|      0|) -> anyhow::Result<BotPermissionCheck> {
-  220|      0|    check_channel_permissions_with_client(&build_client(), token, guild_id, channel_id).await
-  221|      0|}
-  222|       |
-  223|       |/// Check permissions using a caller-configured HTTP client.
-  224|      0|pub async fn check_channel_permissions_with_client(
-  225|      0|    client: &reqwest::Client,
-  226|      0|    token: &str,
-  227|      0|    guild_id: &str,
-  228|      0|    channel_id: &str,
-  229|      0|) -> anyhow::Result<BotPermissionCheck> {
-  230|      0|    check_channel_permissions_at_base_with_client(
-  231|      0|        DISCORD_API_BASE,
-  232|      0|        client,
-  233|      0|        token,
-  234|      0|        guild_id,
-  235|      0|        channel_id,
-  236|      0|    )
-  237|      0|    .await
-  238|      0|}
-  239|       |
-  240|       |/// Test seam: see [`check_channel_permissions`].
-  241|      5|async fn check_channel_permissions_at_base(
-  242|      5|    base: &str,
-  243|      5|    token: &str,
-  244|      5|    guild_id: &str,
-  245|      5|    channel_id: &str,
-  246|      5|) -> anyhow::Result<BotPermissionCheck> {
-  247|      5|    check_channel_permissions_at_base_with_client(
-  248|      5|        base,
-  249|      5|        &build_client(),
-  250|      5|        token,
-  251|      5|        guild_id,
-  252|      5|        channel_id,
-  253|      5|    )
-  254|      5|    .await
-  255|      5|}
-  256|       |
-  257|      5|async fn check_channel_permissions_at_base_with_client(
-  258|      5|    base: &str,
-  259|      5|    client: &reqwest::Client,
-  260|      5|    token: &str,
-  261|      5|    guild_id: &str,
-  262|      5|    channel_id: &str,
-  263|      5|) -> anyhow::Result<BotPermissionCheck> {
-  264|      5|    tracing::debug!(
-  265|       |        "[discord-api] checking permissions in channel {channel_id} (guild {guild_id})"
-  266|       |    );
-  267|       |
-  268|       |    // Resolve bot user id first (`members/@me` is not a valid Discord route).
-  269|      5|    let me_url = format!("{base}/users/@me");
-  270|      5|    let me_resp = client
-  271|      5|        .get(&me_url)
-  272|      5|        .header("Authorization", auth_header(token))
-  273|      5|        .send()
-  274|      5|        .await?;
+  207|       |
+  208|       |    // Filter to text channels (type 0) and sort by position
+  209|      3|    let mut text_channels: Vec<DiscordTextChannel> = all_channels
+  210|      3|        .into_iter()
+  211|      7|        .filter(|c| c.channel_type == 0)
+                       ^3
+  212|      3|        .collect();
+  213|      3|    text_channels.sort_by_key(|c| c.position);
+  214|       |
+  215|      3|    tracing::debug!(
+  216|       |        "[discord-api] found {} text channels in guild {guild_id}",
+  217|      0|        text_channels.len()
+  218|       |    );
+  219|      3|    Ok(text_channels)
+  220|      5|}
+  221|       |
+  222|       |/// Check bot permissions in a specific channel.
+  223|       |///
+  224|       |/// Uses `GET /channels/{channel_id}` combined with the bot's guild member
+  225|       |/// permissions to determine if the bot can view, send, and read history.
+  226|      1|pub async fn check_channel_permissions(
+  227|      1|    token: &str,
+  228|      1|    guild_id: &str,
+  229|      1|    channel_id: &str,
+  230|      1|) -> anyhow::Result<BotPermissionCheck> {
+  231|      1|    check_channel_permissions_with_client(&build_client(), token, guild_id, channel_id).await
+  232|      1|}
+  233|       |
+  234|       |/// Check permissions using a caller-configured HTTP client.
+  235|      1|pub async fn check_channel_permissions_with_client(
+  236|      1|    client: &reqwest::Client,
+  237|      1|    token: &str,
+  238|      1|    guild_id: &str,
+  239|      1|    channel_id: &str,
+  240|      1|) -> anyhow::Result<BotPermissionCheck> {
+  241|      1|    check_channel_permissions_at_base_with_client(&api_base(), client, token, guild_id, channel_id)
+  242|      1|        .await
+  243|      1|}
+  244|       |
+  245|       |/// Test seam: see [`check_channel_permissions`].
+  246|     11|async fn check_channel_permissions_at_base(
+  247|     11|    base: &str,
+  248|     11|    token: &str,
+  249|     11|    guild_id: &str,
+  250|     11|    channel_id: &str,
+  251|     11|) -> anyhow::Result<BotPermissionCheck> {
+  252|     11|    check_channel_permissions_at_base_with_client(
+  253|     11|        base,
+  254|     11|        &build_client(),
+  255|     11|        token,
+  256|     11|        guild_id,
+  257|     11|        channel_id,
+  258|     11|    )
+  259|     11|    .await
+  260|     11|}
+  261|       |
+  262|     12|async fn check_channel_permissions_at_base_with_client(
+  263|     12|    base: &str,
+  264|     12|    client: &reqwest::Client,
+  265|     12|    token: &str,
+  266|     12|    guild_id: &str,
+  267|     12|    channel_id: &str,
+  268|     12|) -> anyhow::Result<BotPermissionCheck> {
+  269|     12|    tracing::debug!(
+  270|       |        "[discord-api] checking permissions in channel {channel_id} (guild {guild_id})"
+  271|       |    );
+  272|       |
+  273|       |    // Resolve bot user id first (`members/@me` is not a valid Discord route).
+  274|     12|    let me_url = format!("{base}/users/@me");
+  275|     12|    let me_resp = client
+  276|     12|        .get(&me_url)
+  277|     12|        .header("Authorization", auth_header(token))
+  278|     12|        .send()
+  279|     12|        .await?;
                             ^0
-  275|       |
-  276|      5|    if !me_resp.status().is_success() {
-  277|      0|        let status = me_resp.status();
-  278|      0|        let body = me_resp.text().await.unwrap_or_default();
-  279|      0|        tracing::debug!(
-  280|       |            target: "discord-api",
-  281|       |            endpoint = "check_bot_permissions.me",
-  282|       |            %guild_id,
-  283|       |            %channel_id,
-  284|       |            url = %me_url,
-  285|       |            %status,
-  286|       |            body = %body,
-  287|       |            "[discord-api] non-success response"
-  288|       |        );
-  289|      0|        anyhow::bail!(
-  290|       |            "{}",
-  291|      0|            format_discord_http_error("get_bot_user", status, &body)
-  292|       |        );
-  293|      5|    }
-  294|      5|    let me: serde_json::Value = me_resp.json().await?;
+  280|       |
+  281|     12|    if !me_resp.status().is_success() {
+  282|      1|        let status = me_resp.status();
+  283|      1|        let body = me_resp.text().await.unwrap_or_default();
+  284|      1|        tracing::debug!(
+  285|       |            target: "discord-api",
+  286|       |            endpoint = "check_bot_permissions.me",
+  287|       |            %guild_id,
+  288|       |            %channel_id,
+  289|       |            url = %me_url,
+  290|       |            %status,
+  291|       |            body = %body,
+  292|       |            "[discord-api] non-success response"
+  293|       |        );
+  294|      1|        anyhow::bail!(
+  295|       |            "{}",
+  296|      1|            format_discord_http_error("get_bot_user", status, &body)
+  297|       |        );
+  298|     11|    }
+  299|     11|    let me: serde_json::Value = me_resp.json().await?;
                                                                   ^0
-  295|      5|    let bot_user_id = me.get("id").and_then(|i| i.as_str()).unwrap_or("").trim();
-  296|      5|    if bot_user_id.is_empty() {
-  297|      0|        anyhow::bail!("Discord get bot user returned empty id");
-  298|      5|    }
-  299|       |
-  300|       |    // Fetch the bot's guild member info which includes role ids.
-  301|      5|    let member_url = format!("{base}/guilds/{guild_id}/members/{bot_user_id}");
-  302|      5|    let member_resp = client
-  303|      5|        .get(&member_url)
-  304|      5|        .header("Authorization", auth_header(token))
-  305|      5|        .send()
-  306|      5|        .await?;
+  300|     11|    let bot_user_id = me.get("id").and_then(|i| i.as_str()).unwrap_or("").trim();
+  301|     11|    if bot_user_id.is_empty() {
+  302|      1|        anyhow::bail!("Discord get bot user returned empty id");
+  303|     10|    }
+  304|       |
+  305|       |    // Fetch the bot's guild member info which includes role ids.
+  306|     10|    let member_url = format!("{base}/guilds/{guild_id}/members/{bot_user_id}");
+  307|     10|    let member_resp = client
+  308|     10|        .get(&member_url)
+  309|     10|        .header("Authorization", auth_header(token))
+  310|     10|        .send()
+  311|     10|        .await?;
                             ^0
-  307|       |
-  308|      5|    if !member_resp.status().is_success() {
-  309|      1|        let status = member_resp.status();
-  310|      1|        let body = member_resp.text().await.unwrap_or_default();
-  311|      1|        tracing::debug!(
-  312|       |            target: "discord-api",
-  313|       |            endpoint = "check_bot_permissions.member",
-  314|       |            %guild_id,
-  315|       |            %channel_id,
-  316|       |            url = %member_url,
-  317|       |            %status,
-  318|       |            body = %body,
-  319|       |            "[discord-api] non-success response"
-  320|       |        );
-  321|      1|        anyhow::bail!(
-  322|       |            "{}",
-  323|      1|            format_discord_http_error("get_member_info", status, &body)
-  324|       |        );
-  325|      4|    }
-  326|       |
-  327|      4|    let member: serde_json::Value = member_resp.json().await?;
+  312|       |
+  313|     10|    if !member_resp.status().is_success() {
+  314|      1|        let status = member_resp.status();
+  315|      1|        let body = member_resp.text().await.unwrap_or_default();
+  316|      1|        tracing::debug!(
+  317|       |            target: "discord-api",
+  318|       |            endpoint = "check_bot_permissions.member",
+  319|       |            %guild_id,
+  320|       |            %channel_id,
+  321|       |            url = %member_url,
+  322|       |            %status,
+  323|       |            body = %body,
+  324|       |            "[discord-api] non-success response"
+  325|       |        );
+  326|      1|        anyhow::bail!(
+  327|       |            "{}",
+  328|      1|            format_discord_http_error("get_member_info", status, &body)
+  329|       |        );
+  330|      9|    }
+  331|       |
+  332|      9|    let member: serde_json::Value = member_resp.json().await?;
                                                                           ^0
-  328|       |
-  329|       |    // Fetch guild roles to compute permissions
-  330|      4|    let roles_url = format!("{base}/guilds/{guild_id}/roles");
-  331|      4|    let roles_resp = client
-  332|      4|        .get(&roles_url)
-  333|      4|        .header("Authorization", auth_header(token))
-  334|      4|        .send()
-  335|      4|        .await?;
+  333|       |
+  334|       |    // Fetch guild roles to compute permissions
+  335|      9|    let roles_url = format!("{base}/guilds/{guild_id}/roles");
+  336|      9|    let roles_resp = client
+  337|      9|        .get(&roles_url)
+  338|      9|        .header("Authorization", auth_header(token))
+  339|      9|        .send()
+  340|      9|        .await?;
                             ^0
-  336|      4|    if !roles_resp.status().is_success() {
-  337|      0|        let status = roles_resp.status();
-  338|      0|        let body = roles_resp.text().await.unwrap_or_default();
-  339|      0|        tracing::debug!(
-  340|       |            target: "discord-api",
-  341|       |            endpoint = "check_bot_permissions.roles",
-  342|       |            %guild_id,
-  343|       |            %channel_id,
-  344|       |            url = %roles_url,
-  345|       |            %status,
-  346|       |            body = %body,
-  347|       |            "[discord-api] non-success response"
-  348|       |        );
-  349|      0|        anyhow::bail!(
-  350|       |            "{}",
-  351|      0|            format_discord_http_error("get_guild_roles", status, &body)
-  352|       |        );
-  353|      4|    }
-  354|      4|    let guild_roles: Vec<serde_json::Value> = roles_resp.json().await?;
+  341|      9|    if !roles_resp.status().is_success() {
+  342|      1|        let status = roles_resp.status();
+  343|      1|        let body = roles_resp.text().await.unwrap_or_default();
+  344|      1|        tracing::debug!(
+  345|       |            target: "discord-api",
+  346|       |            endpoint = "check_bot_permissions.roles",
+  347|       |            %guild_id,
+  348|       |            %channel_id,
+  349|       |            url = %roles_url,
+  350|       |            %status,
+  351|       |            body = %body,
+  352|       |            "[discord-api] non-success response"
+  353|       |        );
+  354|      1|        anyhow::bail!(
+  355|       |            "{}",
+  356|      1|            format_discord_http_error("get_guild_roles", status, &body)
+  357|       |        );
+  358|      8|    }
+  359|      8|    let guild_roles: Vec<serde_json::Value> = roles_resp.json().await?;
                                                                                    ^0
-  355|       |
-  356|       |    // Get the member's role IDs
-  357|      4|    let member_role_ids: Vec<&str> = member
-  358|      4|        .get("roles")
-  359|      4|        .and_then(|r| r.as_array())
-  360|      4|        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<&str>>())
-                                                           ^2^2
-  361|      4|        .unwrap_or_default();
-  362|       |
-  363|       |    // Compute base permissions from @everyone role + member roles
-  364|      4|    let mut permissions: u64 = 0;
-  365|      4|    for role in &guild_roles {
-  366|      4|        let role_id = role.get("id").and_then(|i| i.as_str()).unwrap_or("");
-  367|      4|        let is_everyone = role_id == guild_id; // @everyone role ID == guild ID
-  368|      4|        let is_member_role = member_role_ids.contains(&role_id);
-  369|       |
-  370|      4|        if (is_everyone || is_member_role)
-                                         ^2
-  371|      4|            && let Some(perms_str) = role.get("permissions").and_then(|p| p.as_str())
-  372|      4|            && let Ok(perms) = perms_str.parse::<u64>()
-  373|      4|        {
-  374|      4|            permissions |= perms;
-  375|      4|        }
-                      ^0
-  376|       |    }
-  377|       |
-  378|       |    // Administrator bypasses all permission checks
-  379|       |    const ADMINISTRATOR: u64 = 1 << 3;
-  380|      4|    if permissions & ADMINISTRATOR != 0 {
-  381|      1|        return Ok(BotPermissionCheck {
-  382|      1|            can_view_channel: true,
-  383|      1|            can_send_messages: true,
-  384|      1|            can_read_message_history: true,
-  385|      1|            missing_permissions: vec![],
-  386|      1|        });
-  387|      3|    }
-  388|       |
-  389|       |    // Now check channel-level permission overwrites
-  390|      3|    let channel_url = format!("{base}/channels/{channel_id}");
-  391|      3|    let ch_resp = client
-  392|      3|        .get(&channel_url)
-  393|      3|        .header("Authorization", auth_header(token))
-  394|      3|        .send()
-  395|      3|        .await?;
+  360|       |
+  361|       |    // Get the member's role IDs
+  362|      8|    let member_role_ids: Vec<&str> = member
+  363|      8|        .get("roles")
+  364|      8|        .and_then(|r| r.as_array())
+  365|      8|        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<&str>>())
+                                                           ^5^5
+  366|      8|        .unwrap_or_default();
+  367|       |
+  368|       |    // Compute base permissions from @everyone role + member roles
+  369|      8|    let mut permissions: u64 = 0;
+  370|      9|    for role in &guild_roles {
+                              ^8
+  371|      9|        let role_id = role.get("id").and_then(|i| i.as_str()).unwrap_or("");
+  372|      9|        let is_everyone = role_id == guild_id; // @everyone role ID == guild ID
+  373|      9|        let is_member_role = member_role_ids.contains(&role_id);
+  374|       |
+  375|      9|        if (is_everyone || is_member_role)
+                                         ^6
+  376|      8|            && let Some(perms_str) = role.get("permissions").and_then(|p| p.as_str())
+  377|      8|            && let Ok(perms) = perms_str.parse::<u64>()
+                                    ^7
+  378|      7|        {
+  379|      7|            permissions |= perms;
+  380|      7|        }
+                      ^2
+  381|       |    }
+  382|       |
+  383|       |    // Administrator bypasses all permission checks
+  384|       |    const ADMINISTRATOR: u64 = 1 << 3;
+  385|      8|    if permissions & ADMINISTRATOR != 0 {
+  386|      1|        return Ok(BotPermissionCheck {
+  387|      1|            can_view_channel: true,
+  388|      1|            can_send_messages: true,
+  389|      1|            can_read_message_history: true,
+  390|      1|            missing_permissions: vec![],
+  391|      1|        });
+  392|      7|    }
+  393|       |
+  394|       |    // Now check channel-level permission overwrites
+  395|      7|    let channel_url = format!("{base}/channels/{channel_id}");
+  396|      7|    let ch_resp = client
+  397|      7|        .get(&channel_url)
+  398|      7|        .header("Authorization", auth_header(token))
+  399|      7|        .send()
+  400|      7|        .await?;
                             ^0
-  396|      3|    if !ch_resp.status().is_success() {
-  397|      0|        let status = ch_resp.status();
-  398|      0|        let body = ch_resp.text().await.unwrap_or_default();
-  399|      0|        tracing::debug!(
-  400|       |            target: "discord-api",
-  401|       |            endpoint = "check_bot_permissions.channel",
-  402|       |            %guild_id,
-  403|       |            %channel_id,
-  404|       |            url = %channel_url,
-  405|       |            %status,
-  406|       |            body = %body,
-  407|       |            "[discord-api] non-success response"
-  408|       |        );
-  409|      0|        anyhow::bail!(
-  410|       |            "{}",
-  411|      0|            format_discord_http_error("get_channel", status, &body)
-  412|       |        );
-  413|      3|    }
-  414|      3|    let channel_data: serde_json::Value = ch_resp.json().await?;
+  401|      7|    if !ch_resp.status().is_success() {
+  402|      1|        let status = ch_resp.status();
+  403|      1|        let body = ch_resp.text().await.unwrap_or_default();
+  404|      1|        tracing::debug!(
+  405|       |            target: "discord-api",
+  406|       |            endpoint = "check_bot_permissions.channel",
+  407|       |            %guild_id,
+  408|       |            %channel_id,
+  409|       |            url = %channel_url,
+  410|       |            %status,
+  411|       |            body = %body,
+  412|       |            "[discord-api] non-success response"
+  413|       |        );
+  414|      1|        anyhow::bail!(
+  415|       |            "{}",
+  416|      1|            format_discord_http_error("get_channel", status, &body)
+  417|       |        );
+  418|      6|    }
+  419|      6|    let channel_data: serde_json::Value = ch_resp.json().await?;
                                                                             ^0
-  415|      3|    if let Some(overwrites) = channel_data
-  416|      3|        .get("permission_overwrites")
-  417|      3|        .and_then(|o| o.as_array())
-  418|       |    {
-  419|       |        // Intentional shadowing: prefer the ID returned inside the member
-  420|       |        // object over the one fetched from /users/@me, because the guild
-  421|       |        // member record is more authoritative for permission overwrite lookups.
-  422|      3|        let bot_user_id = member
-  423|      3|            .get("user")
-  424|      3|            .and_then(|u| u.get("id"))
-  425|      3|            .and_then(|i| i.as_str())
-  426|      3|            .unwrap_or(bot_user_id);
-  427|       |
-  428|      3|        let mut everyone_allow = 0_u64;
-  429|      3|        let mut everyone_deny = 0_u64;
-  430|      3|        let mut role_allow = 0_u64;
-  431|      3|        let mut role_deny = 0_u64;
-  432|      3|        let mut member_allow = 0_u64;
-  433|      3|        let mut member_deny = 0_u64;
-  434|       |
-  435|      3|        for overwrite in overwrites {
-                          ^1
-  436|      1|            let ow_id = overwrite.get("id").and_then(|i| i.as_str()).unwrap_or("");
-  437|      1|            let ow_type = overwrite.get("type").and_then(|t| t.as_u64()).unwrap_or(0);
-  438|      1|            let allow = overwrite
-  439|      1|                .get("allow")
-  440|      1|                .and_then(|a| a.as_str())
-  441|      1|                .and_then(|s| s.parse::<u64>().ok())
-  442|      1|                .unwrap_or(0);
-  443|      1|            let deny = overwrite
-  444|      1|                .get("deny")
-  445|      1|                .and_then(|d| d.as_str())
-  446|      1|                .and_then(|s| s.parse::<u64>().ok())
-  447|      1|                .unwrap_or(0);
-  448|       |
-  449|      0|            match ow_type {
-  450|       |                // @everyone overwrite (role id == guild id)
-  451|      1|                0 if ow_id == guild_id => {
-  452|      1|                    everyone_allow = allow;
-  453|      1|                    everyone_deny = deny;
-  454|      1|                }
-  455|       |                // Aggregate all role overwrites
-  456|      0|                0 if member_role_ids.contains(&ow_id) => {
-  457|      0|                    role_allow |= allow;
-  458|      0|                    role_deny |= deny;
-  459|      0|                }
-  460|       |                // Member-specific overwrite
-  461|      0|                1 if ow_id == bot_user_id => {
-  462|      0|                    member_allow = allow;
-  463|      0|                    member_deny = deny;
-  464|      0|                }
-  465|      0|                _ => {}
-  466|       |            }
-  467|       |        }
-  468|       |
-  469|       |        // Apply Discord overwrite precedence: everyone -> roles -> member.
-  470|      3|        permissions &= !everyone_deny;
-  471|      3|        permissions |= everyone_allow;
-  472|      3|        permissions &= !role_deny;
-  473|      3|        permissions |= role_allow;
-  474|      3|        permissions &= !member_deny;
-  475|      3|        permissions |= member_allow;
-  476|      0|    }
-  477|       |
-  478|      3|    let can_view = permissions & VIEW_CHANNEL != 0;
-  479|      3|    let can_send = permissions & SEND_MESSAGES != 0;
-  480|      3|    let can_read_history = permissions & READ_MESSAGE_HISTORY != 0;
-  481|       |
-  482|      3|    let mut missing = Vec::new();
-  483|      3|    if !can_view {
-  484|      2|        missing.push("VIEW_CHANNEL".to_string());
-  485|      2|    }
-                  ^1
-  486|      3|    if !can_send {
-  487|      1|        missing.push("SEND_MESSAGES".to_string());
-  488|      2|    }
-  489|      3|    if !can_read_history {
-  490|      1|        missing.push("READ_MESSAGE_HISTORY".to_string());
-  491|      2|    }
-  492|       |
-  493|      3|    tracing::debug!(
-  494|       |        "[discord-api] permissions for channel {channel_id}: view={can_view}, send={can_send}, history={can_read_history}"
-  495|       |    );
-  496|       |
-  497|      3|    Ok(BotPermissionCheck {
-  498|      3|        can_view_channel: can_view,
-  499|      3|        can_send_messages: can_send,
-  500|      3|        can_read_message_history: can_read_history,
-  501|      3|        missing_permissions: missing,
-  502|      3|    })
-  503|      5|}
-  504|       |
-  505|       |#[cfg(test)]
-  506|       |#[path = "api_tests.rs"]
-  507|       |mod tests;
-  508|       |
-  509|       |#[cfg(any(test, debug_assertions))]
-  510|       |#[path = "api_test_support_tests.rs"]
-  511|       |pub mod test_support;
+  420|      6|    if let Some(overwrites) = channel_data
+                              ^5
+  421|      6|        .get("permission_overwrites")
+  422|      6|        .and_then(|o| o.as_array())
+                                    ^5^5
+  423|       |    {
+  424|       |        // Intentional shadowing: prefer the ID returned inside the member
+  425|       |        // object over the one fetched from /users/@me, because the guild
+  426|       |        // member record is more authoritative for permission overwrite lookups.
+  427|      5|        let bot_user_id = member
+  428|      5|            .get("user")
+  429|      5|            .and_then(|u| u.get("id"))
+  430|      5|            .and_then(|i| i.as_str())
+  431|      5|            .unwrap_or(bot_user_id);
+  432|       |
+  433|      5|        let mut everyone_allow = 0_u64;
+  434|      5|        let mut everyone_deny = 0_u64;
+  435|      5|        let mut role_allow = 0_u64;
+  436|      5|        let mut role_deny = 0_u64;
+  437|      5|        let mut member_allow = 0_u64;
+  438|      5|        let mut member_deny = 0_u64;
+  439|       |
+  440|      7|        for overwrite in overwrites {
+                                       ^5
+  441|      7|            let ow_id = overwrite.get("id").and_then(|i| i.as_str()).unwrap_or("");
+  442|      7|            let ow_type = overwrite.get("type").and_then(|t| t.as_u64()).unwrap_or(0);
+  443|      7|            let allow = overwrite
+  444|      7|                .get("allow")
+  445|      7|                .and_then(|a| a.as_str())
+  446|      7|                .and_then(|s| s.parse::<u64>().ok())
+  447|      7|                .unwrap_or(0);
+  448|      7|            let deny = overwrite
+  449|      7|                .get("deny")
+  450|      7|                .and_then(|d| d.as_str())
+  451|      7|                .and_then(|s| s.parse::<u64>().ok())
+  452|      7|                .unwrap_or(0);
+  453|       |
+  454|      3|            match ow_type {
+  455|       |                // @everyone overwrite (role id == guild id)
+  456|      4|                0 if ow_id == guild_id => {
+                                                   ^1
+  457|      1|                    everyone_allow = allow;
+  458|      1|                    everyone_deny = deny;
+  459|      1|                }
+  460|       |                // Aggregate all role overwrites
+  461|      3|                0 if member_role_ids.contains(&ow_id) => {
+                                                                  ^2
+  462|      2|                    role_allow |= allow;
+  463|      2|                    role_deny |= deny;
+  464|      2|                }
+  465|       |                // Member-specific overwrite
+  466|      3|                1 if ow_id == bot_user_id => {
+                                                      ^2
+  467|      2|                    member_allow = allow;
+  468|      2|                    member_deny = deny;
+  469|      2|                }
+  470|      2|                _ => {}
+  471|       |            }
+  472|       |        }
+  473|       |
+  474|       |        // Apply Discord overwrite precedence: everyone -> roles -> member.
+  475|      5|        permissions &= !everyone_deny;
+  476|      5|        permissions |= everyone_allow;
+  477|      5|        permissions &= !role_deny;
+  478|      5|        permissions |= role_allow;
+  479|      5|        permissions &= !member_deny;
+  480|      5|        permissions |= member_allow;
+  481|      1|    }
+  482|       |
+  483|      6|    let can_view = permissions & VIEW_CHANNEL != 0;
+  484|      6|    let can_send = permissions & SEND_MESSAGES != 0;
+  485|      6|    let can_read_history = permissions & READ_MESSAGE_HISTORY != 0;
+  486|       |
+  487|      6|    let mut missing = Vec::new();
+  488|      6|    if !can_view {
+  489|      2|        missing.push("VIEW_CHANNEL".to_string());
+  490|      4|    }
+  491|      6|    if !can_send {
+  492|      3|        missing.push("SEND_MESSAGES".to_string());
+  493|      3|    }
+  494|      6|    if !can_read_history {
+  495|      2|        missing.push("READ_MESSAGE_HISTORY".to_string());
+  496|      4|    }
+  497|       |
+  498|      6|    tracing::debug!(
+  499|       |        "[discord-api] permissions for channel {channel_id}: view={can_view}, send={can_send}, history={can_read_history}"
+  500|       |    );
+  501|       |
+  502|      6|    Ok(BotPermissionCheck {
+  503|      6|        can_view_channel: can_view,
+  504|      6|        can_send_messages: can_send,
+  505|      6|        can_read_message_history: can_read_history,
+  506|      6|        missing_permissions: missing,
+  507|      6|    })
+  508|     12|}
+  509|       |
+  510|       |#[cfg(test)]
+  511|       |#[path = "api_tests.rs"]
+  512|       |mod tests;
+  513|       |
+  514|       |#[cfg(any(test, debug_assertions))]
+  515|       |#[path = "api_test_support_tests.rs"]
+  516|       |pub mod test_support;
 
 /home/enamakel/work/openhuman/vendor/tinychannels/worktrees/cov-discord/src/providers/discord/channel.rs:
-    1|       |use crate::channel::LengthUnit;
-    2|       |use crate::text::{ChunkMode, TextChunkOptions, chunk_text_with_options};
-    3|       |use crate::traits::{Channel, ChannelMessage, SendMessage};
-    4|       |use async_trait::async_trait;
-    5|       |use futures_util::{SinkExt, StreamExt};
-    6|       |use parking_lot::Mutex;
-    7|       |use serde_json::json;
-    8|       |use tokio_tungstenite::tungstenite::Message;
-    9|       |use uuid::Uuid;
-   10|       |
-   11|       |/// Discord channel — connects via Gateway WebSocket for real-time messages
-   12|       |pub struct DiscordChannel {
-   13|       |    bot_token: String,
-   14|       |    guild_id: Option<String>,
-   15|       |    channel_id: Option<String>,
-   16|       |    allowed_users: Vec<String>,
-   17|       |    listen_to_bots: bool,
-   18|       |    mention_only: bool,
-   19|       |    typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
-   20|       |    http_client: reqwest::Client,
-   21|       |}
-   22|       |
-   23|       |impl DiscordChannel {
-   24|     18|    pub fn new(
-   25|     18|        bot_token: String,
-   26|     18|        guild_id: Option<String>,
-   27|     18|        channel_id: Option<String>,
-   28|     18|        allowed_users: Vec<String>,
-   29|     18|        listen_to_bots: bool,
-   30|     18|        mention_only: bool,
-   31|     18|    ) -> Self {
-   32|     18|        Self {
-   33|     18|            bot_token,
-   34|     18|            guild_id,
-   35|     18|            channel_id,
-   36|     18|            allowed_users,
-   37|     18|            listen_to_bots,
-   38|     18|            mention_only,
-   39|     18|            typing_handle: Mutex::new(None),
-   40|     18|            http_client: reqwest::Client::new(),
-   41|     18|        }
-   42|     18|    }
-   43|       |
-   44|      2|    pub fn with_http_client(
-   45|      2|        bot_token: String,
-   46|      2|        guild_id: Option<String>,
-   47|      2|        channel_id: Option<String>,
-   48|      2|        allowed_users: Vec<String>,
-   49|      2|        listen_to_bots: bool,
-   50|      2|        mention_only: bool,
-   51|      2|        http_client: reqwest::Client,
-   52|      2|    ) -> Self {
-   53|      2|        Self {
-   54|      2|            bot_token,
-   55|      2|            guild_id,
-   56|      2|            channel_id,
-   57|      2|            allowed_users,
-   58|      2|            listen_to_bots,
-   59|      2|            mention_only,
-   60|      2|            typing_handle: Mutex::new(None),
-   61|      2|            http_client,
-   62|      2|        }
-   63|      2|    }
-   64|       |
-   65|      4|    fn http_client(&self) -> reqwest::Client {
-   66|      4|        self.http_client.clone()
-   67|      4|    }
+    1|       |use super::api::DISCORD_API_BASE;
+    2|       |use crate::channel::LengthUnit;
+    3|       |use crate::text::{ChunkMode, TextChunkOptions, chunk_text_with_options};
+    4|       |use crate::traits::{Channel, ChannelMessage, SendMessage};
+    5|       |use async_trait::async_trait;
+    6|       |use futures_util::{SinkExt, StreamExt};
+    7|       |use parking_lot::Mutex;
+    8|       |use serde_json::json;
+    9|       |use tokio_tungstenite::tungstenite::Message;
+   10|       |use uuid::Uuid;
+   11|       |
+   12|       |/// Discord channel — connects via Gateway WebSocket for real-time messages
+   13|       |pub struct DiscordChannel {
+   14|       |    bot_token: String,
+   15|       |    guild_id: Option<String>,
+   16|       |    channel_id: Option<String>,
+   17|       |    allowed_users: Vec<String>,
+   18|       |    listen_to_bots: bool,
+   19|       |    mention_only: bool,
+   20|       |    typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+   21|       |    http_client: reqwest::Client,
+   22|       |    api_base: String,
+   23|       |}
+   24|       |
+   25|       |impl DiscordChannel {
+   26|     22|    pub fn new(
+   27|     22|        bot_token: String,
+   28|     22|        guild_id: Option<String>,
+   29|     22|        channel_id: Option<String>,
+   30|     22|        allowed_users: Vec<String>,
+   31|     22|        listen_to_bots: bool,
+   32|     22|        mention_only: bool,
+   33|     22|    ) -> Self {
+   34|     22|        Self {
+   35|     22|            bot_token,
+   36|     22|            guild_id,
+   37|     22|            channel_id,
+   38|     22|            allowed_users,
+   39|     22|            listen_to_bots,
+   40|     22|            mention_only,
+   41|     22|            typing_handle: Mutex::new(None),
+   42|     22|            http_client: reqwest::Client::new(),
+   43|     22|            api_base: DISCORD_API_BASE.to_string(),
+   44|     22|        }
+   45|     22|    }
+   46|       |
+   47|     12|    pub fn with_http_client(
+   48|     12|        bot_token: String,
+   49|     12|        guild_id: Option<String>,
+   50|     12|        channel_id: Option<String>,
+   51|     12|        allowed_users: Vec<String>,
+   52|     12|        listen_to_bots: bool,
+   53|     12|        mention_only: bool,
+   54|     12|        http_client: reqwest::Client,
+   55|     12|    ) -> Self {
+   56|     12|        Self {
+   57|     12|            bot_token,
+   58|     12|            guild_id,
+   59|     12|            channel_id,
+   60|     12|            allowed_users,
+   61|     12|            listen_to_bots,
+   62|     12|            mention_only,
+   63|     12|            typing_handle: Mutex::new(None),
+   64|     12|            http_client,
+   65|     12|            api_base: DISCORD_API_BASE.to_string(),
+   66|     12|        }
+   67|     12|    }
    68|       |
-   69|       |    /// Check if a Discord user ID is in the allowlist.
-   70|       |    ///
-   71|       |    /// Empty list ⇒ allow-all: an unconfigured allowlist applies no per-user
-   72|       |    /// restriction (the bot is still scoped to its configured guild/channel).
-   73|       |    /// Previously an empty list denied *everyone*, so a bot connected via the UI
-   74|       |    /// with the default-empty allowlist silently ignored every message and never
-   75|       |    /// replied (issue #3712). This now matches the WhatsApp provider's
-   76|       |    /// empty-⇒-allow-all convention. `"*"` also allows everyone; populate the
-   77|       |    /// list with specific user IDs to restrict.
-   78|     17|    fn is_user_allowed(&self, user_id: &str) -> bool {
-   79|     19|        self.allowed_users.is_empty() || self.allowed_users.iter().any(|u| u == "*" || u == user_id)
-                      ^17                ^17           ^15                       ^15                 ^16
+   69|       |    /// Override the Discord REST base (default `https://discord.com/api/v10`),
+   70|       |    /// e.g. to route through a proxy or a local mock. Trailing slashes are
+   71|       |    /// trimmed.
+   72|       |    #[must_use]
+   73|     18|    pub fn with_api_base(mut self, api_base: impl Into<String>) -> Self {
+   74|     18|        self.api_base = api_base.into().trim_end_matches('/').to_string();
+   75|     18|        self
+   76|     18|    }
+   77|       |
+   78|     17|    fn http_client(&self) -> reqwest::Client {
+   79|     17|        self.http_client.clone()
    80|     17|    }
    81|       |
-   82|       |    /// Decide whether a message passes the bot's guild scoping.
+   82|       |    /// Check if a Discord user ID is in the allowlist.
    83|       |    ///
-   84|       |    /// - No configured guild → all messages pass (guild filter inactive).
-   85|       |    /// - Configured guild, message in a *different* guild → blocked.
-   86|       |    /// - Configured guild, message in that guild → allowed.
-   87|       |    /// - Configured guild, DM (no `guild_id`) → only when the allowlist is
-   88|       |    ///   non-empty (explicit). `is_user_allowed` treats an empty list as
-   89|       |    ///   allow-all (the intended *within-guild* default), but DMs bypass the
-   90|       |    ///   guild filter — so a blank allowlist must not open a guild-scoped bot to
-   91|       |    ///   arbitrary DMs (#3794 review — Codex P1). `"*"` (non-empty) still allows.
-   92|      6|    fn passes_guild_scope(
-   93|      6|        configured_guild: Option<&str>,
-   94|      6|        msg_guild: Option<&str>,
-   95|      6|        allowlist_empty: bool,
-   96|      6|    ) -> bool {
-   97|      6|        let Some(gid) = configured_guild else {
-                               ^4
-   98|      2|            return true;
-   99|       |        };
-  100|      4|        match msg_guild {
-  101|      2|            Some(g) => g == gid,
-  102|      2|            None => !allowlist_empty,
-  103|       |        }
-  104|      6|    }
-  105|       |
-  106|       |    /// Resolve the outbound recipient channel id. Prefer the message's explicit
-  107|       |    /// recipient (e.g. the channel a reply targets); fall back to the bot's
-  108|       |    /// configured `channel_id` for recipient-less sends such as proactive
-  109|       |    /// cron/heartbeat delivery (#3794 review — Codex P2). `None` when neither is
-  110|       |    /// available, so the caller surfaces an error instead of POSTing to an empty
-  111|       |    /// channel id.
-  112|      4|    fn resolve_recipient<'a>(
-  113|      4|        msg_recipient: &'a str,
-  114|      4|        configured: Option<&'a str>,
-  115|      4|    ) -> Option<&'a str> {
-  116|      4|        let recipient = if msg_recipient.is_empty() {
-  117|      3|            configured.unwrap_or("")
-  118|       |        } else {
-  119|      1|            msg_recipient
-  120|       |        };
-  121|      4|        (!recipient.is_empty()).then_some(recipient)
-  122|      4|    }
-  123|       |
-  124|      2|    fn bot_user_id_from_token(token: &str) -> Option<String> {
-  125|       |        // Discord bot tokens are base64(bot_user_id).timestamp.hmac
-  126|      2|        let part = token.split('.').next()?;
+   84|       |    /// Empty list ⇒ allow-all: an unconfigured allowlist applies no per-user
+   85|       |    /// restriction (the bot is still scoped to its configured guild/channel).
+   86|       |    /// Previously an empty list denied *everyone*, so a bot connected via the UI
+   87|       |    /// with the default-empty allowlist silently ignored every message and never
+   88|       |    /// replied (issue #3712). This now matches the WhatsApp provider's
+   89|       |    /// empty-⇒-allow-all convention. `"*"` also allows everyone; populate the
+   90|       |    /// list with specific user IDs to restrict.
+   91|     25|    fn is_user_allowed(&self, user_id: &str) -> bool {
+   92|     26|        self.allowed_users.is_empty() || self.allowed_users.iter().any(|u| u == "*" || u == user_id)
+                      ^25                ^25           ^22                       ^22                 ^21
+   93|     25|    }
+   94|       |
+   95|       |    /// Decide whether a message passes the bot's guild scoping.
+   96|       |    ///
+   97|       |    /// - No configured guild → all messages pass (guild filter inactive).
+   98|       |    /// - Configured guild, message in a *different* guild → blocked.
+   99|       |    /// - Configured guild, message in that guild → allowed.
+  100|       |    /// - Configured guild, DM (no `guild_id`) → only when the allowlist is
+  101|       |    ///   non-empty (explicit). `is_user_allowed` treats an empty list as
+  102|       |    ///   allow-all (the intended *within-guild* default), but DMs bypass the
+  103|       |    ///   guild filter — so a blank allowlist must not open a guild-scoped bot to
+  104|       |    ///   arbitrary DMs (#3794 review — Codex P1). `"*"` (non-empty) still allows.
+  105|     13|    fn passes_guild_scope(
+  106|     13|        configured_guild: Option<&str>,
+  107|     13|        msg_guild: Option<&str>,
+  108|     13|        allowlist_empty: bool,
+  109|     13|    ) -> bool {
+  110|     13|        let Some(gid) = configured_guild else {
+                               ^8
+  111|      5|            return true;
+  112|       |        };
+  113|      8|        match msg_guild {
+  114|      6|            Some(g) => g == gid,
+  115|      2|            None => !allowlist_empty,
+  116|       |        }
+  117|     13|    }
+  118|       |
+  119|       |    /// Resolve the outbound recipient channel id. Prefer the message's explicit
+  120|       |    /// recipient (e.g. the channel a reply targets); fall back to the bot's
+  121|       |    /// configured `channel_id` for recipient-less sends such as proactive
+  122|       |    /// cron/heartbeat delivery (#3794 review — Codex P2). `None` when neither is
+  123|       |    /// available, so the caller surfaces an error instead of POSTing to an empty
+  124|       |    /// channel id.
+  125|      8|    fn resolve_recipient<'a>(
+  126|      8|        msg_recipient: &'a str,
+  127|      8|        configured: Option<&'a str>,
+  128|      8|    ) -> Option<&'a str> {
+  129|      8|        let recipient = if msg_recipient.is_empty() {
+  130|      5|            configured.unwrap_or("")
+  131|       |        } else {
+  132|      3|            msg_recipient
+  133|       |        };
+  134|      8|        (!recipient.is_empty()).then_some(recipient)
+  135|      8|    }
+  136|       |
+  137|      7|    fn bot_user_id_from_token(token: &str) -> Option<String> {
+  138|       |        // Discord bot tokens are base64(bot_user_id).timestamp.hmac
+  139|      7|        let part = token.split('.').next()?;
                                                         ^0
-  127|      2|        base64_decode(part)
-  128|      2|    }
-  129|       |}
-  130|       |
-  131|       |const BASE64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-  132|       |
-  133|       |/// Discord's maximum message length for regular messages.
-  134|       |///
-  135|       |/// Discord rejects longer payloads with `50035 Invalid Form Body`.
-  136|       |const DISCORD_MAX_MESSAGE_LENGTH: usize = 2000;
-  137|       |
-  138|       |/// Split a message into chunks that respect Discord's 2000-character limit.
-  139|       |/// Tries to split at word boundaries when possible.
-  140|     23|fn split_message_for_discord(message: &str) -> Vec<String> {
-  141|     23|    if message.is_empty() {
-  142|      1|        return vec![String::new()];
-  143|     22|    }
-  144|     22|    chunk_text_with_options(
-  145|     22|        message,
-  146|     22|        TextChunkOptions {
-  147|     22|            limit: DISCORD_MAX_MESSAGE_LENGTH,
-  148|     22|            length_unit: LengthUnit::Utf16Units,
-  149|     22|            mode: ChunkMode::Length,
-  150|     22|            markdown: true,
-  151|     22|            indicators: false,
-  152|     22|        },
-  153|       |    )
-  154|     23|}
-  155|       |
-  156|      8|fn mention_tags(bot_user_id: &str) -> [String; 2] {
-  157|      8|    [format!("<@{bot_user_id}>"), format!("<@!{bot_user_id}>")]
-  158|      8|}
-  159|       |
-  160|      6|fn contains_bot_mention(content: &str, bot_user_id: &str) -> bool {
-  161|      6|    let tags = mention_tags(bot_user_id);
-  162|      6|    content.contains(&tags[0]) || content.contains(&tags[1])
-                                                ^4      ^4       ^4
-  163|      6|}
-  164|       |
-  165|      3|fn normalize_incoming_content(
-  166|      3|    content: &str,
-  167|      3|    mention_only: bool,
-  168|      3|    bot_user_id: &str,
-  169|      3|) -> Option<String> {
-  170|      3|    if content.is_empty() {
-  171|      0|        return None;
-  172|      3|    }
-  173|       |
-  174|      3|    if mention_only && !contains_bot_mention(content, bot_user_id) {
-  175|      1|        return None;
-  176|      2|    }
+  140|      7|        base64_decode(part)
+  141|      7|    }
+  142|       |}
+  143|       |
+  144|       |const BASE64_ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  145|       |
+  146|       |/// Discord's maximum message length for regular messages.
+  147|       |///
+  148|       |/// Discord rejects longer payloads with `50035 Invalid Form Body`.
+  149|       |const DISCORD_MAX_MESSAGE_LENGTH: usize = 2000;
+  150|       |
+  151|       |/// Split a message into chunks that respect Discord's 2000-character limit.
+  152|       |/// Tries to split at word boundaries when possible.
+  153|     26|fn split_message_for_discord(message: &str) -> Vec<String> {
+  154|     26|    if message.is_empty() {
+  155|      1|        return vec![String::new()];
+  156|     25|    }
+  157|     25|    chunk_text_with_options(
+  158|     25|        message,
+  159|     25|        TextChunkOptions {
+  160|     25|            limit: DISCORD_MAX_MESSAGE_LENGTH,
+  161|     25|            length_unit: LengthUnit::Utf16Units,
+  162|     25|            mode: ChunkMode::Length,
+  163|     25|            markdown: true,
+  164|     25|            indicators: false,
+  165|     25|        },
+  166|       |    )
+  167|     26|}
+  168|       |
+  169|     11|fn mention_tags(bot_user_id: &str) -> [String; 2] {
+  170|     11|    [format!("<@{bot_user_id}>"), format!("<@!{bot_user_id}>")]
+  171|     11|}
+  172|       |
+  173|      8|fn contains_bot_mention(content: &str, bot_user_id: &str) -> bool {
+  174|      8|    let tags = mention_tags(bot_user_id);
+  175|      8|    content.contains(&tags[0]) || content.contains(&tags[1])
+                                                ^6      ^6       ^6
+  176|      8|}
   177|       |
-  178|      2|    let mut normalized = content.to_string();
-  179|      2|    if mention_only {
-  180|      4|        for tag in mention_tags(bot_user_id) {
-                                 ^2           ^2
-  181|      4|            normalized = normalized.replace(&tag, " ");
-  182|      4|        }
-  183|      0|    }
-  184|       |
-  185|      2|    let normalized = normalized.trim().to_string();
-  186|      2|    if normalized.is_empty() {
-  187|      1|        return None;
-  188|      1|    }
-  189|       |
-  190|      1|    Some(normalized)
-  191|      3|}
-  192|       |
-  193|       |/// Minimal base64 decode (no extra dep) — only needs to decode the user ID portion
-  194|       |#[allow(clippy::cast_possible_truncation)]
-  195|      5|fn base64_decode(input: &str) -> Option<String> {
-  196|      5|    let padded = match input.len() % 4 {
-  197|      0|        2 => format!("{input}=="),
-  198|      0|        3 => format!("{input}="),
-  199|      5|        _ => input.to_string(),
-  200|       |    };
-  201|       |
-  202|      5|    let mut bytes = Vec::new();
-  203|      5|    let chars: Vec<u8> = padded.bytes().collect();
-  204|       |
-  205|      5|    for chunk in chars.chunks(4) {
-  206|      5|        if chunk.len() < 4 {
-  207|      0|            break;
-  208|      5|        }
-  209|       |
-  210|      5|        let mut v = [0usize; 4];
-  211|     17|        for (i, &b) in chunk.iter().enumerate() {
-                                     ^5    ^5     ^5
-  212|     17|            if b == b'=' {
-  213|      0|                v[i] = 0;
-  214|      0|            } else {
-  215|    440|                v[i] = BASE64_ALPHABET.iter().position(|&a| a == b)?;
-                              ^16    ^17                    ^17                  ^1
-  216|       |            }
-  217|       |        }
-  218|       |
-  219|      4|        bytes.push(((v[0] << 2) | (v[1] >> 4)) as u8);
-  220|      4|        if chunk[2] != b'=' {
-  221|      4|            bytes.push((((v[1] & 0xF) << 4) | (v[2] >> 2)) as u8);
-  222|      4|        }
+  178|      8|fn normalize_incoming_content(
+  179|      8|    content: &str,
+  180|      8|    mention_only: bool,
+  181|      8|    bot_user_id: &str,
+  182|      8|) -> Option<String> {
+  183|      8|    if content.is_empty() {
+  184|      1|        return None;
+  185|      7|    }
+  186|       |
+  187|      7|    if mention_only && !contains_bot_mention(content, bot_user_id) {
+                                     ^5^5
+  188|      2|        return None;
+  189|      5|    }
+  190|       |
+  191|      5|    let mut normalized = content.to_string();
+  192|      5|    if mention_only {
+  193|      6|        for tag in mention_tags(bot_user_id) {
+                                 ^3           ^3
+  194|      6|            normalized = normalized.replace(&tag, " ");
+  195|      6|        }
+  196|      2|    }
+  197|       |
+  198|      5|    let normalized = normalized.trim().to_string();
+  199|      5|    if normalized.is_empty() {
+  200|      1|        return None;
+  201|      4|    }
+  202|       |
+  203|      4|    Some(normalized)
+  204|      8|}
+  205|       |
+  206|       |/// Minimal base64 decode (no extra dep) — only needs to decode the user ID portion
+  207|       |#[allow(clippy::cast_possible_truncation)]
+  208|     10|fn base64_decode(input: &str) -> Option<String> {
+  209|     10|    let padded = match input.len() % 4 {
+  210|      0|        2 => format!("{input}=="),
+  211|      0|        3 => format!("{input}="),
+  212|     10|        _ => input.to_string(),
+  213|       |    };
+  214|       |
+  215|     10|    let mut bytes = Vec::new();
+  216|     10|    let chars: Vec<u8> = padded.bytes().collect();
+  217|       |
+  218|     15|    for chunk in chars.chunks(4) {
+                               ^10
+  219|     15|        if chunk.len() < 4 {
+  220|      0|            break;
+  221|     15|        }
+  222|       |
+  223|     15|        let mut v = [0usize; 4];
+  224|     57|        for (i, &b) in chunk.iter().enumerate() {
+                                     ^15   ^15    ^15
+  225|     57|            if b == b'=' {
+  226|      0|                v[i] = 0;
+  227|      0|            } else {
+  228|  1.38k|                v[i] = BASE64_ALPHABET.iter().position(|&a| a == b)?;
+                              ^56    ^57                    ^57                  ^1
+  229|       |            }
+  230|       |        }
+  231|       |
+  232|     14|        bytes.push(((v[0] << 2) | (v[1] >> 4)) as u8);
+  233|     14|        if chunk[2] != b'=' {
+  234|     14|            bytes.push((((v[1] & 0xF) << 4) | (v[2] >> 2)) as u8);
+  235|     14|        }
                       ^0
-  223|      4|        if chunk[3] != b'=' {
-  224|      4|            bytes.push((((v[2] & 0x3) << 6) | v[3]) as u8);
-  225|      4|        }
+  236|     14|        if chunk[3] != b'=' {
+  237|     14|            bytes.push((((v[2] & 0x3) << 6) | v[3]) as u8);
+  238|     14|        }
                       ^0
-  226|       |    }
-  227|       |
-  228|      4|    String::from_utf8(bytes).ok()
-  229|      5|}
-  230|       |
-  231|       |#[async_trait]
-  232|       |impl Channel for DiscordChannel {
-  233|      3|    fn name(&self) -> &str {
-  234|      3|        "discord"
-  235|      3|    }
-  236|       |
-  237|       |    /// Recipient-less proactive sends (cron/heartbeat) deliver to the bot's
-  238|       |    /// configured default `channel_id`. `None` when unconfigured, so proactive
-  239|       |    /// routing skips Discord rather than letting `send` bail on an empty target
-  240|       |    /// (#3794 review — Codex P2).
-  241|      3|    fn proactive_target(&self) -> Option<String> {
-  242|      3|        self.channel_id
-  243|      3|            .as_deref()
-  244|      3|            .map(str::trim)
-  245|      3|            .filter(|s| !s.is_empty())
+  239|       |    }
+  240|       |
+  241|      9|    String::from_utf8(bytes).ok()
+  242|     10|}
+  243|       |
+  244|       |#[async_trait]
+  245|       |impl Channel for DiscordChannel {
+  246|      3|    fn name(&self) -> &str {
+  247|      3|        "discord"
+  248|      3|    }
+  249|       |
+  250|       |    /// Recipient-less proactive sends (cron/heartbeat) deliver to the bot's
+  251|       |    /// configured default `channel_id`. `None` when unconfigured, so proactive
+  252|       |    /// routing skips Discord rather than letting `send` bail on an empty target
+  253|       |    /// (#3794 review — Codex P2).
+  254|      3|    fn proactive_target(&self) -> Option<String> {
+  255|      3|        self.channel_id
+  256|      3|            .as_deref()
+  257|      3|            .map(str::trim)
+  258|      3|            .filter(|s| !s.is_empty())
                                        ^2^2
-  246|      3|            .map(str::to_string)
-  247|      3|    }
-  248|       |
-  249|      0|    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-  250|       |        // Resolve the target channel: explicit recipient (replies) or the
-  251|       |        // configured default channel (recipient-less proactive sends). Bail with
-  252|       |        // a clear error rather than POSTing to an empty channel id (#3794 review).
-  253|       |        let Some(recipient) =
-  254|       |            Self::resolve_recipient(&message.recipient, self.channel_id.as_deref())
-  255|       |        else {
-  256|       |            anyhow::bail!(
-  257|       |                "Discord send: no target channel — message had no recipient and no channel_id is configured"
-  258|       |            );
-  259|       |        };
-  260|       |
-  261|       |        let chunks = split_message_for_discord(&message.content);
-  262|       |
-  263|       |        for (i, chunk) in chunks.iter().enumerate() {
-  264|       |            let url = format!("https://discord.com/api/v10/channels/{recipient}/messages");
-  265|       |
-  266|       |            let body = json!({ "content": chunk });
-  267|       |
-  268|       |            let resp = self
-  269|       |                .http_client()
-  270|       |                .post(&url)
-  271|       |                .header("Authorization", format!("Bot {}", self.bot_token))
-  272|       |                .json(&body)
-  273|       |                .send()
-  274|       |                .await?;
+  259|      3|            .map(str::to_string)
+  260|      3|    }
+  261|       |
+  262|      4|    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+  263|       |        // Resolve the target channel: explicit recipient (replies) or the
+  264|       |        // configured default channel (recipient-less proactive sends). Bail with
+  265|       |        // a clear error rather than POSTing to an empty channel id (#3794 review).
+  266|       |        let Some(recipient) =
+  267|       |            Self::resolve_recipient(&message.recipient, self.channel_id.as_deref())
+  268|       |        else {
+  269|       |            anyhow::bail!(
+  270|       |                "Discord send: no target channel — message had no recipient and no channel_id is configured"
+  271|       |            );
+  272|       |        };
+  273|       |
+  274|       |        let chunks = split_message_for_discord(&message.content);
   275|       |
-  276|       |            if !resp.status().is_success() {
-  277|       |                let status = resp.status();
-  278|       |                let err = resp
-  279|       |                    .text()
-  280|       |                    .await
-  281|      0|                    .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
-  282|       |                anyhow::bail!("Discord send message failed ({status}): {err}");
-  283|       |            }
-  284|       |
-  285|       |            // Add a small delay between chunks to avoid rate limiting
-  286|       |            if i < chunks.len() - 1 {
-  287|       |                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-  288|       |            }
-  289|       |        }
-  290|       |
-  291|       |        Ok(())
-  292|      0|    }
-  293|       |
-  294|       |    #[allow(clippy::too_many_lines)]
-  295|      0|    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-  296|       |        let bot_user_id = Self::bot_user_id_from_token(&self.bot_token).unwrap_or_default();
+  276|       |        for (i, chunk) in chunks.iter().enumerate() {
+  277|       |            let url = format!("{}/channels/{recipient}/messages", self.api_base);
+  278|       |
+  279|       |            let body = json!({ "content": chunk });
+  280|       |
+  281|       |            let resp = self
+  282|       |                .http_client()
+  283|       |                .post(&url)
+  284|       |                .header("Authorization", format!("Bot {}", self.bot_token))
+  285|       |                .json(&body)
+  286|       |                .send()
+  287|       |                .await?;
+  288|       |
+  289|       |            if !resp.status().is_success() {
+  290|       |                let status = resp.status();
+  291|       |                let err = resp
+  292|       |                    .text()
+  293|       |                    .await
+  294|      0|                    .unwrap_or_else(|e| format!("<failed to read response body: {e}>"));
+  295|       |                anyhow::bail!("Discord send message failed ({status}): {err}");
+  296|       |            }
   297|       |
-  298|       |        // Get Gateway URL
-  299|       |        let gw_resp: serde_json::Value = self
-  300|       |            .http_client()
-  301|       |            .get("https://discord.com/api/v10/gateway/bot")
-  302|       |            .header("Authorization", format!("Bot {}", self.bot_token))
-  303|       |            .send()
-  304|       |            .await?
-  305|       |            .json()
-  306|       |            .await?;
-  307|       |
-  308|       |        let gw_url = gw_resp
-  309|       |            .get("url")
-  310|      0|            .and_then(|u| u.as_str())
-  311|       |            .unwrap_or("wss://gateway.discord.gg");
-  312|       |
-  313|       |        let ws_url = format!("{gw_url}/?v=10&encoding=json");
-  314|       |        tracing::info!("Discord: connecting to gateway...");
-  315|       |
-  316|       |        let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await?;
-  317|       |        let (mut write, mut read) = ws_stream.split();
-  318|       |
-  319|       |        // Read Hello (opcode 10)
-  320|       |        let hello = read.next().await.ok_or(anyhow::anyhow!("No hello"))??;
-  321|       |        let hello_data: serde_json::Value = serde_json::from_str(&hello.to_string())?;
-  322|       |        let heartbeat_interval = hello_data
-  323|       |            .get("d")
-  324|      0|            .and_then(|d| d.get("heartbeat_interval"))
-  325|       |            .and_then(serde_json::Value::as_u64)
-  326|       |            .unwrap_or(41250);
-  327|       |
-  328|       |        // Send Identify (opcode 2)
-  329|       |        let identify = json!({
-  330|       |            "op": 2,
-  331|       |            "d": {
-  332|       |                "token": self.bot_token,
-  333|       |                "intents": 37377, // GUILDS | GUILD_MESSAGES | MESSAGE_CONTENT | DIRECT_MESSAGES
-  334|       |                "properties": {
-  335|       |                    "os": "linux",
-  336|       |                    "browser": "openhuman",
-  337|       |                    "device": "openhuman"
-  338|       |                }
-  339|       |            }
-  340|       |        });
-  341|       |        write
-  342|       |            .send(Message::Text(identify.to_string().into()))
-  343|       |            .await?;
-  344|       |
-  345|       |        tracing::info!("Discord: connected and identified");
-  346|       |
-  347|       |        // Track the last sequence number for heartbeats and resume.
-  348|       |        // Only accessed in the select! loop below, so a plain i64 suffices.
-  349|       |        let mut sequence: i64 = -1;
-  350|       |
-  351|       |        // Spawn heartbeat timer — sends a tick signal, actual heartbeat
-  352|       |        // is assembled in the select! loop where `sequence` lives.
-  353|       |        let (hb_tx, mut hb_rx) = tokio::sync::mpsc::channel::<()>(1);
-  354|       |        let hb_interval = heartbeat_interval;
-  355|      0|        tokio::spawn(async move {
-  356|      0|            let mut interval = tokio::time::interval(std::time::Duration::from_millis(hb_interval));
-  357|       |            loop {
-  358|      0|                interval.tick().await;
-  359|      0|                if hb_tx.send(()).await.is_err() {
-  360|      0|                    break;
-  361|      0|                }
-  362|       |            }
-  363|      0|        });
-  364|       |
-  365|       |        let guild_filter = self.guild_id.clone();
-  366|       |        let channel_filter = self.channel_id.clone();
-  367|       |
-  368|       |        loop {
-  369|       |            tokio::select! {
-  370|       |                _ = hb_rx.recv() => {
-  371|       |                    let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
-  372|       |                    let hb = json!({"op": 1, "d": d});
-  373|       |                    if write.send(Message::Text(hb.to_string().into())).await.is_err() {
-  374|       |                        break;
-  375|       |                    }
-  376|       |                }
-  377|       |                msg = read.next() => {
-  378|       |                    let msg = match msg {
-  379|       |                        Some(Ok(Message::Text(t))) => t,
-  380|       |                        Some(Ok(Message::Close(_))) | None => break,
-  381|       |                        _ => continue,
-  382|       |                    };
-  383|       |
-  384|       |                    let event: serde_json::Value = match serde_json::from_str(msg.as_ref()) {
-  385|       |                        Ok(e) => e,
-  386|       |                        Err(_) => continue,
-  387|       |                    };
-  388|       |
-  389|       |                    // Track sequence number from all dispatch events
-  390|       |                    if let Some(s) = event.get("s").and_then(serde_json::Value::as_i64) {
-  391|       |                        sequence = s;
-  392|       |                    }
-  393|       |
-  394|       |                    let op = event.get("op").and_then(serde_json::Value::as_u64).unwrap_or(0);
-  395|       |
-  396|       |                    match op {
-  397|       |                        // Op 1: Server requests an immediate heartbeat
-  398|       |                        1 => {
-  399|       |                            let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
-  400|       |                            let hb = json!({"op": 1, "d": d});
-  401|       |                            if write.send(Message::Text(hb.to_string().into())).await.is_err() {
-  402|       |                                break;
-  403|       |                            }
-  404|       |                            continue;
-  405|       |                        }
-  406|       |                        // Op 7: Reconnect
-  407|       |                        7 => {
-  408|       |                            tracing::warn!("Discord: received Reconnect (op 7), closing for restart");
-  409|       |                            break;
-  410|       |                        }
-  411|       |                        // Op 9: Invalid Session
-  412|       |                        9 => {
-  413|       |                            tracing::warn!("Discord: received Invalid Session (op 9), closing for restart");
-  414|       |                            break;
-  415|       |                        }
-  416|       |                        _ => {}
-  417|       |                    }
-  418|       |
-  419|       |                    // Only handle MESSAGE_CREATE (opcode 0, type "MESSAGE_CREATE")
-  420|      0|                    let event_type = event.get("t").and_then(|t| t.as_str()).unwrap_or("");
-  421|       |                    if event_type != "MESSAGE_CREATE" {
-  422|       |                        continue;
-  423|       |                    }
-  424|       |
-  425|       |                    let Some(d) = event.get("d") else {
-  426|       |                        continue;
-  427|       |                    };
-  428|       |
-  429|       |                    // Skip messages from the bot itself
-  430|      0|                    let author_id = d.get("author").and_then(|a| a.get("id")).and_then(|i| i.as_str()).unwrap_or("");
-  431|       |                    if author_id == bot_user_id {
-  432|       |                        continue;
-  433|       |                    }
-  434|       |
-  435|       |                    // Skip bot messages (unless listen_to_bots is enabled)
-  436|      0|                    if !self.listen_to_bots && d.get("author").and_then(|a| a.get("bot")).and_then(serde_json::Value::as_bool).unwrap_or(false) {
-  437|       |                        continue;
-  438|       |                    }
-  439|       |
-  440|       |                    // Sender validation
-  441|       |                    if !self.is_user_allowed(author_id) {
-  442|       |                        tracing::warn!("Discord: ignoring message from unauthorized user: {author_id}");
-  443|       |                        continue;
-  444|       |                    }
-  445|       |
-  446|       |                    // Guild filter + DM scoping (#3794 review — Codex P1)
-  447|       |                    if !Self::passes_guild_scope(
-  448|       |                        guild_filter.as_deref(),
-  449|       |                        d.get("guild_id").and_then(serde_json::Value::as_str),
-  450|       |                        self.allowed_users.is_empty(),
-  451|       |                    ) {
-  452|       |                        continue;
-  453|       |                    }
-  454|       |
-  455|       |                    // Channel filter — only process messages from the configured channel
-  456|       |                    if let Some(ref cid) = channel_filter {
-  457|       |                        let msg_channel = d.get("channel_id").and_then(serde_json::Value::as_str).unwrap_or("");
-  458|       |                        if msg_channel != cid {
-  459|       |                            continue;
-  460|       |                        }
-  461|       |                    }
-  462|       |
-  463|      0|                    let content = d.get("content").and_then(|c| c.as_str()).unwrap_or("");
-  464|       |                    let Some(clean_content) =
-  465|       |                        normalize_incoming_content(content, self.mention_only, &bot_user_id)
-  466|       |                    else {
-  467|       |                        continue;
-  468|       |                    };
-  469|       |
-  470|      0|                    let message_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
-  471|      0|                    let channel_id = d.get("channel_id").and_then(|c| c.as_str()).unwrap_or("").to_string();
-  472|       |
-  473|       |                    let channel_msg = ChannelMessage {
-  474|       |                        id: if message_id.is_empty() {
-  475|       |                            format!("discord_{}", Uuid::new_v4())
-  476|       |                        } else {
-  477|       |                            format!("discord_{message_id}")
-  478|       |                        },
-  479|       |                        sender: author_id.to_string(),
-  480|       |                        reply_target: if channel_id.is_empty() {
-  481|       |                            author_id.to_string()
-  482|       |                        } else {
-  483|       |                            channel_id.clone()
-  484|       |                        },
-  485|       |                        content: clean_content,
-  486|       |                        channel: "discord".to_string(),
-  487|       |                        timestamp: std::time::SystemTime::now()
-  488|       |                            .duration_since(std::time::UNIX_EPOCH)
-  489|       |                            .unwrap_or_default()
-  490|       |                            .as_secs(),
-  491|       |                        thread_ts: None,
-  492|       |                        sender_name: None,
-  493|       |                    };
-  494|       |
-  495|       |                    if tx.send(channel_msg).await.is_err() {
-  496|       |                        break;
-  497|       |                    }
-  498|       |                }
-  499|       |            }
-  500|       |        }
-  501|       |
-  502|       |        Ok(())
-  503|      0|    }
-  504|       |
-  505|      0|    async fn health_check(&self) -> bool {
-  506|       |        self.http_client()
-  507|       |            .get("https://discord.com/api/v10/users/@me")
-  508|       |            .header("Authorization", format!("Bot {}", self.bot_token))
-  509|       |            .send()
-  510|       |            .await
-  511|      0|            .map(|r| r.status().is_success())
-  512|       |            .unwrap_or(false)
-  513|      0|    }
+  298|       |            // Add a small delay between chunks to avoid rate limiting
+  299|       |            if i < chunks.len() - 1 {
+  300|       |                tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+  301|       |            }
+  302|       |        }
+  303|       |
+  304|       |        Ok(())
+  305|      4|    }
+  306|       |
+  307|       |    #[allow(clippy::too_many_lines)]
+  308|      5|    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+  309|       |        let bot_user_id = Self::bot_user_id_from_token(&self.bot_token).unwrap_or_default();
+  310|       |
+  311|       |        // Get Gateway URL
+  312|       |        let gw_resp: serde_json::Value = self
+  313|       |            .http_client()
+  314|       |            .get(format!("{}/gateway/bot", self.api_base))
+  315|       |            .header("Authorization", format!("Bot {}", self.bot_token))
+  316|       |            .send()
+  317|       |            .await?
+  318|       |            .json()
+  319|       |            .await?;
+  320|       |
+  321|       |        let gw_url = gw_resp
+  322|       |            .get("url")
+  323|      4|            .and_then(|u| u.as_str())
+  324|       |            .unwrap_or("wss://gateway.discord.gg");
+  325|       |
+  326|       |        let ws_url = format!("{gw_url}/?v=10&encoding=json");
+  327|       |        tracing::info!("Discord: connecting to gateway...");
+  328|       |
+  329|       |        let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await?;
+  330|       |        let (mut write, mut read) = ws_stream.split();
+  331|       |
+  332|       |        // Read Hello (opcode 10)
+  333|       |        let hello = read.next().await.ok_or(anyhow::anyhow!("No hello"))??;
+  334|       |        let hello_data: serde_json::Value = serde_json::from_str(&hello.to_string())?;
+  335|       |        let heartbeat_interval = hello_data
+  336|       |            .get("d")
+  337|      4|            .and_then(|d| d.get("heartbeat_interval"))
+  338|       |            .and_then(serde_json::Value::as_u64)
+  339|       |            .unwrap_or(41250);
+  340|       |
+  341|       |        // Send Identify (opcode 2)
+  342|       |        let identify = json!({
+  343|       |            "op": 2,
+  344|       |            "d": {
+  345|       |                "token": self.bot_token,
+  346|       |                "intents": 37377, // GUILDS | GUILD_MESSAGES | MESSAGE_CONTENT | DIRECT_MESSAGES
+  347|       |                "properties": {
+  348|       |                    "os": "linux",
+  349|       |                    "browser": "openhuman",
+  350|       |                    "device": "openhuman"
+  351|       |                }
+  352|       |            }
+  353|       |        });
+  354|       |        write
+  355|       |            .send(Message::Text(identify.to_string().into()))
+  356|       |            .await?;
+  357|       |
+  358|       |        tracing::info!("Discord: connected and identified");
+  359|       |
+  360|       |        // Track the last sequence number for heartbeats and resume.
+  361|       |        // Only accessed in the select! loop below, so a plain i64 suffices.
+  362|       |        let mut sequence: i64 = -1;
+  363|       |
+  364|       |        // Spawn heartbeat timer — sends a tick signal, actual heartbeat
+  365|       |        // is assembled in the select! loop where `sequence` lives.
+  366|       |        let (hb_tx, mut hb_rx) = tokio::sync::mpsc::channel::<()>(1);
+  367|       |        let hb_interval = heartbeat_interval;
+  368|      4|        tokio::spawn(async move {
+  369|      4|            let mut interval = tokio::time::interval(std::time::Duration::from_millis(hb_interval));
+  370|       |            loop {
+  371|      8|                interval.tick().await;
+  372|      4|                if hb_tx.send(()).await.is_err() {
+  373|      0|                    break;
+  374|      4|                }
+  375|       |            }
+  376|      0|        });
+  377|       |
+  378|       |        let guild_filter = self.guild_id.clone();
+  379|       |        let channel_filter = self.channel_id.clone();
+  380|       |
+  381|       |        loop {
+  382|       |            tokio::select! {
+  383|       |                _ = hb_rx.recv() => {
+  384|       |                    let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
+  385|       |                    let hb = json!({"op": 1, "d": d});
+  386|       |                    if write.send(Message::Text(hb.to_string().into())).await.is_err() {
+  387|       |                        break;
+  388|       |                    }
+  389|       |                }
+  390|       |                msg = read.next() => {
+  391|       |                    let msg = match msg {
+  392|       |                        Some(Ok(Message::Text(t))) => t,
+  393|       |                        Some(Ok(Message::Close(_))) | None => break,
+  394|       |                        _ => continue,
+  395|       |                    };
+  396|       |
+  397|       |                    let event: serde_json::Value = match serde_json::from_str(msg.as_ref()) {
+  398|       |                        Ok(e) => e,
+  399|       |                        Err(_) => continue,
+  400|       |                    };
+  401|       |
+  402|       |                    // Track sequence number from all dispatch events
+  403|       |                    if let Some(s) = event.get("s").and_then(serde_json::Value::as_i64) {
+  404|       |                        sequence = s;
+  405|       |                    }
+  406|       |
+  407|       |                    let op = event.get("op").and_then(serde_json::Value::as_u64).unwrap_or(0);
+  408|       |
+  409|       |                    match op {
+  410|       |                        // Op 1: Server requests an immediate heartbeat
+  411|       |                        1 => {
+  412|       |                            let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
+  413|       |                            let hb = json!({"op": 1, "d": d});
+  414|       |                            if write.send(Message::Text(hb.to_string().into())).await.is_err() {
+  415|       |                                break;
+  416|       |                            }
+  417|       |                            continue;
+  418|       |                        }
+  419|       |                        // Op 7: Reconnect
+  420|       |                        7 => {
+  421|       |                            tracing::warn!("Discord: received Reconnect (op 7), closing for restart");
+  422|       |                            break;
+  423|       |                        }
+  424|       |                        // Op 9: Invalid Session
+  425|       |                        9 => {
+  426|       |                            tracing::warn!("Discord: received Invalid Session (op 9), closing for restart");
+  427|       |                            break;
+  428|       |                        }
+  429|       |                        _ => {}
+  430|       |                    }
+  431|       |
+  432|       |                    // Only handle MESSAGE_CREATE (opcode 0, type "MESSAGE_CREATE")
+  433|     12|                    let event_type = event.get("t").and_then(|t| t.as_str()).unwrap_or("");
+  434|       |                    if event_type != "MESSAGE_CREATE" {
+  435|       |                        continue;
+  436|       |                    }
+  437|       |
+  438|       |                    let Some(d) = event.get("d") else {
+  439|       |                        continue;
+  440|       |                    };
+  441|       |
+  442|       |                    // Skip messages from the bot itself
+  443|     10|                    let author_id = d.get("author").and_then(|a| a.get("id")).and_then(|i| i.as_str()).unwrap_or("");
+  444|       |                    if author_id == bot_user_id {
+  445|       |                        continue;
+  446|       |                    }
+  447|       |
+  448|       |                    // Skip bot messages (unless listen_to_bots is enabled)
+  449|      7|                    if !self.listen_to_bots && d.get("author").and_then(|a| a.get("bot")).and_then(serde_json::Value::as_bool).unwrap_or(false) {
+  450|       |                        continue;
+  451|       |                    }
+  452|       |
+  453|       |                    // Sender validation
+  454|       |                    if !self.is_user_allowed(author_id) {
+  455|       |                        tracing::warn!("Discord: ignoring message from unauthorized user: {author_id}");
+  456|       |                        continue;
+  457|       |                    }
+  458|       |
+  459|       |                    // Guild filter + DM scoping (#3794 review — Codex P1)
+  460|       |                    if !Self::passes_guild_scope(
+  461|       |                        guild_filter.as_deref(),
+  462|       |                        d.get("guild_id").and_then(serde_json::Value::as_str),
+  463|       |                        self.allowed_users.is_empty(),
+  464|       |                    ) {
+  465|       |                        continue;
+  466|       |                    }
+  467|       |
+  468|       |                    // Channel filter — only process messages from the configured channel
+  469|       |                    if let Some(ref cid) = channel_filter {
+  470|       |                        let msg_channel = d.get("channel_id").and_then(serde_json::Value::as_str).unwrap_or("");
+  471|       |                        if msg_channel != cid {
+  472|       |                            continue;
+  473|       |                        }
+  474|       |                    }
+  475|       |
+  476|      5|                    let content = d.get("content").and_then(|c| c.as_str()).unwrap_or("");
+  477|       |                    let Some(clean_content) =
+  478|       |                        normalize_incoming_content(content, self.mention_only, &bot_user_id)
+  479|       |                    else {
+  480|       |                        continue;
+  481|       |                    };
+  482|       |
+  483|      2|                    let message_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
+  484|      2|                    let channel_id = d.get("channel_id").and_then(|c| c.as_str()).unwrap_or("").to_string();
+  485|       |
+  486|       |                    let channel_msg = ChannelMessage {
+  487|       |                        id: if message_id.is_empty() {
+  488|       |                            format!("discord_{}", Uuid::new_v4())
+  489|       |                        } else {
+  490|       |                            format!("discord_{message_id}")
+  491|       |                        },
+  492|       |                        sender: author_id.to_string(),
+  493|       |                        reply_target: if channel_id.is_empty() {
+  494|       |                            author_id.to_string()
+  495|       |                        } else {
+  496|       |                            channel_id.clone()
+  497|       |                        },
+  498|       |                        content: clean_content,
+  499|       |                        channel: "discord".to_string(),
+  500|       |                        timestamp: std::time::SystemTime::now()
+  501|       |                            .duration_since(std::time::UNIX_EPOCH)
+  502|       |                            .unwrap_or_default()
+  503|       |                            .as_secs(),
+  504|       |                        thread_ts: None,
+  505|       |                        sender_name: None,
+  506|       |                    };
+  507|       |
+  508|       |                    if tx.send(channel_msg).await.is_err() {
+  509|       |                        break;
+  510|       |                    }
+  511|       |                }
+  512|       |            }
+  513|       |        }
   514|       |
-  515|      4|    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-  516|       |        self.stop_typing(recipient).await?;
+  515|       |        Ok(())
+  516|      5|    }
   517|       |
-  518|       |        let client = self.http_client();
-  519|       |        let token = self.bot_token.clone();
-  520|       |        let channel_id = recipient.to_string();
-  521|       |
-  522|      0|        let handle = tokio::spawn(async move {
-  523|      0|            let url = format!("https://discord.com/api/v10/channels/{channel_id}/typing");
-  524|       |            loop {
-  525|      0|                let _ = client
-  526|      0|                    .post(&url)
-  527|      0|                    .header("Authorization", format!("Bot {token}"))
-  528|      0|                    .send()
-  529|      0|                    .await;
-  530|      0|                tokio::time::sleep(std::time::Duration::from_secs(8)).await;
-  531|       |            }
-  532|       |        });
-  533|       |
-  534|       |        let mut guard = self.typing_handle.lock();
-  535|       |        *guard = Some(handle);
-  536|       |
-  537|       |        Ok(())
-  538|      4|    }
-  539|       |
-  540|      7|    async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
-  541|       |        let mut guard = self.typing_handle.lock();
-  542|       |        if let Some(handle) = guard.take() {
-  543|       |            handle.abort();
-  544|       |        }
-  545|       |        Ok(())
-  546|      7|    }
-  547|       |}
+  518|      3|    async fn health_check(&self) -> bool {
+  519|       |        self.http_client()
+  520|       |            .get(format!("{}/users/@me", self.api_base))
+  521|       |            .header("Authorization", format!("Bot {}", self.bot_token))
+  522|       |            .send()
+  523|       |            .await
+  524|      2|            .map(|r| r.status().is_success())
+  525|       |            .unwrap_or(false)
+  526|      3|    }
+  527|       |
+  528|      5|    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
+  529|       |        self.stop_typing(recipient).await?;
+  530|       |
+  531|       |        let client = self.http_client();
+  532|       |        let token = self.bot_token.clone();
+  533|       |        let url = format!("{}/channels/{recipient}/typing", self.api_base);
+  534|       |
+  535|      1|        let handle = tokio::spawn(async move {
+  536|       |            loop {
+  537|      1|                let _ = client
+  538|      1|                    .post(&url)
+  539|      1|                    .header("Authorization", format!("Bot {token}"))
+  540|      1|                    .send()
+  541|      1|                    .await;
+  542|      0|                tokio::time::sleep(std::time::Duration::from_secs(8)).await;
+  543|       |            }
+  544|       |        });
+  545|       |
+  546|       |        let mut guard = self.typing_handle.lock();
+  547|       |        *guard = Some(handle);
   548|       |
-  549|       |#[cfg(test)]
-  550|       |#[path = "channel_tests.rs"]
-  551|       |mod tests;
+  549|       |        Ok(())
+  550|      5|    }
+  551|       |
+  552|      9|    async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
+  553|       |        let mut guard = self.typing_handle.lock();
+  554|       |        if let Some(handle) = guard.take() {
+  555|       |            handle.abort();
+  556|       |        }
+  557|       |        Ok(())
+  558|      9|    }
+  559|       |}
+  560|       |
+  561|       |#[cfg(test)]
+  562|       |#[path = "channel_tests.rs"]
+  563|       |mod tests;
 
 /home/enamakel/work/openhuman/vendor/tinychannels/worktrees/cov-discord/src/providers/email_channel.rs:
     1|       |#![allow(clippy::uninlined_format_args)]
@@ -20020,15 +20046,15 @@
    90|     12|    }
    91|       |
    92|       |    /// Safe connection facts without credentials or message contents.
-   93|      4|    pub async fn descriptor(&self) -> Option<CapabilityDescriptor> {
-   94|      4|        self.state.descriptor.lock().await.clone()
-   95|      4|    }
+   93|      6|    pub async fn descriptor(&self) -> Option<CapabilityDescriptor> {
+   94|      6|        self.state.descriptor.lock().await.clone()
+   95|      6|    }
    96|       |
    97|       |    /// Whether the reader has ended or terminal shutdown was requested.
-   98|     18|    pub fn is_closed(&self) -> bool {
-   99|     18|        self.terminal.load(Ordering::SeqCst) || self.state.closed.load(Ordering::SeqCst)
-                                                              ^17               ^17  ^17
-  100|     18|    }
+   98|     37|    pub fn is_closed(&self) -> bool {
+   99|     37|        self.terminal.load(Ordering::SeqCst) || self.state.closed.load(Ordering::SeqCst)
+                                                              ^36               ^36  ^36
+  100|     37|    }
   101|       |
   102|     24|    async fn prepare_connect(&self) {
   103|     24|        self.state.closed.store(false, Ordering::SeqCst);
@@ -20220,13 +20246,13 @@
   281|       |
   282|     10|    async fn wait_closed(&self) {
   283|       |        loop {
-  284|     12|            let notified = self.state.closed_ready.notified();
-  285|     12|            tokio::pin!(notified);
-  286|     12|            notified.as_mut().enable();
-  287|     12|            if self.state.closed.load(Ordering::SeqCst) {
+  284|     13|            let notified = self.state.closed_ready.notified();
+  285|     13|            tokio::pin!(notified);
+  286|     13|            notified.as_mut().enable();
+  287|     13|            if self.state.closed.load(Ordering::SeqCst) {
   288|      5|                return;
-  289|      7|            }
-  290|      7|            notified.await;
+  289|      8|            }
+  290|      8|            notified.await;
   291|       |        }
   292|      5|    }
   293|       |
@@ -21071,13 +21097,13 @@
    49|       |    path: PathBuf,
    50|       |}
    51|       |
-   52|     29|fn read_store_file(path: &Path) -> anyhow::Result<Option<SessionStoreFile>> {
-   53|     29|    if !path.exists() {
-   54|     23|        return Ok(None);
-   55|      6|    }
-   56|      6|    let raw = std::fs::read_to_string(path)?;
+   52|     30|fn read_store_file(path: &Path) -> anyhow::Result<Option<SessionStoreFile>> {
+   53|     30|    if !path.exists() {
+   54|     25|        return Ok(None);
+   55|      5|    }
+   56|      5|    let raw = std::fs::read_to_string(path)?;
                                                          ^0
-   57|      6|    Ok(Some(serde_json::from_str(&raw).unwrap_or_else(|error| {
+   57|      5|    Ok(Some(serde_json::from_str(&raw).unwrap_or_else(|error| {
                                                                             ^1
    58|      1|        tracing::warn!(
    59|       |            "{LOG_PREFIX} corrupt session store at {}: {error}; resetting",
@@ -21085,7 +21111,7 @@
    61|       |        );
    62|      1|        SessionStoreFile::default()
    63|      1|    })))
-   64|     29|}
+   64|     30|}
    65|       |
    66|       |impl RemoteSessionStore {
    67|       |    /// Load the workspace's store, adopting legacy Telegram bindings when the
@@ -21094,8 +21120,8 @@
    70|     17|        let path = workspace_dir.join(STORE_FILE);
    71|     17|        let file = match read_store_file(&path)? {
                                                              ^0
-   72|      5|            Some(file) => file,
-   73|     12|            None => Self::adopt_legacy_telegram(workspace_dir)?,
+   72|      4|            Some(file) => file,
+   73|     13|            None => Self::adopt_legacy_telegram(workspace_dir)?,
                                                                             ^0
    74|       |        };
    75|     17|        tracing::debug!(
@@ -21106,11 +21132,11 @@
    80|     17|        Ok(Self { file, path })
    81|     17|    }
    82|       |
-   83|     12|    fn adopt_legacy_telegram(workspace_dir: &Path) -> anyhow::Result<SessionStoreFile> {
-   84|     12|        let legacy_path = workspace_dir.join(LEGACY_TELEGRAM_STORE_FILE);
-   85|     12|        let Some(legacy) = read_store_file(&legacy_path)? else {
+   83|     13|    fn adopt_legacy_telegram(workspace_dir: &Path) -> anyhow::Result<SessionStoreFile> {
+   84|     13|        let legacy_path = workspace_dir.join(LEGACY_TELEGRAM_STORE_FILE);
+   85|     13|        let Some(legacy) = read_store_file(&legacy_path)? else {
                                ^1                                     ^0
-   86|     11|            return Ok(SessionStoreFile::default());
+   86|     12|            return Ok(SessionStoreFile::default());
    87|       |        };
    88|       |        // Busy flags are per-process turn state; only bindings carry over.
    89|      1|        let bindings: HashMap<_, _> = legacy
@@ -21127,7 +21153,7 @@
   100|      1|            bindings,
   101|      1|            busy_reply_targets: HashMap::new(),
   102|      1|        })
-  103|     12|    }
+  103|     13|    }
   104|       |
   105|       |    /// Write the store to disk.
   106|     11|    pub fn save(&self) -> anyhow::Result<()> {
