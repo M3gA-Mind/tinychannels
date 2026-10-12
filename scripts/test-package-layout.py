@@ -20,6 +20,9 @@ class PackageTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=target) as directory:
             fixture = Path(directory); home = fixture/"home"; home.mkdir()
             bindir = fixture/"bin"; bindir.mkdir()
+            uname = bindir/"uname"
+            uname.write_text("#!/usr/bin/env bash\nprintf '%s\\n' Darwin\n")
+            uname.chmod(0o755)
             archive = fixture/"module.tar.gz"
             with tarfile.open(archive, "w:gz") as package:
                 for name, data in [("modules.toml", b""), ("libtinychannels_module.so", b"module")]:
