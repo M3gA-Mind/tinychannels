@@ -254,7 +254,7 @@ pub async fn wait_for_state(conn: &YuanbaoConnection, state: ConnectionState) {
 
 /// Timings that make reconnect immediate and never fire a heartbeat
 /// unless a test asks for one.
-pub fn fast_timings() -> ConnTimings {
+pub(crate) fn fast_timings() -> ConnTimings {
     ConnTimings {
         auth_timeout: Duration::from_secs(10),
         ping_interval: Some(Duration::from_secs(3600)),
