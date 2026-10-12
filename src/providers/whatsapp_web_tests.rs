@@ -839,14 +839,14 @@ async fn run_listen_until_shutdown(ch: WhatsAppWebChannel, lifecycle: Arc<Record
     assert!(ch.bot_handle.lock().is_none());
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn listen_runs_the_bot_until_the_host_shutdown_hook_fires() {
     let lifecycle = Arc::new(RecordingLifecycle::default());
     let ch = make_channel().with_lifecycle(lifecycle.clone());
     run_listen_until_shutdown(ch, lifecycle).await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn listen_accepts_pair_code_configuration() {
     for (phone, code) in [
         (
@@ -862,7 +862,7 @@ async fn listen_accepts_pair_code_configuration() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn listen_without_a_lifecycle_registry_parks() {
     let ch = Arc::new(make_channel());
     let (tx, _rx) = mpsc::channel(4);
@@ -880,7 +880,7 @@ async fn listen_without_a_lifecycle_registry_parks() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test]
 async fn the_real_client_refuses_outbound_while_logged_out() {
     let lifecycle = Arc::new(RecordingLifecycle::default());
     let ch = Arc::new(make_channel().with_lifecycle(lifecycle.clone()));
