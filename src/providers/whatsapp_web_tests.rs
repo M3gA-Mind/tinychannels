@@ -319,9 +319,7 @@ use whatsapp_rust::waproto::whatsapp as wa;
 /// Upper bound on any wait in these tests; a hang guard, never a race.
 const HANG_GUARD: Duration = Duration::from_secs(30);
 
-fn inbound_state(
-    allowed: &[&str],
-) -> (InboundState, mpsc::Receiver<ChannelMessage>) {
+fn inbound_state(allowed: &[&str]) -> (InboundState, mpsc::Receiver<ChannelMessage>) {
     let (tx, rx) = mpsc::channel(16);
     let state = InboundState {
         tx,
@@ -576,7 +574,9 @@ async fn pairing_and_unrelated_events_change_nothing() {
                 .build(),
         ),
         Event::PairingQrCodesExhausted(
-            PairingQrCodesExhausted::builder().disconnected(true).build(),
+            PairingQrCodesExhausted::builder()
+                .disconnected(true)
+                .build(),
         ),
     ] {
         state.clone().handle_owned(Arc::new(event)).await;
@@ -706,7 +706,10 @@ async fn unparseable_recipients_are_rejected() {
         "{no_digits}"
     );
     let bad_jid = ch.stop_typing("@@").await.unwrap_err();
-    assert!(bad_jid.to_string().contains("Invalid WhatsApp JID"), "{bad_jid}");
+    assert!(
+        bad_jid.to_string().contains("Invalid WhatsApp JID"),
+        "{bad_jid}"
+    );
     assert!(fake.calls.lock().is_empty());
 }
 
@@ -755,7 +758,7 @@ impl whatsapp_rust::transport::TransportFactory for OfflineTransport {
     ) -> Result<
         (
             Arc<dyn whatsapp_rust::transport::Transport>,
-            async_channel::Receiver<whatsapp_rust::transport::TransportEvent>,
+            whatsapp_rust::async_channel::Receiver<whatsapp_rust::transport::TransportEvent>,
         ),
         anyhow::Error,
     > {
@@ -846,7 +849,10 @@ async fn listen_runs_the_bot_until_the_host_shutdown_hook_fires() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn listen_accepts_pair_code_configuration() {
     for (phone, code) in [
-        (Some("15551234567".to_string()), Some("ABCDEFGH".to_string())),
+        (
+            Some("15551234567".to_string()),
+            Some("ABCDEFGH".to_string()),
+        ),
         (None, Some("ABCDEFGH".to_string())),
     ] {
         let lifecycle = Arc::new(RecordingLifecycle::default());
