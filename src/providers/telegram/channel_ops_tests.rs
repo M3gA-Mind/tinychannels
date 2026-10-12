@@ -51,7 +51,10 @@ async fn send_draft_without_message_id_in_result_returns_none() {
         .await
         .unwrap();
     assert_eq!(id, None);
-    assert_eq!(json_bodies(&server, "sendMessage").await[0]["text"], "thinking");
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await[0]["text"],
+        "thinking"
+    );
 }
 
 #[tokio::test]
@@ -103,7 +106,11 @@ async fn update_draft_truncates_oversized_text_to_limit() {
         .unwrap()
         .to_string();
     assert!(sent.len() <= TELEGRAM_MAX_MESSAGE_LENGTH);
-    assert_eq!(sent.len(), TELEGRAM_MAX_MESSAGE_LENGTH, "two-byte chars fill the limit");
+    assert_eq!(
+        sent.len(),
+        TELEGRAM_MAX_MESSAGE_LENGTH,
+        "two-byte chars fill the limit"
+    );
 }
 
 #[tokio::test]
@@ -320,9 +327,12 @@ async fn send_attachment_marker_only_skips_text_message() {
     mount_post(&server, "sendVideo", ok()).await;
     let ch = channel_for(&server, &["*"]);
 
-    ch.send(&SendMessage::new("[VIDEO:https://cdn.example/v.mp4]", "100"))
-        .await
-        .unwrap();
+    ch.send(&SendMessage::new(
+        "[VIDEO:https://cdn.example/v.mp4]",
+        "100",
+    ))
+    .await
+    .unwrap();
 
     assert!(json_bodies(&server, "sendMessage").await.is_empty());
     assert_eq!(json_bodies(&server, "sendVideo").await.len(), 1);
@@ -429,7 +439,10 @@ async fn typing_refresh_reports_acceptance_rejection_and_transport_error() {
     let received = server.received_requests().await.unwrap();
     assert_eq!(received.len(), 2);
     let sent: serde_json::Value = serde_json::from_slice(&received[0].body).unwrap();
-    assert_eq!(sent, serde_json::json!({ "chat_id": "100", "action": "typing" }));
+    assert_eq!(
+        sent,
+        serde_json::json!({ "chat_id": "100", "action": "typing" })
+    );
 }
 
 #[test]
@@ -464,7 +477,12 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     let server = mock_api().await;
     // Poll sequence: unparseable body, generic API error, 409 without webhook,
     // 409 webhook conflict that deleteWebhook clears, then a real batch.
-    mount_get_updates_once(&server, 1, ResponseTemplate::new(200).set_body_string("<html>")).await;
+    mount_get_updates_once(
+        &server,
+        1,
+        ResponseTemplate::new(200).set_body_string("<html>"),
+    )
+    .await;
     mount_get_updates_once(
         &server,
         2,
@@ -646,7 +664,10 @@ async fn listen_backs_off_when_webhook_delete_fails_and_on_transport_error() {
         .await
         .expect("message dispatched")
         .expect("channel open");
-    assert_eq!(msg.content, "hey ping", "mention stripped in mention-only group");
+    assert_eq!(
+        msg.content, "hey ping",
+        "mention stripped in mention-only group"
+    );
     assert_eq!(json_bodies(&server, "deleteWebhook").await.len(), 1);
     listener.abort();
 
@@ -655,6 +676,9 @@ async fn listen_backs_off_when_webhook_delete_fails_and_on_transport_error() {
     dead.api_base = dead_base();
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let outcome = tokio::time::timeout(Duration::from_millis(300), dead.listen(tx)).await;
-    assert!(outcome.is_err(), "listen keeps retrying on transport errors");
+    assert!(
+        outcome.is_err(),
+        "listen keeps retrying on transport errors"
+    );
     assert!(dead.bot_username.lock().is_none());
 }

@@ -16,7 +16,11 @@ fn private_text(from: serde_json::Value, text: &str) -> serde_json::Value {
     })
 }
 
-fn voice_update(chat_type: &str, caption: Option<&str>, file_size: Option<u64>) -> serde_json::Value {
+fn voice_update(
+    chat_type: &str,
+    caption: Option<&str>,
+    file_size: Option<u64>,
+) -> serde_json::Value {
     let mut voice = serde_json::json!({
         "file_id": "voice-id",
         "file_unique_id": "uniq",
@@ -161,11 +165,8 @@ fn incoming_context_falls_back_to_numeric_id_and_requires_chat() {
     assert_eq!(ctx.sender_identity, "42");
     assert_eq!(ctx.sender_name.as_deref(), Some("Lovelace"));
     assert!(
-        ch.parse_incoming_message_context(
-            &serde_json::json!({ "from": { "id": 42 } }),
-            Some("x")
-        )
-        .is_none()
+        ch.parse_incoming_message_context(&serde_json::json!({ "from": { "id": 42 } }), Some("x"))
+            .is_none()
     );
     assert_eq!(TelegramChannel::sender_display_name(None), None);
     assert_eq!(
@@ -189,8 +190,10 @@ fn parse_update_reaction_requires_chat_message_and_emoji() {
             .is_none()
     );
     assert!(
-        ch.parse_update_reaction(&serde_json::json!({ "message_reaction": { "chat": { "id": 1 } } }))
-            .is_none()
+        ch.parse_update_reaction(
+            &serde_json::json!({ "message_reaction": { "chat": { "id": 1 } } })
+        )
+        .is_none()
     );
     let anonymous = ch
         .parse_update_reaction(&serde_json::json!({ "message_reaction": {
@@ -376,8 +379,15 @@ async fn bind_with_wrong_code_reports_invalid_then_lockout() {
     let texts = sent_texts(&server).await;
     let max = usize::try_from(crate::security::MAX_PAIR_ATTEMPTS).unwrap();
     assert_eq!(texts.len(), max + 1);
-    assert!(texts[..max].iter().all(|t| t.contains("Invalid binding code")));
-    assert!(texts[max].contains("Too many invalid attempts"), "{texts:?}");
+    assert!(
+        texts[..max]
+            .iter()
+            .all(|t| t.contains("Invalid binding code"))
+    );
+    assert!(
+        texts[max].contains("Too many invalid attempts"),
+        "{texts:?}"
+    );
     assert!(ch.allowlist_is_empty());
 }
 
@@ -498,7 +508,12 @@ async fn voice_without_transcriber_reports_failure_to_chat() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0]["chat_id"], "888");
     assert_eq!(sent[0]["reply_to_message_id"], 60);
-    assert!(sent[0]["text"].as_str().unwrap().contains("Voice transcription failed"));
+    assert!(
+        sent[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Voice transcription failed")
+    );
 }
 
 #[tokio::test]
@@ -506,7 +521,8 @@ async fn voice_transcriber_error_reports_failure_to_chat() {
     let server = mock_api().await;
     mount_voice_download(&server, vec![9]).await;
     mount_post(&server, "sendMessage", ok()).await;
-    let ch = channel_for(&server, &["alice"]).with_transcriber(FixedTranscriber::failing("stt down"));
+    let ch =
+        channel_for(&server, &["alice"]).with_transcriber(FixedTranscriber::failing("stt down"));
 
     assert!(
         ch.parse_update_voice_message(&voice_update("private", None, None))
@@ -718,7 +734,10 @@ fn normalize_incoming_content_without_mention_collapses_whitespace() {
         TelegramChannel::normalize_incoming_content("  a \n b  ", "bot").as_deref(),
         Some("a b")
     );
-    assert_eq!(TelegramChannel::normalize_incoming_content("   ", "bot"), None);
+    assert_eq!(
+        TelegramChannel::normalize_incoming_content("   ", "bot"),
+        None
+    );
 }
 
 #[test]

@@ -6,7 +6,10 @@ use wiremock::{Mock, ResponseTemplate};
 #[test]
 fn new_with_empty_allowlist_arms_pairing_with_live_code() {
     let ch = TelegramChannel::new("tok".into(), vec![" ".into(), "@".into()], false);
-    assert!(ch.pairing.is_some(), "blank entries normalize to empty list");
+    assert!(
+        ch.pairing.is_some(),
+        "blank entries normalize to empty list"
+    );
     assert!(ch.pairing_code_active());
     assert!(ch.allowed_users.read().unwrap().is_empty());
 }

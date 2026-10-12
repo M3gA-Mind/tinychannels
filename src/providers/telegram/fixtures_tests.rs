@@ -82,7 +82,11 @@ pub(super) async fn sent_texts(server: &MockServer) -> Vec<String> {
     json_bodies(server, "sendMessage")
         .await
         .into_iter()
-        .filter_map(|body| body.get("text").and_then(|t| t.as_str()).map(str::to_string))
+        .filter_map(|body| {
+            body.get("text")
+                .and_then(|t| t.as_str())
+                .map(str::to_string)
+        })
         .collect()
 }
 

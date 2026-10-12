@@ -313,7 +313,10 @@ async fn file_uploads_surface_api_rejection_text() {
     std::fs::write(&file, b"abc").unwrap();
 
     let results = vec![
-        ("sendDocument", ch.send_document("1", None, &file, None).await),
+        (
+            "sendDocument",
+            ch.send_document("1", None, &file, None).await,
+        ),
         ("sendPhoto", ch.send_photo("1", None, &file, None).await),
         ("sendVideo", ch.send_video("1", None, &file, None).await),
         ("sendAudio", ch.send_audio("1", None, &file, None).await),
@@ -330,7 +333,10 @@ async fn file_uploads_surface_api_rejection_text() {
     ];
     for (api_method, result) in results {
         let err = result.unwrap_err().to_string();
-        assert!(err.contains(&format!("Telegram {api_method} failed")), "{err}");
+        assert!(
+            err.contains(&format!("Telegram {api_method} failed")),
+            "{err}"
+        );
         assert!(err.contains(&format!("{api_method}-rejected")), "{err}");
     }
 }
