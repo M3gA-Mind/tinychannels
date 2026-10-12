@@ -1,0 +1,762 @@
+use super::*;
+use crate::providers::telegram::fixtures::*;
+use std::sync::Arc;
+use wiremock::matchers::{method, path};
+use wiremock::{Mock, MockServer, ResponseTemplate};
+
+fn private_text(from: serde_json::Value, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "update_id": 1,
+        "message": {
+            "message_id": 50,
+            "chat": { "id": 777, "type": "private" },
+            "from": from,
+            "text": text,
+        }
+    })
+}
+
+fn voice_update(
+    chat_type: &str,
+    caption: Option<&str>,
+    file_size: Option<u64>,
+) -> serde_json::Value {
+    let mut voice = serde_json::json!({
+        "file_id": "voice-id",
+        "file_unique_id": "uniq",
+        "mime_type": "audio/ogg",
+    });
+    if let Some(size) = file_size {
+        voice["file_size"] = serde_json::json!(size);
+    }
+    let mut message = serde_json::json!({
+        "message_id": 60,
+        "chat": { "id": 888, "type": chat_type },
+        "from": { "id": 9, "username": "alice", "first_name": "Alice" },
+        "voice": voice,
+    });
+    if let Some(caption) = caption {
+        message["caption"] = serde_json::json!(caption);
+    }
+    serde_json::json!({ "update_id": 3, "message": message })
+}
+
+/// Serve `getFile` and the file download for the fixture voice note.
+async fn mount_voice_download(server: &MockServer, bytes: Vec<u8>) {
+    mount_post(
+        server,
+        "getFile",
+        ok_with(serde_json::json!({ "file_path": "voice/v.oga", "file_size": bytes.len() })),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/file/bot{TOKEN}/voice/v.oga")))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(bytes))
+        .mount(server)
+        .await;
+}
+
+// ── typing ───────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn typing_action_retries_without_thread_when_thread_scoped_action_rejected() {
+    let server = mock_api().await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendChatAction")))
+        .and(wiremock::matchers::body_partial_json(
+            serde_json::json!({ "message_thread_id": "4" }),
+        ))
+        .respond_with(ResponseTemplate::new(400).set_body_string("TOPIC_CLOSED"))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    mount_post(&server, "sendChatAction", ok_with(serde_json::json!(true))).await;
+    let ch = channel_for(&server, &["*"]);
+
+    ch.send_typing_action_once("100:4").await;
+
+    let bodies = json_bodies(&server, "sendChatAction").await;
+    assert_eq!(bodies.len(), 2);
+    assert_eq!(bodies[0]["message_thread_id"], "4");
+    assert_eq!(
+        bodies[1],
+        serde_json::json!({ "chat_id": "100", "action": "typing" })
+    );
+}
+
+#[tokio::test]
+async fn typing_action_fallback_rejection_is_tolerated() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendChatAction",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": false })),
+    )
+    .await;
+    let ch = channel_for(&server, &["*"]);
+
+    ch.send_typing_action_once("100:4").await;
+    ch.send_typing_action_once("100").await;
+
+    // Thread-scoped: original + fallback; plain chat: no fallback.
+    assert_eq!(json_bodies(&server, "sendChatAction").await.len(), 3);
+}
+
+#[tokio::test]
+async fn typing_action_transport_error_is_tolerated() {
+    let mut ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
+    ch.api_base = dead_base();
+    ch.send_typing_action_once("100:4").await;
+}
+
+// ── mention parsing ──────────────────────────────────────────────────────
+
+#[test]
+fn mention_spans_ignore_embedded_and_bare_at_signs() {
+    assert!(TelegramChannel::find_bot_mention_spans("hi @bot", "@").is_empty());
+    assert!(TelegramChannel::find_bot_mention_spans("mail a@bot.com", "bot").is_empty());
+    assert!(TelegramChannel::find_bot_mention_spans("@ @! @", "bot").is_empty());
+    assert_eq!(
+        TelegramChannel::find_bot_mention_spans("é @Bot!", "bot"),
+        vec![(3, 7)]
+    );
+}
+
+#[test]
+fn incoming_context_in_mention_only_group_needs_source_and_known_bot_name() {
+    let mut ch = TelegramChannel::new("tok".into(), vec!["*".into()], true);
+    ch.mention_only = true;
+    let message = serde_json::json!({
+        "message_id": 1,
+        "chat": { "id": 5, "type": "supergroup" },
+        "from": { "id": 2, "username": "alice" },
+    });
+    assert!(ch.parse_incoming_message_context(&message, None).is_none());
+    assert!(
+        ch.parse_incoming_message_context(&message, Some("@bot hi"))
+            .is_none(),
+        "unknown bot username cannot be matched"
+    );
+    *ch.bot_username.lock() = Some("bot".into());
+    assert!(
+        ch.parse_incoming_message_context(&message, Some("hi"))
+            .is_none()
+    );
+    let ctx = ch
+        .parse_incoming_message_context(&message, Some("@bot hi"))
+        .unwrap();
+    assert_eq!(ctx.mention_text.as_deref(), Some("hi"));
+}
+
+#[test]
+fn incoming_context_falls_back_to_numeric_id_and_requires_chat() {
+    let ch = TelegramChannel::new("tok".into(), vec!["42".into()], false);
+    let ctx = ch
+        .parse_incoming_message_context(
+            &serde_json::json!({
+                "message_id": 3,
+                "chat": { "id": 5 },
+                "from": { "id": 42, "last_name": "Lovelace" },
+                "reply_to_message": { "message_id": 2 },
+            }),
+            Some("x"),
+        )
+        .unwrap();
+    assert_eq!(ctx.sender_identity, "42");
+    assert_eq!(ctx.sender_name.as_deref(), Some("Lovelace"));
+    assert!(
+        ch.parse_incoming_message_context(&serde_json::json!({ "from": { "id": 42 } }), Some("x"))
+            .is_none()
+    );
+    assert_eq!(TelegramChannel::sender_display_name(None), None);
+    assert_eq!(
+        TelegramChannel::sender_display_name(Some(&serde_json::json!({ "username": "u" }))),
+        Some("u".into())
+    );
+}
+
+#[test]
+fn parse_update_message_drops_whitespace_only_text() {
+    let ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
+    let update = private_text(serde_json::json!({ "id": 1, "username": "a" }), "   ");
+    assert!(ch.parse_update_message(&update).is_none());
+}
+
+#[test]
+fn parse_update_reaction_requires_chat_message_and_emoji() {
+    let ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
+    assert!(
+        ch.parse_update_reaction(&serde_json::json!({ "message_reaction": { "message_id": 1 } }))
+            .is_none()
+    );
+    assert!(
+        ch.parse_update_reaction(
+            &serde_json::json!({ "message_reaction": { "chat": { "id": 1 } } })
+        )
+        .is_none()
+    );
+    let anonymous = ch
+        .parse_update_reaction(&serde_json::json!({ "message_reaction": {
+            "chat": { "id": 1 }, "message_id": 2,
+            "new_reaction": [{ "type": "custom_emoji" }, { "emoji": "🎉" }]
+        }}))
+        .unwrap();
+    assert_eq!(anonymous.sender, "unknown");
+    assert_eq!(anonymous.emoji, "🎉");
+
+    let restricted = TelegramChannel::new("tok".into(), vec!["7".into()], false);
+    let by_id = restricted
+        .parse_update_reaction(&serde_json::json!({ "message_reaction": {
+            "chat": { "id": 1 }, "message_id": 2,
+            "user": { "id": 7, "username": "notlisted" },
+            "new_reaction": [{ "emoji": "👍" }]
+        }}))
+        .unwrap();
+    assert_eq!(by_id.sender, "notlisted", "allowed via numeric id");
+}
+
+#[test]
+fn redact_bot_token_is_identity_for_empty_token() {
+    let ch = TelegramChannel::new(String::new(), vec!["*".into()], false);
+    assert_eq!(ch.redact_bot_token("keep /bot/ as is"), "keep /bot/ as is");
+}
+
+// ── unauthorized-message handling ───────────────────────────────────────
+
+#[tokio::test]
+async fn unauthorized_ignores_non_message_unsupported_and_chatless_updates() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["alice"]);
+
+    ch.handle_unauthorized_message(&serde_json::json!({ "edited_message": {} }))
+        .await;
+    ch.handle_unauthorized_message(&serde_json::json!({ "message": { "photo": [] } }))
+        .await;
+    ch.handle_unauthorized_message(&serde_json::json!({
+        "message": { "text": "hi", "from": { "id": 3 } }
+    }))
+    .await;
+
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn unauthorized_handler_is_silent_for_allowed_sender() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["alice"]);
+    ch.handle_unauthorized_message(&private_text(
+        serde_json::json!({ "id": 1, "username": "alice" }),
+        "hi",
+    ))
+    .await;
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn unauthorized_handler_suppresses_prompt_on_restart_race() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["alice"]);
+    ch.allowed_users.write().unwrap().clear();
+    ch.handle_unauthorized_message(&private_text(
+        serde_json::json!({ "id": 2, "username": "mallory" }),
+        "hi",
+    ))
+    .await;
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn start_command_pairs_first_private_sender_and_persists() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let store = Arc::new(RecordingAllowlist::default());
+    let ch = channel_for(&server, &[]).with_allowlist(store.clone());
+    assert!(ch.pairing_code_active());
+
+    ch.handle_unauthorized_message(&private_text(
+        serde_json::json!({ "id": 31, "username": "owner" }),
+        "/start",
+    ))
+    .await;
+
+    assert!(ch.is_user_allowed("31"));
+    assert!(!ch.pairing_code_active(), "bind code consumed by /start");
+    assert_eq!(
+        *store.persisted.lock().unwrap(),
+        vec![("telegram".to_string(), "31".to_string())]
+    );
+    let texts = sent_texts(&server).await;
+    assert_eq!(texts.len(), 1);
+    assert!(texts[0].contains("You're all set"), "{texts:?}");
+}
+
+#[tokio::test]
+async fn start_command_reports_persist_failure_but_keeps_runtime_access() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let store = Arc::new(RecordingAllowlist {
+        fail: true,
+        ..Default::default()
+    });
+    let ch = channel_for(&server, &[]).with_allowlist(store);
+
+    ch.handle_unauthorized_message(&private_text(
+        serde_json::json!({ "username": "owner" }),
+        "/start@my_bot",
+    ))
+    .await;
+
+    assert!(ch.is_user_allowed("owner"));
+    let texts = sent_texts(&server).await;
+    assert!(texts[0].contains("couldn't save it"), "{texts:?}");
+}
+
+#[tokio::test]
+async fn start_command_without_identity_asks_sender_to_retry() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &[]);
+
+    ch.handle_unauthorized_message(&private_text(serde_json::json!({}), "/start"))
+        .await;
+
+    assert!(ch.allowlist_is_empty());
+    assert!(ch.pairing_code_active());
+    let texts = sent_texts(&server).await;
+    assert!(texts[0].contains("Could not identify your Telegram account from /start"));
+}
+
+#[tokio::test]
+async fn bind_with_valid_code_allowlists_sender() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &[]);
+    let code = ch.pairing.as_ref().unwrap().pairing_code().unwrap();
+    // A group chat skips the /start onboarding branch.
+    let mut update = private_text(
+        serde_json::json!({ "id": 64, "username": "op" }),
+        &format!("/bind {code}"),
+    );
+    update["message"]["chat"]["type"] = serde_json::json!("group");
+
+    ch.handle_unauthorized_message(&update).await;
+
+    assert!(ch.is_user_allowed("64"));
+    assert!(sent_texts(&server).await[0].contains("You're all set"));
+}
+
+#[tokio::test]
+async fn bind_with_valid_code_but_no_identity_is_rejected() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &[]);
+    let code = ch.pairing.as_ref().unwrap().pairing_code().unwrap();
+
+    ch.handle_unauthorized_message(&private_text(
+        serde_json::json!({}),
+        &format!("/bind {code}"),
+    ))
+    .await;
+
+    assert!(ch.allowlist_is_empty());
+    assert!(sent_texts(&server).await[0].contains("Could not identify your Telegram account."));
+}
+
+#[tokio::test]
+async fn bind_with_wrong_code_reports_invalid_then_lockout() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &[]);
+    let wrong = serde_json::json!({ "id": 5, "username": "guess" });
+
+    for _ in 0..crate::security::MAX_PAIR_ATTEMPTS {
+        ch.handle_unauthorized_message(&private_text(wrong.clone(), "/bind 000000x"))
+            .await;
+    }
+    ch.handle_unauthorized_message(&private_text(wrong, "/bind 000000x"))
+        .await;
+
+    let texts = sent_texts(&server).await;
+    let max = usize::try_from(crate::security::MAX_PAIR_ATTEMPTS).unwrap();
+    assert_eq!(texts.len(), max + 1);
+    assert!(
+        texts[..max]
+            .iter()
+            .all(|t| t.contains("Invalid binding code"))
+    );
+    assert!(
+        texts[max].contains("Too many invalid attempts"),
+        "{texts:?}"
+    );
+    assert!(ch.allowlist_is_empty());
+}
+
+#[tokio::test]
+async fn bind_without_active_pairing_points_at_config() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &["alice"]);
+
+    ch.handle_unauthorized_message(&private_text(
+        serde_json::json!({ "id": 6, "username": "bob" }),
+        "/bind 123456",
+    ))
+    .await;
+
+    assert!(sent_texts(&server).await[0].contains("pairing is not active"));
+}
+
+#[tokio::test]
+async fn pending_pairing_prompt_advertises_start_in_private_chat_and_debounces() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &[]);
+    let update = private_text(serde_json::json!({ "id": 8, "username": "x" }), "hello");
+
+    ch.handle_unauthorized_message(&update).await;
+    ch.handle_unauthorized_message(&update).await;
+
+    let texts = sent_texts(&server).await;
+    assert_eq!(texts.len(), 1, "second prompt debounced");
+    assert!(texts[0].contains("send /start"), "{texts:?}");
+}
+
+#[tokio::test]
+async fn pending_pairing_prompt_in_group_omits_start_hint() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &[]);
+    let mut update = private_text(serde_json::json!({ "id": 8 }), "/start");
+    update["message"]["chat"]["type"] = serde_json::json!("supergroup");
+
+    ch.handle_unauthorized_message(&update).await;
+
+    assert!(ch.allowlist_is_empty(), "group /start never onboards");
+    let texts = sent_texts(&server).await;
+    assert_eq!(texts.len(), 1);
+    assert!(texts[0].contains("requires operator approval"), "{texts:?}");
+}
+
+// ── voice ────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn voice_update_is_transcribed_with_caption_prefix() {
+    let server = mock_api().await;
+    mount_voice_download(&server, vec![1, 2, 3]).await;
+    let stt = FixedTranscriber::ok("  spoken words  ");
+    let ch = channel_for(&server, &["alice"]).with_transcriber(stt.clone());
+
+    let msg = ch
+        .parse_update_message_or_voice(&voice_update("private", Some("note"), Some(3)))
+        .await
+        .expect("voice message parsed");
+
+    assert_eq!(msg.content, "note\n\nspoken words");
+    assert_eq!(msg.sender, "alice");
+    assert_eq!(msg.thread_ts.as_deref(), Some("60"));
+    let requests = stt.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].audio_base64, "AQID");
+    assert_eq!(requests[0].mime_type.as_deref(), Some("audio/ogg"));
+    assert_eq!(requests[0].file_name.as_deref(), Some("v.oga"));
+}
+
+#[tokio::test]
+async fn text_update_bypasses_voice_parser() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    let msg = ch
+        .parse_update_message_or_voice(&private_text(
+            serde_json::json!({ "id": 1, "username": "a" }),
+            "plain",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(msg.content, "plain");
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn update_without_text_or_voice_yields_nothing() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    let update = serde_json::json!({
+        "update_id": 1,
+        "message": { "message_id": 1, "chat": { "id": 1 }, "sticker": {} }
+    });
+    assert!(ch.parse_update_message_or_voice(&update).await.is_none());
+    assert!(
+        ch.parse_update_voice_message(&serde_json::json!({}))
+            .await
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn voice_without_transcriber_reports_failure_to_chat() {
+    let server = mock_api().await;
+    mount_voice_download(&server, vec![9]).await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &["alice"]);
+
+    let msg = ch
+        .parse_update_voice_message(&voice_update("private", None, None))
+        .await;
+
+    assert!(msg.is_none());
+    let sent = json_bodies(&server, "sendMessage").await;
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0]["chat_id"], "888");
+    assert_eq!(sent[0]["reply_to_message_id"], 60);
+    assert!(
+        sent[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("Voice transcription failed")
+    );
+}
+
+#[tokio::test]
+async fn voice_transcriber_error_reports_failure_to_chat() {
+    let server = mock_api().await;
+    mount_voice_download(&server, vec![9]).await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch =
+        channel_for(&server, &["alice"]).with_transcriber(FixedTranscriber::failing("stt down"));
+
+    assert!(
+        ch.parse_update_voice_message(&voice_update("private", None, None))
+            .await
+            .is_none()
+    );
+    assert_eq!(sent_texts(&server).await.len(), 1);
+}
+
+#[tokio::test]
+async fn oversized_declared_voice_is_rejected_before_download() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &["alice"]).with_transcriber(FixedTranscriber::ok("x"));
+
+    let err = ch
+        .transcribe_telegram_voice(&TelegramVoiceAttachment {
+            file_id: "f".into(),
+            file_unique_id: None,
+            file_size: Some(TELEGRAM_MAX_VOICE_FILE_BYTES + 1),
+            mime_type: None,
+        })
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("voice file too large"), "{err}");
+    assert!(json_bodies(&server, "getFile").await.is_empty());
+}
+
+#[tokio::test]
+async fn voice_from_non_allowlisted_sender_is_not_downloaded() {
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["bob"]).with_transcriber(FixedTranscriber::ok("x"));
+    assert!(
+        ch.parse_update_voice_message(&voice_update("private", None, None))
+            .await
+            .is_none()
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn voice_without_file_id_is_ignored() {
+    let update = serde_json::json!({ "message": { "voice": { "file_id": "  " } } });
+    assert!(TelegramChannel::parse_update_voice_attachment(&update).is_none());
+}
+
+// ── voice download failures ──────────────────────────────────────────────
+
+async fn download_error(server: &MockServer) -> String {
+    channel_for(server, &["*"])
+        .download_telegram_voice_file("voice-id", Some("uniq"))
+        .await
+        .unwrap_err()
+        .to_string()
+}
+
+#[tokio::test]
+async fn download_reports_get_file_http_failure_with_token_redacted() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "getFile",
+        ResponseTemplate::new(400).set_body_string(format!("bad token {TOKEN}")),
+    )
+    .await;
+    let err = download_error(&server).await;
+    assert!(err.contains("Telegram getFile failed"), "{err}");
+    assert!(!err.contains(TOKEN), "{err}");
+}
+
+#[tokio::test]
+async fn download_rejects_malformed_get_file_payloads() {
+    for (body, expected) in [
+        (serde_json::json!("not-an-object"), "missing result"),
+        (
+            serde_json::json!({ "ok": false, "description": "file is too big" }),
+            "ok=false: file is too big",
+        ),
+        (serde_json::json!({ "ok": true }), "missing result"),
+        (
+            serde_json::json!({ "ok": true, "result": { "file_path": " " } }),
+            "missing file_path",
+        ),
+        (
+            serde_json::json!({ "ok": true, "result": {
+                "file_path": "a.oga", "file_size": TELEGRAM_MAX_VOICE_FILE_BYTES + 1
+            } }),
+            "reported voice file too large",
+        ),
+    ] {
+        let server = mock_api().await;
+        let template = if body.is_string() {
+            ResponseTemplate::new(200).set_body_string("{not json")
+        } else {
+            ResponseTemplate::new(200).set_body_json(body)
+        };
+        mount_post(&server, "getFile", template).await;
+        let err = download_error(&server).await;
+        let expected = if err.contains("invalid JSON") {
+            "invalid JSON"
+        } else {
+            expected
+        };
+        assert!(err.contains(expected), "{err} (wanted {expected})");
+    }
+}
+
+#[tokio::test]
+async fn download_reports_file_fetch_failure_and_oversized_content_length() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "getFile",
+        ok_with(serde_json::json!({ "file_path": "voice/v.oga" })),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(404).set_body_string("gone"))
+        .mount(&server)
+        .await;
+    let err = download_error(&server).await;
+    assert!(err.contains("voice download failed"), "{err}");
+    assert!(err.contains("gone"), "{err}");
+
+    let big = oversized_file_server().await;
+    let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    ch.api_base = big;
+    let err = ch
+        .download_telegram_voice_file("voice-id", None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("voice download too large"), "{err}");
+}
+
+#[tokio::test]
+async fn download_reports_transport_failure_with_token_redacted() {
+    let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    ch.api_base = dead_base();
+    let err = ch
+        .download_telegram_voice_file("voice-id", None)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(!err.contains(TOKEN), "{err}");
+}
+
+/// A raw HTTP server whose `getFile` answers normally but whose file download
+/// advertises a Content-Length above the voice cap (without sending a body).
+async fn oversized_file_server() -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut buf = vec![0u8; 8192];
+                let mut read = 0;
+                loop {
+                    let n = socket.read(&mut buf[read..]).await.unwrap_or(0);
+                    if n == 0 {
+                        return;
+                    }
+                    read += n;
+                    let head = String::from_utf8_lossy(&buf[..read]).to_string();
+                    let Some(end) = head.find("\r\n\r\n") else {
+                        continue;
+                    };
+                    let len = head
+                        .lines()
+                        .find_map(|l| {
+                            let (k, v) = l.split_once(':')?;
+                            k.eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().unwrap_or(0))
+                        })
+                        .unwrap_or(0);
+                    if read < end + 4 + len {
+                        continue;
+                    }
+                    let response = if head.starts_with("POST") {
+                        let body = r#"{"ok":true,"result":{"file_path":"voice/big.oga"}}"#;
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        )
+                    } else {
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            TELEGRAM_MAX_VOICE_FILE_BYTES + 1
+                        )
+                    };
+                    let _ = socket.write_all(response.as_bytes()).await;
+                    let _ = socket.shutdown().await;
+                    return;
+                }
+            });
+        }
+    });
+    format!("http://{addr}")
+}
+
+#[test]
+fn normalize_incoming_content_without_mention_collapses_whitespace() {
+    assert_eq!(
+        TelegramChannel::normalize_incoming_content("  a \n b  ", "bot").as_deref(),
+        Some("a b")
+    );
+    assert_eq!(
+        TelegramChannel::normalize_incoming_content("   ", "bot"),
+        None
+    );
+}
+
+#[test]
+fn voice_content_without_caption_is_bare_transcript() {
+    let ctx = TelegramIncomingMessageContext {
+        sender_identity: "a".into(),
+        sender_name: None,
+        reply_target: "1".into(),
+        chat_id: "1".into(),
+        message_id: 1,
+        mention_text: None,
+    };
+    assert_eq!(
+        TelegramChannel::voice_message_content("words", Some("  "), &ctx, false),
+        "words"
+    );
+    assert_eq!(
+        TelegramChannel::voice_message_content("words", Some("cap"), &ctx, true),
+        "words",
+        "mention-only groups use the normalized mention text, not the raw caption"
+    );
+}
