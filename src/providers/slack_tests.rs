@@ -137,3 +137,174 @@ fn inbound_thread_ts_none_when_ts_missing() {
     let thread_ts = SlackChannel::inbound_thread_ts(&msg, "");
     assert_eq!(thread_ts, None);
 }
+
+#[tokio::test]
+async fn api_requests_preserve_auth_threads_and_report_http_and_slack_errors() {
+    use super::super::http_test_support::HttpsServer;
+    use serde_json::json;
+
+    let server = HttpsServer::start(|request| match request.target.as_str() {
+        "/api/auth.test" => (200, json!({"user_id": "bot"}).to_string()),
+        "/api/chat.postMessage" => match request.body["text"].as_str().unwrap() {
+            "http-error" => (403, "permission denied".into()),
+            "app-error" => (
+                200,
+                json!({"ok": false, "error": "channel_not_found"}).to_string(),
+            ),
+            "unknown-error" => (200, json!({"ok": false}).to_string()),
+            "invalid-json" => (200, "not json".into()),
+            _ => (200, json!({"ok": true}).to_string()),
+        },
+        _ => panic!("unexpected request: {request:?}"),
+    })
+    .await;
+    let channel =
+        SlackChannel::with_http_client("test-token".into(), None, vec![], server.client.clone());
+    assert_eq!(channel.get_bot_user_id().await.as_deref(), Some("bot"));
+    assert!(channel.health_check().await);
+    let mut reply = SendMessage::new("reply", "room");
+    reply.thread_ts = Some("123.001".into());
+    channel.send(&reply).await.unwrap();
+    for (text, error) in [
+        ("http-error", "permission denied"),
+        ("app-error", "channel_not_found"),
+        ("unknown-error", "unknown"),
+    ] {
+        assert!(
+            channel
+                .send(&SendMessage::new(text, "room"))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains(error)
+        );
+    }
+    channel
+        .send(&SendMessage::new("invalid-json", "room"))
+        .await
+        .unwrap();
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 7);
+    assert!(
+        requests
+            .iter()
+            .all(|r| r.headers.contains("authorization: Bearer test-token"))
+    );
+    assert_eq!(requests[2].method, "POST");
+    assert_eq!(
+        requests[2].body,
+        json!({"channel": "room", "text": "reply", "thread_ts": "123.001"})
+    );
+    assert!(requests[3].body.get("thread_ts").is_none());
+}
+
+#[tokio::test]
+async fn identity_health_and_listen_handle_unavailable_or_invalid_api_responses() {
+    use super::super::http_test_support::HttpsServer;
+
+    for body in ["invalid json", "{}"] {
+        let server = HttpsServer::start(move |_| (503, body.into())).await;
+        let channel =
+            SlackChannel::with_http_client("token".into(), None, vec![], server.client.clone());
+        assert!(channel.get_bot_user_id().await.is_none());
+        assert!(!channel.health_check().await);
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        assert!(
+            channel
+                .listen(tx)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("channel_id required")
+        );
+    }
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all("http://127.0.0.1:0").unwrap())
+        .build()
+        .unwrap();
+    let channel = SlackChannel::with_http_client("token".into(), None, vec![], client);
+    assert!(channel.get_bot_user_id().await.is_none());
+    assert!(!channel.health_check().await);
+    assert!(
+        channel
+            .send(&SendMessage::new("hello", "room"))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn history_listener_filters_messages_orders_delivery_and_advances_cursor() {
+    use super::super::http_test_support::HttpsServer;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let polls = AtomicUsize::new(0);
+    let server = HttpsServer::start(move |request| {
+        if request.target == "/api/auth.test" {
+            return (200, json!({"user_id": "bot"}).to_string());
+        }
+        assert!(request.target.starts_with("/api/conversations.history?"));
+        match polls.fetch_add(1, Ordering::SeqCst) {
+            0 => (200, "invalid json".into()),
+            1 => (200, "{}".into()),
+            2 => {
+                assert!(!request.target.contains("oldest="));
+                (
+                    200,
+                    json!({"messages": [
+                        {"ts": "003", "user": "alice", "text": "second", "thread_ts": "001"},
+                        {"ts": "002", "user": "alice", "text": "first"},
+                        {"ts": "001", "user": "alice", "text": ""},
+                        {"ts": "001", "user": "mallory", "text": "blocked"},
+                        {"ts": "001", "user": "bot", "text": "own message"},
+                        {}
+                    ]})
+                    .to_string(),
+                )
+            }
+            _ => {
+                assert!(request.target.contains("oldest=003"));
+                (
+                    200,
+                    json!({"messages": [
+                        {"ts": "004", "user": "alice", "text": "receiver closed"},
+                        {"ts": "003", "user": "alice", "text": "duplicate"}
+                    ]})
+                    .to_string(),
+                )
+            }
+        }
+    })
+    .await;
+    let channel = SlackChannel::with_http_client(
+        "token".into(),
+        Some("room".into()),
+        vec!["alice".into()],
+        server.client.clone(),
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let listener = tokio::spawn(async move { channel.listen(tx).await });
+    tokio::time::timeout(std::time::Duration::from_secs(20), async {
+        let first = rx.recv().await.unwrap();
+        let second = rx.recv().await.unwrap();
+        assert_eq!(
+            (
+                first.id.as_str(),
+                first.sender.as_str(),
+                first.reply_target.as_str(),
+                first.content.as_str(),
+                first.channel.as_str()
+            ),
+            ("slack_room_002", "alice", "room", "first", "slack")
+        );
+        assert_eq!(first.thread_ts.as_deref(), Some("002"));
+        assert_eq!(second.content, "second");
+        assert_eq!(second.thread_ts.as_deref(), Some("001"));
+        assert!(first.timestamp > 0);
+        drop(rx);
+        listener.await.unwrap().unwrap();
+    })
+    .await
+    .unwrap();
+}

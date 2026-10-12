@@ -699,3 +699,7 @@ impl TelegramChannel {
             .await
     }
 }
+
+#[cfg(test)]
+#[path = "channel_send_tests.rs"]
+mod tests;

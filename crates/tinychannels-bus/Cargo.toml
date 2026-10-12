@@ -1,4 +1,5 @@
 [package]
+rust-version = "1.94"
 name = "tinychannels-bus"
 version.workspace = true
 edition = "2024"

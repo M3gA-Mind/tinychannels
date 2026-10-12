@@ -404,3 +404,31 @@ fn make_channel() -> IrcChannel {
         verify_tls: true,
     })
 }
+
+#[test]
+fn parse_prefix_without_command_returns_none() {
+    assert!(IrcMessage::parse(":server.example ").is_none());
+    assert!(IrcMessage::parse(":server.example").is_none());
+}
+
+#[test]
+fn sasl_plain_encode_pads_a_single_trailing_byte() {
+    // \0a\0b is four bytes, so the last base64 group carries one byte.
+    assert_eq!(encode_sasl_plain("a", "b"), "AGEAYg==");
+}
+
+#[test]
+fn split_with_zero_budget_joins_lines_into_one_chunk() {
+    assert_eq!(
+        split_message("first\r\n\nsecond\nthird", 0),
+        vec!["first second third"]
+    );
+    assert_eq!(split_message("\n\r\n", 0), vec![""]);
+}
+
+#[test]
+fn split_budget_smaller_than_a_character_keeps_characters_whole() {
+    // Each 'é' is two bytes; a one-byte budget cannot split it, so every
+    // chunk advances forward to the next character boundary instead.
+    assert_eq!(split_message("éé", 1), vec!["é", "é"]);
+}

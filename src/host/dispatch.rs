@@ -131,3 +131,7 @@ pub trait TurnDispatcher: Send + Sync {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "dispatch_tests.rs"]
+mod tests;

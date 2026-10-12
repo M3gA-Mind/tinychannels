@@ -44,3 +44,57 @@ fn effective_config_without_overrides_keeps_base_routes() {
     let cfg = build_effective_yuanbao_config(base, &creds(json!({})), "k".into());
     assert_eq!(cfg.api_domain, "custom.example");
 }
+
+fn verify_config(api_domain: &str) -> YuanbaoConfig {
+    let mut c = YuanbaoConfig::default();
+    c.app_key = "key-1".into();
+    c.api_domain = api_domain.into();
+    c.route_env = "canary".into();
+    c
+}
+
+#[tokio::test]
+async fn verify_credentials_accepts_valid_sign_token_response() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .and(wiremock::matchers::path("/api/v5/robotLogic/sign-token"))
+        .and(wiremock::matchers::header("X-Route-Env", "canary"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(json!({
+            "code": 0,
+            "data": {"token": "t", "bot_id": "b", "duration": 600},
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    verify_yuanbao_credentials(
+        reqwest::Client::new(),
+        &verify_config(&server.uri()),
+        "secret",
+    )
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn verify_credentials_reports_rejected_secret() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .set_body_json(json!({"code": 40001, "msg": "bad signature"})),
+        )
+        .mount(&server)
+        .await;
+    let err = verify_yuanbao_credentials(
+        reqwest::Client::new(),
+        &verify_config(&server.uri()),
+        "nope",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.starts_with("yuanbao credential verification failed:"),
+        "{err}"
+    );
+    assert!(err.contains("bad signature"), "{err}");
+}

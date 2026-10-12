@@ -400,3 +400,72 @@ async fn failed_native_cleanup_retains_ownership_and_capacity_until_retry_succee
     runtimes.reserve().await.unwrap();
     runtimes.shutdown().await.unwrap();
 }
+
+#[tokio::test(start_paused = true)]
+async fn expired_reservation_cannot_activate_before_the_next_capacity_scan() {
+    let (runtimes, _client) = fixture().await;
+    let reservation = runtimes.reserve().await.unwrap();
+    tokio::time::advance(RESERVATION_LIFETIME + Duration::from_secs(1)).await;
+    let error = runtimes
+        .start(reservation.handle.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(error.wire_message(), "unknown or expired channel runtime");
+    let slot = runtimes.get(&reservation.handle).await.unwrap();
+    assert!(!slot.activated.load(Ordering::SeqCst));
+    assert!(slot.child.lock().await.is_none());
+    runtimes.stop(reservation.handle).await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn pending_startup_keeps_its_worker_and_stop_can_retry_after_timeout() {
+    let (runtimes, _client) = fixture().await;
+    let reservation = runtimes.reserve().await.unwrap();
+    let slot = runtimes.get(&reservation.handle).await.unwrap();
+    let child_guard = slot.child.lock().await;
+    let error = runtimes
+        .start(reservation.handle.clone())
+        .await
+        .unwrap_err();
+    assert!(error.wire_message().contains("startup is pending"));
+    assert!(slot.worker.lock().await.is_some());
+    let error = runtimes.stop(reservation.handle.clone()).await.unwrap_err();
+    assert!(error.wire_message().contains("startup cleanup is pending"));
+    assert!(slot.worker.lock().await.is_some());
+    assert!(runtimes.get(&reservation.handle).await.is_ok());
+    let error = runtimes
+        .start(reservation.handle.clone())
+        .await
+        .unwrap_err();
+    assert_eq!(error.wire_message(), "channel runtime is closed");
+    drop(child_guard);
+    runtimes.stop(reservation.handle.clone()).await.unwrap();
+    assert!(runtimes.get(&reservation.handle).await.is_err());
+}
+
+#[tokio::test]
+async fn shutdown_reports_cleanup_failure_and_retains_only_the_failed_owner() {
+    let (runtimes, client) = fixture().await;
+    let failed = runtimes.reserve().await.unwrap();
+    let inert = runtimes.reserve().await.unwrap();
+    let fault = Arc::new(AtomicBool::new(true));
+    client
+        .serve_at(
+            failed.host_object_path.clone().try_into().unwrap(),
+            FaultedDeliveryStore(fault.clone()),
+        )
+        .await
+        .unwrap();
+    client
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    runtimes.start(failed.handle.clone()).await.unwrap();
+    assert!(runtimes.shutdown().await.is_err());
+    assert!(runtimes.get(&failed.handle).await.is_ok());
+    assert!(runtimes.get(&inert.handle).await.is_err());
+    assert!(runtimes.reserve().await.is_err());
+    fault.store(false, Ordering::SeqCst);
+    runtimes.shutdown().await.unwrap();
+    assert!(runtimes.slots.lock().await.is_empty());
+}

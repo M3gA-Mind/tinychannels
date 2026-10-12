@@ -41,3 +41,7 @@ pub use tinychannels_runtime::CliChannel;
 pub use whatsapp::WhatsAppChannel;
 pub use whatsapp_web::WhatsAppWebChannel;
 pub use yuanbao::YuanbaoChannel;
+
+#[cfg(test)]
+#[path = "http_test_support_tests.rs"]
+mod http_test_support;

@@ -388,3 +388,56 @@ fn linq_phone_number_accessor() {
     let ch = make_channel();
     assert_eq!(ch.phone_number(), "+15551234567");
 }
+
+#[tokio::test]
+async fn injected_linq_client_propagates_transport_failure_and_keeps_webhook_listener_idle() {
+    let client = reqwest::Client::builder()
+        .proxy(reqwest::Proxy::all("http://127.0.0.1:0").unwrap())
+        .timeout(std::time::Duration::from_secs(1))
+        .build()
+        .unwrap();
+    let channel =
+        LinqChannel::with_http_client("token".into(), "+15551234567".into(), vec![], client);
+    assert!(
+        channel
+            .send(&SendMessage::new("hello", "chat"))
+            .await
+            .is_err()
+    );
+    assert!(channel.start_typing("chat").await.is_err());
+    assert!(channel.stop_typing("chat").await.is_err());
+    assert!(!channel.health_check().await);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), channel.listen(tx))
+            .await
+            .is_err()
+    );
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn webhook_signature_rejects_invalid_timestamp_and_non_hex_signature() {
+    assert!(!verify_linq_signature("secret", "body", "invalid", "00"));
+    let timestamp = chrono::Utc::now().timestamp().to_string();
+    assert!(!verify_linq_signature(
+        "secret", "body", &timestamp, "not hex"
+    ));
+}
+
+#[test]
+fn webhook_requires_sender_and_message() {
+    let channel = LinqChannel::new("token".into(), "+15551234567".into(), vec!["*".into()]);
+    for data in [
+        serde_json::json!({}),
+        serde_json::json!({"from": "+15557654321"}),
+    ] {
+        assert!(
+            channel
+                .parse_webhook_payload(&serde_json::json!({
+                    "event_type": "message.received", "data": data
+                }))
+                .is_empty()
+        );
+    }
+}

@@ -153,3 +153,38 @@ fn the_mailbox_defaults_to_inbox_and_is_configurable() {
         "Archive"
     );
 }
+
+#[tokio::test]
+async fn imap_tls_refuses_plaintext_before_sending_mailbox_credentials() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        socket
+            .write_all(b"* OK plaintext server\r\n")
+            .await
+            .unwrap();
+        let mut bytes = [0; 1024];
+        let count = tokio::io::AsyncReadExt::read(&mut socket, &mut bytes)
+            .await
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&bytes[..count]).contains("LOGIN"));
+    });
+    let error = AsyncImapReceiver::new()
+        .with_timeout(Duration::from_secs(1))
+        .fetch_new(&creds(port))
+        .await
+        .unwrap_err();
+    assert!(matches!(error, MailError::Transport(detail) if detail.contains("tls connect")));
+    server.await.unwrap();
+}
+
+#[tokio::test]
+async fn imap_acknowledgment_propagates_connection_failure() {
+    let error = AsyncImapReceiver::new()
+        .with_timeout(Duration::from_secs(1))
+        .mark_seen(&creds(0), &[3])
+        .await
+        .unwrap_err();
+    assert!(matches!(error, MailError::Transport(detail) if detail.contains("imap connect")));
+}

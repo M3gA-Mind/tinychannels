@@ -195,7 +195,12 @@ impl ChannelBackend for RecordingBackend {
         &self,
         _config: &ChannelsConfig,
     ) -> anyhow::Result<TelegramLoginStartResult> {
-        unimplemented!("not used by this test")
+        self.calls.lock().unwrap().push("telegram:start".into());
+        Ok(TelegramLoginStartResult {
+            link_token: "tg-token".into(),
+            telegram_url: "https://t.me/bot?start=tg-token".into(),
+            bot_username: "bot".into(),
+        })
     }
 
     async fn telegram_login_check(
@@ -203,14 +208,25 @@ impl ChannelBackend for RecordingBackend {
         _config: &ChannelsConfig,
         _link_token: &str,
     ) -> anyhow::Result<TelegramLoginCheckResult> {
-        unimplemented!("not used by this test")
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("telegram:check:{_link_token}"));
+        Ok(TelegramLoginCheckResult {
+            linked: true,
+            details: Some(serde_json::json!({"token": _link_token})),
+        })
     }
 
     async fn discord_link_start(
         &self,
         _config: &ChannelsConfig,
     ) -> anyhow::Result<DiscordLinkStartResult> {
-        unimplemented!("not used by this test")
+        self.calls.lock().unwrap().push("discord:start".into());
+        Ok(DiscordLinkStartResult {
+            link_token: "dc-token".into(),
+            instructions: "Paste token".into(),
+        })
     }
 
     async fn discord_link_check(
@@ -218,7 +234,14 @@ impl ChannelBackend for RecordingBackend {
         _config: &ChannelsConfig,
         _link_token: &str,
     ) -> anyhow::Result<DiscordLinkCheckResult> {
-        unimplemented!("not used by this test")
+        self.calls
+            .lock()
+            .unwrap()
+            .push(format!("discord:check:{_link_token}"));
+        Ok(DiscordLinkCheckResult {
+            linked: false,
+            details: Some(serde_json::json!({"token": _link_token})),
+        })
     }
 
     async fn discord_list_guilds(
@@ -614,4 +637,82 @@ async fn set_default_channel_validates_and_canonicalizes_before_delegating() {
         manager.backend.default_channels.lock().unwrap().as_slice(),
         ["discord", "web"]
     );
+}
+
+#[tokio::test]
+async fn login_and_link_flows_forward_tokens_and_backend_results() {
+    let manager = ChannelManager::new(ChannelsConfig::default(), RecordingBackend::default());
+    let telegram = manager.telegram_login_start().await.unwrap();
+    assert_eq!(telegram.link_token, "tg-token");
+    assert_eq!(telegram.bot_username, "bot");
+    let checked = manager
+        .telegram_login_check(&telegram.link_token)
+        .await
+        .unwrap();
+    assert!(checked.linked);
+    assert_eq!(checked.details.unwrap()["token"], "tg-token");
+    let discord = manager.discord_link_start().await.unwrap();
+    assert_eq!(discord.link_token, "dc-token");
+    let checked = manager
+        .discord_link_check(&discord.link_token)
+        .await
+        .unwrap();
+    assert!(!checked.linked);
+    assert_eq!(checked.details.unwrap()["token"], "dc-token");
+    assert_eq!(
+        *manager.backend().calls.lock().unwrap(),
+        [
+            "telegram:start",
+            "telegram:check:tg-token",
+            "discord:start",
+            "discord:check:dc-token"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn manager_preserves_saved_config_and_prepared_credentials() {
+    let mut manager = ChannelManager::new(ChannelsConfig::default(), RecordingBackend::default());
+    manager.config_mut().active_channel = Some("telegram".into());
+    assert_eq!(manager.config().active_channel.as_deref(), Some("telegram"));
+    assert_eq!(
+        manager.get_default_channel().await.unwrap().as_deref(),
+        Some("telegram")
+    );
+    let credentials = serde_json::json!({"app_key": "app", "app_secret": "secret", "bot_version": "openhuman/1.2.3"});
+    manager
+        .prepare_connect("yuanbao", ChannelAuthMode::ApiKey, credentials.clone())
+        .await
+        .unwrap();
+    assert_eq!(
+        *manager.backend().credentials.lock().unwrap(),
+        [credentials]
+    );
+    let statuses = manager.status(None).await.unwrap();
+    assert_eq!(statuses[0].channel_id, "telegram");
+    assert!(
+        manager
+            .test("missing", ChannelAuthMode::ApiKey, serde_json::json!({}))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("unknown channel")
+    );
+}
+
+#[tokio::test]
+async fn manager_forwards_explicit_outbound_intent_without_replacing_its_key() {
+    let manager = ChannelManager::new(ChannelsConfig::default(), RecordingBackend::default());
+    let mut intent =
+        outbound_intent_from_send_message("telegram", &SendMessage::new("hello", "alice"));
+    intent.idempotency_key = "caller-key".into();
+    let raw = manager
+        .send_outbound_intent(intent)
+        .await
+        .unwrap()
+        .raw
+        .unwrap();
+    assert_eq!(raw["idempotencyKey"], "caller-key");
+    assert_eq!(raw["channel"], "telegram");
+    assert_eq!(raw["message"]["content"], "hello");
 }

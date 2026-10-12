@@ -6,6 +6,8 @@ use tokio::sync::Notify;
 #[derive(Clone, Default)]
 struct Callback {
     sends: Arc<Mutex<Vec<Value>>>,
+    requests: Arc<Mutex<Vec<ProgressiveTransportRequest>>>,
+    result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
     block: bool,
     entered: Arc<Notify>,
     released: Arc<Notify>,
@@ -20,6 +22,7 @@ impl Callback {
         let ChannelBackendRequest::ProgressiveTransport(request) = request else {
             return Err(Error::failed("unexpected callback"));
         };
+        self.requests.lock().await.push(request.clone());
         if let ProgressiveTransportRequest::Send { message, .. } = request {
             self.sends.lock().await.push(message);
             if self.block {
@@ -28,7 +31,9 @@ impl Callback {
             }
         }
         Ok(ChannelBackendResult::ProgressiveTransport(
-            ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"})),
+            self.result.lock().await.clone().unwrap_or_else(|| {
+                ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"}))
+            }),
         ))
     }
 }
@@ -309,4 +314,181 @@ async fn oversized_terminal_content_is_rejected_without_closing_reply() {
         .await
         .unwrap();
     assert_eq!(callback.sends.lock().await[0]["text"], "valid reply");
+}
+
+#[tokio::test]
+async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::Feed {
+                handle: handle.clone(),
+                events: vec![
+                    ProgressiveEvent::ThinkingDelta("considering".into()),
+                    ProgressiveEvent::ToolCall("lookup".into()),
+                    ProgressiveEvent::ToolResult {
+                        tool_name: "lookup".into(),
+                        success: true
+                    },
+                    ProgressiveEvent::TextDelta("partial answer".into()),
+                ],
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Updated
+    );
+    replies
+        .execute(ProgressiveCommand::Finish {
+            handle: handle.clone(),
+            text: "complete answer".into(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        callback.sends.lock().await.last().unwrap()["text"],
+        "complete answer"
+    );
+    let error = replies
+        .execute(ProgressiveCommand::Feed {
+            handle: handle.clone(),
+            events: vec![ProgressiveEvent::TextDelta("late".into())],
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("closed"));
+    replies.shutdown().await.unwrap();
+    let error = replies
+        .execute(ProgressiveCommand::Feed {
+            handle,
+            events: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("shutting down"));
+}
+
+#[tokio::test]
+async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity() {
+    let (replies, _) = fixture(false).await;
+    for channel in [String::new(), "x".repeat(4097)] {
+        assert!(
+            replies
+                .execute(ProgressiveCommand::Open { channel })
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("invalid progressive target")
+        );
+    }
+    assert!(replies.state.lock().await.entries.is_empty());
+    let handle = open(&replies).await;
+    let error = replies
+        .execute(ProgressiveCommand::Feed {
+            handle: handle.clone(),
+            events: vec![ProgressiveEvent::TextDelta("x".into()); 33],
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("too many progressive events"));
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::Feed {
+                handle,
+                events: vec![]
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Updated
+    );
+    assert_eq!(
+        replies
+            .execute(ProgressiveCommand::Close {
+                handle: "absent".into()
+            })
+            .await
+            .unwrap(),
+        ProgressiveResult::Closed
+    );
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
+    let (replies, _) = fixture(false).await;
+    let mut reply =
+        ProgressiveReply::new(Arc::new(Sender(replies.host.clone())), "discord:fixture");
+    apply(
+        &mut reply,
+        vec![ProgressiveEvent::ThinkingDelta("x".repeat(MAX_CONTENT))],
+    )
+    .unwrap();
+    assert!(
+        apply(
+            &mut reply,
+            vec![
+                ProgressiveEvent::TextDelta("not committed".into()),
+                ProgressiveEvent::ThinkingDelta("extra".into())
+            ]
+        )
+        .is_err()
+    );
+    assert!(reply.state().content.is_empty());
+    assert_eq!(reply.state().thinking_accumulator.len(), MAX_CONTENT);
+}
+
+#[tokio::test]
+async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
+    let (replies, callback) = fixture(false).await;
+    let sender = Sender(replies.host.clone());
+    sender
+        .edit("discord:room", "message-id", "updated")
+        .await
+        .unwrap();
+    sender.delete("discord:room", "message-id").await.unwrap();
+    let requests = callback.requests.lock().await;
+    assert!(
+        matches!(&requests[0], ProgressiveTransportRequest::Edit { channel, message_id, text }
+        if channel == "discord:room" && message_id == "message-id" && text == "updated")
+    );
+    assert!(
+        matches!(&requests[1], ProgressiveTransportRequest::Delete { channel, message_id }
+        if channel == "discord:room" && message_id == "message-id")
+    );
+}
+
+#[tokio::test]
+async fn transport_failures_preserve_recovery_classification() {
+    let (replies, callback) = fixture(false).await;
+    let sender = Sender(replies.host.clone());
+    for result in [
+        ProgressiveTransportResult::Unavailable,
+        ProgressiveTransportResult::EditUnsupported,
+        ProgressiveTransportResult::MessageGone,
+        ProgressiveTransportResult::Failed,
+    ] {
+        *callback.result.lock().await = Some(result.clone());
+        let error = sender
+            .edit("discord:room", "message-id", "updated")
+            .await
+            .unwrap_err();
+        match result {
+            ProgressiveTransportResult::Unavailable => {
+                assert!(matches!(error, ProgressiveSendError::Unavailable))
+            }
+            ProgressiveTransportResult::EditUnsupported => {
+                assert!(matches!(error, ProgressiveSendError::EditUnsupported))
+            }
+            ProgressiveTransportResult::MessageGone => {
+                assert!(matches!(error, ProgressiveSendError::MessageGone))
+            }
+            ProgressiveTransportResult::Failed => {
+                let ProgressiveSendError::Other(error) = error else {
+                    panic!("expected opaque transport failure")
+                };
+                assert_eq!(error.to_string(), "progressive transport failed");
+            }
+            ProgressiveTransportResult::Success(_) => unreachable!(),
+        }
+    }
 }

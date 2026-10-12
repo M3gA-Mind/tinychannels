@@ -491,3 +491,98 @@ async fn send_reply_is_standalone() {
     assert_eq!(reply.channel(), "slack:1");
     assert_eq!(sender.calls().len(), 2);
 }
+
+#[tokio::test]
+async fn missing_edit_route_preserves_owned_bubbles_and_skips_later_requests() {
+    use super::bubbles::flush_thinking_message;
+    use super::draft::flush_streaming_edit;
+
+    let sender = FakeSender::default();
+    let channel = "coverage-no-edit-route:room";
+    let mut state = StreamingState {
+        content: "draft".into(),
+        message_id: Some("draft-id".into()),
+        thinking_accumulator: "reasoning".into(),
+        thinking_message_id: Some("thinking-id".into()),
+        ..Default::default()
+    };
+    FakeSender::script(&sender.edits, Outcome::Err(unsupported));
+    flush_thinking_message(&sender, channel, &mut state).await;
+    assert!(state.thinking_edit_disabled);
+    assert_eq!(state.thinking_message_id.as_deref(), Some("thinking-id"));
+    flush_streaming_edit(&sender, channel, &mut state).await;
+    assert!(state.edit_disabled);
+    assert_eq!(state.message_id.as_deref(), Some("draft-id"));
+    flush_thinking_message(&sender, channel, &mut state).await;
+    assert_eq!(
+        sender.calls().len(),
+        1,
+        "known absent routes must not be retried"
+    );
+}
+
+#[tokio::test]
+async fn unavailable_bubble_transport_does_not_spend_failure_budgets_or_claim_delivery() {
+    use super::bubbles::{flush_thinking_message, send_filler_message};
+    use super::draft::flush_streaming_edit;
+
+    let sender = FakeSender::default();
+    let mut state = StreamingState {
+        content: "draft".into(),
+        thinking_accumulator: "reasoning".into(),
+        ..Default::default()
+    };
+    for _ in 0..3 {
+        FakeSender::script(&sender.sends, Outcome::Err(unavailable));
+    }
+    flush_streaming_edit(&sender, "coverage-unavailable", &mut state).await;
+    flush_thinking_message(&sender, "coverage-unavailable", &mut state).await;
+    send_filler_message(&sender, "coverage-unavailable", &mut state).await;
+    assert!(!state.draft_sent && !state.thinking_sent);
+    assert!(!state.edit_disabled && !state.thinking_edit_disabled && !state.filler_disabled);
+    assert_eq!(state.edit_failures, 0);
+    assert_eq!(state.filler_failures, 0);
+    assert!(state.filler_message_ids.is_empty());
+    state.message_id = Some("existing".into());
+    FakeSender::script(&sender.edits, Outcome::Err(unavailable));
+    flush_streaming_edit(&sender, "coverage-unavailable", &mut state).await;
+    assert_eq!(state.message_id.as_deref(), Some("existing"));
+    assert_eq!(state.edit_failures, 0);
+}
+
+#[tokio::test]
+async fn transient_thinking_edit_failure_retains_cleanup_id_and_allows_retry() {
+    use super::bubbles::flush_thinking_message;
+
+    let sender = FakeSender::default();
+    let mut state = StreamingState {
+        thinking_accumulator: "reasoning".into(),
+        thinking_message_id: Some("thinking-id".into()),
+        ..Default::default()
+    };
+    FakeSender::script(&sender.edits, Outcome::Err(other));
+    flush_thinking_message(&sender, "coverage-thinking-retry", &mut state).await;
+    assert!(!state.thinking_edit_disabled);
+    assert_eq!(state.thinking_message_id.as_deref(), Some("thinking-id"));
+    flush_thinking_message(&sender, "coverage-thinking-retry", &mut state).await;
+    assert_eq!(sender.calls().len(), 2);
+}
+
+#[tokio::test]
+async fn empty_thinking_and_filler_without_an_id_do_not_claim_cleanup_ownership() {
+    use super::bubbles::{flush_thinking_message, send_filler_message};
+
+    let sender = FakeSender::default();
+    let mut state = StreamingState {
+        thinking_accumulator: " \n ".into(),
+        thinking_dirty: true,
+        ..Default::default()
+    };
+    flush_thinking_message(&sender, "coverage-empty-thinking", &mut state).await;
+    assert!(sender.calls().is_empty());
+    assert!(!state.thinking_dirty);
+    FakeSender::script(&sender.sends, Outcome::Ok(json!({"ok": true})));
+    send_filler_message(&sender, "coverage-empty-thinking", &mut state).await;
+    assert!(state.filler_message_ids.is_empty());
+    assert_eq!(state.filler_failures, 0);
+}

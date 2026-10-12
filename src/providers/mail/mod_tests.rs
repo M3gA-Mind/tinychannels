@@ -89,3 +89,40 @@ fn security_spells_lowercase_and_defaults_to_starttls() {
         SmtpSecurity::None
     );
 }
+
+#[test]
+fn secret_conversions_preserve_value_and_empty_state_without_leaking() {
+    for secret in [
+        MailSecret::from(PLANTED),
+        MailSecret::from(PLANTED.to_owned()),
+    ] {
+        assert!(!secret.is_empty());
+        assert_eq!(secret.expose(), PLANTED);
+        assert_eq!(format!("{secret:?}"), MailSecret::REDACTED);
+        assert_eq!(serde_json::to_value(&secret).unwrap(), MailSecret::REDACTED);
+    }
+    let empty = MailSecret::default();
+    assert!(empty.is_empty());
+    assert_eq!(empty.expose(), "");
+}
+
+#[test]
+fn mail_errors_distinguish_configuration_address_transport_and_timeout() {
+    for (error, expected) in [
+        (
+            MailError::Config("unsupported".into()),
+            "mail configuration error: unsupported",
+        ),
+        (
+            MailError::InvalidAddress("bad address".into()),
+            "invalid mail address: bad address",
+        ),
+        (
+            MailError::Transport("refused".into()),
+            "mail transport error: refused",
+        ),
+        (MailError::TimedOut, "mail transport timed out"),
+    ] {
+        assert_eq!(error.to_string(), expected);
+    }
+}

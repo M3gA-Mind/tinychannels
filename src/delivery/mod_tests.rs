@@ -666,3 +666,114 @@ fn payload_shape_maps_to_expected_durable_capability() {
         assert!(!requirements.contains_key(&Thread));
     }
 }
+
+#[tokio::test]
+async fn missing_delivery_updates_are_idempotent() {
+    use crate::delivery::{
+        fail_delivery_after_platform_send, load_pending_deliveries, load_pending_delivery,
+    };
+    let store = MemoryStore::default();
+    fail_delivery(&store, "missing", "error", 1).await.unwrap();
+    fail_delivery_after_platform_send(&store, "missing", "error", 1)
+        .await
+        .unwrap();
+    mark_delivery_platform_send_attempt_started(&store, "missing", 1)
+        .await
+        .unwrap();
+    mark_delivery_platform_outcome_unknown(&store, "missing", 1)
+        .await
+        .unwrap();
+    move_to_failed(&store, "missing").await.unwrap();
+    assert!(
+        load_pending_delivery(&store, "missing")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(load_pending_deliveries(&store).await.unwrap().is_empty());
+    assert!(store.failed().is_empty());
+}
+
+#[tokio::test]
+async fn post_send_failure_saturates_retries_and_preserves_first_send_timestamp() {
+    use crate::delivery::{
+        fail_delivery_after_platform_send, load_pending_deliveries, load_pending_delivery,
+    };
+    let store = MemoryStore::default();
+    let mut entry = text_entry("entry", 1);
+    entry.retry_count = u32::MAX;
+    enqueue_delivery(&store, entry).await.unwrap();
+    fail_delivery_after_platform_send(&store, "entry", "first", 2)
+        .await
+        .unwrap();
+    fail_delivery_after_platform_send(&store, "entry", "second", 3)
+        .await
+        .unwrap();
+    let entry = load_pending_delivery(&store, "entry")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(entry.retry_count, u32::MAX);
+    assert_eq!(entry.platform_send_started_at_unix_ms, Some(2));
+    assert_eq!(entry.last_attempt_at_unix_ms, Some(3));
+    assert_eq!(entry.last_error.as_deref(), Some("second"));
+    assert_eq!(
+        entry.recovery_state,
+        Some(DeliveryRecoveryState::UnknownAfterSend)
+    );
+    assert_eq!(load_pending_deliveries(&store).await.unwrap(), [entry]);
+}
+
+#[tokio::test]
+async fn selected_drain_leaves_unmatched_and_backed_off_entries_pending() {
+    let store = MemoryStore::default();
+    enqueue_delivery(&store, text_entry("unmatched", 1))
+        .await
+        .unwrap();
+    let mut entry = text_entry("backoff", 2);
+    entry.retry_count = 1;
+    entry.last_attempt_at_unix_ms = Some(100);
+    enqueue_delivery(&store, entry).await.unwrap();
+    let handler = StaticHandler::success();
+    let summary = drain_selected_pending_deliveries(&store, &handler, 101, |entry| {
+        PendingDeliveryDrainDecision {
+            matches: entry.id != "unmatched",
+            bypass_backoff: false,
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(summary.deferred_backoff, 1);
+    assert_eq!(summary.recovered, 0);
+    assert!(handler.delivered_ids().is_empty());
+    assert_eq!(store.pending().len(), 2);
+}
+
+#[tokio::test]
+async fn delivery_failure_after_send_preserves_uncertainty_without_incrementing_retries() {
+    let store = MemoryStore::default();
+    enqueue_delivery(&store, text_entry("entry", 1))
+        .await
+        .unwrap();
+    let handler = StaticHandler {
+        result: Err(DeliveryAttemptFailure {
+            error: "receipt lost".into(),
+            sent_before_error: true,
+            ..Default::default()
+        }),
+        reconciliation: None,
+        delivered: Arc::default(),
+    };
+    let summary = recover_pending_deliveries(&store, &handler, 2)
+        .await
+        .unwrap();
+    assert_eq!(summary.failed, 1);
+    let entry = store.pending().pop().unwrap();
+    assert_eq!(entry.retry_count, 0);
+    assert_eq!(entry.last_error.as_deref(), Some("receipt lost"));
+    assert_eq!(
+        entry.recovery_state,
+        Some(DeliveryRecoveryState::UnknownAfterSend)
+    );
+    assert_eq!(entry.platform_send_started_at_unix_ms, Some(2));
+}

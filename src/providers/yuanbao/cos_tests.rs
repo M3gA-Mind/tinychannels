@@ -217,3 +217,158 @@ fn encode_cos_key_keeps_slashes_but_escapes_segments() {
     assert_eq!(encode_cos_key("plain/file.png"), "plain/file.png");
     assert_eq!(encode_cos_key("a b/c d.png"), "a%20b/c%20d.png");
 }
+
+fn upload_creds(resource_url: &str, start_time: u64, expired_time: u64) -> CosCredentials {
+    CosCredentials {
+        bucket: "bkt".into(),
+        region: "ap-shanghai".into(),
+        location: "/dir/a b.png".into(),
+        secret_id: "AKID".into(),
+        secret_key: "SECRET".into(),
+        session_token: "session".into(),
+        start_time,
+        expired_time,
+        resource_url: resource_url.into(),
+    }
+}
+
+fn png(width: u32, height: u32) -> Vec<u8> {
+    let mut v = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    v.extend_from_slice(&width.to_be_bytes());
+    v.extend_from_slice(&height.to_be_bytes());
+    v
+}
+
+#[tokio::test]
+async fn upload_to_cos_puts_signed_object_and_reports_image_dims() {
+    use wiremock::matchers::{body_bytes, header, method, path};
+    let server = wiremock::MockServer::start().await;
+    let data = png(32, 16);
+    wiremock::Mock::given(method("PUT"))
+        .and(path("/dir/a%20b.png"))
+        .and(header("Content-Type", "image/png"))
+        .and(header("x-cos-security-token", "session"))
+        .and(body_bytes(data.clone()))
+        .respond_with(wiremock::ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let http = reqwest::Client::new();
+    // octet-stream + an image filename → content type guessed from the name;
+    // no resource_url → the canonical COS URL is returned.
+    let res = upload_to_cos_via(
+        &http,
+        &upload_creds("", 0, 0),
+        &data,
+        "a b.png",
+        "application/octet-stream".into(),
+        Some(&server.uri()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        res.url,
+        "https://bkt.cos.accelerate.myqcloud.com/dir/a%20b.png"
+    );
+    assert_eq!((res.width, res.height), (32, 16));
+    assert_eq!(res.size, data.len() as u64);
+    assert_eq!(res.uuid, sha1_hex(&data));
+}
+
+#[tokio::test]
+async fn upload_to_cos_non_image_uses_resource_url_and_no_dims() {
+    use wiremock::matchers::{header, method};
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(method("PUT"))
+        .and(header("Content-Type", "application/octet-stream"))
+        .respond_with(wiremock::ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let http = reqwest::Client::new();
+    let far_future = unix_now() + 7200;
+    let res = upload_to_cos_via(
+        &http,
+        &upload_creds("https://cdn.example/r", 1_700_000_000, far_future),
+        b"plain bytes",
+        "notes.bin",
+        String::new(),
+        Some(&server.uri()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(res.url, "https://cdn.example/r");
+    assert_eq!((res.width, res.height), (0, 0));
+}
+
+#[tokio::test]
+async fn upload_to_cos_surfaces_put_http_error() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("PUT"))
+        .respond_with(wiremock::ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+    let http = reqwest::Client::new();
+    let err = upload_to_cos_via(
+        &http,
+        &upload_creds("", 0, 0),
+        b"x",
+        "f.txt",
+        "text/plain".into(),
+        Some(&server.uri()),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, YuanbaoError::Media(ref m) if m.contains("COS PUT HTTP 403")));
+}
+
+/// An origin nothing listens on: bind an ephemeral port, then free it.
+fn dead_origin() -> String {
+    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    format!("http://{}", l.local_addr().unwrap())
+}
+
+#[tokio::test]
+async fn upload_and_credentials_surface_connection_errors() {
+    let http = reqwest::Client::new();
+    let origin = dead_origin();
+    let err = upload_to_cos_via(
+        &http,
+        &upload_creds("", 0, 0),
+        b"x",
+        "f.txt",
+        "text/plain".into(),
+        Some(&origin),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, YuanbaoError::Connection(ref m) if m.contains("COS PUT")));
+
+    let err = get_cos_credentials(&http, &origin, "appk", "bot", "tok", "", "f")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, YuanbaoError::Connection(ref m) if m.contains("genUploadInfo")));
+}
+
+#[tokio::test]
+async fn upload_to_cos_without_override_rejects_missing_creds_before_network() {
+    let http = reqwest::Client::new();
+    let err = upload_to_cos(&http, &CosCredentials::default(), b"x", "f", String::new())
+        .await
+        .unwrap_err();
+    assert!(matches!(err, YuanbaoError::Media(_)));
+}
+
+#[tokio::test]
+async fn get_cos_credentials_rejects_non_json_body() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("POST"))
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_string("not json"))
+        .mount(&server)
+        .await;
+    let http = reqwest::Client::new();
+    let err = get_cos_credentials(&http, &server.uri(), "appk", "bot", "tok", "", "f")
+        .await
+        .unwrap_err();
+    assert!(matches!(err, YuanbaoError::Media(ref m) if m.contains("body parse")));
+}

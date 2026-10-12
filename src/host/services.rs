@@ -280,3 +280,7 @@ pub trait RunLedger: Send + Sync {
     async fn append_event(&self, event: RunEventAppend) -> anyhow::Result<()>;
     async fn record_telemetry(&self, telemetry: RunTelemetry) -> anyhow::Result<()>;
 }
+
+#[cfg(test)]
+#[path = "services_tests.rs"]
+mod tests;
