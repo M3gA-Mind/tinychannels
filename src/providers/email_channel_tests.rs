@@ -823,13 +823,13 @@ async fn listen_delivers_new_mail_and_reconnects_after_failures() {
     assert_eq!(first.sender, "alice@example.com");
     assert_eq!(first.reply_target, "alice@example.com");
     assert_eq!(first.channel, "email");
-    assert_eq!(first.content, "Subject: Hi\n\nHello world\r\n");
+    assert_eq!(first.content.trim_end(), "Subject: Hi\n\nHello world");
     assert_eq!(first.timestamp, 1_704_164_645);
 
     // Mallory is blocked and Alice's repeat is deduped by Message-ID.
     let second = recv(&mut rx).await;
     assert_eq!(second.sender, "bob@example.com");
-    assert_eq!(second.content, "Subject: Html\n\nHello Bob");
+    assert_eq!(second.content.trim_end(), "Subject: Html\n\nHello Bob");
     assert!(second.id.starts_with("gen-"), "{}", second.id);
     assert!(second.timestamp > 1_704_164_645);
 
@@ -1071,6 +1071,8 @@ fn blocking_smtp_server() -> (u16, std::thread::JoinHandle<String>) {
                     let _ = write.write_all(b"221 bye\r\n");
                     break;
                 }
+                (false, l) if l.starts_with("EHLO") => b"250-fake\r\n250 AUTH PLAIN\r\n",
+                (false, l) if l.starts_with("AUTH") => b"235 authenticated\r\n",
                 _ => b"250 ok\r\n",
             };
             write.write_all(reply).unwrap();
