@@ -55,7 +55,7 @@ docker run --rm \
     if command -v dnf >/dev/null 2>&1; then
       dnf install -y gcc gcc-c++ cmake curl git gzip jq make openssl-devel perl tar
     else
-      pacman -Syu --noconfirm base-devel cmake curl git gzip jq openssl perl
+      pacman --disable-sandbox-filesystem -Syu --noconfirm base-devel cmake curl git gzip jq openssl perl
     fi
     case "$(uname -m)" in
       x86_64) rustup_target=x86_64-unknown-linux-gnu; rustup_sha=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c ;;
