@@ -1,11 +1,9 @@
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::BTreeMap;
-use std::fs;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tinybus::test_support::{admit_module, start_bus, wait_until_serving};
-use tinybus::{Connection, Result};
+use tinybus::Result;
 use tinychannels::relay::{CapabilityDescriptor, ConnectorToGatewayFrame, GatewayToConnectorFrame};
 use tinychannels_bus::module_email::EmailSendRequest;
 use tinychannels_bus::module_relay::RelayReservation;
