@@ -2,23 +2,57 @@ use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use directories::UserDirs;
 use rusqlite::{Connection, OpenFlags};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::sync::mpsc;
+
+/// The newest-first poll: inbound messages with text, newer than `?1`.
+const NEW_MESSAGES_SQL: &str = "SELECT m.ROWID, h.id, m.text \
+     FROM message m \
+     JOIN handle h ON m.handle_id = h.ROWID \
+     WHERE m.ROWID > ?1 \
+     AND m.is_from_me = 0 \
+     AND m.text IS NOT NULL \
+     ORDER BY m.ROWID ASC \
+     LIMIT 20";
 
 /// iMessage channel using macOS `AppleScript` bridge.
 /// Polls the Messages database for new messages and sends replies via `osascript`.
 #[derive(Clone)]
 pub struct IMessageChannel {
     allowed_contacts: Vec<String>,
-    poll_interval_secs: u64,
+    poll_interval: Duration,
+    /// Overrides `~/Library/Messages/chat.db`.
+    db_path: Option<PathBuf>,
+    /// The program and leading arguments that run an `AppleScript`;
+    /// `-e <script>` is appended.
+    script_command: Vec<String>,
 }
 
 impl IMessageChannel {
     pub fn new(allowed_contacts: Vec<String>) -> Self {
         Self {
             allowed_contacts,
-            poll_interval_secs: 3,
+            poll_interval: Duration::from_secs(3),
+            db_path: None,
+            script_command: vec!["osascript".to_string()],
         }
+    }
+
+    /// The Messages database: the override, else under the home directory.
+    fn messages_db_path(&self) -> Option<PathBuf> {
+        if let Some(path) = &self.db_path {
+            return Some(path.clone());
+        }
+        UserDirs::new().map(|u| u.home_dir().join("Library/Messages/chat.db"))
+    }
+
+    /// Healthy only on macOS with a Messages database present.
+    fn is_healthy_on(&self, os: &str) -> bool {
+        if os != "macos" {
+            return false;
+        }
+        self.messages_db_path().is_some_and(|path| path.exists())
     }
 
     fn is_contact_allowed(&self, sender: &str) -> bool {
@@ -116,7 +150,12 @@ impl Channel for IMessageChannel {
 end tell"#
         );
 
-        let output = tokio::process::Command::new("osascript")
+        let (program, leading_args) = self
+            .script_command
+            .split_first()
+            .ok_or_else(|| anyhow::anyhow!("no AppleScript runner configured"))?;
+        let output = tokio::process::Command::new(program)
+            .args(leading_args)
             .arg("-e")
             .arg(&script)
             .output()
@@ -135,8 +174,8 @@ end tell"#
 
         // Query the Messages SQLite database for new messages
         // The database is at ~/Library/Messages/chat.db
-        let db_path = UserDirs::new()
-            .map(|u| u.home_dir().join("Library/Messages/chat.db"))
+        let db_path = self
+            .messages_db_path()
             .ok_or_else(|| anyhow::anyhow!("Cannot find home directory"))?;
 
         if !db_path.exists() {
@@ -149,56 +188,24 @@ end tell"#
         // Open a persistent read-only connection instead of creating
         // a new one on every 3-second poll cycle.
         let path = db_path.to_path_buf();
-        let conn = tokio::task::spawn_blocking(move || -> anyhow::Result<Connection> {
-            Ok(Connection::open_with_flags(
-                &path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )?)
-        })
-        .await??;
+        let conn = tokio::task::spawn_blocking(move || open_read_only(&path)).await??;
 
         // Track the last ROWID we've seen (shuttle conn in and out)
         let (mut conn, initial_rowid) =
             tokio::task::spawn_blocking(move || -> anyhow::Result<(Connection, i64)> {
-                let rowid = {
-                    let mut stmt =
-                        conn.prepare("SELECT MAX(ROWID) FROM message WHERE is_from_me = 0")?;
-                    let rowid: Option<i64> = stmt.query_row([], |row| row.get(0))?;
-                    rowid.unwrap_or(0)
-                };
+                let rowid = max_inbound_rowid(&conn)?;
                 Ok((conn, rowid))
             })
             .await??;
         let mut last_rowid = initial_rowid;
 
         loop {
-            tokio::time::sleep(tokio::time::Duration::from_secs(self.poll_interval_secs)).await;
+            tokio::time::sleep(self.poll_interval).await;
 
             let since = last_rowid;
             let (returned_conn, poll_result) = tokio::task::spawn_blocking(
                 move || -> (Connection, anyhow::Result<Vec<(i64, String, String)>>) {
-                    let result = (|| -> anyhow::Result<Vec<(i64, String, String)>> {
-                        let mut stmt = conn.prepare(
-                            "SELECT m.ROWID, h.id, m.text \
-                     FROM message m \
-                     JOIN handle h ON m.handle_id = h.ROWID \
-                     WHERE m.ROWID > ?1 \
-                     AND m.is_from_me = 0 \
-                     AND m.text IS NOT NULL \
-                     ORDER BY m.ROWID ASC \
-                     LIMIT 20",
-                        )?;
-                        let rows = stmt.query_map([since], |row| {
-                            Ok((
-                                row.get::<_, i64>(0)?,
-                                row.get::<_, String>(1)?,
-                                row.get::<_, String>(2)?,
-                            ))
-                        })?;
-                        let results = rows.collect::<Result<Vec<_>, _>>()?;
-                        Ok(results)
-                    })();
-
+                    let result = query_new_messages(&conn, since);
                     (conn, result)
                 },
             )
@@ -248,16 +255,40 @@ end tell"#
     }
 
     async fn health_check(&self) -> bool {
-        if std::env::consts::OS != "macos" {
-            return false;
-        }
-
-        let db_path = UserDirs::new()
-            .map(|u| u.home_dir().join("Library/Messages/chat.db"))
-            .unwrap_or_default();
-
-        db_path.exists()
+        self.is_healthy_on(std::env::consts::OS)
     }
+}
+
+/// Opens the Messages database read-only.
+fn open_read_only(path: &Path) -> anyhow::Result<Connection> {
+    Ok(Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?)
+}
+
+/// The newest inbound ROWID, or 0 for an empty table.
+fn max_inbound_rowid(conn: &Connection) -> anyhow::Result<i64> {
+    let mut stmt = conn.prepare("SELECT MAX(ROWID) FROM message WHERE is_from_me = 0")?;
+    let rowid: Option<i64> = stmt.query_row([], |row| row.get(0))?;
+    Ok(rowid.unwrap_or(0))
+}
+
+/// Inbound messages newer than `since_rowid`, oldest first, at most 20.
+/// The rowid is bound as a parameter (CWE-89 prevention).
+fn query_new_messages(
+    conn: &Connection,
+    since_rowid: i64,
+) -> anyhow::Result<Vec<(i64, String, String)>> {
+    let mut stmt = conn.prepare(NEW_MESSAGES_SQL)?;
+    let rows = stmt.query_map([since_rowid], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
 #[allow(dead_code)]
@@ -265,17 +296,7 @@ end tell"#
 /// Uses rusqlite with parameterized queries for security (CWE-89 prevention).
 async fn get_max_rowid(db_path: &Path) -> anyhow::Result<i64> {
     let path = db_path.to_path_buf();
-    let result = tokio::task::spawn_blocking(move || -> anyhow::Result<i64> {
-        let conn = Connection::open_with_flags(
-            &path,
-            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        let mut stmt = conn.prepare("SELECT MAX(ROWID) FROM message WHERE is_from_me = 0")?;
-        let rowid: Option<i64> = stmt.query_row([], |row| row.get(0))?;
-        Ok(rowid.unwrap_or(0))
-    })
-    .await??;
-    Ok(result)
+    tokio::task::spawn_blocking(move || max_inbound_rowid(&open_read_only(&path)?)).await?
 }
 
 /// Fetch messages newer than `since_rowid`.
@@ -287,33 +308,8 @@ async fn fetch_new_messages(
     since_rowid: i64,
 ) -> anyhow::Result<Vec<(i64, String, String)>> {
     let path = db_path.to_path_buf();
-    let results =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(i64, String, String)>> {
-            let conn = Connection::open_with_flags(
-                &path,
-                OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-            )?;
-            let mut stmt = conn.prepare(
-                "SELECT m.ROWID, h.id, m.text \
-             FROM message m \
-             JOIN handle h ON m.handle_id = h.ROWID \
-             WHERE m.ROWID > ?1 \
-             AND m.is_from_me = 0 \
-             AND m.text IS NOT NULL \
-             ORDER BY m.ROWID ASC \
-             LIMIT 20",
-            )?;
-            let rows = stmt.query_map([since_rowid], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?;
-            rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
-        })
-        .await??;
-    Ok(results)
+    tokio::task::spawn_blocking(move || query_new_messages(&open_read_only(&path)?, since_rowid))
+        .await?
 }
 
 #[cfg(test)]
