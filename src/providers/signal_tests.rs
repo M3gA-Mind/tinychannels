@@ -641,9 +641,9 @@ async fn sse_retries_failures_and_parses_multiline_events_before_receiver_shutdo
                 "data: {\n",
                 "data: \"envelope\": {\"sourceNumber\":\"+1111111111\",\"sourceName\":\" Alice \",\"dataMessage\":{\"message\":\"trailing\",\"timestamp\":1000}}}\n"
             )),
-            _ => ResponseTemplate::new(200).set_body_string(concat!(
+            _ => ResponseTemplate::new(200).set_body_string(
                 "data: {\"envelope\":{\"sourceNumber\":\"+1111111111\",\"dataMessage\":{\"message\":\"after reconnect\",\"timestamp\":2000}}}\n\n"
-            )),
+            ),
         })
         .expect(3).mount(&server).await;
     let (tx, mut rx) = mpsc::channel(1);
