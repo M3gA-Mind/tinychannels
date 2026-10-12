@@ -202,9 +202,13 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         .request_name(tinychannels_bus::HOST_BUS_NAME)
         .await
         .unwrap();
-    wait_until_serving(&connection, tinychannels_bus::BUS_NAME, std::time::Duration::from_secs(5))
-        .await
-        .unwrap();
+    wait_until_serving(
+        &connection,
+        tinychannels_bus::BUS_NAME,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
     let proxy = connection
         .proxy(
             tinychannels_bus::BUS_NAME,

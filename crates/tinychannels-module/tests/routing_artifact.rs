@@ -89,4 +89,3 @@ async fn compiled_runtime_commands_preserve_alias_unknown_and_help_behavior() {
         .await
         .unwrap();
 }
-
