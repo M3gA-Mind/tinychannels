@@ -308,7 +308,7 @@ async fn webhook_server_forwards_verified_events() {
                     Instant::now() < deadline,
                     "webhook never came up: {error}"
                 );
-                tokio::task::yield_now().await;
+                tokio::time::sleep(Duration::from_millis(20)).await;
             }
         }
     };
