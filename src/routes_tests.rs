@@ -89,3 +89,34 @@ fn cached_models_and_help_responses_render_expected_text() {
     assert!(provider_help.contains("Available providers"));
     assert!(provider_help.contains("openai"));
 }
+
+#[test]
+fn resolved_catalog_preview_preserves_first_provider_order_and_ten_item_limit() {
+    let catalog = ModelCatalog {
+        entries: vec![
+            ModelCatalogEntry {
+                provider: "anthropic".into(),
+                models: (0..12).map(|i| format!("model-{i}")).collect(),
+            },
+            ModelCatalogEntry {
+                provider: "anthropic".into(),
+                models: vec!["duplicate".into()],
+            },
+        ],
+    };
+    assert_eq!(
+        model_preview(&catalog, "anthropic"),
+        (0..10).map(|i| format!("model-{i}")).collect::<Vec<_>>()
+    );
+    assert!(model_preview(&catalog, "ANTHROPIC").is_empty());
+    assert!(
+        build_models_help_response_from_catalog(
+            &ChannelRouteSelection {
+                provider: "missing".into(),
+                model: "configured".into()
+            },
+            &catalog,
+        )
+        .contains("No cached model list found for `missing`")
+    );
+}

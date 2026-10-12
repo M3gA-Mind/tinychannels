@@ -43,6 +43,7 @@ fn every_declared_member_appears_in_its_method_table() {
         methods::EXECUTE_REMOTE,
         methods::PREPARE_CHANNEL_CONTROL,
         methods::START_RUNTIME_WITH_DISPATCH,
+        methods::PREPARE_RUNTIME_COMMAND,
     ] {
         assert!(METHODS.contains(&m), "{m} missing from METHODS");
     }
@@ -79,7 +80,7 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::CHANNEL_STATUS,
         ]
     );
-    assert_eq!(METHODS.len(), 34);
+    assert_eq!(METHODS.len(), 35);
     assert_eq!(
         &METHODS[13..],
         &[
@@ -104,6 +105,7 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::EXECUTE_REMOTE,
             methods::PREPARE_CHANNEL_CONTROL,
             methods::START_RUNTIME_WITH_DISPATCH,
+            methods::PREPARE_RUNTIME_COMMAND,
         ]
     );
 }
