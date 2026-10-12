@@ -1,8 +1,9 @@
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
 use tinybus::test_support::{admit_module, start_bus, wait_until_serving};
 use tinybus::{Connection, Result};
 use tinychannels::relay::{CapabilityDescriptor, ConnectorToGatewayFrame, GatewayToConnectorFrame};
@@ -159,7 +160,7 @@ impl Callback {
 #[tokio::test]
 #[ignore = "run through scripts/verify-module-artifact.sh"]
 async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_lifecycle() {
-    let (module_host, connection, broker_task) = start_bus().await.unwrap();
+    let (module_host, connection, _broker_task) = start_bus().await.unwrap();
     let info = admit_module(
         &module_host,
         "TINYCHANNELS_MODULE_ARTIFACT",
@@ -1038,37 +1039,6 @@ async fn smtp_server() -> (
         received
     });
     (port, started_rx, release, task)
-}
-
-struct StagedArtifact(PathBuf);
-
-impl Drop for StagedArtifact {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn stage_allowlisted_artifact(artifact: PathBuf) -> (StagedArtifact, PathBuf) {
-    let hash = hex::encode(Sha256::digest(fs::read(&artifact).unwrap()));
-    let directory = artifact
-        .parent()
-        .expect("artifact has a parent directory")
-        .join(format!(
-            "tinychannels-artifact-test-{}",
-            uuid::Uuid::new_v4()
-        ));
-    fs::create_dir(&directory).unwrap();
-    let staged = directory.join(artifact.file_name().unwrap());
-    fs::copy(artifact, &staged).unwrap();
-    fs::write(
-        directory.join("modules.toml"),
-        format!(
-            "{:?} = {hash:?}\n",
-            staged.file_name().unwrap().to_str().unwrap()
-        ),
-    )
-    .unwrap();
-    (StagedArtifact(directory), staged)
 }
 
 async fn relay_server() -> (String, tokio::task::JoinHandle<Vec<serde_json::Value>>) {
