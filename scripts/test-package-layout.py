@@ -41,6 +41,7 @@ class PackageTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             module_path = Path((fixture/"loaded-module-path").read_text())
             self.assertTrue(module_path.is_relative_to(home/".cache"), module_path)
+            self.assertTrue(module_path.is_file(), module_path)
 
     def test_arch_package_install_disables_only_landlock_sandbox(self):
         script = (ROOT / "scripts/test-distro.sh").read_text()
