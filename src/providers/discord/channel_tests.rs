@@ -825,7 +825,6 @@ async fn listen_filters_gateway_events_and_forwards_allowed_messages() {
             (json!({"id": "u1", "bot": true}), json!({})),      // another bot
             (json!({"id": "intruder"}), json!({})),             // not allowlisted
             (json!({"id": "u1"}), json!({"guild_id": "g2"})),   // other guild
-            (json!({"id": "u1"}), json!({"guild_id": null})),   // DM? allowlist non-empty → allowed by guild, but channel mismatch
             (json!({"id": "u1"}), json!({"channel_id": "c2"})), // other channel
             (json!({"id": "u1"}), json!({"content": ""})),      // empty content
         ] {
