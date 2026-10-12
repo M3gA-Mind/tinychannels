@@ -354,7 +354,8 @@ impl EmailChannel {
     /// Main IDLE-based listen loop with automatic reconnection
     #[cfg(feature = "email")]
     async fn listen_with_idle(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()> {
-        self.listen_with_reconnect(&tx, || self.connect_imap()).await
+        self.listen_with_reconnect(&tx, || self.connect_imap())
+            .await
     }
 
     /// The reconnect loop over any session source, so it is testable without

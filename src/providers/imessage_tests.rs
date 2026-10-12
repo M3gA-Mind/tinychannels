@@ -713,7 +713,10 @@ async fn send_runs_the_escaped_script_through_the_runner() {
     let script = std::fs::read_to_string(&out).unwrap();
     assert!(script.contains("tell application \"Messages\""), "{script}");
     assert!(script.contains("participant \"+15555550123\""), "{script}");
-    assert!(script.contains("send \"say \\\"hi\\\"\" to targetBuddy"), "{script}");
+    assert!(
+        script.contains("send \"say \\\"hi\\\"\" to targetBuddy"),
+        "{script}"
+    );
 }
 
 #[tokio::test]

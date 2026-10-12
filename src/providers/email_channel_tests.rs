@@ -661,9 +661,7 @@ struct ConnScript {
 
 /// A plaintext IMAP server that serves `scripts` one connection each, then
 /// stops listening. Returns every command line received, per connection.
-async fn fake_imap(
-    scripts: Vec<ConnScript>,
-) -> (u16, tokio::task::JoinHandle<Vec<Vec<String>>>) {
+async fn fake_imap(scripts: Vec<ConnScript>) -> (u16, tokio::task::JoinHandle<Vec<Vec<String>>>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let handle = tokio::spawn(async move {
@@ -1000,8 +998,15 @@ async fn an_idle_timeout_rechecks_the_mailbox() {
         .unwrap()
         .remove(0);
     listen.abort();
-    let stores: Vec<_> = commands.iter().filter(|l| l.contains("UID STORE")).collect();
-    assert_eq!(stores.len(), 1, "only the parsed fetch is marked: {commands:?}");
+    let stores: Vec<_> = commands
+        .iter()
+        .filter(|l| l.contains("UID STORE"))
+        .collect();
+    assert_eq!(
+        stores.len(),
+        1,
+        "only the parsed fetch is marked: {commands:?}"
+    );
     assert!(stores[0].contains("UID STORE 1 "), "{commands:?}");
 }
 
