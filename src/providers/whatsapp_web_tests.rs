@@ -937,3 +937,11 @@ async fn the_websocket_transport_dials_the_configured_url() {
     };
     assert!(err.to_string().contains("Failed to parse URL"), "{err}");
 }
+
+#[test]
+fn a_sender_user_already_in_e164_is_not_double_prefixed() {
+    let phone = Jid::pn("+15550001111");
+    let (sender, allow) = WhatsAppWebChannel::sender_identity(&phone, None);
+    assert_eq!(sender, "+15550001111");
+    assert_eq!(allow, vec!["+15550001111".to_string()]);
+}
