@@ -49,6 +49,30 @@ pub enum InboundEvent {
 /// In-flight outbound request awaiting a matching `Response` frame.
 type PendingMap = HashMap<String, oneshot::Sender<ConnFrame>>;
 
+/// Timing knobs for the connection loop. Production always uses
+/// [`ConnTimings::default`], which reproduces the protocol constants;
+/// tests shrink them so reconnect, auth-timeout and heartbeat paths run
+/// without waiting in real time.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ConnTimings {
+    /// How long to wait for the `auth-bind` response.
+    pub auth_timeout: Duration,
+    /// Heartbeat interval override; `None` uses the config / default.
+    pub ping_interval: Option<Duration>,
+    /// One "second" of the reconnect backoff schedule.
+    pub backoff_unit: Duration,
+}
+
+impl Default for ConnTimings {
+    fn default() -> Self {
+        Self {
+            auth_timeout: Duration::from_secs(AUTH_TIMEOUT_SECS),
+            ping_interval: None,
+            backoff_unit: Duration::from_secs(1),
+        }
+    }
+}
+
 /// Long-lived connection manager.
 pub struct YuanbaoConnection {
     config: YuanbaoConfig,
@@ -60,6 +84,7 @@ pub struct YuanbaoConnection {
     account: ParkingMutex<Account>,
     sign_manager: Option<Arc<SignManager>>,
     pending: ParkingMutex<PendingMap>,
+    timings: ConnTimings,
 }
 
 impl YuanbaoConnection {
@@ -67,6 +92,16 @@ impl YuanbaoConnection {
         config: YuanbaoConfig,
         inbound_tx: mpsc::UnboundedSender<InboundEvent>,
         sign_manager: Option<Arc<SignManager>>,
+    ) -> Arc<Self> {
+        Self::with_timings(config, inbound_tx, sign_manager, ConnTimings::default())
+    }
+
+    /// Build a connection with explicit [`ConnTimings`].
+    pub(crate) fn with_timings(
+        config: YuanbaoConfig,
+        inbound_tx: mpsc::UnboundedSender<InboundEvent>,
+        sign_manager: Option<Arc<SignManager>>,
+        timings: ConnTimings,
     ) -> Arc<Self> {
         let initial_account = Account {
             uid: config.bot_id.clone(),
@@ -82,6 +117,7 @@ impl YuanbaoConnection {
             account: ParkingMutex::new(initial_account),
             sign_manager,
             pending: ParkingMutex::new(HashMap::new()),
+            timings,
         })
     }
 
@@ -240,7 +276,7 @@ impl YuanbaoConnection {
                 delay, attempt, max_attempts
             );
             tokio::select! {
-                _ = time::sleep(Duration::from_secs(delay)) => {}
+                _ = time::sleep(self.timings.backoff_unit * delay as u32) => {}
                 _ = shutdown.changed() => {
                     info!("[yuanbao] shutdown received during backoff");
                     self.shutdown().await;
@@ -278,7 +314,7 @@ impl YuanbaoConnection {
         self.send_auth_bind(&token, &bot_id, &source).await?;
 
         // Wait for auth-bind response.
-        let auth_timeout = Duration::from_secs(AUTH_TIMEOUT_SECS);
+        let auth_timeout = self.timings.auth_timeout;
         let auth_msg = tokio::time::timeout(auth_timeout, receiver.next())
             .await
             .map_err(|_| YuanbaoError::AuthTimeout)?
@@ -289,12 +325,14 @@ impl YuanbaoConnection {
         self.set_state(ConnectionState::Connected);
         info!("[yuanbao] auth-bind successful, entering read loop");
 
-        let ping_secs = if self.config.heartbeat_interval_secs > 0 {
-            self.config.heartbeat_interval_secs
-        } else {
-            PING_INTERVAL_SECS
-        };
-        let mut ping_interval = time::interval(Duration::from_secs(ping_secs));
+        let ping_every = self.timings.ping_interval.unwrap_or_else(|| {
+            Duration::from_secs(if self.config.heartbeat_interval_secs > 0 {
+                self.config.heartbeat_interval_secs
+            } else {
+                PING_INTERVAL_SECS
+            })
+        });
+        let mut ping_interval = time::interval(ping_every);
         ping_interval.tick().await; // skip first tick
 
         let mut close_code: Option<u16> = None;
