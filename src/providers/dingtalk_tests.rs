@@ -189,7 +189,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
     let gateway = HttpsServer::start(move |_| {
         (
             200,
-            json!({"endpoint": format!("ws://{address}"), "ticket": "test-ticket"}).to_string(),
+            json!({"endpoint": format!("ws://{address}/"), "ticket": "test-ticket"}).to_string(),
         )
     })
     .await;
