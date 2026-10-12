@@ -39,6 +39,8 @@ use std::time::Duration;
 #[cfg(feature = "email")]
 use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(feature = "email")]
+use tokio::io::{AsyncRead, AsyncWrite};
+#[cfg(feature = "email")]
 use tokio::net::TcpStream;
 #[cfg(feature = "email")]
 use tokio::sync::Mutex;
@@ -66,6 +68,17 @@ use crate::traits::{Channel, ChannelMessage, SendMessage};
 #[cfg(feature = "email")]
 type ImapSession = Session<TlsStream<TcpStream>>;
 
+/// The bounds `async-imap` (runtime-tokio) needs of a connected stream, so the
+/// IMAP exchange after the TLS handshake is testable over plain TCP.
+#[cfg(feature = "email")]
+trait ImapStream: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send {}
+#[cfg(feature = "email")]
+impl<S: AsyncRead + AsyncWrite + Unpin + std::fmt::Debug + Send> ImapStream for S {}
+
+/// Budget for one [`Channel::health_check`] IMAP login probe.
+#[cfg(feature = "email")]
+const HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Email channel — IMAP IDLE for instant push notifications, SMTP for outbound
 pub struct EmailChannel {
     pub config: EmailConfig,
@@ -74,6 +87,12 @@ pub struct EmailChannel {
     /// would be dead weight and a `never read` denial there.
     #[cfg(feature = "email")]
     seen_messages: Arc<Mutex<HashSet<String>>>,
+    /// First delay before reconnecting a failed IMAP session; doubles up to
+    /// [`Self::max_reconnect_backoff`].
+    #[cfg(feature = "email")]
+    reconnect_backoff: Duration,
+    #[cfg(feature = "email")]
+    max_reconnect_backoff: Duration,
 }
 
 impl EmailChannel {
@@ -82,6 +101,10 @@ impl EmailChannel {
             config,
             #[cfg(feature = "email")]
             seen_messages: Arc::new(Mutex::new(HashSet::new())),
+            #[cfg(feature = "email")]
+            reconnect_backoff: Duration::from_secs(1),
+            #[cfg(feature = "email")]
+            max_reconnect_backoff: Duration::from_secs(60),
         }
     }
 
@@ -182,8 +205,12 @@ impl EmailChannel {
         let tls_stream: TlsConnector = Arc::new(config).into();
         let sni: DnsName = self.config.imap_host.clone().try_into()?;
         let stream = tls_stream.connect(sni.into(), tcp).await?;
+        self.login_imap(stream).await
+    }
 
-        // Create IMAP client
+    /// Log in over an already-connected stream.
+    #[cfg(feature = "email")]
+    async fn login_imap<S: ImapStream>(&self, stream: S) -> Result<Session<S>> {
         let client = async_imap::Client::new(stream);
 
         // Login
@@ -198,7 +225,10 @@ impl EmailChannel {
 
     /// Fetch and process unseen messages from the selected mailbox
     #[cfg(feature = "email")]
-    async fn fetch_unseen(&self, session: &mut ImapSession) -> Result<Vec<ParsedEmail>> {
+    async fn fetch_unseen<S: ImapStream>(
+        &self,
+        session: &mut Session<S>,
+    ) -> Result<Vec<ParsedEmail>> {
         // Search for unseen messages
         let uids = session.uid_search("UNSEEN").await?;
         if uids.is_empty() {
@@ -282,10 +312,10 @@ impl EmailChannel {
     /// Run the IDLE loop, returning when a new message arrives or timeout
     /// Note: IDLE consumes the session and returns it via done()
     #[cfg(feature = "email")]
-    async fn wait_for_changes(
+    async fn wait_for_changes<S: ImapStream>(
         &self,
-        session: ImapSession,
-    ) -> Result<(IdleWaitResult, ImapSession)> {
+        session: Session<S>,
+    ) -> Result<(IdleWaitResult, Session<S>)> {
         let idle_timeout = Duration::from_secs(self.config.idle_timeout_secs);
 
         // Start IDLE mode - this consumes the session
@@ -305,12 +335,7 @@ impl EmailChannel {
                 debug!("IDLE response: {:?}", response);
                 // Done with IDLE, return session to normal mode
                 let session = idle.done().await?;
-                let wait_result = match response {
-                    IdleResponse::NewData(_) => IdleWaitResult::NewMail,
-                    IdleResponse::Timeout => IdleWaitResult::Timeout,
-                    IdleResponse::ManualInterrupt => IdleWaitResult::Interrupted,
-                };
-                Ok((wait_result, session))
+                Ok((IdleWaitResult::from_response(&response), session))
             }
             Ok(Err(e)) => {
                 // Try to clean up IDLE state
@@ -329,11 +354,28 @@ impl EmailChannel {
     /// Main IDLE-based listen loop with automatic reconnection
     #[cfg(feature = "email")]
     async fn listen_with_idle(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()> {
-        let mut backoff = Duration::from_secs(1);
-        let max_backoff = Duration::from_secs(60);
+        self.listen_with_reconnect(&tx, || self.connect_imap())
+            .await
+    }
+
+    /// The reconnect loop over any session source, so it is testable without
+    /// a TLS server.
+    #[cfg(feature = "email")]
+    async fn listen_with_reconnect<S, F, Fut>(
+        &self,
+        tx: &mpsc::Sender<ChannelMessage>,
+        connect: F,
+    ) -> Result<()>
+    where
+        S: ImapStream,
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<Session<S>>>,
+    {
+        let mut backoff = self.reconnect_backoff;
+        let max_backoff = self.max_reconnect_backoff;
 
         loop {
-            match self.run_idle_session(&tx).await {
+            match self.run_idle_session(tx, connect()).await {
                 Ok(()) => {
                     // Clean exit (channel closed)
                     return Ok(());
@@ -353,9 +395,13 @@ impl EmailChannel {
 
     /// Run a single IDLE session until error or clean shutdown
     #[cfg(feature = "email")]
-    async fn run_idle_session(&self, tx: &mpsc::Sender<ChannelMessage>) -> Result<()> {
+    async fn run_idle_session<S: ImapStream>(
+        &self,
+        tx: &mpsc::Sender<ChannelMessage>,
+        connect: impl std::future::Future<Output = Result<Session<S>>>,
+    ) -> Result<()> {
         // Connect and authenticate
-        let mut session = self.connect_imap().await?;
+        let mut session = connect.await?;
 
         // Select the mailbox
         session.select(&self.config.imap_folder).await?;
@@ -394,9 +440,9 @@ impl EmailChannel {
 
     /// Fetch unseen messages and send to channel
     #[cfg(feature = "email")]
-    async fn process_unseen(
+    async fn process_unseen<S: ImapStream>(
         &self,
-        session: &mut ImapSession,
+        session: &mut Session<S>,
         tx: &mpsc::Sender<ChannelMessage>,
     ) -> Result<()> {
         let messages = self.fetch_unseen(session).await?;
@@ -543,10 +589,22 @@ struct ParsedEmail {
 
 /// Result from waiting on IDLE
 #[cfg(feature = "email")]
+#[derive(Debug, PartialEq, Eq)]
 enum IdleWaitResult {
     NewMail,
     Timeout,
     Interrupted,
+}
+
+#[cfg(feature = "email")]
+impl IdleWaitResult {
+    fn from_response(response: &IdleResponse) -> Self {
+        match response {
+            IdleResponse::NewData(_) => Self::NewMail,
+            IdleResponse::Timeout => Self::Timeout,
+            IdleResponse::ManualInterrupt => Self::Interrupted,
+        }
+    }
 }
 
 #[cfg(feature = "email")]
@@ -595,8 +653,21 @@ impl Channel for EmailChannel {
     }
 
     async fn health_check(&self) -> bool {
+        self.health_check_with(self.connect_imap(), HEALTH_CHECK_TIMEOUT)
+            .await
+    }
+}
+
+#[cfg(feature = "email")]
+impl EmailChannel {
+    /// Bounded IMAP login probe over any session source.
+    async fn health_check_with<S: ImapStream>(
+        &self,
+        connect: impl std::future::Future<Output = Result<Session<S>>>,
+        limit: Duration,
+    ) -> bool {
         // Fully async health check - attempt IMAP connection
-        match timeout(Duration::from_secs(10), self.connect_imap()).await {
+        match timeout(limit, connect).await {
             Ok(Ok(mut session)) => {
                 // Try to logout cleanly
                 let _ = session.logout().await;
