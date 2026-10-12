@@ -532,6 +532,22 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         ])),
     )
     .await;
+    // Any later poll delivers yet another update, so the loop ends on the
+    // closed receiver no matter how far it ran ahead of the test.
+    Mock::given(method("POST"))
+        .and(path(api_path("getUpdates")))
+        .respond_with(updates(serde_json::json!([
+            {
+                "update_id": 14,
+                "message": {
+                    "message_id": 10, "chat": { "id": 100, "type": "private" },
+                    "from": { "id": 7, "username": "alice" }, "text": "third"
+                }
+            }
+        ])))
+        .with_priority(10)
+        .mount(&server)
+        .await;
     mount_post(&server, "sendMessage", ok()).await;
 
     let events = Arc::new(RecordingEvents::default());
@@ -570,7 +586,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     assert!(prompts[0].contains("operator approval"), "{prompts:?}");
     // Offsets advance past each delivered batch.
     let polls = json_bodies(&server, "getUpdates").await;
-    assert_eq!(polls.len(), 6);
+    assert!(polls.len() >= 6, "{polls:?}");
     assert_eq!(polls[0]["offset"], 0);
     assert_eq!(polls[5]["offset"], 13);
 }
