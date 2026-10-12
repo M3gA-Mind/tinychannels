@@ -163,7 +163,11 @@ async fn oauth_and_gateway_reject_invalid_responses_and_network_failures() {
         assert!(!channel.health_check().await);
         assert!(channel.get_gateway_url("token").await.is_err());
     }
-    for expires in [json!(123), json!("invalid"), json!("20")] {
+    for (expires, lifetime) in [
+        (json!(123), 7140),
+        (json!("invalid"), 7140),
+        (json!("20"), 0),
+    ] {
         let server = HttpsServer::start(move |_| {
             (
                 200,
@@ -177,13 +181,17 @@ async fn oauth_and_gateway_reject_invalid_responses_and_network_failures() {
             vec![],
             server.client.clone(),
         );
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let (token, expiry) = channel.fetch_access_token().await.unwrap();
         assert_eq!(token, "token");
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        assert!((now..=now + 7200).contains(&expiry));
+        assert!((before + lifetime..=now + lifetime).contains(&expiry));
     }
     let client = reqwest::Client::builder()
         .proxy(reqwest::Proxy::all("http://127.0.0.1:0").unwrap())

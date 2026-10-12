@@ -199,6 +199,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
         vec!["alice".into()],
         gateway.client.clone(),
     ));
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
     let websocket = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
         // Tungstenite fixes the callback error type to an unboxed HTTP response.
@@ -263,6 +264,7 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
             assert_eq!(ack["headers"]["messageId"], id);
             assert_eq!(ack["code"], 200);
         }
+        release_rx.await.unwrap();
         // The next valid message makes the listener observe the closed receiver.
         ws.send(Message::Text(json!({"type": "CALLBACK", "data": {"senderStaffId": "alice", "text": {"content": "closed"}}}).to_string().into())).await.unwrap();
         let ack: serde_json::Value =
