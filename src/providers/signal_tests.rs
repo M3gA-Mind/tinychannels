@@ -488,3 +488,176 @@ fn sse_envelope_reads_source_name() {
         Some("Alice")
     );
 }
+
+fn mock_signal(url: String) -> SignalChannel {
+    SignalChannel::with_http_client(
+        url,
+        "+1234567890".into(),
+        None,
+        vec!["+1111111111".into()],
+        false,
+        false,
+        Client::builder().no_proxy().build().unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn rpc_routes_direct_and_group_messages_and_typing() {
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let channel = mock_signal(format!("{}/", server.uri()));
+    for (recipient, target) in [
+        (
+            "+1111111111",
+            serde_json::json!({"recipient": ["+1111111111"]}),
+        ),
+        ("group:team", serde_json::json!({"groupId": "team"})),
+    ] {
+        for method_name in ["send", "sendTyping"] {
+            let mut params = target.clone();
+            params["account"] = serde_json::json!("+1234567890");
+            if method_name == "send" {
+                params["message"] = serde_json::json!("hello");
+            }
+            Mock::given(method("POST"))
+                .and(path("/api/v1/rpc"))
+                .and(body_partial_json(serde_json::json!({
+                    "jsonrpc": "2.0", "method": method_name, "params": params
+                })))
+                .respond_with(ResponseTemplate::new(201))
+                .expect(1)
+                .mount(&server)
+                .await;
+            if method_name == "send" {
+                channel
+                    .send(&SendMessage::new("hello", recipient))
+                    .await
+                    .unwrap();
+            } else {
+                channel.start_typing(recipient).await.unwrap();
+            }
+        }
+    }
+    channel.stop_typing("team").await.unwrap();
+    server.verify().await;
+    let requests = server.received_requests().await.unwrap();
+    for request in requests {
+        let body: serde_json::Value = request.body_json().unwrap();
+        assert!(Uuid::parse_str(body["id"].as_str().unwrap()).is_ok());
+    }
+}
+
+#[tokio::test]
+async fn rpc_reports_errors_and_handles_empty_and_result_responses() {
+    use wiremock::matchers::path;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let channel = mock_signal(server.uri());
+    for (body, expected) in [
+        ("", None),
+        (
+            r#"{"result":{"timestamp":42}}"#,
+            Some(serde_json::json!({"timestamp": 42})),
+        ),
+        (r#"{}"#, None),
+    ] {
+        server.reset().await;
+        Mock::given(path("/api/v1/rpc"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        assert_eq!(
+            channel
+                .rpc_request("send", serde_json::json!({}))
+                .await
+                .unwrap(),
+            expected
+        );
+    }
+    for (body, expected) in [
+        (
+            r#"{"error":{"code":-5,"message":"unknown recipient"}}"#,
+            "Signal RPC error -5: unknown recipient",
+        ),
+        (r#"{"error":{}}"#, "Signal RPC error -1: unknown"),
+        ("invalid json", "expected value"),
+    ] {
+        server.reset().await;
+        Mock::given(path("/api/v1/rpc"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+        assert!(
+            channel
+                .send(&SendMessage::new("hello", "+1111111111"))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains(expected)
+        );
+    }
+    server.reset().await;
+    for (status, healthy) in [(200, true), (503, false)] {
+        server.reset().await;
+        Mock::given(path("/api/v1/check"))
+            .respond_with(ResponseTemplate::new(status))
+            .mount(&server)
+            .await;
+        assert_eq!(channel.health_check().await, healthy);
+    }
+    let unavailable = mock_signal("http://127.0.0.1:0".into());
+    assert!(!unavailable.health_check().await);
+    assert!(
+        unavailable
+            .rpc_request("send", serde_json::json!({}))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn sse_retries_failures_and_parses_multiline_events_before_receiver_shutdown() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let channel = mock_signal(server.uri());
+    let requests = AtomicUsize::new(0);
+    Mock::given(method("GET"))
+        .and(path("/api/v1/events"))
+        .and(header("accept", "text/event-stream"))
+        .and(query_param("account", "+1234567890"))
+        .respond_with(move |_: &wiremock::Request| match requests.fetch_add(1, Ordering::SeqCst) {
+            0 => ResponseTemplate::new(503).set_body_string("retry"),
+            1 => ResponseTemplate::new(200).set_body_string(concat!(
+                ": keepalive\r\n\n",
+                "data: invalid\n\n",
+                "data: {}\n\n",
+                "event: message\n",
+                "data: {\n",
+                "data: \"envelope\": {\"sourceNumber\":\"+1111111111\",\"sourceName\":\" Alice \",\"dataMessage\":{\"message\":\"trailing\",\"timestamp\":1000}}}\n"
+            )),
+            _ => ResponseTemplate::new(200).set_body_string(concat!(
+                "data: {\"envelope\":{\"sourceNumber\":\"+1111111111\",\"dataMessage\":{\"message\":\"after reconnect\",\"timestamp\":2000}}}\n\n"
+            )),
+        })
+        .expect(3).mount(&server).await;
+    let (tx, mut rx) = mpsc::channel(1);
+    let listener = tokio::spawn(async move { channel.listen(tx).await });
+    tokio::time::timeout(Duration::from_secs(10), async {
+        let message = rx.recv().await.unwrap();
+        assert_eq!(message.content, "trailing");
+        assert_eq!(message.timestamp, 1);
+        assert_eq!(message.sender_name.as_deref(), Some("Alice"));
+        assert_eq!(message.reply_target, "+1111111111");
+        drop(rx);
+        listener.await.unwrap().unwrap();
+        server.verify().await;
+    })
+    .await
+    .unwrap();
+}
