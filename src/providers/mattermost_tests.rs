@@ -460,3 +460,179 @@ fn normalize_keeps_partial_username_mentions() {
         normalize_mattermost_content("@mybot hello @mybotx world", "bot123", "mybot", &post);
     assert_eq!(result.as_deref(), Some("hello @mybotx world"));
 }
+
+fn mock_channel(base_url: String) -> MattermostChannel {
+    MattermostChannel::with_http_client(
+        base_url,
+        "test-token".into(),
+        Some("room".into()),
+        vec!["alice".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn rest_requests_preserve_auth_thread_routing_and_server_errors() {
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let channel = mock_channel(format!("{}/", server.uri()));
+    Mock::given(method("GET"))
+        .and(path("/api/v4/users/me"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "bot-id", "username": "bot-name"
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    assert_eq!(
+        channel.get_bot_identity().await,
+        ("bot-id".into(), "bot-name".into())
+    );
+    assert!(channel.health_check().await);
+    Mock::given(method("POST"))
+        .and(path("/api/v4/posts"))
+        .and(header("authorization", "Bearer test-token"))
+        .and(body_json(
+            json!({"channel_id": "room", "root_id": "root", "message": "reply"}),
+        ))
+        .respond_with(ResponseTemplate::new(201))
+        .expect(1)
+        .mount(&server)
+        .await;
+    channel
+        .send(&SendMessage::new("reply", "room:root"))
+        .await
+        .unwrap();
+    Mock::given(method("POST"))
+        .and(path("/api/v4/posts"))
+        .and(body_json(
+            json!({"channel_id": "room", "message": "top-level"}),
+        ))
+        .respond_with(ResponseTemplate::new(403).set_body_string("permission denied"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = channel
+        .send(&SendMessage::new("top-level", "room"))
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("403"));
+    assert!(error.to_string().contains("permission denied"));
+    server.verify().await;
+    server.reset().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
+        .mount(&server)
+        .await;
+    assert_eq!(
+        channel.get_bot_identity().await,
+        (String::new(), String::new())
+    );
+    assert!(!channel.health_check().await);
+    let unreachable = mock_channel("http://127.0.0.1:0".into());
+    assert_eq!(
+        unreachable.get_bot_identity().await,
+        (String::new(), String::new())
+    );
+    assert!(!unreachable.health_check().await);
+    assert!(
+        unreachable
+            .send(&SendMessage::new("hello", "room"))
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn typing_replaces_previous_loop_and_stops_cleanly() {
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let channel = mock_channel(server.uri());
+    for (recipient, body) in [
+        (
+            "room:root",
+            json!({"channel_id": "room", "parent_id": "root"}),
+        ),
+        ("room", json!({"channel_id": "room"})),
+    ] {
+        server.reset().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v4/users/me/typing"))
+            .and(header("authorization", "Bearer test-token"))
+            .and(body_json(body))
+            .respond_with(ResponseTemplate::new(503))
+            .expect(1)
+            .mount(&server)
+            .await;
+        channel.start_typing(recipient).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            while server.received_requests().await.unwrap().is_empty() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        server.verify().await;
+    }
+    channel.stop_typing("room").await.unwrap();
+    assert!(channel.typing_handle.lock().is_none());
+    channel.stop_typing("room").await.unwrap();
+}
+
+#[tokio::test]
+async fn listener_recovers_from_invalid_json_and_delivers_posts_in_time_order() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let channel = mock_channel(server.uri());
+    Mock::given(path("/api/v4/users/me"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"id": "bot", "username": "assistant"})),
+        )
+        .mount(&server)
+        .await;
+    let polls = AtomicUsize::new(0);
+    Mock::given(method("GET"))
+        .and(path("/api/v4/channels/room/posts"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(move |_: &wiremock::Request| {
+            match polls.fetch_add(1, Ordering::SeqCst) {
+                0 => ResponseTemplate::new(200).set_body_string("invalid json"),
+                1 => ResponseTemplate::new(200).set_body_json(json!({})),
+                _ => ResponseTemplate::new(200).set_body_json(json!({"posts": {
+                    "later": {"id": "later", "user_id": "alice", "message": "second", "create_at": i64::MAX - 1},
+                    "earlier": {"id": "earlier", "user_id": "alice", "message": "first", "create_at": i64::MAX - 2},
+                    "blocked": {"id": "blocked", "user_id": "mallory", "message": "ignore", "create_at": i64::MAX - 3}
+                }})),
+            }
+        })
+        .mount(&server).await;
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let listener = tokio::spawn(async move { channel.listen(tx).await });
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        let first = rx.recv().await.unwrap();
+        let second = rx.recv().await.unwrap();
+        assert_eq!((first.content.as_str(), first.reply_target.as_str()), ("first", "room:earlier"));
+        assert_eq!((second.content.as_str(), second.reply_target.as_str()), ("second", "room:later"));
+        // A newer post on the next poll must terminate listening when the receiver closes.
+        server.reset().await;
+        Mock::given(path("/api/v4/channels/room/posts"))
+            .and(query_param("since", (i64::MAX - 1).to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"posts": {
+                "last": {"id": "last", "user_id": "alice", "message": "closed", "create_at": i64::MAX}
+            }})))
+            .expect(1).mount(&server).await;
+        drop(rx);
+        listener.await.unwrap().unwrap();
+        server.verify().await;
+    }).await.unwrap();
+}
