@@ -983,3 +983,13 @@ async fn listen_fails_when_gateway_lookup_is_not_json() {
     let (tx, _rx) = mpsc::channel(1);
     assert!(channel_at(&base, None).listen(tx).await.is_err());
 }
+
+#[test]
+fn base64_decode_handles_unpadded_padded_and_trailing_input() {
+    assert_eq!(base64_decode("MQ").as_deref(), Some("1"));
+    assert_eq!(base64_decode("MTI").as_deref(), Some("12"));
+    assert_eq!(base64_decode("MQ==").as_deref(), Some("1"));
+    assert_eq!(base64_decode("MTI=").as_deref(), Some("12"));
+    // A dangling fifth character is ignored rather than mis-decoded.
+    assert_eq!(base64_decode("MTIzN").as_deref(), Some("123"));
+}
