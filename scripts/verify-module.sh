@@ -32,7 +32,7 @@ reject_symlink_components() {
 }
 reject_symlink_components "$HOME"
 stage_parent="$HOME/.cache"
-mkdir -p -- "$stage_parent"
+mkdir -p "$stage_parent"
 reject_symlink_components "$stage_parent"
 work="$(mktemp -d "$stage_parent/tinychannels-module-verify-XXXXXX")"
 trap 'rm -rf "$work"' EXIT
