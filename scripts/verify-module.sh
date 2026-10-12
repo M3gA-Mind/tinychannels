@@ -38,15 +38,8 @@ reject_symlink_components "$stage_parent"
   echo "verification cache is not owned by the current user: $stage_parent" >&2
   exit 2
 }
-if ! cache_mode="$(stat -c '%a' "$stage_parent" 2>/dev/null)"; then
-  cache_mode="$(stat -f '%Lp' "$stage_parent")"
-fi
-[[ "$cache_mode" =~ ^[0-7]{3,4}$ ]] || {
-  echo "could not determine verification cache permissions: $stage_parent" >&2
-  exit 2
-}
-cache_permissions=$((8#$cache_mode))
-if (( (cache_permissions & 0022) != 0 && (cache_permissions & 01000) == 0 )); then
+insecure_cache="$(find "$stage_parent" -prune \( -perm -002 -o -perm -020 \) ! -perm -01000 -print)"
+if [[ -n "$insecure_cache" ]]; then
   echo "verification cache is group or world writable without sticky-bit protection: $stage_parent" >&2
   exit 2
 fi
