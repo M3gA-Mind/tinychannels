@@ -11,10 +11,11 @@ target_root="${CARGO_TARGET_DIR:-$root/target}"
 mkdir -p "$target_root"
 target_root="$(cd "$target_root" && pwd -P)"
 [[ "$target_root" == "$root"/* ]] || { echo "CARGO_TARGET_DIR must stay inside the repository" >&2; exit 2; }
-work="$target_root/tinychannels-module-verify-$$"
-rm -rf "$work"
-mkdir -p "$work"
-chmod 700 "$work"
+# Distro checks may run as root over a workspace bind mount owned by the host
+# user; stage the untrusted module under this verifier's own cache directory.
+stage_parent="$HOME/.cache"
+mkdir -p "$stage_parent"
+work="$(mktemp -d "$stage_parent/tinychannels-module-verify-XXXXXX")"
 trap 'rm -rf "$work"' EXIT
 case "$archive" in
   *.tar.gz)

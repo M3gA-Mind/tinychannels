@@ -1,5 +1,6 @@
 """Verify the shipped module archive layout without compiling native code."""
 import hashlib
+import io
 import json
 import os
 import shlex
@@ -14,6 +15,30 @@ import unittest
 ROOT = Path(__file__).resolve().parent.parent
 
 class PackageTests(unittest.TestCase):
+    def test_verify_extracts_artifact_under_the_current_user_home(self):
+        target = ROOT / "target"; target.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=target) as directory:
+            fixture = Path(directory); home = fixture/"home"; home.mkdir()
+            bindir = fixture/"bin"; bindir.mkdir()
+            archive = fixture/"module.tar.gz"
+            with tarfile.open(archive, "w:gz") as package:
+                for name, data in [("modules.toml", b""), ("libtinychannels_module.so", b"module")]:
+                    member = tarfile.TarInfo(name); member.size = len(data)
+                    package.addfile(member, io.BytesIO(data))
+            cargo = bindir/"cargo"
+            cargo.write_text("#!/usr/bin/env python3\nimport os,sys\nfrom pathlib import Path\n"
+                "module = os.environ.get('TINYJUICE_TEST_MODULE') or os.environ.get('TINYCHANNELS_MODULE_ARTIFACT') or sys.argv[-1]\n"
+                "Path(os.environ['RECORDED_MODULE_PATH']).write_text(module)\n")
+            cargo.chmod(0o755)
+            env = dict(os.environ, HOME=str(home), PATH=str(bindir)+os.pathsep+os.environ["PATH"],
+                RECORDED_MODULE_PATH=str(fixture/"loaded-module-path"))
+            env.pop("CARGO_TARGET_DIR", None)
+            result = subprocess.run(["bash", str(ROOT/"scripts/verify-module.sh"),
+                "--archive", str(archive)], cwd=ROOT, env=env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            module_path = Path((fixture/"loaded-module-path").read_text())
+            self.assertTrue(module_path.is_relative_to(home/".cache"), module_path)
+
     def test_arch_package_install_disables_only_landlock_sandbox(self):
         script = (ROOT / "scripts/test-distro.sh").read_text()
         pacman = next(line.strip() for line in script.splitlines() if line.strip().startswith("pacman "))
