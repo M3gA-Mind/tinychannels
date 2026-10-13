@@ -23,9 +23,9 @@ tinychannels = { path = "../..", features = ["email", "lark", "whatsapp-web", "r
 # The transport-free vocabulary shared with the host.
 tinychannels-bus = { path = "../tinychannels-bus" }
 # TinyBus provides the typed service interface and dynamic module host ABI.
-tinybus = { version = "=0.1.4", default-features = false, features = ["macros", "modules"] }
+tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["macros", "modules"] }
 # The module-side SDK owns its runtime and exports the stable C entrypoints.
-tinybus-module = "=0.1.4"
+tinybus-module = ">=0.1.4, <0.2"
 # Provider listen loops are long-lived tasks the module owns.
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 # Storage over the bus: the module reaches host storage through the same port
@@ -46,7 +46,7 @@ async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]
-tinybus = { version = "=0.1.4", default-features = false, features = ["test-support"] }
+tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["test-support"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 serde_json = "1"
