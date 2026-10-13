@@ -152,18 +152,10 @@ pub const METHODS: [&str; 35] = [
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 15] = [
+pub const HOST_METHODS: [&str; 7] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,
-    host_methods::SAVE_PENDING_DELIVERY,
-    host_methods::LOAD_PENDING_DELIVERY,
-    host_methods::LOAD_PENDING_DELIVERIES,
-    host_methods::REMOVE_PENDING_DELIVERY,
-    host_methods::SAVE_FAILED_DELIVERY,
-    host_methods::LOAD_FAILED_DELIVERY,
-    host_methods::SAVE_DELIVERY_RESULT,
-    host_methods::LOAD_DELIVERY_RESULT,
     host_methods::TRANSCRIBE,
     host_methods::PUBLISH_EVENT,
     host_methods::DISPATCH_CONTROLLER_BACKEND,
