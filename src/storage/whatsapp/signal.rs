@@ -15,32 +15,44 @@ use super::{
 impl DocumentWhatsAppBackend {
     pub(super) async fn hydrate_signal(&self) -> Result<()> {
         for doc in self.all(IDENTITY).await? {
-            let key: [u8; 32] = unb64(&doc, "value")?
-                .try_into()
-                .map_err(|_| wacore::store::error::StoreError::Validation("identity key length".into()))?;
+            let key: [u8; 32] = unb64(&doc, "value")?.try_into().map_err(|_| {
+                wacore::store::error::StoreError::Validation("identity key length".into())
+            })?;
             self.inner.put_identity(&text(&doc, "key"), key).await?;
         }
         for doc in self.all(SESSION).await? {
-            self.inner.put_session(&text(&doc, "key"), &unb64(&doc, "value")?).await?;
+            self.inner
+                .put_session(&text(&doc, "key"), &unb64(&doc, "value")?)
+                .await?;
         }
         for doc in self.all(PREKEY).await? {
-            let uploaded = doc.get("uploaded").and_then(Value::as_bool).unwrap_or(false);
+            let uploaded = doc
+                .get("uploaded")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             self.inner
                 .store_prekey(id(&doc)?, &unb64(&doc, "value")?, uploaded)
                 .await?;
         }
         for doc in self.all(SIGNED_PREKEY).await? {
-            self.inner.store_signed_prekey(id(&doc)?, &unb64(&doc, "value")?).await?;
+            self.inner
+                .store_signed_prekey(id(&doc)?, &unb64(&doc, "value")?)
+                .await?;
         }
         for doc in self.all(SENDER_KEY).await? {
-            self.inner.put_sender_key(&text(&doc, "key"), &unb64(&doc, "value")?).await?;
+            self.inner
+                .put_sender_key(&text(&doc, "key"), &unb64(&doc, "value")?)
+                .await?;
         }
         Ok(())
     }
 }
 
 fn text(doc: &Value, field: &str) -> String {
-    doc.get(field).and_then(Value::as_str).unwrap_or_default().to_owned()
+    doc.get(field)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
 }
 
 fn id(doc: &Value) -> Result<u32> {
@@ -52,7 +64,8 @@ fn id(doc: &Value) -> Result<u32> {
 #[async_trait]
 impl SignalStore for DocumentWhatsAppBackend {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()> {
-        self.put(IDENTITY, address, json!({ "value": b64(&key) })).await?;
+        self.put(IDENTITY, address, json!({ "value": b64(&key) }))
+            .await?;
         self.inner.put_identity(address, key).await
     }
 
@@ -77,7 +90,8 @@ impl SignalStore for DocumentWhatsAppBackend {
     }
 
     async fn put_session(&self, address: &str, session: &[u8]) -> Result<()> {
-        self.put(SESSION, address, json!({ "value": b64(session) })).await?;
+        self.put(SESSION, address, json!({ "value": b64(session) }))
+            .await?;
         self.inner.put_session(address, session).await
     }
 
@@ -146,7 +160,12 @@ impl SignalStore for DocumentWhatsAppBackend {
     }
 
     async fn store_signed_prekey(&self, id: u32, record: &[u8]) -> Result<()> {
-        self.put(SIGNED_PREKEY, &id.to_string(), json!({ "value": b64(record) })).await?;
+        self.put(
+            SIGNED_PREKEY,
+            &id.to_string(),
+            json!({ "value": b64(record) }),
+        )
+        .await?;
         self.inner.store_signed_prekey(id, record).await
     }
 
@@ -164,7 +183,8 @@ impl SignalStore for DocumentWhatsAppBackend {
     }
 
     async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()> {
-        self.put(SENDER_KEY, address, json!({ "value": b64(record) })).await?;
+        self.put(SENDER_KEY, address, json!({ "value": b64(record) }))
+            .await?;
         self.inner.put_sender_key(address, record).await
     }
 

@@ -31,7 +31,9 @@ use tinystoragedrivers_core::{
     StorageError,
 };
 
-use crate::delivery::{DeliveryQueueError, DeliveryQueueStore, DeliveryResultStore, QueuedDelivery};
+use crate::delivery::{
+    DeliveryQueueError, DeliveryQueueStore, DeliveryResultStore, QueuedDelivery,
+};
 
 const LOG_PREFIX: &str = "[channel-delivery-store]";
 
@@ -120,8 +122,8 @@ fn validate_entry(entry: &QueuedDelivery) -> Result<(), DeliveryQueueError> {
 }
 
 fn decode_entry(doc: Value) -> Result<QueuedDelivery, DeliveryQueueError> {
-    let entry: QueuedDelivery = serde_json::from_value(doc)
-        .map_err(|_| invalid("stored delivery record is unreadable"))?;
+    let entry: QueuedDelivery =
+        serde_json::from_value(doc).map_err(|_| invalid("stored delivery record is unreadable"))?;
     validate_entry(&entry)?;
     Ok(entry)
 }
@@ -164,7 +166,9 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
                 .await
             {
                 Ok(_) => return Ok(()),
-                Err(error) if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) => {
+                Err(error)
+                    if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) =>
+                {
                     tracing::debug!("{LOG_PREFIX} save_pending raced; retrying");
                 }
                 Err(error) => return Err(store_error(error)),
@@ -266,7 +270,8 @@ impl DeliveryResultStore for DocumentDeliveryStore {
             result,
         };
         let id = record.result.id.clone();
-        let doc = serde_json::to_value(&record).map_err(|_| invalid("result could not be encoded"))?;
+        let doc =
+            serde_json::to_value(&record).map_err(|_| invalid("result could not be encoded"))?;
         docs.put(RESULTS_COLLECTION, &id, doc, Precondition::None)
             .await
             .map_err(store_error)?;

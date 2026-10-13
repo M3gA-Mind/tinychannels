@@ -116,7 +116,10 @@ impl DocumentWhatsAppBackend {
     pub async fn open(docs: Arc<dyn DocumentStore>, session_path: &str) -> StoreResult<Self> {
         for name in COLLECTIONS {
             if let Err(error) = docs.ensure_collection(&CollectionSpec::new(name)).await {
-                tracing::debug!("{LOG_PREFIX} ensure_collection {name} not applied: {:?}", error.kind());
+                tracing::debug!(
+                    "{LOG_PREFIX} ensure_collection {name} not applied: {:?}",
+                    error.kind()
+                );
             }
         }
         let backend = Self {
@@ -134,7 +137,12 @@ impl DocumentWhatsAppBackend {
     }
 
     /// Write one record: the document carries `account` and `key` beside `body`.
-    pub(crate) async fn put(&self, collection: &str, key: &str, mut body: Value) -> StoreResult<()> {
+    pub(crate) async fn put(
+        &self,
+        collection: &str,
+        key: &str,
+        mut body: Value,
+    ) -> StoreResult<()> {
         if let Some(object) = body.as_object_mut() {
             object.insert("account".into(), json!(self.account));
             object.insert("key".into(), json!(key));

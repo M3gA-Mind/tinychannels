@@ -6,9 +6,9 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use serde_json::json;
 use wacore::appstate::hash::HashState;
+use wacore::appstate::processor::AppStateMutationMAC;
 use wacore::store::error::Result;
 use wacore::store::traits::{AppStateSyncKey, AppSyncStore};
-use wacore::appstate::processor::AppStateMutationMAC;
 
 use super::{DocumentWhatsAppBackend, SYNC_KEY, json_err};
 
@@ -21,7 +21,8 @@ impl DocumentWhatsAppBackend {
         for doc in self.all(SYNC_KEY).await? {
             let key_id = super::unb64(&doc, "key_id")?;
             let key: AppStateSyncKey =
-                serde_json::from_value(doc.get("sync_key").cloned().unwrap_or_default()).map_err(json_err)?;
+                serde_json::from_value(doc.get("sync_key").cloned().unwrap_or_default())
+                    .map_err(json_err)?;
             self.inner.set_sync_key(&key_id, key).await?;
         }
         Ok(())

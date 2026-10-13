@@ -59,12 +59,21 @@ async fn records_survive_reopening_the_store_over_the_same_documents() {
     let first = DocumentDeliveryStore::new(Arc::clone(&docs));
     first.save_pending(entry("kept", 1)).await.unwrap();
     first.save_failed(entry("dead", 2)).await.unwrap();
-    first.save_result(result("done", now_unix_ms())).await.unwrap();
+    first
+        .save_result(result("done", now_unix_ms()))
+        .await
+        .unwrap();
     drop(first);
 
     let second = DocumentDeliveryStore::new(docs);
-    assert_eq!(second.load_pending("kept").await.unwrap(), Some(entry("kept", 1)));
-    assert_eq!(second.load_failed("dead").await.unwrap(), Some(entry("dead", 2)));
+    assert_eq!(
+        second.load_pending("kept").await.unwrap(),
+        Some(entry("kept", 1))
+    );
+    assert_eq!(
+        second.load_failed("dead").await.unwrap(),
+        Some(entry("dead", 2))
+    );
     assert_eq!(
         second.load_result("done").await.unwrap().map(|r| r.id),
         Some("done".into())
@@ -124,11 +133,27 @@ async fn invalid_and_oversized_records_are_refused_before_storage() {
     let docs = docs();
     let store = DocumentDeliveryStore::new(Arc::clone(&docs));
     assert!(store.load_pending("").await.is_err());
-    assert!(store.load_failed(&"x".repeat(MAX_ID_BYTES + 1)).await.is_err());
-    assert!(store.save_pending(QueuedDelivery::new("other", intent("k", "b"), 1)).await.is_err());
-    let oversized = QueuedDelivery::new("big", intent("big", &"x".repeat(DELIVERY_RECORD_BYTES)), 1);
+    assert!(
+        store
+            .load_failed(&"x".repeat(MAX_ID_BYTES + 1))
+            .await
+            .is_err()
+    );
+    assert!(
+        store
+            .save_pending(QueuedDelivery::new("other", intent("k", "b"), 1))
+            .await
+            .is_err()
+    );
+    let oversized =
+        QueuedDelivery::new("big", intent("big", &"x".repeat(DELIVERY_RECORD_BYTES)), 1);
     assert!(store.save_pending(oversized).await.is_err());
-    assert!(store.save_failed(QueuedDelivery::new("other", intent("k", "b"), 1)).await.is_err());
+    assert!(
+        store
+            .save_failed(QueuedDelivery::new("other", intent("k", "b"), 1))
+            .await
+            .is_err()
+    );
     assert!(
         docs.get(PENDING_COLLECTION, "big").await.unwrap().is_none(),
         "nothing was written"
@@ -143,7 +168,10 @@ async fn expired_results_read_as_absent_and_are_purged_on_the_next_save() {
     store.save_result(result("old", long_ago)).await.unwrap();
     assert!(store.load_result("old").await.unwrap().is_none());
 
-    store.save_result(result("new", now_unix_ms())).await.unwrap();
+    store
+        .save_result(result("new", now_unix_ms()))
+        .await
+        .unwrap();
     assert!(docs.get(RESULTS_COLLECTION, "old").await.unwrap().is_none());
     assert!(store.load_result("new").await.unwrap().is_some());
 }
@@ -163,7 +191,10 @@ async fn results_beyond_the_capacity_evict_the_oldest_and_keep_the_newest() {
         .save_result(result(&newest, base + DELIVERY_RESULT_CAPACITY as u64))
         .await
         .unwrap();
-    assert!(store.load_result("r-0").await.unwrap().is_none(), "oldest evicted");
+    assert!(
+        store.load_result("r-0").await.unwrap().is_none(),
+        "oldest evicted"
+    );
     assert!(store.load_result("r-1").await.unwrap().is_some());
     assert!(store.load_result(&newest).await.unwrap().is_some());
 }
@@ -177,19 +208,44 @@ async fn a_storage_outage_is_a_store_error_not_a_missing_record() {
         fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
             tinystoragedrivers_core::Capabilities::none()
         }
-        async fn ensure_collection(&self, _: &CollectionSpec) -> tinystoragedrivers_core::Result<()> {
+        async fn ensure_collection(
+            &self,
+            _: &CollectionSpec,
+        ) -> tinystoragedrivers_core::Result<()> {
             Err(StorageError::unavailable("down"))
         }
-        async fn get(&self, _: &str, _: &str) -> tinystoragedrivers_core::Result<Option<tinystoragedrivers_core::Versioned<Value>>> {
+        async fn get(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> tinystoragedrivers_core::Result<Option<tinystoragedrivers_core::Versioned<Value>>>
+        {
             Err(StorageError::unavailable("down"))
         }
-        async fn put(&self, _: &str, _: &str, _: Value, _: Precondition) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::Version> {
+        async fn put(
+            &self,
+            _: &str,
+            _: &str,
+            _: Value,
+            _: Precondition,
+        ) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::Version> {
             Err(StorageError::unavailable("down"))
         }
-        async fn delete(&self, _: &str, _: &str, _: Precondition) -> tinystoragedrivers_core::Result<bool> {
+        async fn delete(
+            &self,
+            _: &str,
+            _: &str,
+            _: Precondition,
+        ) -> tinystoragedrivers_core::Result<bool> {
             Err(StorageError::unavailable("down"))
         }
-        async fn query(&self, _: &str, _: &Query) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::Page<tinystoragedrivers_core::Versioned<Value>>> {
+        async fn query(
+            &self,
+            _: &str,
+            _: &Query,
+        ) -> tinystoragedrivers_core::Result<
+            tinystoragedrivers_core::Page<tinystoragedrivers_core::Versioned<Value>>,
+        > {
             Err(StorageError::unavailable("down"))
         }
         async fn count(&self, _: &str, _: &Filter) -> tinystoragedrivers_core::Result<u64> {
@@ -198,7 +254,14 @@ async fn a_storage_outage_is_a_store_error_not_a_missing_record() {
         async fn delete_where(&self, _: &str, _: &Filter) -> tinystoragedrivers_core::Result<u64> {
             Err(StorageError::unavailable("down"))
         }
-        async fn claim(&self, _: &str, _: &Filter, _: &[Sort], _: &Value) -> tinystoragedrivers_core::Result<Option<tinystoragedrivers_core::Versioned<Value>>> {
+        async fn claim(
+            &self,
+            _: &str,
+            _: &Filter,
+            _: &[Sort],
+            _: &Value,
+        ) -> tinystoragedrivers_core::Result<Option<tinystoragedrivers_core::Versioned<Value>>>
+        {
             Err(StorageError::unavailable("down"))
         }
         async fn drop_collection(&self, _: &str) -> tinystoragedrivers_core::Result<()> {
@@ -206,7 +269,16 @@ async fn a_storage_outage_is_a_store_error_not_a_missing_record() {
         }
     }
     let store = DocumentDeliveryStore::new(Arc::new(Down));
-    assert!(matches!(store.load_pending("k").await, Err(DeliveryQueueError::Store(_))));
-    assert!(matches!(store.save_pending(entry("k", 1)).await, Err(DeliveryQueueError::Store(_))));
-    assert!(matches!(store.load_pending_all().await, Err(DeliveryQueueError::Store(_))));
+    assert!(matches!(
+        store.load_pending("k").await,
+        Err(DeliveryQueueError::Store(_))
+    ));
+    assert!(matches!(
+        store.save_pending(entry("k", 1)).await,
+        Err(DeliveryQueueError::Store(_))
+    ));
+    assert!(matches!(
+        store.load_pending_all().await,
+        Err(DeliveryQueueError::Store(_))
+    ));
 }

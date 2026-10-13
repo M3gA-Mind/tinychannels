@@ -7,8 +7,9 @@
 //! (e.g. dispatcher + STT this week, ledger next) without a bespoke host type.
 
 use super::{
-    AllowlistStore, ApprovalGate, StorageProvider, ChannelHost, ConversationStore, EventSink, LifecycleRegistry,
-    Memory, ReactionGate, RunLedger, SpeechSynthesizer, Transcriber, TurnDispatcher,
+    AllowlistStore, ApprovalGate, ChannelHost, ConversationStore, EventSink, LifecycleRegistry,
+    Memory, ReactionGate, RunLedger, SpeechSynthesizer, StorageProvider, Transcriber,
+    TurnDispatcher,
 };
 use std::sync::Arc;
 

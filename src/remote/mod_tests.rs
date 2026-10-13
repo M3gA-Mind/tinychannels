@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use super::session_store::{RemoteSessionStore, chat_key};
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 use super::*;
+use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
 #[derive(Default)]
 struct FakeHost {
@@ -167,7 +167,13 @@ async fn new_session_reports_create_failure_without_binding() {
     let c = ctx("discord", &sessions);
     let reply = execute_remote_command(&host, &c, RemoteCommand::New).await;
     assert_eq!(reply, "Failed to create session: read-only");
-    assert!(sessions.binding("discord", "chat-1").await.unwrap().is_none());
+    assert!(
+        sessions
+            .binding("discord", "chat-1")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -246,15 +252,29 @@ async fn legacy_telegram_bindings_are_adopted_once_and_left_untouched() {
 
     let sessions = store();
     assert_eq!(sessions.adopt_legacy(dir.path()).await.unwrap(), 1);
-    let binding = sessions.binding("telegram", "chat-9").await.unwrap().unwrap();
+    let binding = sessions
+        .binding("telegram", "chat-9")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(binding.thread_id, "thread-old");
     assert!(
         !sessions.is_busy("telegram", "chat-9").await.unwrap(),
         "busy is not adopted"
     );
-    assert!(sessions.binding("discord", "chat-9").await.unwrap().is_none());
+    assert!(
+        sessions
+            .binding("discord", "chat-9")
+            .await
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(std::fs::read_to_string(&legacy).unwrap(), legacy_raw);
-    assert!(!dir.path().join("state/channel_remote_sessions.json").exists());
+    assert!(
+        !dir.path()
+            .join("state/channel_remote_sessions.json")
+            .exists()
+    );
 
     // The import runs once: a later change to the legacy file, or a binding the
     // chat has since moved to, is never overwritten.
@@ -265,7 +285,12 @@ async fn legacy_telegram_bindings_are_adopted_once_and_left_untouched() {
     std::fs::write(&legacy, legacy_raw.replace("thread-old", "thread-stale")).unwrap();
     assert_eq!(sessions.adopt_legacy(dir.path()).await.unwrap(), 0);
     assert_eq!(
-        sessions.binding("telegram", "chat-9").await.unwrap().unwrap().thread_id,
+        sessions
+            .binding("telegram", "chat-9")
+            .await
+            .unwrap()
+            .unwrap()
+            .thread_id,
         "thread-new"
     );
 }
@@ -293,7 +318,12 @@ async fn shared_legacy_file_wins_over_the_telegram_only_file() {
     let sessions = store();
     sessions.adopt_legacy(dir.path()).await.unwrap();
     assert_eq!(
-        sessions.binding("telegram", "c").await.unwrap().unwrap().thread_id,
+        sessions
+            .binding("telegram", "c")
+            .await
+            .unwrap()
+            .unwrap()
+            .thread_id,
         "shared"
     );
 }

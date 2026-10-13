@@ -15,7 +15,8 @@ impl DocumentWhatsAppBackend {
     pub(super) async fn hydrate_protocol(&self) -> Result<()> {
         for doc in self.all(LID_MAPPING).await? {
             let entry: LidPnMappingEntry =
-                serde_json::from_value(doc.get("entry").cloned().unwrap_or_default()).map_err(json_err)?;
+                serde_json::from_value(doc.get("entry").cloned().unwrap_or_default())
+                    .map_err(json_err)?;
             self.inner.put_lid_mapping(&entry).await?;
         }
         Ok(())
@@ -70,7 +71,9 @@ impl ProtocolStore for DocumentWhatsAppBackend {
     }
 
     async fn save_base_key(&self, address: &str, message_id: &str, base_key: &[u8]) -> Result<()> {
-        self.inner.save_base_key(address, message_id, base_key).await
+        self.inner
+            .save_base_key(address, message_id, base_key)
+            .await
     }
 
     async fn has_same_base_key(
@@ -79,7 +82,9 @@ impl ProtocolStore for DocumentWhatsAppBackend {
         message_id: &str,
         current_base_key: &[u8],
     ) -> Result<bool> {
-        self.inner.has_same_base_key(address, message_id, current_base_key).await
+        self.inner
+            .has_same_base_key(address, message_id, current_base_key)
+            .await
     }
 
     async fn delete_base_key(&self, address: &str, message_id: &str) -> Result<()> {
@@ -131,11 +136,19 @@ impl ProtocolStore for DocumentWhatsAppBackend {
     }
 
     async fn delete_expired_tc_tokens(&self, token_cutoff: i64, sender_cutoff: i64) -> Result<u32> {
-        self.inner.delete_expired_tc_tokens(token_cutoff, sender_cutoff).await
+        self.inner
+            .delete_expired_tc_tokens(token_cutoff, sender_cutoff)
+            .await
     }
 
-    async fn touch_tc_token_sender_timestamp(&self, jid: &str, sender_timestamp: i64) -> Result<()> {
-        self.inner.touch_tc_token_sender_timestamp(jid, sender_timestamp).await
+    async fn touch_tc_token_sender_timestamp(
+        &self,
+        jid: &str,
+        sender_timestamp: i64,
+    ) -> Result<()> {
+        self.inner
+            .touch_tc_token_sender_timestamp(jid, sender_timestamp)
+            .await
     }
 
     async fn store_received_tc_token(
@@ -144,11 +157,20 @@ impl ProtocolStore for DocumentWhatsAppBackend {
         token: &[u8],
         token_timestamp: i64,
     ) -> Result<()> {
-        self.inner.store_received_tc_token(jid, token, token_timestamp).await
+        self.inner
+            .store_received_tc_token(jid, token, token_timestamp)
+            .await
     }
 
-    async fn store_sent_message(&self, chat_jid: &str, message_id: &str, payload: &[u8]) -> Result<()> {
-        self.inner.store_sent_message(chat_jid, message_id, payload).await
+    async fn store_sent_message(
+        &self,
+        chat_jid: &str,
+        message_id: &str,
+        payload: &[u8],
+    ) -> Result<()> {
+        self.inner
+            .store_sent_message(chat_jid, message_id, payload)
+            .await
     }
 
     async fn take_sent_message(&self, chat_jid: &str, message_id: &str) -> Result<Option<Vec<u8>>> {
@@ -156,7 +178,9 @@ impl ProtocolStore for DocumentWhatsAppBackend {
     }
 
     async fn delete_expired_sent_messages(&self, cutoff_timestamp: i64) -> Result<u32> {
-        self.inner.delete_expired_sent_messages(cutoff_timestamp).await
+        self.inner
+            .delete_expired_sent_messages(cutoff_timestamp)
+            .await
     }
 
     async fn store_pending_inbound(
@@ -166,10 +190,17 @@ impl ProtocolStore for DocumentWhatsAppBackend {
         id: &str,
         message: &[u8],
     ) -> Result<()> {
-        self.inner.store_pending_inbound(chat, sender, id, message).await
+        self.inner
+            .store_pending_inbound(chat, sender, id, message)
+            .await
     }
 
-    async fn get_pending_inbound(&self, chat: &str, sender: &str, id: &str) -> Result<Option<Vec<u8>>> {
+    async fn get_pending_inbound(
+        &self,
+        chat: &str,
+        sender: &str,
+        id: &str,
+    ) -> Result<Option<Vec<u8>>> {
         self.inner.get_pending_inbound(chat, sender, id).await
     }
 
@@ -178,7 +209,9 @@ impl ProtocolStore for DocumentWhatsAppBackend {
     }
 
     async fn delete_expired_pending_inbound(&self, cutoff_timestamp: i64) -> Result<u32> {
-        self.inner.delete_expired_pending_inbound(cutoff_timestamp).await
+        self.inner
+            .delete_expired_pending_inbound(cutoff_timestamp)
+            .await
     }
 
     async fn store_pending_inbound_batch(&self, rows: &[PendingInboundRow<'_>]) -> Result<()> {
@@ -199,14 +232,21 @@ impl MsgSecretStore for DocumentWhatsAppBackend {
         msg_id: &str,
         secret: &[u8; wacore::reporting_token::MESSAGE_SECRET_SIZE],
     ) -> Result<()> {
-        self.inner.put_msg_secret(chat, sender, msg_id, secret).await
+        self.inner
+            .put_msg_secret(chat, sender, msg_id, secret)
+            .await
     }
 
     async fn put_msg_secrets(&self, entries: Vec<MsgSecretEntry>) -> Result<usize> {
         self.inner.put_msg_secrets(entries).await
     }
 
-    async fn get_msg_secret(&self, chat: &str, sender: &str, msg_id: &str) -> Result<Option<Vec<u8>>> {
+    async fn get_msg_secret(
+        &self,
+        chat: &str,
+        sender: &str,
+        msg_id: &str,
+    ) -> Result<Option<Vec<u8>>> {
         self.inner.get_msg_secret(chat, sender, msg_id).await
     }
 
@@ -216,10 +256,14 @@ impl MsgSecretStore for DocumentWhatsAppBackend {
         sender: &str,
         msg_id: &str,
     ) -> Result<Option<(Vec<u8>, i64)>> {
-        self.inner.get_msg_secret_with_ts(chat, sender, msg_id).await
+        self.inner
+            .get_msg_secret_with_ts(chat, sender, msg_id)
+            .await
     }
 
     async fn delete_expired_msg_secrets(&self, cutoff_timestamp: i64) -> Result<u32> {
-        self.inner.delete_expired_msg_secrets(cutoff_timestamp).await
+        self.inner
+            .delete_expired_msg_secrets(cutoff_timestamp)
+            .await
     }
 }

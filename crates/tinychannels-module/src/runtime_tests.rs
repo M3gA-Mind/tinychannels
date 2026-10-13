@@ -373,7 +373,10 @@ async fn failed_native_cleanup_retains_ownership_and_capacity_until_retry_succee
         runtimes.reserve().await.is_err(),
         "failed cleanup must retain its capacity slot"
     );
-    storage.faults.fail_queue_read.store(false, Ordering::SeqCst);
+    storage
+        .faults
+        .fail_queue_read
+        .store(false, Ordering::SeqCst);
     runtimes.stop(reservation.handle.clone()).await.unwrap();
     assert!(runtimes.get(&reservation.handle).await.is_err());
     runtimes.reserve().await.unwrap();
@@ -438,7 +441,10 @@ async fn shutdown_reports_cleanup_failure_and_retains_only_the_failed_owner() {
     assert!(runtimes.get(&failed.handle).await.is_ok());
     assert!(runtimes.get(&inert.handle).await.is_err());
     assert!(runtimes.reserve().await.is_err());
-    storage.faults.fail_queue_read.store(false, Ordering::SeqCst);
+    storage
+        .faults
+        .fail_queue_read
+        .store(false, Ordering::SeqCst);
     runtimes.shutdown().await.unwrap();
     assert!(runtimes.slots.lock().await.is_empty());
 }

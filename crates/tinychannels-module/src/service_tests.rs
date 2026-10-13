@@ -314,7 +314,11 @@ fn required_intent(id: &str, text: &str) -> ChannelOutboundIntent {
 async fn required_send_persists_before_delivery_and_replays_lost_final_reply() {
     let (sent, mut received) = tokio::sync::mpsc::channel(4);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
-    callbacks.storage.faults.lose_result_reply.store(true, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .lose_result_reply
+        .store(true, Ordering::SeqCst);
     let intent = required_intent("delivery-replay", "confidential body");
 
     channels
@@ -348,7 +352,11 @@ async fn required_send_persists_before_delivery_and_replays_lost_final_reply() {
 async fn pending_persistence_failure_refuses_before_provider_send() {
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
-    callbacks.storage.faults.fail_pending_write.store(true, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .fail_pending_write
+        .store(true, Ordering::SeqCst);
     assert!(
         channels
             .send_channel_intent("fixture".into(), required_intent("persist-fail", "body"))
@@ -492,9 +500,7 @@ async fn replayed_terminal_result_acknowledges_a_remaining_pending_record() {
         .await
         .unwrap();
     assert!(received.try_recv().is_err());
-    assert!(
-        callbacks.storage.pending("scope-a").await.is_empty()
-    );
+    assert!(callbacks.storage.pending("scope-a").await.is_empty());
     channels.shutdown().await.unwrap();
 }
 
@@ -658,12 +664,20 @@ async fn changed_intent_cannot_reuse_a_terminal_result_key() {
 async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
     let (sent, _received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
-    callbacks.storage.faults.fail_queue_read.store(true, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(true, Ordering::SeqCst);
 
     assert!(channels.stop_channel("fixture".into()).await.is_err());
     assert!(channels.running.lock().await.contains_key("fixture"));
 
-    callbacks.storage.faults.fail_queue_read.store(false, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(false, Ordering::SeqCst);
     channels.stop_channel("fixture".into()).await.unwrap();
     assert!(!channels.running.lock().await.contains_key("fixture"));
     channels.shutdown().await.unwrap();
@@ -802,7 +816,11 @@ async fn shutdown_store_failure_still_joins_provider_and_can_retry_persistence()
         .await
         .unwrap();
     channels.relays.reserve().await.unwrap();
-    callbacks.storage.faults.fail_queue_read.store(true, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(true, Ordering::SeqCst);
 
     assert!(channels.shutdown().await.is_err());
     assert!(
@@ -824,7 +842,11 @@ async fn shutdown_store_failure_still_joins_provider_and_can_retry_persistence()
         "host callback owner must be closed after shutdown cleanup"
     );
 
-    callbacks.storage.faults.fail_queue_read.store(false, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(false, Ordering::SeqCst);
     channels.shutdown().await.unwrap();
     assert_eq!(
         callbacks.storage.pending("scope-a").await.len(),
@@ -844,7 +866,9 @@ async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry(
         .await
         .unwrap();
     let root_callbacks = DurableHost {
-        storage: Arc::new(crate::storage_fixture::StorageHost::serve(&host_server, "scope-a").await),
+        storage: Arc::new(
+            crate::storage_fixture::StorageHost::serve(&host_server, "scope-a").await,
+        ),
     };
     host_server
         .serve_at(
@@ -895,7 +919,14 @@ async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry(
     );
     assert!(channels.running.lock().await.is_empty());
     assert!(channels.relays.is_empty().await);
-    assert!(root_callbacks.storage.faults.pending_reads.load(Ordering::SeqCst) > 0);
+    assert!(
+        root_callbacks
+            .storage
+            .faults
+            .pending_reads
+            .load(Ordering::SeqCst)
+            > 0
+    );
     assert!(
         channels
             .email

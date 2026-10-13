@@ -151,7 +151,8 @@ impl RemoteSessionStore {
         let id = chat_key(channel, reply_target);
         let docs = self.docs().await?;
         let result = if busy {
-            let doc = serde_json::json!({ "busy": true, "updated_at": chrono::Utc::now().to_rfc3339() });
+            let doc =
+                serde_json::json!({ "busy": true, "updated_at": chrono::Utc::now().to_rfc3339() });
             docs.put(BUSY_COLLECTION, &id, doc, Precondition::None)
                 .await
                 .map(|_| ())
@@ -191,20 +192,30 @@ impl RemoteSessionStore {
         }
         let mut legacy: HashMap<String, ChatBinding> = HashMap::new();
         // The Telegram-only file is older; the shared file wins on overlap.
-        for (file, prefix) in [(LEGACY_TELEGRAM_STORE_FILE, true), (LEGACY_STORE_FILE, false)] {
+        for (file, prefix) in [
+            (LEGACY_TELEGRAM_STORE_FILE, true),
+            (LEGACY_STORE_FILE, false),
+        ] {
             let path = workspace_dir.join(file);
             let Some(parsed) = read_legacy(&path)? else {
                 continue;
             };
             for (key, binding) in parsed.bindings {
-                let key = if prefix { chat_key("telegram", &key) } else { key };
+                let key = if prefix {
+                    chat_key("telegram", &key)
+                } else {
+                    key
+                };
                 legacy.insert(key, binding);
             }
         }
         let mut imported = 0;
         for (key, binding) in legacy {
             let doc = serde_json::to_value(&binding)?;
-            match docs.put(BINDINGS_COLLECTION, &key, doc, Precondition::Absent).await {
+            match docs
+                .put(BINDINGS_COLLECTION, &key, doc, Precondition::Absent)
+                .await
+            {
                 Ok(_) => imported += 1,
                 Err(error)
                     if matches!(
@@ -224,10 +235,15 @@ impl RemoteSessionStore {
         .await
         .or_else(|error| match error.kind() {
             tinystoragedrivers_core::ErrorKind::Conflict
-            | tinystoragedrivers_core::ErrorKind::AlreadyExists => Ok(tinystoragedrivers_core::Version(0)),
+            | tinystoragedrivers_core::ErrorKind::AlreadyExists => {
+                Ok(tinystoragedrivers_core::Version(0))
+            }
             _ => Err(anyhow::anyhow!(crate::storage::describe(&error))),
         })?;
-        tracing::info!("{LOG_PREFIX} adopted {imported} legacy binding(s) from {}", workspace_dir.display());
+        tracing::info!(
+            "{LOG_PREFIX} adopted {imported} legacy binding(s) from {}",
+            workspace_dir.display()
+        );
         Ok(imported)
     }
 }
@@ -238,7 +254,10 @@ fn read_legacy(path: &Path) -> anyhow::Result<Option<LegacyStoreFile>> {
     }
     let raw = std::fs::read_to_string(path)?;
     Ok(Some(serde_json::from_str(&raw).unwrap_or_else(|error| {
-        tracing::warn!("{LOG_PREFIX} corrupt legacy session file at {}: {error}; skipping", path.display());
+        tracing::warn!(
+            "{LOG_PREFIX} corrupt legacy session file at {}: {error}; skipping",
+            path.display()
+        );
         LegacyStoreFile::default()
     })))
 }

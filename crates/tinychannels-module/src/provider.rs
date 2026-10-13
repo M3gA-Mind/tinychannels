@@ -170,9 +170,7 @@ struct ModuleStorage(HostChannels);
 
 #[async_trait::async_trait]
 impl tinychannels::host::StorageProvider for ModuleStorage {
-    async fn documents(
-        &self,
-    ) -> anyhow::Result<Arc<dyn tinystoragedrivers_core::DocumentStore>> {
+    async fn documents(&self) -> anyhow::Result<Arc<dyn tinystoragedrivers_core::DocumentStore>> {
         self.0
             .documents()
             .await

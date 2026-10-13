@@ -2,8 +2,8 @@
 use crate::host::HostChannels;
 use async_trait::async_trait;
 use std::path::PathBuf;
-use tinychannels::remote::session_store::RemoteSessionStore;
 use tinybus::{Error, Result};
+use tinychannels::remote::session_store::RemoteSessionStore;
 use tinychannels::remote::{RemoteCommandContext, RemoteControlHost};
 use tinychannels_bus::module_remote::{
     NewRemoteThread, RemoteHostRequest, RemoteHostResult, RemoteOperation, RemoteOperationResult,
@@ -83,7 +83,10 @@ async fn sessions(callback: &HostChannels, workspace: &std::path::Path) -> Remot
     let docs = match callback.documents().await {
         Ok(docs) => docs,
         Err(error) => {
-            tracing::warn!("[channel-remote] host storage unavailable: {:?}", error.kind());
+            tracing::warn!(
+                "[channel-remote] host storage unavailable: {:?}",
+                error.kind()
+            );
             return RemoteSessionStore::unavailable();
         }
     };

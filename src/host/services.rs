@@ -249,7 +249,9 @@ pub trait AllowlistStore: Send + Sync {
 #[async_trait]
 pub trait StorageProvider: Send + Sync {
     /// The scoped document store, or why it is unavailable.
-    async fn documents(&self) -> anyhow::Result<std::sync::Arc<dyn tinystoragedrivers_core::DocumentStore>>;
+    async fn documents(
+        &self,
+    ) -> anyhow::Result<std::sync::Arc<dyn tinystoragedrivers_core::DocumentStore>>;
 }
 
 // ---------------------------------------------------------------------------

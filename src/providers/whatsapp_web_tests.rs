@@ -952,9 +952,7 @@ struct FixedStorage(Result<Arc<dyn tinystoragedrivers_core::DocumentStore>, &'st
 #[cfg(feature = "whatsapp-web")]
 #[async_trait]
 impl crate::host::StorageProvider for FixedStorage {
-    async fn documents(
-        &self,
-    ) -> anyhow::Result<Arc<dyn tinystoragedrivers_core::DocumentStore>> {
+    async fn documents(&self) -> anyhow::Result<Arc<dyn tinystoragedrivers_core::DocumentStore>> {
         self.0.clone().map_err(|message| anyhow::anyhow!(message))
     }
 }
@@ -972,24 +970,33 @@ fn memory_docs() -> Arc<dyn tinystoragedrivers_core::DocumentStore> {
 #[tokio::test]
 async fn host_storage_makes_the_session_durable_across_channel_restarts() {
     let docs = memory_docs();
-    let channel = || {
-        make_channel().with_storage(Arc::new(FixedStorage(Ok(Arc::clone(&docs)))))
-    };
+    let channel = || make_channel().with_storage(Arc::new(FixedStorage(Ok(Arc::clone(&docs)))));
 
     let backend = channel().session_backend().await;
-    wacore::store::traits::DeviceStore::create(&*backend).await.unwrap();
+    wacore::store::traits::DeviceStore::create(&*backend)
+        .await
+        .unwrap();
     let before = serde_json::to_value(
-        wacore::store::traits::DeviceStore::load(&*backend).await.unwrap().unwrap(),
+        wacore::store::traits::DeviceStore::load(&*backend)
+            .await
+            .unwrap()
+            .unwrap(),
     )
     .unwrap();
     drop(backend);
 
     let restarted = channel().session_backend().await;
     let after = serde_json::to_value(
-        wacore::store::traits::DeviceStore::load(&*restarted).await.unwrap().unwrap(),
+        wacore::store::traits::DeviceStore::load(&*restarted)
+            .await
+            .unwrap()
+            .unwrap(),
     )
     .unwrap();
-    assert_eq!(before, after, "the same linked device resumes after a restart");
+    assert_eq!(
+        before, after,
+        "the same linked device resumes after a restart"
+    );
 }
 
 #[cfg(feature = "whatsapp-web")]
@@ -1000,10 +1007,20 @@ async fn without_usable_host_storage_the_session_falls_back_to_memory() {
         make_channel().with_storage(Arc::new(FixedStorage(Err("no storage object")))),
     ] {
         let backend = channel.session_backend().await;
-        wacore::store::traits::DeviceStore::create(&*backend).await.unwrap();
-        assert!(wacore::store::traits::DeviceStore::exists(&*backend).await.unwrap());
+        wacore::store::traits::DeviceStore::create(&*backend)
+            .await
+            .unwrap();
+        assert!(
+            wacore::store::traits::DeviceStore::exists(&*backend)
+                .await
+                .unwrap()
+        );
         // A second backend from the same channel shares nothing: no persistence.
         let other = channel.session_backend().await;
-        assert!(!wacore::store::traits::DeviceStore::exists(&*other).await.unwrap());
+        assert!(
+            !wacore::store::traits::DeviceStore::exists(&*other)
+                .await
+                .unwrap()
+        );
     }
 }

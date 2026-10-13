@@ -83,7 +83,9 @@ async fn fixture(_workspace: &std::path::Path) -> (HostChannels, Callback) {
         .unwrap();
     let storage = crate::storage_fixture::StorageHost::serve(&connection, "remote").await;
     let callback = Callback {
-        sessions: tinychannels::remote::session_store::RemoteSessionStore::new(storage.docs("remote")),
+        sessions: tinychannels::remote::session_store::RemoteSessionStore::new(
+            storage.docs("remote"),
+        ),
         calls: Arc::new(Mutex::new(Vec::new())),
     };
     connection

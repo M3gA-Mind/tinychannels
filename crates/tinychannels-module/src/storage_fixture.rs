@@ -235,11 +235,15 @@ impl DocumentStore for ScopeSwitchDocs {
         doc: Value,
         precondition: Precondition,
     ) -> Result<Version> {
-        if collection == PENDING_COLLECTION && self.faults.fail_pending_write.swap(false, Ordering::SeqCst) {
+        if collection == PENDING_COLLECTION
+            && self.faults.fail_pending_write.swap(false, Ordering::SeqCst)
+        {
             return Err(StorageError::backend("fixture pending write failed"));
         }
         let version = self.inner().put(collection, id, doc, precondition).await?;
-        if collection == RESULTS_COLLECTION && self.faults.lose_result_reply.swap(false, Ordering::SeqCst) {
+        if collection == RESULTS_COLLECTION
+            && self.faults.lose_result_reply.swap(false, Ordering::SeqCst)
+        {
             return Err(StorageError::backend("fixture lost terminal reply"));
         }
         Ok(version)

@@ -12,7 +12,9 @@ fn docs() -> Arc<dyn DocumentStore> {
 }
 
 async fn open(docs: &Arc<dyn DocumentStore>, path: &str) -> DocumentWhatsAppBackend {
-    DocumentWhatsAppBackend::open(Arc::clone(docs), path).await.unwrap()
+    DocumentWhatsAppBackend::open(Arc::clone(docs), path)
+        .await
+        .unwrap()
 }
 
 #[test]
@@ -36,10 +38,16 @@ async fn a_linked_device_is_the_same_device_after_a_restart() {
     drop(backend);
 
     let backend: Arc<dyn Backend> = Arc::new(open(&docs, "session").await);
-    assert!(backend.exists().await.unwrap(), "the device record was loaded");
+    assert!(
+        backend.exists().await.unwrap(),
+        "the device record was loaded"
+    );
     let manager = PersistenceManager::new(backend).await.unwrap();
     let after = serde_json::to_value(manager.get_device_snapshot().await).unwrap();
-    assert_eq!(before, after, "the identity keys survive, so no new QR scan is needed");
+    assert_eq!(
+        before, after,
+        "the identity keys survive, so no new QR scan is needed"
+    );
 }
 
 #[tokio::test]
@@ -62,20 +70,29 @@ async fn signal_state_survives_a_restart_and_deletes_stay_deleted() {
     let backend = open(&docs, "session").await;
     backend.put_identity("alice.0", [7; 32]).await.unwrap();
     backend.put_identity("bob.0", [8; 32]).await.unwrap();
-    backend.put_session("alice.0", b"session-bytes").await.unwrap();
+    backend
+        .put_session("alice.0", b"session-bytes")
+        .await
+        .unwrap();
     backend.put_session("bob.0", b"gone").await.unwrap();
     backend.store_prekey(5, b"prekey-5", false).await.unwrap();
     backend.store_prekey(9, b"prekey-9", false).await.unwrap();
     backend.mark_prekeys_uploaded(&[9]).await.unwrap();
     backend.store_signed_prekey(1, b"signed-1").await.unwrap();
-    backend.put_sender_key("group.alice", b"sender-key").await.unwrap();
+    backend
+        .put_sender_key("group.alice", b"sender-key")
+        .await
+        .unwrap();
     backend.delete_identity("bob.0").await.unwrap();
     backend.delete_session("bob.0").await.unwrap();
     backend.remove_prekey(5).await.unwrap();
     drop(backend);
 
     let reopened = open(&docs, "session").await;
-    assert_eq!(reopened.load_identity("alice.0").await.unwrap(), Some([7; 32]));
+    assert_eq!(
+        reopened.load_identity("alice.0").await.unwrap(),
+        Some([7; 32])
+    );
     assert_eq!(reopened.load_identity("bob.0").await.unwrap(), None);
     assert_eq!(
         reopened.get_session("alice.0").await.unwrap(),
@@ -93,7 +110,11 @@ async fn signal_state_survives_a_restart_and_deletes_stay_deleted() {
         Some(&b"signed-1"[..])
     );
     assert_eq!(
-        reopened.get_sender_key("group.alice").await.unwrap().as_deref(),
+        reopened
+            .get_sender_key("group.alice")
+            .await
+            .unwrap()
+            .as_deref(),
         Some(&b"sender-key"[..])
     );
 }
@@ -110,7 +131,13 @@ async fn batch_writes_are_durable() {
         .await
         .unwrap();
     backend
-        .store_prekeys_batch(&[(1, Bytes::from_static(b"p1")), (2, Bytes::from_static(b"p2"))], true)
+        .store_prekeys_batch(
+            &[
+                (1, Bytes::from_static(b"p1")),
+                (2, Bytes::from_static(b"p2")),
+            ],
+            true,
+        )
         .await
         .unwrap();
     backend
@@ -120,7 +147,10 @@ async fn batch_writes_are_durable() {
     drop(backend);
 
     let reopened = open(&docs, "session").await;
-    assert_eq!(reopened.get_session("b").await.unwrap(), Some(Bytes::from_static(b"2")));
+    assert_eq!(
+        reopened.get_session("b").await.unwrap(),
+        Some(Bytes::from_static(b"2"))
+    );
     assert_eq!(reopened.load_prekeys_batch(&[1, 2]).await.unwrap().len(), 2);
     assert_eq!(reopened.load_identity("b").await.unwrap(), Some([2; 32]));
 }
@@ -155,10 +185,21 @@ async fn app_state_sync_keys_and_lid_mappings_are_durable() {
     let reopened = open(&docs, "session").await;
     let key = reopened.get_sync_key(&[0xAB, 0xCD]).await.unwrap().unwrap();
     assert_eq!(key.key_data, vec![1, 2, 3]);
-    assert_eq!(reopened.get_latest_sync_key_id().await.unwrap(), Some(vec![0xAB, 0xCD]));
+    assert_eq!(
+        reopened.get_latest_sync_key_id().await.unwrap(),
+        Some(vec![0xAB, 0xCD])
+    );
     let mapping = reopened.get_lid_mapping("100").await.unwrap().unwrap();
     assert_eq!(mapping.phone_number, "15550001");
-    assert_eq!(reopened.get_pn_mapping("15550001").await.unwrap().unwrap().lid, "100");
+    assert_eq!(
+        reopened
+            .get_pn_mapping("15550001")
+            .await
+            .unwrap()
+            .unwrap()
+            .lid,
+        "100"
+    );
 }
 
 #[tokio::test]
@@ -171,7 +212,12 @@ async fn caches_the_protocol_refetches_stay_in_memory() {
 
     let reopened = open(&docs, "session").await;
     assert_eq!(reopened.get_group_metadata("g@g.us").await.unwrap(), None);
-    assert!(!reopened.has_same_base_key("addr", "msg", b"base").await.unwrap());
+    assert!(
+        !reopened
+            .has_same_base_key("addr", "msg", b"base")
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]
@@ -185,7 +231,10 @@ async fn two_accounts_in_one_scope_never_share_a_device() {
     assert!(!other.exists().await.unwrap());
     drop(one);
     let one_again = open(&docs, "one.db").await;
-    assert_eq!(one_again.load_identity("peer").await.unwrap(), Some([1; 32]));
+    assert_eq!(
+        one_again.load_identity("peer").await.unwrap(),
+        Some([1; 32])
+    );
 }
 
 #[tokio::test]
@@ -205,7 +254,9 @@ async fn a_failing_store_fails_the_write_instead_of_pretending_it_is_durable() {
     .unwrap();
     drop(backend);
     assert!(
-        DocumentWhatsAppBackend::open(docs, "session").await.is_err(),
+        DocumentWhatsAppBackend::open(docs, "session")
+            .await
+            .is_err(),
         "a corrupt persisted record is reported, not silently skipped"
     );
 }
