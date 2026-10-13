@@ -341,6 +341,30 @@ async fn corrupt_legacy_file_is_skipped_instead_of_failing() {
 }
 
 #[tokio::test]
+async fn a_corrupt_legacy_file_is_imported_once_it_is_repaired() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state/channel_remote_sessions.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "{not json").unwrap();
+    let sessions = store();
+    assert_eq!(sessions.adopt_legacy(dir.path()).await.unwrap(), 0);
+
+    write_legacy_binding(dir.path(), "telegram:c", "thread-repaired");
+    assert_eq!(sessions.adopt_legacy(dir.path()).await.unwrap(), 1);
+    assert_eq!(
+        sessions
+            .binding("telegram", "c")
+            .await
+            .unwrap()
+            .unwrap()
+            .thread_id,
+        "thread-repaired"
+    );
+    // Now complete: the marker is written and later calls are no-ops.
+    assert_eq!(sessions.adopt_legacy(dir.path()).await.unwrap(), 0);
+}
+
+#[tokio::test]
 async fn unavailable_storage_degrades_status_and_fails_new_without_losing_help() {
     let sessions = RemoteSessionStore::unavailable();
     let host = FakeHost::default();
