@@ -988,6 +988,7 @@ async fn full_durable_queue_applies_backpressure_before_provider_send() {
         tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY,
         "the refused intent was not queued"
     );
+    callbacks.storage.clear_pending("scope-a").await;
     channels.shutdown().await.unwrap();
 }
 

@@ -58,7 +58,7 @@ pub fn chat_key(channel: &str, reply_target: &str) -> String {
 /// The remote-control session store over one scoped document handle.
 #[derive(Clone, Debug)]
 pub struct RemoteSessionStore {
-    docs: Arc<dyn DocumentStore>,
+    docs: Option<Arc<dyn DocumentStore>>,
     ready: Arc<tokio::sync::OnceCell<()>>,
 }
 
@@ -67,20 +67,35 @@ impl RemoteSessionStore {
     #[must_use]
     pub fn new(docs: Arc<dyn DocumentStore>) -> Self {
         Self {
-            docs,
+            docs: Some(docs),
             ready: Arc::new(tokio::sync::OnceCell::new()),
         }
     }
 
-    async fn docs(&self) -> &Arc<dyn DocumentStore> {
+    /// A store for a host that provides no storage: every operation fails with
+    /// "storage unavailable", which the command flow reports to the chat (and
+    /// `/help` never touches).
+    #[must_use]
+    pub fn unavailable() -> Self {
+        Self {
+            docs: None,
+            ready: Arc::new(tokio::sync::OnceCell::new()),
+        }
+    }
+
+    async fn docs(&self) -> anyhow::Result<&Arc<dyn DocumentStore>> {
+        let docs = self
+            .docs
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("host storage is unavailable"))?;
         self.ready
             .get_or_init(|| async {
                 for name in [BINDINGS_COLLECTION, BUSY_COLLECTION, META_COLLECTION] {
-                    crate::storage::ensure_collection(&self.docs, CollectionSpec::new(name)).await;
+                    crate::storage::ensure_collection(docs, CollectionSpec::new(name)).await;
                 }
             })
             .await;
-        &self.docs
+        Ok(docs)
     }
 
     /// The binding for one chat, if any.
@@ -114,7 +129,7 @@ impl RemoteSessionStore {
             title,
         };
         self.docs()
-            .await
+            .await?
             .put_as(
                 BINDINGS_COLLECTION,
                 &chat_key(channel, reply_target),
@@ -134,7 +149,7 @@ impl RemoteSessionStore {
         busy: bool,
     ) -> anyhow::Result<()> {
         let id = chat_key(channel, reply_target);
-        let docs = self.docs().await;
+        let docs = self.docs().await?;
         let result = if busy {
             let doc = serde_json::json!({ "busy": true, "updated_at": chrono::Utc::now().to_rfc3339() });
             docs.put(BUSY_COLLECTION, &id, doc, Precondition::None)
@@ -166,7 +181,7 @@ impl RemoteSessionStore {
     /// overwritten. Busy flags are per-process turn state and do not carry
     /// over. Returns how many bindings were imported.
     pub async fn adopt_legacy(&self, workspace_dir: &Path) -> anyhow::Result<usize> {
-        let docs = self.docs().await;
+        let docs = self.docs().await?;
         let marker = docs
             .get(META_COLLECTION, LEGACY_MARKER_ID)
             .await

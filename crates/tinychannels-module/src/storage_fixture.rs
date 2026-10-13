@@ -157,6 +157,14 @@ impl StorageHost {
             && self.results(scope).await.is_empty()
     }
 
+    /// Remove every pending record of `scope`.
+    pub(crate) async fn clear_pending(&self, scope: &str) {
+        self.docs(scope)
+            .delete_where(PENDING_COLLECTION, &Filter::default())
+            .await
+            .unwrap();
+    }
+
     /// Seed a pending record through the store the module itself uses.
     pub(crate) async fn seed_pending(&self, scope: &str, entry: DeliveryQueueEntry) {
         use tinychannels::delivery::DeliveryQueueStore;
