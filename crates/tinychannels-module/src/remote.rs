@@ -78,7 +78,9 @@ fn workspace(path: String) -> Result<PathBuf> {
 /// The remote-session store on the module's scoped host storage, with the
 /// legacy per-workspace JSON files imported once.
 async fn sessions(callback: &HostChannels, workspace: &std::path::Path) -> Result<RemoteSessionStore> {
-    let docs = callback.documents().await?;
+    let docs = callback.documents().await.map_err(|error| {
+        Error::failed(format!("host storage is unavailable: {:?}", error.kind()))
+    })?;
     let store = RemoteSessionStore::new(docs);
     if let Err(error) = store.adopt_legacy(workspace).await {
         tracing::warn!("[channel-remote] legacy session import failed: {error}");

@@ -308,16 +308,16 @@ impl HostChannels {
     /// The host binds the scope from the authenticated caller; nothing here
     /// names one. A connect failure is not cached, so a host that starts
     /// serving storage later is picked up by the next call.
-    pub(crate) async fn storage(&self) -> Result<tinystoragedrivers_core::ScopedStorage> {
+    pub(crate) async fn storage(
+        &self,
+    ) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::ScopedStorage> {
         use tinystoragedrivers_core::StorageBackend;
         let mut slot = self.storage.lock().await;
         if let Some(scoped) = slot.as_ref() {
             return Ok(scoped.clone());
         }
         let bus = tinystoragedrivers_busproxy::connect_storage(self.connection.clone()).await?;
-        let scoped = bus
-            .for_scope(&tinystoragedrivers_busproxy::module_scope_label())
-            .map_err(|error| Error::failed(format!("host storage refused the module scope: {:?}", error.kind())))?;
+        let scoped = bus.for_scope(&tinystoragedrivers_busproxy::module_scope_label())?;
         *slot = Some(scoped.clone());
         Ok(scoped)
     }
@@ -326,7 +326,7 @@ impl HostChannels {
     /// WhatsApp session records.
     pub(crate) async fn documents(
         &self,
-    ) -> Result<Arc<dyn tinystoragedrivers_core::DocumentStore>> {
+    ) -> tinystoragedrivers_core::Result<Arc<dyn tinystoragedrivers_core::DocumentStore>> {
         Ok(Arc::clone(self.storage().await?.documents()))
     }
 

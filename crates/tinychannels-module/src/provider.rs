@@ -176,7 +176,7 @@ impl tinychannels::host::StorageProvider for ModuleStorage {
         self.0
             .documents()
             .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .map_err(|error| anyhow::anyhow!("host storage: {:?}", error.kind()))
     }
 }
 
