@@ -3,7 +3,8 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use super::session_store::{RemoteSessionStore, chat_key, with_store_read};
+use super::session_store::{RemoteSessionStore, chat_key};
+use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 use super::*;
 
 #[derive(Default)]
@@ -53,12 +54,17 @@ impl RemoteControlHost for FakeHost {
     }
 }
 
-fn ctx(channel: &str, dir: &std::path::Path) -> RemoteCommandContext {
+fn store() -> RemoteSessionStore {
+    let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+    RemoteSessionStore::new(std::sync::Arc::clone(storage.documents()))
+}
+
+fn ctx(channel: &str, sessions: &RemoteSessionStore) -> RemoteCommandContext {
     RemoteCommandContext {
         channel: channel.into(),
         reply_target: "chat-1".into(),
         sender_key: format!("{channel}_alice_chat-1"),
-        workspace_dir: dir.to_path_buf(),
+        sessions: sessions.clone(),
     }
 }
 
@@ -103,9 +109,9 @@ fn renderers_include_their_inputs() {
 #[tokio::test]
 async fn new_then_status_on_any_chat_provider() {
     for channel in ["telegram", "discord", "slack"] {
-        let dir = tempfile::tempdir().unwrap();
+        let sessions = store();
         let host = FakeHost::default();
-        let c = ctx(channel, dir.path());
+        let c = ctx(channel, &sessions);
         host.history.lock().unwrap().insert(c.sender_key.clone(), 4);
 
         let before = execute_remote_command(&host, &c, RemoteCommand::Status).await;
@@ -134,13 +140,13 @@ async fn new_then_status_on_any_chat_provider() {
 
 #[tokio::test]
 async fn new_session_titles_use_the_channel_display_name() {
-    let dir = tempfile::tempdir().unwrap();
+    let sessions = store();
     let host = FakeHost::default();
     let now = chrono::DateTime::parse_from_rfc3339("2026-09-29T15:04:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    new_session(&host, &ctx("telegram", dir.path()), now).await;
-    new_session(&host, &ctx("slack", dir.path()), now).await;
+    new_session(&host, &ctx("telegram", &sessions), now).await;
+    new_session(&host, &ctx("slack", &sessions), now).await;
     let titles: Vec<_> = host
         .created
         .lock()
@@ -153,24 +159,22 @@ async fn new_session_titles_use_the_channel_display_name() {
 
 #[tokio::test]
 async fn new_session_reports_create_failure_without_binding() {
-    let dir = tempfile::tempdir().unwrap();
+    let sessions = store();
     let host = FakeHost {
         fail_create: true,
         ..Default::default()
     };
-    let c = ctx("discord", dir.path());
+    let c = ctx("discord", &sessions);
     let reply = execute_remote_command(&host, &c, RemoteCommand::New).await;
     assert_eq!(reply, "Failed to create session: read-only");
-    let bound =
-        with_store_read(dir.path(), |s| Ok(s.binding("discord", "chat-1").cloned())).unwrap();
-    assert!(bound.is_none());
+    assert!(sessions.binding("discord", "chat-1").await.unwrap().is_none());
 }
 
 #[tokio::test]
 async fn sessions_lists_recent_first_and_marks_active() {
-    let dir = tempfile::tempdir().unwrap();
+    let sessions = store();
     let host = FakeHost::default();
-    let c = ctx("telegram", dir.path());
+    let c = ctx("telegram", &sessions);
     assert!(
         execute_remote_command(&host, &c, RemoteCommand::Sessions)
             .await
@@ -204,10 +208,10 @@ async fn sessions_lists_recent_first_and_marks_active() {
 
 #[tokio::test]
 async fn help_needs_no_state() {
-    let dir = tempfile::tempdir().unwrap();
+    let sessions = store();
     let reply = execute_remote_command(
         &FakeHost::default(),
-        &ctx("irc", dir.path()),
+        &ctx("irc", &sessions),
         RemoteCommand::Help,
     )
     .await;
@@ -216,58 +220,108 @@ async fn help_needs_no_state() {
 
 #[tokio::test]
 async fn busy_state_is_per_channel_and_chat() {
-    let dir = tempfile::tempdir().unwrap();
-    mark_turn(dir.path(), "discord", "chat-1", true).await;
-    let (busy, other_channel) = with_store_read(dir.path(), |s| {
-        Ok((
-            s.is_busy("discord", "chat-1"),
-            s.is_busy("telegram", "chat-1"),
-        ))
-    })
-    .unwrap();
+    let sessions = store();
+    mark_turn(&sessions, "discord", "chat-1", true).await;
+    let busy = sessions.is_busy("discord", "chat-1").await.unwrap();
+    let other_channel = sessions.is_busy("telegram", "chat-1").await.unwrap();
     assert!(busy && !other_channel);
     let status = execute_remote_command(
         &FakeHost::default(),
-        &ctx("discord", dir.path()),
+        &ctx("discord", &sessions),
         RemoteCommand::Status,
     )
     .await;
     assert!(status.contains("in progress"));
-    mark_turn(dir.path(), "discord", "chat-1", false).await;
-    assert!(!with_store_read(dir.path(), |s| Ok(s.is_busy("discord", "chat-1"))).unwrap());
+    mark_turn(&sessions, "discord", "chat-1", false).await;
+    assert!(!sessions.is_busy("discord", "chat-1").await.unwrap());
 }
 
-#[test]
-fn legacy_telegram_bindings_are_adopted_and_left_untouched() {
+#[tokio::test]
+async fn legacy_telegram_bindings_are_adopted_once_and_left_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let legacy = dir.path().join("state/telegram_remote_sessions.json");
     std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
     let legacy_raw = r#"{"bindings":{"chat-9":{"thread_id":"thread-old","sender_key":"telegram_bob_chat-9","updated_at":"2026-01-01T00:00:00Z","title":"Old"}},"busy_reply_targets":{"chat-9":true}}"#;
     std::fs::write(&legacy, legacy_raw).unwrap();
 
-    let mut store = RemoteSessionStore::load(dir.path()).unwrap();
-    let binding = store.binding("telegram", "chat-9").cloned().unwrap();
+    let sessions = store();
+    assert_eq!(sessions.adopt_legacy(dir.path()).await.unwrap(), 1);
+    let binding = sessions.binding("telegram", "chat-9").await.unwrap().unwrap();
     assert_eq!(binding.thread_id, "thread-old");
-    assert!(!store.is_busy("telegram", "chat-9"), "busy is not adopted");
-    assert!(store.binding("discord", "chat-9").is_none());
-
-    store.set_busy("telegram", "chat-9", true);
-    store.save().unwrap();
+    assert!(
+        !sessions.is_busy("telegram", "chat-9").await.unwrap(),
+        "busy is not adopted"
+    );
+    assert!(sessions.binding("discord", "chat-9").await.unwrap().is_none());
     assert_eq!(std::fs::read_to_string(&legacy).unwrap(), legacy_raw);
+    assert!(!dir.path().join("state/channel_remote_sessions.json").exists());
 
-    // Once the shared store exists, it wins over the legacy file.
-    std::fs::write(&legacy, r#"{"bindings":{}}"#).unwrap();
-    let reloaded = RemoteSessionStore::load(dir.path()).unwrap();
-    assert!(reloaded.binding("telegram", "chat-9").is_some());
+    // The import runs once: a later change to the legacy file, or a binding the
+    // chat has since moved to, is never overwritten.
+    sessions
+        .set_binding("telegram", "chat-9", "thread-new".into(), "k".into(), None)
+        .await
+        .unwrap();
+    std::fs::write(&legacy, legacy_raw.replace("thread-old", "thread-stale")).unwrap();
+    assert_eq!(sessions.adopt_legacy(dir.path()).await.unwrap(), 0);
+    assert_eq!(
+        sessions.binding("telegram", "chat-9").await.unwrap().unwrap().thread_id,
+        "thread-new"
+    );
 }
 
-#[test]
-fn corrupt_store_resets_instead_of_failing() {
+#[tokio::test]
+async fn shared_legacy_file_wins_over_the_telegram_only_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = dir.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let binding = |thread: &str| {
+        format!(
+            r#"{{"thread_id":"{thread}","sender_key":"k","updated_at":"2026-01-01T00:00:00Z"}}"#
+        )
+    };
+    std::fs::write(
+        state.join("telegram_remote_sessions.json"),
+        format!(r#"{{"bindings":{{"c":{}}}}}"#, binding("telegram-only")),
+    )
+    .unwrap();
+    std::fs::write(
+        state.join("channel_remote_sessions.json"),
+        format!(r#"{{"bindings":{{"telegram:c":{}}}}}"#, binding("shared")),
+    )
+    .unwrap();
+    let sessions = store();
+    sessions.adopt_legacy(dir.path()).await.unwrap();
+    assert_eq!(
+        sessions.binding("telegram", "c").await.unwrap().unwrap().thread_id,
+        "shared"
+    );
+}
+
+#[tokio::test]
+async fn corrupt_legacy_file_is_skipped_instead_of_failing() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("state/channel_remote_sessions.json");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "{not json").unwrap();
-    let store = RemoteSessionStore::load(dir.path()).unwrap();
-    assert!(store.binding("telegram", "x").is_none());
+    let sessions = store();
+    assert_eq!(sessions.adopt_legacy(dir.path()).await.unwrap(), 0);
+    assert!(sessions.binding("telegram", "x").await.unwrap().is_none());
     assert_eq!(chat_key("slack", "C1"), "slack:C1");
+}
+
+#[tokio::test]
+async fn unavailable_storage_degrades_status_and_fails_new_without_losing_help() {
+    let sessions = RemoteSessionStore::unavailable();
+    let host = FakeHost::default();
+    let c = ctx("telegram", &sessions);
+    assert_eq!(
+        execute_remote_command(&host, &c, RemoteCommand::Help).await,
+        build_remote_help_response()
+    );
+    let status = execute_remote_command(&host, &c, RemoteCommand::Status).await;
+    assert!(status.contains("none"), "{status}");
+    let new = execute_remote_command(&host, &c, RemoteCommand::New).await;
+    assert!(new.contains("failed to persist the chat binding"), "{new}");
+    assert!(sessions.binding("telegram", "chat-1").await.is_err());
 }
