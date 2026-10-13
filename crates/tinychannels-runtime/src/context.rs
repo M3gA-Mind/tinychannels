@@ -2,11 +2,6 @@
 
 use crate::text::truncate_with_ellipsis;
 use crate::traits::ChannelMessage;
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-
-/// Per-sender conversation history for channel messages.
-pub type ConversationHistoryMap = Arc<Mutex<HashMap<String, Vec<ChatMessage>>>>;
 pub use tinychannels_bus::context::*;
 
 #[async_trait::async_trait]
@@ -63,42 +58,6 @@ pub fn conversation_history_key_parts(
         }
     }
     base_key
-}
-
-pub fn compact_history(turns: &mut Vec<ChatMessage>) -> bool {
-    if turns.is_empty() {
-        return false;
-    }
-
-    let keep_from = turns
-        .len()
-        .saturating_sub(CHANNEL_HISTORY_COMPACT_KEEP_MESSAGES);
-    let mut compacted = turns[keep_from..].to_vec();
-
-    for turn in &mut compacted {
-        if turn.content.chars().count() > CHANNEL_HISTORY_COMPACT_CONTENT_CHARS {
-            turn.content =
-                truncate_with_ellipsis(&turn.content, CHANNEL_HISTORY_COMPACT_CONTENT_CHARS);
-        }
-    }
-
-    *turns = compacted;
-    true
-}
-
-pub fn clear_sender_history(histories: &ConversationHistoryMap, sender_key: &str) {
-    histories
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .remove(sender_key);
-}
-
-pub fn compact_sender_history(histories: &ConversationHistoryMap, sender_key: &str) -> bool {
-    let mut histories = histories.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(turns) = histories.get_mut(sender_key) else {
-        return false;
-    };
-    compact_history(turns)
 }
 
 pub fn should_skip_memory_context_entry(key: &str, content: &str) -> bool {

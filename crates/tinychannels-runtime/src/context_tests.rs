@@ -1,4 +1,6 @@
 use super::*;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 struct MockMemory {
     entries: Vec<MemoryEntry>,
@@ -51,23 +53,6 @@ fn conversation_history_keys_do_not_collide_on_underscores() {
     let right = conversation_history_key_parts("a", "b_c", "room", None);
 
     assert_ne!(left, right);
-}
-
-#[test]
-fn compact_history_keeps_recent_turns_and_truncates_content() {
-    let mut history = (0..20)
-        .map(|idx| {
-            if idx == 19 {
-                ChatMessage::assistant("x".repeat(700))
-            } else {
-                ChatMessage::user(format!("turn {idx}"))
-            }
-        })
-        .collect::<Vec<_>>();
-
-    assert!(compact_history(&mut history));
-    assert_eq!(history.len(), CHANNEL_HISTORY_COMPACT_KEEP_MESSAGES);
-    assert!(history.last().unwrap().content.chars().count() <= 601);
 }
 
 #[test]
