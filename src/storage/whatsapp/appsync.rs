@@ -8,7 +8,7 @@ use serde_json::json;
 use wacore::appstate::hash::HashState;
 use wacore::store::error::Result;
 use wacore::store::traits::{AppStateSyncKey, AppSyncStore};
-use wacore_appstate::processor::AppStateMutationMAC;
+use wacore::appstate::processor::AppStateMutationMAC;
 
 use super::{DocumentWhatsAppBackend, SYNC_KEY, json_err};
 
