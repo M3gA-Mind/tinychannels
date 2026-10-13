@@ -85,11 +85,13 @@ fn channel_controller_operations_have_closed_typed_wire_tags() {
         round_trip,
         ChannelControllerRequest::TestChannel { .. }
     ));
-    assert!(serde_json::from_value::<ChannelControllerRequest>(json!({
-        "operation":"execute_arbitrary",
-        "request":{}
-    }))
-    .is_err());
+    assert!(
+        serde_json::from_value::<ChannelControllerRequest>(json!({
+            "operation":"execute_arbitrary",
+            "request":{}
+        }))
+        .is_err()
+    );
 }
 
 #[test]
@@ -211,8 +213,8 @@ fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
     }
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible(CONTRACT_VERSION + 1));
-    assert_eq!(CONTRACT_VERSION, 20);
-    assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 20));
+    assert_eq!(CONTRACT_VERSION, 21);
+    assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 21));
 }
 
 #[test]

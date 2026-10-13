@@ -41,3 +41,5 @@ deny = []
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+# tinystoragedrivers is consumed by release tag (like tinybus by git rev).
+allow-git = ["https://github.com/tinyhumansai/tinystoragedrivers"]

@@ -3,6 +3,7 @@ use crate::host::HostChannels;
 use async_trait::async_trait;
 use std::path::PathBuf;
 use tinybus::{Error, Result};
+use tinychannels::remote::session_store::RemoteSessionStore;
 use tinychannels::remote::{RemoteCommandContext, RemoteControlHost};
 use tinychannels_bus::module_remote::{
     NewRemoteThread, RemoteHostRequest, RemoteHostResult, RemoteOperation, RemoteOperationResult,
@@ -74,6 +75,27 @@ fn workspace(path: String) -> Result<PathBuf> {
     }
     Ok(path.into())
 }
+/// The remote-session store on the module's scoped host storage, with the
+/// legacy per-workspace JSON files imported once. A host without storage gets
+/// a store that reports itself unavailable, so `/help` and ordinary messages
+/// still work and the commands that need bindings say why they cannot.
+async fn sessions(callback: &HostChannels, workspace: &std::path::Path) -> RemoteSessionStore {
+    let docs = match callback.documents().await {
+        Ok(docs) => docs,
+        Err(error) => {
+            tracing::warn!(
+                "[channel-remote] host storage unavailable: {:?}",
+                error.kind()
+            );
+            return RemoteSessionStore::unavailable();
+        }
+    };
+    let store = RemoteSessionStore::new(docs);
+    if let Err(error) = store.adopt_legacy(workspace).await {
+        tracing::warn!("[channel-remote] legacy session import failed: {error}");
+    }
+    store
+}
 pub(crate) async fn execute(
     callback: &HostChannels,
     request: RemoteOperation,
@@ -92,7 +114,8 @@ pub(crate) async fn execute(
         } => {
             let workspace = workspace(workspace_dir)?;
             if tinychannels::capabilities_for(&channel).remote_control {
-                tinychannels::remote::mark_turn(&workspace, &channel, &reply_target, busy).await;
+                let store = sessions(callback, &workspace).await;
+                tinychannels::remote::mark_turn(&store, &channel, &reply_target, busy).await;
             }
             None
         }
@@ -114,7 +137,7 @@ pub(crate) async fn execute(
                         channel: message.channel.clone(),
                         reply_target: message.reply_target.clone(),
                         sender_key: tinychannels::context::conversation_history_key(&message),
-                        workspace_dir: workspace,
+                        sessions: sessions(callback, &workspace).await,
                     };
                     Some(
                         tinychannels::remote::execute_remote_command(

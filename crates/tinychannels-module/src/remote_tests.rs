@@ -5,7 +5,7 @@ use tokio::sync::Mutex;
 
 #[derive(Clone)]
 struct Callback {
-    workspace: PathBuf,
+    sessions: tinychannels::remote::session_store::RemoteSessionStore,
     calls: Arc<Mutex<Vec<String>>>,
 }
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
@@ -27,23 +27,26 @@ impl Callback {
             }
             RemoteHostRequest::ClearHistory { sender_key } => {
                 assert_eq!(sender_key, "telegram_sender_chat");
-                tinychannels::remote::session_store::with_store_read(&self.workspace, |store| {
-                    assert!(store.binding("telegram", "chat").is_none());
-                    Ok(())
-                })
-                .unwrap();
+                assert!(
+                    self.sessions
+                        .binding("telegram", "chat")
+                        .await
+                        .unwrap()
+                        .is_none()
+                );
                 calls.push("clear".into());
                 RemoteHostResult::Completed
             }
             RemoteHostRequest::InvalidateThread { thread_id } => {
-                tinychannels::remote::session_store::with_store_read(&self.workspace, |store| {
-                    assert_eq!(
-                        store.binding("telegram", "chat").unwrap().thread_id,
-                        thread_id
-                    );
-                    Ok(())
-                })
-                .unwrap();
+                assert_eq!(
+                    self.sessions
+                        .binding("telegram", "chat")
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .thread_id,
+                    thread_id
+                );
                 calls.push("invalidate".into());
                 RemoteHostResult::Completed
             }
@@ -68,7 +71,7 @@ impl Callback {
         Ok(ChannelBackendResult::RemoteControl(result))
     }
 }
-async fn fixture(workspace: &std::path::Path) -> (HostChannels, Callback) {
+async fn fixture(_workspace: &std::path::Path) -> (HostChannels, Callback) {
     let bus = MemoryBus::new();
     Broker::new().spawn(bus.clone());
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
@@ -78,8 +81,11 @@ async fn fixture(workspace: &std::path::Path) -> (HostChannels, Callback) {
         .request_name(tinychannels_bus::HOST_BUS_NAME)
         .await
         .unwrap();
+    let storage = crate::storage_fixture::StorageHost::serve(&connection, "remote").await;
     let callback = Callback {
-        workspace: workspace.to_owned(),
+        sessions: tinychannels::remote::session_store::RemoteSessionStore::new(
+            storage.docs("remote"),
+        ),
         calls: Arc::new(Mutex::new(Vec::new())),
     };
     connection
@@ -176,5 +182,30 @@ async fn ordinary_messages_and_unsupported_channels_do_not_call_host_state() {
         );
     }
     assert!(callback.calls.lock().await.is_empty());
+    host.shutdown().await.unwrap();
+}
+#[tokio::test]
+async fn legacy_workspace_bindings_are_imported_once_and_left_untouched() {
+    let workspace = tempfile::tempdir().unwrap();
+    let state = workspace.path().join("state");
+    std::fs::create_dir_all(&state).unwrap();
+    let legacy = state.join("telegram_remote_sessions.json");
+    let body = serde_json::json!({
+        "bindings": { "chat": {
+            "thread_id": "thread-legacy", "sender_key": "telegram_sender_chat",
+            "updated_at": "2025-01-01T00:00:00Z", "title": "Legacy chat"
+        }}
+    })
+    .to_string();
+    std::fs::write(&legacy, &body).unwrap();
+    let (host, _callback) = fixture(workspace.path()).await;
+    let status = execute(&host, command(workspace.path(), "/status", "telegram"))
+        .await
+        .unwrap()
+        .reply
+        .unwrap();
+    assert!(status.contains("thread-legacy"), "{status}");
+    assert_eq!(std::fs::read_to_string(&legacy).unwrap(), body);
+    assert!(!state.join("channel_remote_sessions.json").exists());
     host.shutdown().await.unwrap();
 }

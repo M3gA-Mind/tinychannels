@@ -103,29 +103,12 @@ pub mod host_methods {
     pub const REPORT_STATUS: &str = "ReportStatus";
     /// `PersistAllowedIdentity` — persist a provider-authorized identity host-side.
     pub const PERSIST_ALLOWED_IDENTITY: &str = "PersistAllowedIdentity";
-    /// Atomically store a bounded pending delivery before provider I/O.
-    /// Identical id retries are idempotent; changed intent under one id fails.
-    pub const SAVE_PENDING_DELIVERY: &str = "SavePendingDelivery";
-    /// Read one pending delivery by idempotency key.
-    pub const LOAD_PENDING_DELIVERY: &str = "LoadPendingDelivery";
-    /// Read at most `DELIVERY_PENDING_CAPACITY` records in enqueue order.
-    pub const LOAD_PENDING_DELIVERIES: &str = "LoadPendingDeliveries";
-    /// Remove a pending delivery after terminal success.
-    pub const REMOVE_PENDING_DELIVERY: &str = "RemovePendingDelivery";
-    /// Move a permanently failed delivery to host-owned failed storage.
-    pub const SAVE_FAILED_DELIVERY: &str = "SaveFailedDelivery";
-    /// Read a permanently failed delivery by idempotency key.
-    pub const LOAD_FAILED_DELIVERY: &str = "LoadFailedDelivery";
-    /// Persist an idempotent successful result before acknowledging the item.
-    /// The host enforces `DELIVERY_RESULT_CAPACITY` and `DELIVERY_RESULT_TTL_SECONDS`.
-    pub const SAVE_DELIVERY_RESULT: &str = "SaveDeliveryResult";
-    /// Replay a successful result after a lost final reply.
-    pub const LOAD_DELIVERY_RESULT: &str = "LoadDeliveryResult";
     /// `Transcribe` — use the host's configured speech recognition provider.
     pub const TRANSCRIBE: &str = "Transcribe";
     /// `PublishEvent` — publish one provider event through the host event sink.
     pub const PUBLISH_EVENT: &str = "PublishEvent";
-    /// Call a narrow host persistence, credential, or managed API capability.
+    /// Call a narrow host credential or managed API capability. Durable state is not
+    /// one of them: modules persist through the storage bus instead.
     pub const DISPATCH_CONTROLLER_BACKEND: &str = "DispatchControllerBackend";
 }
 
@@ -169,18 +152,10 @@ pub const METHODS: [&str; 35] = [
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 15] = [
+pub const HOST_METHODS: [&str; 7] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,
-    host_methods::SAVE_PENDING_DELIVERY,
-    host_methods::LOAD_PENDING_DELIVERY,
-    host_methods::LOAD_PENDING_DELIVERIES,
-    host_methods::REMOVE_PENDING_DELIVERY,
-    host_methods::SAVE_FAILED_DELIVERY,
-    host_methods::LOAD_FAILED_DELIVERY,
-    host_methods::SAVE_DELIVERY_RESULT,
-    host_methods::LOAD_DELIVERY_RESULT,
     host_methods::TRANSCRIBE,
     host_methods::PUBLISH_EVENT,
     host_methods::DISPATCH_CONTROLLER_BACKEND,

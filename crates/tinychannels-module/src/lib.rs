@@ -28,6 +28,8 @@ mod relay;
 mod remote;
 mod runtime;
 mod service;
+#[cfg(test)]
+mod storage_fixture;
 
 /// Constructs this module for registration with an in-process TinyBus host.
 #[cfg(feature = "static-link")]

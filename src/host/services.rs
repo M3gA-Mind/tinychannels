@@ -239,6 +239,21 @@ pub trait AllowlistStore: Send + Sync {
     async fn persist_allowed_identity(&self, channel: &str, identity: &str) -> anyhow::Result<()>;
 }
 
+/// A handle to the host's durable storage, on the tinystoragedrivers document
+/// port. Needed by: **whatsapp_web** (the linked-device session survives a
+/// restart instead of asking for a new QR scan). The handle is already scoped
+/// by the host; a provider never names a scope, database or backend.
+///
+/// Resolution is async because a loaded module reaches storage over the bus
+/// and connects on first use.
+#[async_trait]
+pub trait StorageProvider: Send + Sync {
+    /// The scoped document store, or why it is unavailable.
+    async fn documents(
+        &self,
+    ) -> anyhow::Result<std::sync::Arc<dyn tinystoragedrivers_core::DocumentStore>>;
+}
+
 // ---------------------------------------------------------------------------
 // Run ledger (telemetry / observability)
 // ---------------------------------------------------------------------------

@@ -15,12 +15,9 @@
 
 pub mod session_store;
 
-use std::path::PathBuf;
-
 use async_trait::async_trait;
 
 pub use session_store::{ChatBinding, RemoteSessionStore, chat_key, mark_turn};
-use session_store::{with_store, with_store_read};
 
 const LOG_PREFIX: &str = "[channel-remote]";
 
@@ -120,7 +117,7 @@ pub trait RemoteControlHost: Send + Sync {
 }
 
 /// Who issued a remote-control command, and where.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct RemoteCommandContext {
     /// Provider id of the channel (`telegram`, `discord`, ...).
     pub channel: String,
@@ -128,8 +125,8 @@ pub struct RemoteCommandContext {
     pub reply_target: String,
     /// Conversation history key of the sender.
     pub sender_key: String,
-    /// Workspace holding the session store.
-    pub workspace_dir: PathBuf,
+    /// Chat → thread bindings and busy state.
+    pub sessions: RemoteSessionStore,
 }
 
 /// Run a remote-control command and return the reply text.
@@ -152,25 +149,20 @@ pub async fn execute_remote_command(
 }
 
 async fn read_chat_state(ctx: &RemoteCommandContext) -> (Option<ChatBinding>, bool) {
-    let workspace = ctx.workspace_dir.clone();
-    let (channel, reply_target) = (ctx.channel.clone(), ctx.reply_target.clone());
-    tokio::task::spawn_blocking(move || {
-        with_store_read(&workspace, |store| {
-            Ok((
-                store.binding(&channel, &reply_target).cloned(),
-                store.is_busy(&channel, &reply_target),
-            ))
-        })
-    })
-    .await
-    .unwrap_or_else(|join_err| {
-        tracing::warn!("{LOG_PREFIX} join error reading session store: {join_err}");
-        Ok((None, false))
-    })
-    .unwrap_or_else(|store_err| {
-        tracing::warn!("{LOG_PREFIX} session store error: {store_err}");
-        (None, false)
-    })
+    let binding = ctx
+        .sessions
+        .binding(&ctx.channel, &ctx.reply_target)
+        .await
+        .unwrap_or_else(|error| {
+            tracing::warn!("{LOG_PREFIX} session store error: {error}");
+            None
+        });
+    let busy = ctx
+        .sessions
+        .is_busy(&ctx.channel, &ctx.reply_target)
+        .await
+        .unwrap_or(false);
+    (binding, busy)
 }
 
 async fn status(host: &dyn RemoteControlHost, ctx: &RemoteCommandContext) -> String {
@@ -272,24 +264,16 @@ async fn new_session(
         );
     }
 
-    let workspace_dir = ctx.workspace_dir.clone();
-    let (channel, reply_target) = (ctx.channel.clone(), ctx.reply_target.clone());
-    let (thread_owned, sender_owned, title_owned) =
-        (thread_id.clone(), ctx.sender_key.clone(), title.clone());
-    let bind_result = tokio::task::spawn_blocking(move || {
-        with_store(&workspace_dir, |store| {
-            store.set_binding(
-                &channel,
-                &reply_target,
-                thread_owned,
-                sender_owned,
-                Some(title_owned),
-            );
-            Ok(())
-        })
-    })
-    .await
-    .unwrap_or_else(|e| Err(anyhow::anyhow!("join error: {e}")));
+    let bind_result = ctx
+        .sessions
+        .set_binding(
+            &ctx.channel,
+            &ctx.reply_target,
+            thread_id.clone(),
+            ctx.sender_key.clone(),
+            Some(title.clone()),
+        )
+        .await;
 
     if let Err(error) = bind_result {
         tracing::warn!("{LOG_PREFIX} new: persist binding failed: {error}");

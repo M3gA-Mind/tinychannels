@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::BTreeMap;
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 
@@ -179,21 +178,9 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
     host.shutdown().await.unwrap();
 }
 
-#[derive(Default)]
-struct QueueScope {
-    pending: BTreeMap<String, tinychannels_bus::DeliveryQueueEntry>,
-    failed: BTreeMap<String, tinychannels_bus::DeliveryQueueEntry>,
-    results: BTreeMap<String, tinychannels_bus::DeliveryTerminalResult>,
-}
-
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct DurableHost {
-    current_scope: Arc<Mutex<String>>,
-    scopes: Arc<Mutex<HashMap<String, QueueScope>>>,
-    fail_pending_write: Arc<std::sync::atomic::AtomicBool>,
-    fail_queue_read: Arc<std::sync::atomic::AtomicBool>,
-    lose_result_reply: Arc<std::sync::atomic::AtomicBool>,
-    pending_reads: Arc<std::sync::atomic::AtomicUsize>,
+    storage: Arc<crate::storage_fixture::StorageHost>,
 }
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
@@ -221,151 +208,6 @@ impl DurableHost {
         _identity: String,
     ) -> tinybus::Result<()> {
         Ok(())
-    }
-
-    async fn save_pending_delivery(
-        &self,
-        entry: tinychannels_bus::DeliveryQueueEntry,
-    ) -> tinybus::Result<()> {
-        if self.fail_pending_write.swap(false, Ordering::SeqCst) {
-            return Err(tinybus::Error::failed("fixture pending write failed"));
-        }
-        let scope = self.current_scope.lock().await.clone();
-        let mut scopes = self.scopes.lock().await;
-        let queue = scopes.entry(scope).or_default();
-        if queue.pending.len() >= tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY
-            && !queue.pending.contains_key(&entry.id)
-        {
-            return Err(tinybus::Error::failed("fixture pending queue is full"));
-        }
-        if let Some(existing) = queue.pending.get(&entry.id)
-            && existing.intent != entry.intent
-        {
-            return Err(tinybus::Error::failed("fixture idempotency conflict"));
-        }
-        queue.pending.insert(entry.id.clone(), entry);
-        Ok(())
-    }
-
-    async fn load_pending_delivery(
-        &self,
-        id: String,
-    ) -> tinybus::Result<Option<tinychannels_bus::DeliveryQueueEntry>> {
-        let scope = self.current_scope.lock().await.clone();
-        Ok(self
-            .scopes
-            .lock()
-            .await
-            .get(&scope)
-            .and_then(|queue| queue.pending.get(&id).cloned()))
-    }
-
-    async fn load_pending_deliveries(
-        &self,
-    ) -> tinybus::Result<Vec<tinychannels_bus::DeliveryQueueEntry>> {
-        self.pending_reads.fetch_add(1, Ordering::SeqCst);
-        if self.fail_queue_read.load(Ordering::SeqCst) {
-            return Err(tinybus::Error::failed("fixture pending read failed"));
-        }
-        let scope = self.current_scope.lock().await.clone();
-        Ok(self
-            .scopes
-            .lock()
-            .await
-            .get(&scope)
-            .map(|queue| queue.pending.values().cloned().collect())
-            .unwrap_or_default())
-    }
-
-    async fn remove_pending_delivery(&self, id: String) -> tinybus::Result<()> {
-        let scope = self.current_scope.lock().await.clone();
-        if let Some(queue) = self.scopes.lock().await.get_mut(&scope) {
-            queue.pending.remove(&id);
-        }
-        Ok(())
-    }
-
-    async fn save_failed_delivery(
-        &self,
-        entry: tinychannels_bus::DeliveryQueueEntry,
-    ) -> tinybus::Result<()> {
-        let scope = self.current_scope.lock().await.clone();
-        self.scopes
-            .lock()
-            .await
-            .entry(scope)
-            .or_default()
-            .failed
-            .insert(entry.id.clone(), entry);
-        Ok(())
-    }
-
-    async fn load_failed_delivery(
-        &self,
-        id: String,
-    ) -> tinybus::Result<Option<tinychannels_bus::DeliveryQueueEntry>> {
-        let scope = self.current_scope.lock().await.clone();
-        Ok(self
-            .scopes
-            .lock()
-            .await
-            .get(&scope)
-            .and_then(|queue| queue.failed.get(&id).cloned()))
-    }
-
-    async fn save_delivery_result(
-        &self,
-        result: tinychannels_bus::DeliveryTerminalResult,
-    ) -> tinybus::Result<()> {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        let scope = self.current_scope.lock().await.clone();
-        let mut scopes = self.scopes.lock().await;
-        let queue = scopes.entry(scope).or_default();
-        queue.results.retain(|_, saved| {
-            saved.completed_at_unix_ms.saturating_add(
-                tinychannels_bus::module_delivery::DELIVERY_RESULT_TTL_SECONDS * 1000,
-            ) > now
-        });
-        if queue.results.len() >= tinychannels_bus::module_delivery::DELIVERY_RESULT_CAPACITY
-            && !queue.results.contains_key(&result.id)
-        {
-            return Err(tinybus::Error::failed("fixture result capacity exceeded"));
-        }
-        if let Some(existing) = queue.results.get(&result.id)
-            && existing != &result
-        {
-            return Err(tinybus::Error::failed("fixture result key conflicts"));
-        }
-        queue.results.insert(result.id.clone(), result);
-        if self.lose_result_reply.swap(false, Ordering::SeqCst) {
-            return Err(tinybus::Error::failed("fixture lost terminal reply"));
-        }
-        Ok(())
-    }
-
-    async fn load_delivery_result(
-        &self,
-        id: String,
-    ) -> tinybus::Result<Option<tinychannels_bus::DeliveryTerminalResult>> {
-        let scope = self.current_scope.lock().await.clone();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-        Ok(self
-            .scopes
-            .lock()
-            .await
-            .get(&scope)
-            .and_then(|queue| queue.results.get(&id).cloned())
-            .filter(|result| {
-                result.completed_at_unix_ms.saturating_add(
-                    tinychannels_bus::module_delivery::DELIVERY_RESULT_TTL_SECONDS * 1000,
-                ) > now
-            }))
     }
 }
 
@@ -420,8 +262,7 @@ async fn channels_with_store(
         .await
         .unwrap();
     let callbacks = DurableHost {
-        current_scope: Arc::new(Mutex::new("scope-a".into())),
-        ..DurableHost::default()
+        storage: Arc::new(crate::storage_fixture::StorageHost::serve(&server, "scope-a").await),
     };
     server
         .serve_at(
@@ -473,7 +314,11 @@ fn required_intent(id: &str, text: &str) -> ChannelOutboundIntent {
 async fn required_send_persists_before_delivery_and_replays_lost_final_reply() {
     let (sent, mut received) = tokio::sync::mpsc::channel(4);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
-    callbacks.lose_result_reply.store(true, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .lose_result_reply
+        .store(true, Ordering::SeqCst);
     let intent = required_intent("delivery-replay", "confidential body");
 
     channels
@@ -496,7 +341,7 @@ async fn required_send_persists_before_delivery_and_replays_lost_final_reply() {
             .is_err()
     );
 
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
     assert!(scope.pending.is_empty());
     assert!(scope.failed.is_empty());
@@ -507,7 +352,11 @@ async fn required_send_persists_before_delivery_and_replays_lost_final_reply() {
 async fn pending_persistence_failure_refuses_before_provider_send() {
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
-    callbacks.fail_pending_write.store(true, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .fail_pending_write
+        .store(true, Ordering::SeqCst);
     assert!(
         channels
             .send_channel_intent("fixture".into(), required_intent("persist-fail", "body"))
@@ -519,7 +368,7 @@ async fn pending_persistence_failure_refuses_before_provider_send() {
         channels.delivery_admission.try_lock().is_ok(),
         "admission guard leaked"
     );
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     assert!(scopes.get("scope-a").is_none());
     drop(scopes);
     channels.shutdown().await.unwrap();
@@ -559,7 +408,7 @@ async fn required_send_refuses_invalid_and_oversized_intents_before_persistence(
             .is_err()
     );
     assert!(received.try_recv().is_err());
-    assert!(callbacks.scopes.lock().await.is_empty());
+    assert!(callbacks.storage.snapshot().await.is_empty());
     channels.shutdown().await.unwrap();
 }
 
@@ -576,7 +425,7 @@ async fn missing_required_delivery_target_keeps_the_intent_pending() {
             .is_err()
     );
     assert!(received.try_recv().is_err());
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     assert_eq!(scopes.get("scope-a").unwrap().pending.len(), 1);
     assert!(scopes.get("scope-a").unwrap().failed.is_empty());
     drop(scopes);
@@ -610,7 +459,7 @@ async fn ended_provider_does_not_mark_unstarted_delivery_as_unknown_send() {
             .is_err()
     );
     assert_eq!(send_calls.load(Ordering::SeqCst), 0);
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let queue = scopes.get("scope-a").unwrap();
     assert!(queue.failed.is_empty());
     let pending = queue.pending.get("ended-provider").unwrap();
@@ -628,7 +477,7 @@ async fn replayed_terminal_result_acknowledges_a_remaining_pending_record() {
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
     let intent = required_intent("terminal-cleanup", "body");
     let fingerprint = intent_fingerprint(&intent).unwrap();
-    let store = crate::delivery::HostDeliveryStore::new(channels.host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
     store
         .save_pending(QueuedDelivery::new(
             "terminal-cleanup",
@@ -651,16 +500,7 @@ async fn replayed_terminal_result_acknowledges_a_remaining_pending_record() {
         .await
         .unwrap();
     assert!(received.try_recv().is_err());
-    assert!(
-        callbacks
-            .scopes
-            .lock()
-            .await
-            .get("scope-a")
-            .unwrap()
-            .pending
-            .is_empty()
-    );
+    assert!(callbacks.storage.pending("scope-a").await.is_empty());
     channels.shutdown().await.unwrap();
 }
 
@@ -671,7 +511,7 @@ async fn startup_recovery_acks_a_matching_terminal_result_without_resending() {
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
     let intent = required_intent("recovery-terminal", "already sent");
-    let store = crate::delivery::HostDeliveryStore::new(channels.host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
     let mut entry = QueuedDelivery::new("recovery-terminal", intent.clone(), now_unix_ms());
     entry.recovery_state = Some(DeliveryRecoveryState::SendAttemptStarted);
     entry.platform_send_started_at_unix_ms = Some(now_unix_ms());
@@ -689,7 +529,7 @@ async fn startup_recovery_acks_a_matching_terminal_result_without_resending() {
         .await
         .unwrap();
 
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
     assert!(scope.pending.is_empty());
     assert!(scope.failed.is_empty());
@@ -708,7 +548,7 @@ async fn startup_recovery_rejects_a_conflicting_terminal_result() {
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
     let intent = required_intent("recovery-conflict", "pending intent");
-    let store = crate::delivery::HostDeliveryStore::new(channels.host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
     let mut entry = QueuedDelivery::new("recovery-conflict", intent, now_unix_ms());
     entry.recovery_state = Some(DeliveryRecoveryState::SendAttemptStarted);
     entry.platform_send_started_at_unix_ms = Some(now_unix_ms());
@@ -728,7 +568,7 @@ async fn startup_recovery_rejects_a_conflicting_terminal_result() {
             .is_err(),
         "a terminal result for a different intent is a key conflict"
     );
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
     assert_eq!(scope.pending.len(), 1, "conflicts stay retryable");
     assert!(scope.failed.is_empty());
@@ -745,7 +585,7 @@ async fn failed_and_pending_keys_refuse_reuse_with_different_intents() {
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
     let failed = required_intent("failed-conflict", "original");
     let pending = required_intent("pending-conflict", "original");
-    let store = crate::delivery::HostDeliveryStore::new(channels.host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
     store
         .save_failed(QueuedDelivery::new("failed-conflict", failed, 1))
         .await
@@ -783,7 +623,7 @@ async fn failed_and_pending_keys_refuse_reuse_with_different_intents() {
             .is_err()
     );
     assert!(received.try_recv().is_err());
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let queue = scopes.get("scope-a").unwrap();
     assert_eq!(queue.failed.len(), 1);
     assert_eq!(queue.pending.len(), 1);
@@ -796,20 +636,16 @@ async fn changed_intent_cannot_reuse_a_terminal_result_key() {
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
     callbacks
-        .scopes
-        .lock()
-        .await
-        .entry("scope-a".into())
-        .or_default()
-        .results
-        .insert(
-            "result-conflict".into(),
+        .storage
+        .seed_result(
+            "scope-a",
             tinychannels_bus::DeliveryTerminalResult {
                 id: "result-conflict".into(),
                 intent_fingerprint: "a".repeat(64),
                 completed_at_unix_ms: now_unix_ms(),
             },
-        );
+        )
+        .await;
 
     assert!(
         channels
@@ -828,12 +664,20 @@ async fn changed_intent_cannot_reuse_a_terminal_result_key() {
 async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
     let (sent, _received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
-    callbacks.fail_queue_read.store(true, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(true, Ordering::SeqCst);
 
     assert!(channels.stop_channel("fixture".into()).await.is_err());
     assert!(channels.running.lock().await.contains_key("fixture"));
 
-    callbacks.fail_queue_read.store(false, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(false, Ordering::SeqCst);
     channels.stop_channel("fixture".into()).await.unwrap();
     assert!(!channels.running.lock().await.contains_key("fixture"));
     channels.shutdown().await.unwrap();
@@ -878,7 +722,7 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
             .is_err()
     );
     {
-        let scopes = callbacks.scopes.lock().await;
+        let scopes = callbacks.storage.snapshot().await;
         let scope = scopes.get("scope-a").unwrap();
         assert_eq!(scope.pending.len(), 1);
         assert!(scope.failed.is_empty());
@@ -888,7 +732,7 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
         .await
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
     assert!(scope.pending.is_empty());
     assert_eq!(scope.failed.len(), 1);
@@ -902,7 +746,7 @@ async fn startup_recovery_is_ordered_and_respects_host_user_scope() {
 
     let (sent, mut received) = tokio::sync::mpsc::channel(4);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
-    let store = crate::delivery::HostDeliveryStore::new(channels.host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
     let later = required_intent("recovery-later", "later");
     let earlier = required_intent("recovery-earlier", "earlier");
     store
@@ -913,7 +757,7 @@ async fn startup_recovery_is_ordered_and_respects_host_user_scope() {
         .save_pending(QueuedDelivery::new("recovery-earlier", earlier, 10))
         .await
         .unwrap();
-    *callbacks.current_scope.lock().await = "scope-b".into();
+    callbacks.storage.set_scope("scope-b");
     recover_delivery_channel(&channels.host, &channels.running, "fixture")
         .await
         .unwrap();
@@ -922,7 +766,7 @@ async fn startup_recovery_is_ordered_and_respects_host_user_scope() {
         "another user scope stays isolated"
     );
 
-    *callbacks.current_scope.lock().await = "scope-a".into();
+    callbacks.storage.set_scope("scope-a");
     recover_delivery_channel(&channels.host, &channels.running, "fixture")
         .await
         .unwrap();
@@ -937,7 +781,7 @@ async fn shutdown_drains_retryable_queue_before_stopping_provider() {
 
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let (channels, _callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
-    let store = crate::delivery::HostDeliveryStore::new(channels.host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
     let intent = required_intent("shutdown-drain", "drain before stop");
     store
         .save_pending(QueuedDelivery::new("shutdown-drain", intent, 1))
@@ -961,7 +805,7 @@ async fn shutdown_store_failure_still_joins_provider_and_can_retry_persistence()
         .get("fixture")
         .unwrap()
         .clone();
-    let store = crate::delivery::HostDeliveryStore::new(channels.host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
     let intent = required_intent("shutdown-store-outage", "retain for restart");
     store
         .save_pending(QueuedDelivery::new(
@@ -972,7 +816,11 @@ async fn shutdown_store_failure_still_joins_provider_and_can_retry_persistence()
         .await
         .unwrap();
     channels.relays.reserve().await.unwrap();
-    callbacks.fail_queue_read.store(true, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(true, Ordering::SeqCst);
 
     assert!(channels.shutdown().await.is_err());
     assert!(
@@ -985,14 +833,7 @@ async fn shutdown_store_failure_still_joins_provider_and_can_retry_persistence()
         "relay owner must be stopped"
     );
     assert_eq!(
-        callbacks
-            .scopes
-            .lock()
-            .await
-            .get("scope-a")
-            .unwrap()
-            .pending
-            .len(),
+        callbacks.storage.pending("scope-a").await.len(),
         1,
         "queue data remains host-owned and retryable"
     );
@@ -1001,35 +842,17 @@ async fn shutdown_store_failure_still_joins_provider_and_can_retry_persistence()
         "host callback owner must be closed after shutdown cleanup"
     );
 
-    callbacks.fail_queue_read.store(false, Ordering::SeqCst);
+    callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(false, Ordering::SeqCst);
     channels.shutdown().await.unwrap();
     assert_eq!(
-        callbacks
-            .scopes
-            .lock()
-            .await
-            .get("scope-a")
-            .unwrap()
-            .pending
-            .len(),
+        callbacks.storage.pending("scope-a").await.len(),
         1,
         "a stopped provider leaves the durable entry for the next start"
     );
-}
-
-#[derive(Clone)]
-struct FailingRuntimeDeliveryHost(Arc<std::sync::atomic::AtomicBool>);
-
-#[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
-impl FailingRuntimeDeliveryHost {
-    async fn load_pending_deliveries(
-        &self,
-    ) -> tinybus::Result<Vec<tinychannels_bus::DeliveryQueueEntry>> {
-        if self.0.load(Ordering::SeqCst) {
-            return Err(tinybus::Error::failed("fixture runtime store unavailable"));
-        }
-        Ok(Vec::new())
-    }
 }
 
 #[tokio::test]
@@ -1042,7 +865,11 @@ async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry(
     let host_server = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let root_callbacks = DurableHost::default();
+    let root_callbacks = DurableHost {
+        storage: Arc::new(
+            crate::storage_fixture::StorageHost::serve(&host_server, "scope-a").await,
+        ),
+    };
     host_server
         .serve_at(
             tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
@@ -1072,14 +899,13 @@ async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry(
     channels.relays.reserve().await.unwrap();
 
     let reservation = runtimes.reserve().await.unwrap();
-    let fail_runtime_store = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    host_server
-        .serve_at(
-            reservation.host_object_path.clone().try_into().unwrap(),
-            FailingRuntimeDeliveryHost(fail_runtime_store.clone()),
-        )
-        .await
-        .unwrap();
+    // The nested runtime shares the module's storage connection, so one
+    // outage on the pending queue fails both the nested and the root cleanup.
+    root_callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(true, Ordering::SeqCst);
     runtimes.start(reservation.handle.clone()).await.unwrap();
 
     assert!(channels.shutdown().await.is_err());
@@ -1093,7 +919,14 @@ async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry(
     );
     assert!(channels.running.lock().await.is_empty());
     assert!(channels.relays.is_empty().await);
-    assert!(root_callbacks.pending_reads.load(Ordering::SeqCst) > 0);
+    assert!(
+        root_callbacks
+            .storage
+            .faults
+            .pending_reads
+            .load(Ordering::SeqCst)
+            > 0
+    );
     assert!(
         channels
             .email
@@ -1109,7 +942,11 @@ async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry(
         "email admission must be closed even when nested runtime cleanup fails"
     );
     assert!(root_host.flush().await.is_err());
-    fail_runtime_store.store(false, Ordering::SeqCst);
+    root_callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(false, Ordering::SeqCst);
     channels.shutdown().await.unwrap();
     assert!(runtimes.start(reservation.handle).await.is_err());
 }
@@ -1153,20 +990,19 @@ async fn start_waiting_for_delivery_admission_is_rejected_after_shutdown_freezes
 async fn full_durable_queue_applies_backpressure_before_provider_send() {
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
-    {
-        let mut scopes = callbacks.scopes.lock().await;
-        let scope = scopes.entry("scope-a".into()).or_default();
-        for index in 0..tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY {
-            let id = format!("queued-{index}");
-            scope.pending.insert(
-                id.clone(),
+    for index in 0..tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY {
+        let id = format!("queued-{index}");
+        callbacks
+            .storage
+            .seed_pending(
+                "scope-a",
                 tinychannels_bus::DeliveryQueueEntry::new(
                     id.clone(),
                     required_intent(&id, "queued"),
                     index as u64,
                 ),
-            );
-        }
+            )
+            .await;
     }
     assert!(
         channels
@@ -1178,14 +1014,12 @@ async fn full_durable_queue_applies_backpressure_before_provider_send() {
             .is_err()
     );
     assert!(received.try_recv().is_err());
-    callbacks
-        .scopes
-        .lock()
-        .await
-        .get_mut("scope-a")
-        .unwrap()
-        .pending
-        .clear();
+    assert_eq!(
+        callbacks.storage.pending("scope-a").await.len(),
+        tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY,
+        "the refused intent was not queued"
+    );
+    callbacks.storage.clear_pending("scope-a").await;
     channels.shutdown().await.unwrap();
 }
 

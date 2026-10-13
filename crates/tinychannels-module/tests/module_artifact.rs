@@ -8,6 +8,9 @@ use tinychannels::relay::{CapabilityDescriptor, ConnectorToGatewayFrame, Gateway
 use tinychannels_bus::module_email::EmailSendRequest;
 use tinychannels_bus::module_relay::RelayReservation;
 use tinychannels_bus::{ChannelOutboundIntent, ChannelsConfig, OutboundPayload, SendMessage};
+use tinystoragedrivers_busproxy::{PerCallerEndpoint, serve};
+use tinystoragedrivers_client::StorageServer;
+use tinystoragedrivers_core::{DocumentStoreExt, MemoryStorage, Query, Scope, StorageBackend};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -185,6 +188,16 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         "compiled artifact must match the bus contract"
     );
 
+    // Delivery records live in the host's storage, which the module reaches over
+    // the storage bus; serve an in-memory backend for it.
+    let storage = MemoryStorage::new();
+    let served_backend = storage.clone();
+    let endpoint = PerCallerEndpoint::new(move |_sender| {
+        let scoped = served_backend.for_scope(&Scope::local()).ok()?;
+        Some(StorageServer::new(scoped))
+    });
+    let _storage_host = serve(&connection, Arc::new(endpoint)).await.unwrap();
+
     let callbacks = Callback(
         Arc::new(Mutex::new(Vec::new())),
         Arc::new(Mutex::new(DeliveryState::default())),
@@ -328,31 +341,25 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
     assert_eq!(first_callbacks.0.lock().await.len(), 1);
     assert_eq!(second_callbacks.0.lock().await.len(), 1);
     assert!(callbacks.0.lock().await.is_empty());
-    assert!(
-        first_callbacks
-            .1
-            .lock()
-            .await
-            .pending
-            .contains_key("first-scope")
-    );
-    assert!(
-        !first_callbacks
-            .1
-            .lock()
-            .await
-            .pending
-            .contains_key("second-scope")
-    );
-    assert!(
-        second_callbacks
-            .1
-            .lock()
-            .await
-            .pending
-            .contains_key("second-scope")
-    );
-    assert!(callbacks.1.lock().await.pending.is_empty());
+    // The module no longer calls per-record delivery callbacks on the host...
+    for host in [&first_callbacks, &second_callbacks, &callbacks] {
+        assert!(host.1.lock().await.pending.is_empty());
+    }
+    // ...it writes both scopes' required deliveries to the host's storage.
+    let docs = storage.for_scope(&Scope::local()).unwrap();
+    let mut pending: Vec<String> = docs
+        .documents()
+        .query_all(
+            tinychannels::storage::delivery::PENDING_COLLECTION,
+            &Query::all(),
+        )
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|found| found.id)
+        .collect();
+    pending.sort();
+    assert_eq!(pending, ["first-scope", "second-scope"]);
     assert_eq!(
         proxy
             .call::<()>("StopRuntime", first.handle.clone())
@@ -689,12 +696,17 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
             .is_err()
     );
     assert!(
-        callbacks
-            .1
-            .lock()
+        storage
+            .for_scope(&Scope::local())
+            .unwrap()
+            .documents()
+            .get(
+                tinychannels::storage::delivery::PENDING_COLLECTION,
+                "artifact-required"
+            )
             .await
-            .pending
-            .contains_key("artifact-required")
+            .unwrap()
+            .is_some()
     );
     let mut conflict = required;
     conflict.payload = OutboundPayload::Text {

@@ -98,9 +98,6 @@ impl HeldTurn {
         self.release.acquire().await.unwrap().forget();
         Ok(())
     }
-    async fn load_pending_deliveries(&self) -> Result<Vec<tinychannels_bus::DeliveryQueueEntry>> {
-        Ok(Vec::new())
-    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -356,30 +353,12 @@ async fn same_named_providers_have_separate_queues_and_native_cleanup() {
     assert!(receivers[1].recv().await.is_none());
 }
 
-struct FaultedDeliveryStore(Arc<AtomicBool>);
-
-#[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
-impl FaultedDeliveryStore {
-    async fn load_pending_deliveries(&self) -> Result<Vec<tinychannels_bus::DeliveryQueueEntry>> {
-        if self.0.load(Ordering::SeqCst) {
-            return Err(Error::failed("fixture persistence unavailable"));
-        }
-        Ok(Vec::new())
-    }
-}
-
 #[tokio::test]
 async fn failed_native_cleanup_retains_ownership_and_capacity_until_retry_succeeds() {
     let (runtimes, client) = fixture().await;
     let reservation = runtimes.reserve().await.unwrap();
-    let fault = Arc::new(AtomicBool::new(true));
-    client
-        .serve_at(
-            reservation.host_object_path.clone().try_into().unwrap(),
-            FaultedDeliveryStore(fault.clone()),
-        )
-        .await
-        .unwrap();
+    let storage = crate::storage_fixture::StorageHost::serve(&client, "runtime").await;
+    storage.faults.fail_queue_read.store(true, Ordering::SeqCst);
     client
         .request_name(tinychannels_bus::HOST_BUS_NAME)
         .await
@@ -394,7 +373,10 @@ async fn failed_native_cleanup_retains_ownership_and_capacity_until_retry_succee
         runtimes.reserve().await.is_err(),
         "failed cleanup must retain its capacity slot"
     );
-    fault.store(false, Ordering::SeqCst);
+    storage
+        .faults
+        .fail_queue_read
+        .store(false, Ordering::SeqCst);
     runtimes.stop(reservation.handle.clone()).await.unwrap();
     assert!(runtimes.get(&reservation.handle).await.is_err());
     runtimes.reserve().await.unwrap();
@@ -448,14 +430,8 @@ async fn shutdown_reports_cleanup_failure_and_retains_only_the_failed_owner() {
     let (runtimes, client) = fixture().await;
     let failed = runtimes.reserve().await.unwrap();
     let inert = runtimes.reserve().await.unwrap();
-    let fault = Arc::new(AtomicBool::new(true));
-    client
-        .serve_at(
-            failed.host_object_path.clone().try_into().unwrap(),
-            FaultedDeliveryStore(fault.clone()),
-        )
-        .await
-        .unwrap();
+    let storage = crate::storage_fixture::StorageHost::serve(&client, "runtime").await;
+    storage.faults.fail_queue_read.store(true, Ordering::SeqCst);
     client
         .request_name(tinychannels_bus::HOST_BUS_NAME)
         .await
@@ -465,7 +441,10 @@ async fn shutdown_reports_cleanup_failure_and_retains_only_the_failed_owner() {
     assert!(runtimes.get(&failed.handle).await.is_ok());
     assert!(runtimes.get(&inert.handle).await.is_err());
     assert!(runtimes.reserve().await.is_err());
-    fault.store(false, Ordering::SeqCst);
+    storage
+        .faults
+        .fail_queue_read
+        .store(false, Ordering::SeqCst);
     runtimes.shutdown().await.unwrap();
     assert!(runtimes.slots.lock().await.is_empty());
 }

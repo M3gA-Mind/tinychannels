@@ -45,7 +45,7 @@ pub use services::{
     AllowlistStore, ApprovalAsk, ApprovalDecision, ApprovalGate, ConversationMessage,
     ConversationStore, EventSink, LifecycleRegistry, ReactionDecision, ReactionGate, ReactionQuery,
     RunEventAppend, RunLedger, RunTelemetry, RunUpsert, ShutdownHook, SpeechRequest, SpeechResult,
-    SpeechSynthesizer, Transcriber, TranscriptionRequest, TranscriptionResult,
+    SpeechSynthesizer, StorageProvider, Transcriber, TranscriptionRequest, TranscriptionResult,
 };
 
 use crate::config::ChannelsConfig;
@@ -73,6 +73,7 @@ pub struct HostCapabilities {
     pub lifecycle: bool,
     pub run_ledger: bool,
     pub allowlist_store: bool,
+    pub storage: bool,
 }
 
 impl HostCapabilities {
@@ -89,6 +90,7 @@ impl HostCapabilities {
         lifecycle: false,
         run_ledger: false,
         allowlist_store: false,
+        storage: false,
     };
 
     /// Derive the descriptor from a live host by probing each accessor.
@@ -105,6 +107,7 @@ impl HostCapabilities {
             lifecycle: host.lifecycle().is_some(),
             run_ledger: host.ledger().is_some(),
             allowlist_store: host.allowlist().is_some(),
+            storage: host.storage().is_some(),
         }
     }
 
@@ -166,6 +169,10 @@ pub trait ChannelHost: Send + Sync {
     fn allowlist(&self) -> Option<Arc<dyn AllowlistStore>> {
         None
     }
+    /// Durable document storage (provider session state).
+    fn storage(&self) -> Option<Arc<dyn StorageProvider>> {
+        None
+    }
 
     /// Snapshot of available capabilities. Defaults to probing the accessors;
     /// hosts may override with a cached descriptor.
@@ -182,6 +189,7 @@ pub trait ChannelHost: Send + Sync {
             lifecycle: self.lifecycle().is_some(),
             run_ledger: self.ledger().is_some(),
             allowlist_store: self.allowlist().is_some(),
+            storage: self.storage().is_some(),
         }
     }
 }

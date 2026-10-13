@@ -48,6 +48,7 @@ pub mod relay;
 pub mod remote;
 pub mod routes;
 pub mod runtime;
+pub mod storage;
 
 pub use backend::{ChannelBackend, ChannelManager};
 pub use factory::{ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels};

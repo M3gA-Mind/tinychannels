@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
@@ -22,13 +21,6 @@ fn consume_failure(counter: &AtomicUsize) -> bool {
     }
 }
 
-#[derive(Default)]
-struct DeliveryFixtureDb {
-    pending: HashMap<String, tinychannels_bus::DeliveryQueueEntry>,
-    failed: HashMap<String, tinychannels_bus::DeliveryQueueEntry>,
-    results: HashMap<String, tinychannels_bus::DeliveryTerminalResult>,
-}
-
 #[derive(Clone)]
 struct Callback {
     events: Arc<Mutex<Vec<String>>>,
@@ -44,10 +36,7 @@ struct Callback {
     controller_gate: Arc<tokio::sync::Notify>,
     persist_failures: Arc<std::sync::atomic::AtomicUsize>,
     event_failures: Arc<AtomicUsize>,
-    delivery_scope: Arc<Mutex<String>>,
-    delivery: Arc<Mutex<HashMap<String, DeliveryFixtureDb>>>,
-    pending_save_failures: Arc<std::sync::atomic::AtomicUsize>,
-    pending_all_reads: Arc<AtomicUsize>,
+    storage: Arc<crate::storage_fixture::StorageHost>,
 }
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
@@ -150,132 +139,15 @@ impl Callback {
             .push(format!("allowlist:{channel}:{identity}"));
         Ok(())
     }
-
-    async fn save_pending_delivery(
-        &self,
-        entry: tinychannels_bus::DeliveryQueueEntry,
-    ) -> Result<()> {
-        if consume_failure(&self.pending_save_failures) {
-            return Err(tinybus::Error::failed("fixture queue persistence failure"));
-        }
-        let scope = self.delivery_scope.lock().await.clone();
-        let mut delivery = self.delivery.lock().await;
-        let db = delivery.entry(scope).or_default();
-        if db.pending.len() >= tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY
-            && !db.pending.contains_key(&entry.id)
-        {
-            return Err(tinybus::Error::failed("fixture queue capacity exceeded"));
-        }
-        if let Some(existing) = db.pending.get(&entry.id)
-            && existing.intent != entry.intent
-        {
-            return Err(tinybus::Error::failed("fixture delivery key conflicts"));
-        }
-        db.pending.insert(entry.id.clone(), entry);
-        Ok(())
-    }
-
-    async fn load_pending_delivery(
-        &self,
-        id: String,
-    ) -> Result<Option<tinychannels_bus::DeliveryQueueEntry>> {
-        let scope = self.delivery_scope.lock().await.clone();
-        Ok(self
-            .delivery
-            .lock()
-            .await
-            .get(&scope)
-            .and_then(|db| db.pending.get(&id).cloned()))
-    }
-
-    async fn load_pending_deliveries(&self) -> Result<Vec<tinychannels_bus::DeliveryQueueEntry>> {
-        self.pending_all_reads.fetch_add(1, Ordering::SeqCst);
-        let scope = self.delivery_scope.lock().await.clone();
-        let mut entries: Vec<_> = self
-            .delivery
-            .lock()
-            .await
-            .get(&scope)
-            .map(|db| db.pending.values().cloned().collect())
-            .unwrap_or_default();
-        entries.sort_by_key(|entry| entry.enqueued_at_unix_ms);
-        Ok(entries)
-    }
-
-    async fn remove_pending_delivery(&self, id: String) -> Result<()> {
-        let scope = self.delivery_scope.lock().await.clone();
-        if let Some(db) = self.delivery.lock().await.get_mut(&scope) {
-            db.pending.remove(&id);
-        }
-        Ok(())
-    }
-
-    async fn save_failed_delivery(
-        &self,
-        entry: tinychannels_bus::DeliveryQueueEntry,
-    ) -> Result<()> {
-        let scope = self.delivery_scope.lock().await.clone();
-        self.delivery
-            .lock()
-            .await
-            .entry(scope)
-            .or_default()
-            .failed
-            .insert(entry.id.clone(), entry);
-        Ok(())
-    }
-
-    async fn load_failed_delivery(
-        &self,
-        id: String,
-    ) -> Result<Option<tinychannels_bus::DeliveryQueueEntry>> {
-        let scope = self.delivery_scope.lock().await.clone();
-        Ok(self
-            .delivery
-            .lock()
-            .await
-            .get(&scope)
-            .and_then(|db| db.failed.get(&id).cloned()))
-    }
-
-    async fn save_delivery_result(
-        &self,
-        result: tinychannels_bus::DeliveryTerminalResult,
-    ) -> Result<()> {
-        let scope = self.delivery_scope.lock().await.clone();
-        let mut delivery = self.delivery.lock().await;
-        let db = delivery.entry(scope).or_default();
-        if db.results.len() >= tinychannels_bus::module_delivery::DELIVERY_RESULT_CAPACITY
-            && !db.results.contains_key(&result.id)
-        {
-            return Err(tinybus::Error::failed("fixture result capacity exceeded"));
-        }
-        if let Some(existing) = db.results.get(&result.id)
-            && existing != &result
-        {
-            return Err(tinybus::Error::failed("fixture result key conflicts"));
-        }
-        db.results.insert(result.id.clone(), result);
-        Ok(())
-    }
-
-    async fn load_delivery_result(
-        &self,
-        id: String,
-    ) -> Result<Option<tinychannels_bus::DeliveryTerminalResult>> {
-        let scope = self.delivery_scope.lock().await.clone();
-        Ok(self
-            .delivery
-            .lock()
-            .await
-            .get(&scope)
-            .and_then(|db| db.results.get(&id).cloned()))
-    }
 }
 
 async fn connected_host() -> (HostChannels, Callback, Connection) {
     let bus = MemoryBus::new();
     Broker::new().spawn(bus.clone());
+    let server = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let storage = Arc::new(crate::storage_fixture::StorageHost::serve(&server, "scope-a").await);
     let callback = Callback {
         events: Arc::new(Mutex::new(Vec::new())),
         blocked: Arc::new(AtomicBool::new(false)),
@@ -290,14 +162,8 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         controller_gate: Arc::new(tokio::sync::Notify::new()),
         persist_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         event_failures: Arc::new(AtomicUsize::new(0)),
-        delivery_scope: Arc::new(Mutex::new("scope-a".into())),
-        delivery: Arc::new(Mutex::new(HashMap::new())),
-        pending_save_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
-        pending_all_reads: Arc::new(AtomicUsize::new(0)),
+        storage,
     };
-    let server = Connection::connect(bus.connect().await.unwrap())
-        .await
-        .unwrap();
     server
         .serve_at(HOST_OBJECT_PATH.try_into().unwrap(), callback.clone())
         .await
@@ -650,7 +516,7 @@ async fn durable_store_round_trips_records_inside_the_active_host_scope() {
     };
 
     let (host, callback, _server) = connected_host().await;
-    let store = crate::delivery::HostDeliveryStore::new(host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&host);
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "op-scope-test".into(),
         channel_id: "telegram".into(),
@@ -673,10 +539,10 @@ async fn durable_store_round_trips_records_inside_the_active_host_scope() {
     store.save_result(result.clone()).await.unwrap();
     assert_eq!(store.load_result(&result.id).await.unwrap(), Some(result));
 
-    *callback.delivery_scope.lock().await = "scope-b".into();
+    callback.storage.set_scope("scope-b");
     assert!(store.load_pending_all().await.unwrap().is_empty());
     assert!(store.load_result("op-scope-test").await.unwrap().is_none());
-    *callback.delivery_scope.lock().await = "scope-a".into();
+    callback.storage.set_scope("scope-a");
     assert_eq!(store.load_pending_all().await.unwrap().len(), 1);
     host.shutdown().await.unwrap();
 }
@@ -686,7 +552,7 @@ async fn updating_pending_delivery_does_not_read_the_full_queue() {
     use tinychannels::delivery::{DeliveryQueueStore as _, QueuedDelivery};
 
     let (host, callback, _server) = connected_host().await;
-    let store = crate::delivery::HostDeliveryStore::new(host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&host);
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "op-update-only".into(),
         durability: tinychannels_bus::DeliveryDurability::Required,
@@ -694,14 +560,14 @@ async fn updating_pending_delivery_does_not_read_the_full_queue() {
     };
     let entry = QueuedDelivery::new("op-update-only", intent, 42);
     store.save_pending(entry.clone()).await.unwrap();
-    let full_reads_after_insert = callback.pending_all_reads.load(Ordering::SeqCst);
+    let full_reads_after_insert = callback.storage.faults.pending_reads.load(Ordering::SeqCst);
 
     let mut update = entry;
     update.retry_count = 1;
     store.save_pending(update).await.unwrap();
 
     assert_eq!(
-        callback.pending_all_reads.load(Ordering::SeqCst),
+        callback.storage.faults.pending_reads.load(Ordering::SeqCst),
         full_reads_after_insert,
         "an update should load its existing record by id, not transfer the whole queue"
     );
@@ -715,7 +581,7 @@ async fn durable_store_rejects_invalid_and_expired_records() {
     };
 
     let (host, _callback, _server) = connected_host().await;
-    let store = crate::delivery::HostDeliveryStore::new(host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&host);
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "op-validate".into(),
         durability: tinychannels_bus::DeliveryDurability::Required,
@@ -789,11 +655,10 @@ async fn absent_optional_host_ignores_status_but_reports_inbound_failure() {
 }
 
 #[tokio::test]
-async fn runtime_callbacks_and_delivery_storage_do_not_follow_the_default_user() {
+async fn runtime_callbacks_do_not_follow_the_default_user() {
     let (legacy, default_user, server) = connected_host().await;
     let mut runtime_user = default_user.clone();
     runtime_user.events = Arc::new(Mutex::new(Vec::new()));
-    runtime_user.delivery_scope = Arc::new(Mutex::new("runtime-user".into()));
     let path = format!("{HOST_OBJECT_PATH}/runtime_a");
     server
         .serve_at(path.clone().try_into().unwrap(), runtime_user.clone())
@@ -821,32 +686,21 @@ async fn runtime_callbacks_and_delivery_storage_do_not_follow_the_default_user()
             "allowlist:telegram:allowed"
         ]
     );
-    use tinychannels::delivery::DeliveryQueueStore as _;
-    let scoped_store = crate::delivery::HostDeliveryStore::from_host(&scoped);
-    let intent = tinychannels_bus::ChannelOutboundIntent {
-        idempotency_key: "runtime-key".into(),
-        channel_id: "telegram".into(),
-        ..Default::default()
-    };
-    let entry = tinychannels::delivery::QueuedDelivery::new("runtime-key", intent, 42);
-    scoped_store.save_pending(entry.clone()).await.unwrap();
-    assert_eq!(
-        scoped_store.load_pending("runtime-key").await.unwrap(),
-        Some(entry)
-    );
-    let default_store = crate::delivery::HostDeliveryStore::from_host(&legacy);
-    assert!(default_store.load_pending_all().await.unwrap().is_empty());
     scoped.shutdown().await.unwrap();
     legacy.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn runtime_only_callback_host_has_no_legacy_delivery_store_and_refuses_required_send() {
+async fn host_without_a_storage_object_has_no_delivery_store_and_refuses_required_send() {
     use tinychannels::delivery::{
         DeliveryQueueError, DeliveryQueueStore as _, QueuedDelivery, enqueue_delivery,
     };
-    let (host, _callback, server) = connected_host().await;
-    server.unserve(&HOST_OBJECT_PATH.try_into().unwrap()).await;
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let client = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(client);
     let store = crate::delivery::HostDeliveryStore::from_host(&host);
     assert!(matches!(
         store.load_pending_all().await,

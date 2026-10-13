@@ -19,6 +19,11 @@ resolver = "3"
 tinybus = { path = "vendor/tinybus/crates/tinybus" }
 tinybus-module = { path = "vendor/tinybus/crates/tinybus-module" }
 
+# tinystoragedrivers names tinybus by git rev; point that source at the same
+# vendored checkout so the module and the storage client share one `Connection`.
+[patch."https://github.com/tinyhumansai/tinybus"]
+tinybus = { path = "vendor/tinybus/crates/tinybus" }
+
 [workspace.package]
 # Releases update this sole workspace version before packaging every crate.
 version = "0.1.29"
@@ -79,6 +84,7 @@ whatsapp-web = [
     "dep:whatsapp-rust-tokio-transport",
     "dep:whatsapp-rust-ureq-http-client",
     "dep:wacore",
+    "dep:bytes",
 ]
 
 [dependencies]
@@ -90,6 +96,9 @@ whatsapp-web = [
 # happen, while still needing to be bumped in lockstep by every release.
 tinychannels-bus = { path = "crates/tinychannels-bus" }
 tinychannels-runtime = { path = "crates/tinychannels-runtime" }
+# Storage ports only: no driver crate and no database client. The host (or the
+# bus client in the module crate) supplies the backend.
+tinystoragedrivers-core = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v0.7.0" }
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.23"
@@ -135,6 +144,7 @@ whatsapp-rust = { version = "0.7", optional = true, default-features = false, fe
 whatsapp-rust-tokio-transport = { version = "0.7", optional = true, default-features = false }
 whatsapp-rust-ureq-http-client = { version = "0.7", optional = true }
 wacore = { version = "0.7", optional = true, default-features = false }
+bytes = { version = "1", optional = true }
 
 [dev-dependencies]
 # Dual-declared: the optional dependency above belongs to the `lark` provider,
@@ -144,3 +154,4 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 tempfile = "3"
 toml = "1"
 wiremock = "0.6"
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
