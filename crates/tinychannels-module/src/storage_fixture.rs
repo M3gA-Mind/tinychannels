@@ -150,13 +150,6 @@ impl StorageHost {
             .collect()
     }
 
-    /// Whether `scope` holds any delivery record at all.
-    pub(crate) async fn is_empty(&self, scope: &str) -> bool {
-        self.pending(scope).await.is_empty()
-            && self.failed(scope).await.is_empty()
-            && self.results(scope).await.is_empty()
-    }
-
     /// Remove every pending record of `scope`.
     pub(crate) async fn clear_pending(&self, scope: &str) {
         self.docs(scope)
@@ -180,14 +173,6 @@ impl StorageHost {
         use tinychannels::delivery::DeliveryResultStore;
         tinychannels::storage::DocumentDeliveryStore::new(self.docs(scope))
             .save_result(result)
-            .await
-            .unwrap();
-    }
-
-    pub(crate) async fn seed_failed(&self, scope: &str, entry: DeliveryQueueEntry) {
-        use tinychannels::delivery::DeliveryQueueStore;
-        tinychannels::storage::DocumentDeliveryStore::new(self.docs(scope))
-            .save_failed(entry)
             .await
             .unwrap();
     }
