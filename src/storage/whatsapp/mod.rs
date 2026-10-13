@@ -29,7 +29,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use serde::Serialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tinystoragedrivers_core::{
@@ -145,17 +144,6 @@ impl DocumentWhatsAppBackend {
             .await
             .map(|_| ())
             .map_err(store_err)
-    }
-
-    pub(crate) async fn put_as<T: Serialize + Sync>(
-        &self,
-        collection: &str,
-        key: &str,
-        value: &T,
-    ) -> StoreResult<()> {
-        let body = serde_json::to_value(value).map_err(json_err)?;
-        let body = if body.is_object() { body } else { json!({ "value": body }) };
-        self.put(collection, key, body).await
     }
 
     pub(crate) async fn get(&self, collection: &str, key: &str) -> StoreResult<Option<Value>> {
