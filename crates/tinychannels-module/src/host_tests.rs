@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::HashMap;
 use std::sync::atomic::AtomicUsize;
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;

@@ -1,5 +1,4 @@
 use super::*;
-use std::collections::BTreeMap;
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 
@@ -494,14 +493,7 @@ async fn replayed_terminal_result_acknowledges_a_remaining_pending_record() {
         .unwrap();
     assert!(received.try_recv().is_err());
     assert!(
-        callbacks
-            .scopes
-            .lock()
-            .await
-            .get("scope-a")
-            .unwrap()
-            .pending
-            .is_empty()
+        callbacks.storage.pending("scope-a").await.is_empty()
     );
     channels.shutdown().await.unwrap();
 }
@@ -638,20 +630,16 @@ async fn changed_intent_cannot_reuse_a_terminal_result_key() {
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
     callbacks
-        .scopes
-        .lock()
-        .await
-        .entry("scope-a".into())
-        .or_default()
-        .results
-        .insert(
-            "result-conflict".into(),
+        .storage
+        .seed_result(
+            "scope-a",
             tinychannels_bus::DeliveryTerminalResult {
                 id: "result-conflict".into(),
                 intent_fingerprint: "a".repeat(64),
                 completed_at_unix_ms: now_unix_ms(),
             },
-        );
+        )
+        .await;
 
     assert!(
         channels
@@ -827,14 +815,7 @@ async fn shutdown_store_failure_still_joins_provider_and_can_retry_persistence()
         "relay owner must be stopped"
     );
     assert_eq!(
-        callbacks
-            .scopes
-            .lock()
-            .await
-            .get("scope-a")
-            .unwrap()
-            .pending
-            .len(),
+        callbacks.storage.pending("scope-a").await.len(),
         1,
         "queue data remains host-owned and retryable"
     );
@@ -846,32 +827,10 @@ async fn shutdown_store_failure_still_joins_provider_and_can_retry_persistence()
     callbacks.storage.faults.fail_queue_read.store(false, Ordering::SeqCst);
     channels.shutdown().await.unwrap();
     assert_eq!(
-        callbacks
-            .scopes
-            .lock()
-            .await
-            .get("scope-a")
-            .unwrap()
-            .pending
-            .len(),
+        callbacks.storage.pending("scope-a").await.len(),
         1,
         "a stopped provider leaves the durable entry for the next start"
     );
-}
-
-#[derive(Clone)]
-struct FailingRuntimeDeliveryHost(Arc<std::sync::atomic::AtomicBool>);
-
-#[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
-impl FailingRuntimeDeliveryHost {
-    async fn load_pending_deliveries(
-        &self,
-    ) -> tinybus::Result<Vec<tinychannels_bus::DeliveryQueueEntry>> {
-        if self.0.load(Ordering::SeqCst) {
-            return Err(tinybus::Error::failed("fixture runtime store unavailable"));
-        }
-        Ok(Vec::new())
-    }
 }
 
 #[tokio::test]
@@ -884,7 +843,9 @@ async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry(
     let host_server = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let root_callbacks = DurableHost::default();
+    let root_callbacks = DurableHost {
+        storage: Arc::new(crate::storage_fixture::StorageHost::serve(&host_server, "scope-a").await),
+    };
     host_server
         .serve_at(
             tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
@@ -914,14 +875,13 @@ async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry(
     channels.relays.reserve().await.unwrap();
 
     let reservation = runtimes.reserve().await.unwrap();
-    let fail_runtime_store = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    host_server
-        .serve_at(
-            reservation.host_object_path.clone().try_into().unwrap(),
-            FailingRuntimeDeliveryHost(fail_runtime_store.clone()),
-        )
-        .await
-        .unwrap();
+    // The nested runtime shares the module's storage connection, so one
+    // outage on the pending queue fails both the nested and the root cleanup.
+    root_callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(true, Ordering::SeqCst);
     runtimes.start(reservation.handle.clone()).await.unwrap();
 
     assert!(channels.shutdown().await.is_err());
@@ -951,7 +911,11 @@ async fn nested_runtime_shutdown_failure_still_drains_root_owners_and_can_retry(
         "email admission must be closed even when nested runtime cleanup fails"
     );
     assert!(root_host.flush().await.is_err());
-    fail_runtime_store.store(false, Ordering::SeqCst);
+    root_callbacks
+        .storage
+        .faults
+        .fail_queue_read
+        .store(false, Ordering::SeqCst);
     channels.shutdown().await.unwrap();
     assert!(runtimes.start(reservation.handle).await.is_err());
 }
@@ -995,20 +959,19 @@ async fn start_waiting_for_delivery_admission_is_rejected_after_shutdown_freezes
 async fn full_durable_queue_applies_backpressure_before_provider_send() {
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
-    {
-        let mut scopes = callbacks.storage.snapshot().await;
-        let scope = scopes.entry("scope-a".into()).or_default();
-        for index in 0..tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY {
-            let id = format!("queued-{index}");
-            scope.pending.insert(
-                id.clone(),
+    for index in 0..tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY {
+        let id = format!("queued-{index}");
+        callbacks
+            .storage
+            .seed_pending(
+                "scope-a",
                 tinychannels_bus::DeliveryQueueEntry::new(
                     id.clone(),
                     required_intent(&id, "queued"),
                     index as u64,
                 ),
-            );
-        }
+            )
+            .await;
     }
     assert!(
         channels
@@ -1020,14 +983,11 @@ async fn full_durable_queue_applies_backpressure_before_provider_send() {
             .is_err()
     );
     assert!(received.try_recv().is_err());
-    callbacks
-        .scopes
-        .lock()
-        .await
-        .get_mut("scope-a")
-        .unwrap()
-        .pending
-        .clear();
+    assert_eq!(
+        callbacks.storage.pending("scope-a").await.len(),
+        tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY,
+        "the refused intent was not queued"
+    );
     channels.shutdown().await.unwrap();
 }
 
