@@ -295,6 +295,11 @@ impl HostChannels {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn connection(&self) -> Connection {
+        self.connection.clone()
+    }
+
     /// The module's scoped handle on the host's storage, over the storage bus.
     ///
     /// The host binds the scope from the authenticated caller; nothing here
