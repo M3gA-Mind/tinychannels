@@ -1,7 +1,7 @@
 //! Durable state on the tinystoragedrivers ports.
 //!
 //! Everything TinyChannels must remember across restarts lives here and is
-//! written through [`DocumentStore`],
+//! written through [`tinystoragedrivers_core::DocumentStore`],
 //! the port a host hands to a linked library directly and to a loaded module
 //! over the storage bus. There is no storage backend in this crate: no file
 //! format, no database client, and no host callback per kind of record.
