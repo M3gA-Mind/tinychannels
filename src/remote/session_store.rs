@@ -106,7 +106,7 @@ impl RemoteSessionStore {
     ) -> anyhow::Result<Option<ChatBinding>> {
         let found = self
             .docs()
-            .await
+            .await?
             .get_as::<ChatBinding>(BINDINGS_COLLECTION, &chat_key(channel, reply_target))
             .await
             .map_err(|e| anyhow::anyhow!(crate::storage::describe(&e)))?;
@@ -167,7 +167,7 @@ impl RemoteSessionStore {
     pub async fn is_busy(&self, channel: &str, reply_target: &str) -> anyhow::Result<bool> {
         let found = self
             .docs()
-            .await
+            .await?
             .get(BUSY_COLLECTION, &chat_key(channel, reply_target))
             .await
             .map_err(|e| anyhow::anyhow!(crate::storage::describe(&e)))?;
