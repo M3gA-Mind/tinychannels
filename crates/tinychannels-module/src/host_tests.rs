@@ -145,6 +145,10 @@ impl Callback {
 async fn connected_host() -> (HostChannels, Callback, Connection) {
     let bus = MemoryBus::new();
     Broker::new().spawn(bus.clone());
+    let server = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let storage = Arc::new(crate::storage_fixture::StorageHost::serve(&server, "scope-a").await);
     let callback = Callback {
         events: Arc::new(Mutex::new(Vec::new())),
         blocked: Arc::new(AtomicBool::new(false)),
@@ -159,10 +163,8 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         controller_gate: Arc::new(tokio::sync::Notify::new()),
         persist_failures: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         event_failures: Arc::new(AtomicUsize::new(0)),
+        storage,
     };
-    let server = Connection::connect(bus.connect().await.unwrap())
-        .await
-        .unwrap();
     server
         .serve_at(HOST_OBJECT_PATH.try_into().unwrap(), callback.clone())
         .await
@@ -515,7 +517,7 @@ async fn durable_store_round_trips_records_inside_the_active_host_scope() {
     };
 
     let (host, callback, _server) = connected_host().await;
-    let store = crate::delivery::HostDeliveryStore::new(host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&host);
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "op-scope-test".into(),
         channel_id: "telegram".into(),
@@ -538,10 +540,10 @@ async fn durable_store_round_trips_records_inside_the_active_host_scope() {
     store.save_result(result.clone()).await.unwrap();
     assert_eq!(store.load_result(&result.id).await.unwrap(), Some(result));
 
-    *callback.delivery_scope.lock().await = "scope-b".into();
+    callback.storage.set_scope("scope-b");
     assert!(store.load_pending_all().await.unwrap().is_empty());
     assert!(store.load_result("op-scope-test").await.unwrap().is_none());
-    *callback.delivery_scope.lock().await = "scope-a".into();
+    callback.storage.set_scope("scope-a");
     assert_eq!(store.load_pending_all().await.unwrap().len(), 1);
     host.shutdown().await.unwrap();
 }
@@ -551,7 +553,7 @@ async fn updating_pending_delivery_does_not_read_the_full_queue() {
     use tinychannels::delivery::{DeliveryQueueStore as _, QueuedDelivery};
 
     let (host, callback, _server) = connected_host().await;
-    let store = crate::delivery::HostDeliveryStore::new(host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&host);
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "op-update-only".into(),
         durability: tinychannels_bus::DeliveryDurability::Required,
@@ -559,14 +561,14 @@ async fn updating_pending_delivery_does_not_read_the_full_queue() {
     };
     let entry = QueuedDelivery::new("op-update-only", intent, 42);
     store.save_pending(entry.clone()).await.unwrap();
-    let full_reads_after_insert = callback.pending_all_reads.load(Ordering::SeqCst);
+    let full_reads_after_insert = callback.storage.faults.pending_reads.load(Ordering::SeqCst);
 
     let mut update = entry;
     update.retry_count = 1;
     store.save_pending(update).await.unwrap();
 
     assert_eq!(
-        callback.pending_all_reads.load(Ordering::SeqCst),
+        callback.storage.faults.pending_reads.load(Ordering::SeqCst),
         full_reads_after_insert,
         "an update should load its existing record by id, not transfer the whole queue"
     );
@@ -580,7 +582,7 @@ async fn durable_store_rejects_invalid_and_expired_records() {
     };
 
     let (host, _callback, _server) = connected_host().await;
-    let store = crate::delivery::HostDeliveryStore::new(host.connection());
+    let store = crate::delivery::HostDeliveryStore::from_host(&host);
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "op-validate".into(),
         durability: tinychannels_bus::DeliveryDurability::Required,
@@ -654,11 +656,10 @@ async fn absent_optional_host_ignores_status_but_reports_inbound_failure() {
 }
 
 #[tokio::test]
-async fn runtime_callbacks_and_delivery_storage_do_not_follow_the_default_user() {
+async fn runtime_callbacks_do_not_follow_the_default_user() {
     let (legacy, default_user, server) = connected_host().await;
     let mut runtime_user = default_user.clone();
     runtime_user.events = Arc::new(Mutex::new(Vec::new()));
-    runtime_user.delivery_scope = Arc::new(Mutex::new("runtime-user".into()));
     let path = format!("{HOST_OBJECT_PATH}/runtime_a");
     server
         .serve_at(path.clone().try_into().unwrap(), runtime_user.clone())
@@ -686,32 +687,21 @@ async fn runtime_callbacks_and_delivery_storage_do_not_follow_the_default_user()
             "allowlist:telegram:allowed"
         ]
     );
-    use tinychannels::delivery::DeliveryQueueStore as _;
-    let scoped_store = crate::delivery::HostDeliveryStore::from_host(&scoped);
-    let intent = tinychannels_bus::ChannelOutboundIntent {
-        idempotency_key: "runtime-key".into(),
-        channel_id: "telegram".into(),
-        ..Default::default()
-    };
-    let entry = tinychannels::delivery::QueuedDelivery::new("runtime-key", intent, 42);
-    scoped_store.save_pending(entry.clone()).await.unwrap();
-    assert_eq!(
-        scoped_store.load_pending("runtime-key").await.unwrap(),
-        Some(entry)
-    );
-    let default_store = crate::delivery::HostDeliveryStore::from_host(&legacy);
-    assert!(default_store.load_pending_all().await.unwrap().is_empty());
     scoped.shutdown().await.unwrap();
     legacy.shutdown().await.unwrap();
 }
 
 #[tokio::test]
-async fn runtime_only_callback_host_has_no_legacy_delivery_store_and_refuses_required_send() {
+async fn host_without_a_storage_object_has_no_delivery_store_and_refuses_required_send() {
     use tinychannels::delivery::{
         DeliveryQueueError, DeliveryQueueStore as _, QueuedDelivery, enqueue_delivery,
     };
-    let (host, _callback, server) = connected_host().await;
-    server.unserve(&HOST_OBJECT_PATH.try_into().unwrap()).await;
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let client = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(client);
     let store = crate::delivery::HostDeliveryStore::from_host(&host);
     assert!(matches!(
         store.load_pending_all().await,
