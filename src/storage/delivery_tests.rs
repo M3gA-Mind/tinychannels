@@ -128,6 +128,36 @@ async fn a_full_queue_refuses_new_keys_but_still_updates_existing_ones() {
     store.save_pending(update).await.unwrap();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn concurrent_distinct_inserts_never_exceed_the_pending_capacity() {
+    let backing = docs();
+    let first = DocumentDeliveryStore::new(backing.clone());
+    for index in 0..DELIVERY_PENDING_CAPACITY - 1 {
+        first
+            .save_pending(entry(&format!("q-{index}"), index as u64))
+            .await
+            .unwrap();
+    }
+    let mut tasks = Vec::new();
+    for n in 0..8 {
+        let store = DocumentDeliveryStore::new(backing.clone());
+        tasks.push(tokio::spawn(async move {
+            store.save_pending(entry(&format!("late-{n}"), 99)).await
+        }));
+    }
+    let mut accepted = 0;
+    for task in tasks {
+        if task.await.unwrap().is_ok() {
+            accepted += 1;
+        }
+    }
+    assert_eq!(accepted, 1);
+    assert_eq!(
+        first.load_pending_all().await.unwrap().len(),
+        DELIVERY_PENDING_CAPACITY
+    );
+}
+
 #[tokio::test]
 async fn invalid_and_oversized_records_are_refused_before_storage() {
     let docs = docs();
