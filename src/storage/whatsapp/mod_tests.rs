@@ -535,3 +535,28 @@ async fn protocol_store_caches_round_trip_through_the_working_set() {
     assert_eq!(b.put_msg_secrets(vec![entry]).await.unwrap(), 1);
     b.delete_expired_msg_secrets(i64::MAX).await.unwrap();
 }
+
+#[tokio::test]
+async fn debug_output_names_the_account_but_not_its_secrets() {
+    let b = open(&docs(), "session").await;
+    b.put_identity("a", [9; 32]).await.unwrap();
+    let shown = format!("{b:?}");
+    assert!(shown.contains("DocumentWhatsAppBackend"));
+    assert!(shown.contains(&account_label("session")));
+    assert!(!shown.contains("09, 09"));
+}
+
+#[test]
+fn storage_and_json_errors_map_to_distinct_store_errors() {
+    let storage = store_err(StorageError::unavailable("down"));
+    assert!(matches!(storage, StoreError::Database(_)));
+    let json = json_err(serde_json::from_str::<Value>("{").unwrap_err());
+    assert!(matches!(json, StoreError::Serialization(_)));
+}
+
+#[tokio::test]
+async fn snapshots_and_resource_reports_are_served_by_the_working_set() {
+    let b = open(&docs(), "session").await;
+    b.snapshot_db("snap", None).await.unwrap();
+    let _ = b.resource_report().await;
+}

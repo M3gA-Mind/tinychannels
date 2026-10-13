@@ -355,3 +355,63 @@ async fn unavailable_storage_degrades_status_and_fails_new_without_losing_help()
     assert!(new.contains("failed to persist the chat binding"), "{new}");
     assert!(sessions.binding("telegram", "chat-1").await.is_err());
 }
+
+fn write_legacy_binding(dir: &std::path::Path, key: &str, thread: &str) {
+    let path = dir.join("state/channel_remote_sessions.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        path,
+        format!(
+            r#"{{"bindings":{{"{key}":{{"thread_id":"{thread}","sender_key":"k","updated_at":"2026-01-01T00:00:00Z"}}}}}}"#
+        ),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn a_binding_already_in_storage_is_not_replaced_by_the_import() {
+    let dir = tempfile::tempdir().unwrap();
+    write_legacy_binding(dir.path(), "telegram:c", "thread-legacy");
+    let sessions = store();
+    sessions
+        .set_binding("telegram", "c", "thread-live".into(), "k".into(), None)
+        .await
+        .unwrap();
+    assert_eq!(sessions.adopt_legacy(dir.path()).await.unwrap(), 0);
+    assert_eq!(
+        sessions
+            .binding("telegram", "c")
+            .await
+            .unwrap()
+            .unwrap()
+            .thread_id,
+        "thread-live"
+    );
+}
+
+#[tokio::test]
+async fn two_concurrent_imports_leave_one_binding_and_both_succeed() {
+    let dir = tempfile::tempdir().unwrap();
+    write_legacy_binding(dir.path(), "telegram:c", "thread-legacy");
+    let sessions = store();
+    let (a, b) = tokio::join!(
+        sessions.adopt_legacy(dir.path()),
+        sessions.adopt_legacy(dir.path())
+    );
+    assert!(a.is_ok() && b.is_ok());
+    assert_eq!(
+        sessions
+            .binding("telegram", "c")
+            .await
+            .unwrap()
+            .unwrap()
+            .thread_id,
+        "thread-legacy"
+    );
+}
+
+#[tokio::test]
+async fn marking_a_turn_on_unavailable_storage_is_advisory_and_never_panics() {
+    super::session_store::mark_turn(&RemoteSessionStore::unavailable(), "telegram", "c", true)
+        .await;
+}
