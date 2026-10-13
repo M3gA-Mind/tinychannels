@@ -45,7 +45,7 @@ pub use module_email::{
     EmailUploadHandle,
 };
 pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, methods};
-pub use traits::{ChannelMessage, SendMessage};
+pub use traits::{Channel, ChannelMessage, ChannelSendExt, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};
 
 #[cfg(test)]

@@ -2,6 +2,16 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// A remote-control slash command.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteCommand {
+    Status,
+    Sessions,
+    New,
+    Help,
+}
+
 /// The model route configured by the host for this sender.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct RemoteRoute {
