@@ -338,7 +338,7 @@ async fn required_send_persists_before_delivery_and_replays_lost_final_reply() {
             .is_err()
     );
 
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
     assert!(scope.pending.is_empty());
     assert!(scope.failed.is_empty());
@@ -361,7 +361,7 @@ async fn pending_persistence_failure_refuses_before_provider_send() {
         channels.delivery_admission.try_lock().is_ok(),
         "admission guard leaked"
     );
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     assert!(scopes.get("scope-a").is_none());
     drop(scopes);
     channels.shutdown().await.unwrap();
@@ -401,7 +401,7 @@ async fn required_send_refuses_invalid_and_oversized_intents_before_persistence(
             .is_err()
     );
     assert!(received.try_recv().is_err());
-    assert!(callbacks.scopes.lock().await.is_empty());
+    assert!(callbacks.storage.snapshot().await.is_empty());
     channels.shutdown().await.unwrap();
 }
 
@@ -418,7 +418,7 @@ async fn missing_required_delivery_target_keeps_the_intent_pending() {
             .is_err()
     );
     assert!(received.try_recv().is_err());
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     assert_eq!(scopes.get("scope-a").unwrap().pending.len(), 1);
     assert!(scopes.get("scope-a").unwrap().failed.is_empty());
     drop(scopes);
@@ -452,7 +452,7 @@ async fn ended_provider_does_not_mark_unstarted_delivery_as_unknown_send() {
             .is_err()
     );
     assert_eq!(send_calls.load(Ordering::SeqCst), 0);
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let queue = scopes.get("scope-a").unwrap();
     assert!(queue.failed.is_empty());
     let pending = queue.pending.get("ended-provider").unwrap();
@@ -531,7 +531,7 @@ async fn startup_recovery_acks_a_matching_terminal_result_without_resending() {
         .await
         .unwrap();
 
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
     assert!(scope.pending.is_empty());
     assert!(scope.failed.is_empty());
@@ -570,7 +570,7 @@ async fn startup_recovery_rejects_a_conflicting_terminal_result() {
             .is_err(),
         "a terminal result for a different intent is a key conflict"
     );
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
     assert_eq!(scope.pending.len(), 1, "conflicts stay retryable");
     assert!(scope.failed.is_empty());
@@ -625,7 +625,7 @@ async fn failed_and_pending_keys_refuse_reuse_with_different_intents() {
             .is_err()
     );
     assert!(received.try_recv().is_err());
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let queue = scopes.get("scope-a").unwrap();
     assert_eq!(queue.failed.len(), 1);
     assert_eq!(queue.pending.len(), 1);
@@ -720,7 +720,7 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
             .is_err()
     );
     {
-        let scopes = callbacks.scopes.lock().await;
+        let scopes = callbacks.storage.snapshot().await;
         let scope = scopes.get("scope-a").unwrap();
         assert_eq!(scope.pending.len(), 1);
         assert!(scope.failed.is_empty());
@@ -730,7 +730,7 @@ async fn provider_failure_stays_pending_then_recovery_fails_closed_once() {
         .await
         .unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    let scopes = callbacks.scopes.lock().await;
+    let scopes = callbacks.storage.snapshot().await;
     let scope = scopes.get("scope-a").unwrap();
     assert!(scope.pending.is_empty());
     assert_eq!(scope.failed.len(), 1);
@@ -996,7 +996,7 @@ async fn full_durable_queue_applies_backpressure_before_provider_send() {
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let (channels, callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
     {
-        let mut scopes = callbacks.scopes.lock().await;
+        let mut scopes = callbacks.storage.snapshot().await;
         let scope = scopes.entry("scope-a".into()).or_default();
         for index in 0..tinychannels_bus::module_delivery::DELIVERY_PENDING_CAPACITY {
             let id = format!("queued-{index}");

@@ -33,7 +33,26 @@ pub(crate) struct StorageHost {
     pub(crate) faults: Arc<Faults>,
     /// The scope the host binds callers to; changing it re-binds live callers.
     pub(crate) scope: Arc<Mutex<String>>,
+    known: Mutex<std::collections::BTreeSet<String>>,
     _served: ServedStorage,
+}
+
+/// The delivery records of one scope.
+#[derive(Default)]
+pub(crate) struct QueueScope {
+    pub(crate) pending: BTreeMap<String, DeliveryQueueEntry>,
+    pub(crate) failed: BTreeMap<String, DeliveryQueueEntry>,
+    pub(crate) results: BTreeMap<String, DeliveryTerminalResult>,
+}
+
+/// Scopes that hold at least one delivery record.
+pub(crate) struct Snapshot(std::collections::HashMap<String, QueueScope>);
+
+impl std::ops::Deref for Snapshot {
+    type Target = std::collections::HashMap<String, QueueScope>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl StorageHost {
@@ -64,12 +83,31 @@ impl StorageHost {
             backend,
             faults,
             scope: current,
+            known: Mutex::new(std::iter::once(scope.to_owned()).collect()),
             _served: served,
         }
     }
 
     pub(crate) fn set_scope(&self, scope: &str) {
+        self.known.lock().unwrap().insert(scope.to_owned());
         *self.scope.lock().unwrap() = scope.to_owned();
+    }
+
+    /// Every known scope that holds delivery records, as plain maps.
+    pub(crate) async fn snapshot(&self) -> Snapshot {
+        let known: Vec<String> = self.known.lock().unwrap().iter().cloned().collect();
+        let mut scopes = std::collections::HashMap::new();
+        for scope in known {
+            let queue = QueueScope {
+                pending: self.pending(&scope).await,
+                failed: self.failed(&scope).await,
+                results: self.results(&scope).await,
+            };
+            if !(queue.pending.is_empty() && queue.failed.is_empty() && queue.results.is_empty()) {
+                scopes.insert(scope, queue);
+            }
+        }
+        Snapshot(scopes)
     }
 
     /// Direct (fault-free) handle on `scope`'s documents.
@@ -122,6 +160,7 @@ impl StorageHost {
     /// Seed a pending record through the store the module itself uses.
     pub(crate) async fn seed_pending(&self, scope: &str, entry: DeliveryQueueEntry) {
         use tinychannels::delivery::DeliveryQueueStore;
+        self.known.lock().unwrap().insert(scope.to_owned());
         tinychannels::storage::DocumentDeliveryStore::new(self.docs(scope))
             .save_pending(entry)
             .await
