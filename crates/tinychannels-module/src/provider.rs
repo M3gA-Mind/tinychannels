@@ -154,6 +154,7 @@ impl Hooks {
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
             .events(Arc::new(ModuleEvents(callbacks.clone())))
+            .storage(Arc::new(ModuleStorage(callbacks.clone())))
             .allowlist(Arc::new(ModuleAllowlist(callbacks)))
             .build()
     }
@@ -162,6 +163,20 @@ impl Hooks {
         for hook in hooks {
             hook().await;
         }
+    }
+}
+
+struct ModuleStorage(HostChannels);
+
+#[async_trait::async_trait]
+impl tinychannels::host::StorageProvider for ModuleStorage {
+    async fn documents(
+        &self,
+    ) -> anyhow::Result<Arc<dyn tinystoragedrivers_core::DocumentStore>> {
+        self.0
+            .documents()
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
     }
 }
 
