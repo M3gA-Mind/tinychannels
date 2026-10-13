@@ -2634,11 +2634,14 @@ dependencies = [
 name = "tinychannels-bus"
 version = "0.1.28"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "base64 0.23.1",
  "schemars",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
+ "tokio",
  "toml",
 ]
 

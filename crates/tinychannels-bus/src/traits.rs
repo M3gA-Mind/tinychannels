@@ -203,3 +203,7 @@ pub trait ChannelSendExt: Channel {
 }
 
 impl<T: Channel + ?Sized> ChannelSendExt for T {}
+
+#[cfg(test)]
+#[path = "traits_tests.rs"]
+mod tests;
