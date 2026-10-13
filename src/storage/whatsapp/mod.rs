@@ -11,8 +11,9 @@
 //! [`DocumentStore`](tinystoragedrivers_core::DocumentStore) before the call
 //! returns; [`open`](DocumentWhatsAppBackend::open) reads it back. Durable:
 //! the device record, Signal identities, sessions, pre-keys, signed pre-keys,
-//! sender keys, app-state sync keys and collection versions, and LID to phone
-//! number mappings. Everything else (mutation MACs, privacy tokens, device
+//! sender keys, app-state sync keys, and LID to phone number mappings.
+//! Everything else (collection versions and mutation MACs, which only make
+//! sense together and so make app state resync from the durable keys, privacy tokens, device
 //! lists, base keys, sent-message and pending-inbound buffers, message
 //! secrets, group metadata) is a cache the protocol re-derives or refetches,
 //! and stays in memory.
@@ -47,11 +48,10 @@ pub(crate) const PREKEY: &str = "whatsapp_prekey";
 pub(crate) const SIGNED_PREKEY: &str = "whatsapp_signed_prekey";
 pub(crate) const SENDER_KEY: &str = "whatsapp_sender_key";
 pub(crate) const SYNC_KEY: &str = "whatsapp_sync_key";
-pub(crate) const SYNC_VERSION: &str = "whatsapp_sync_version";
 pub(crate) const LID_MAPPING: &str = "whatsapp_lid_mapping";
 
 /// Every collection the backend writes, for declaration and tests.
-pub const COLLECTIONS: [&str; 9] = [
+pub const COLLECTIONS: [&str; 8] = [
     DEVICE,
     IDENTITY,
     SESSION,
@@ -59,7 +59,6 @@ pub const COLLECTIONS: [&str; 9] = [
     SIGNED_PREKEY,
     SENDER_KEY,
     SYNC_KEY,
-    SYNC_VERSION,
     LID_MAPPING,
 ];
 

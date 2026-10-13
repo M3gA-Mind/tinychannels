@@ -1,4 +1,5 @@
-//! App-state sync keys and collection versions: durable; mutation MACs are not.
+//! App-state sync keys are durable. Collection versions and mutation MACs are
+//! a consistent pair that stays in memory.
 
 use std::collections::HashMap;
 
@@ -9,7 +10,7 @@ use wacore::store::error::Result;
 use wacore::store::traits::{AppStateSyncKey, AppSyncStore};
 use wacore_appstate::processor::AppStateMutationMAC;
 
-use super::{DocumentWhatsAppBackend, SYNC_KEY, SYNC_VERSION, json_err};
+use super::{DocumentWhatsAppBackend, SYNC_KEY, json_err};
 
 fn key_name(key_id: &[u8]) -> String {
     key_id.iter().map(|b| format!("{b:02x}")).collect()
@@ -22,12 +23,6 @@ impl DocumentWhatsAppBackend {
             let key: AppStateSyncKey =
                 serde_json::from_value(doc.get("sync_key").cloned().unwrap_or_default()).map_err(json_err)?;
             self.inner.set_sync_key(&key_id, key).await?;
-        }
-        for doc in self.all(SYNC_VERSION).await? {
-            let name = doc.get("name").and_then(|v| v.as_str()).unwrap_or_default().to_owned();
-            let state: HashState =
-                serde_json::from_value(doc.get("state").cloned().unwrap_or_default()).map_err(json_err)?;
-            self.inner.set_version(&name, state).await?;
         }
         Ok(())
     }
@@ -53,8 +48,9 @@ impl AppSyncStore for DocumentWhatsAppBackend {
     }
 
     async fn set_version(&self, name: &str, state: HashState) -> Result<()> {
-        let body = json!({ "name": name, "state": serde_json::to_value(&state).map_err(json_err)? });
-        self.put(SYNC_VERSION, name, body).await?;
+        // Versions and mutation MACs are one consistent pair; both stay in
+        // memory so a restart resyncs app state from scratch (with the durable
+        // sync keys) instead of trusting a version whose MACs are gone.
         self.inner.set_version(name, state).await
     }
 
