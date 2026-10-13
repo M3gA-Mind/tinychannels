@@ -696,12 +696,17 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
             .is_err()
     );
     assert!(
-        callbacks
-            .1
-            .lock()
+        storage
+            .for_scope(&Scope::local())
+            .unwrap()
+            .documents()
+            .get(
+                tinychannels::storage::delivery::PENDING_COLLECTION,
+                "artifact-required"
+            )
             .await
-            .pending
-            .contains_key("artifact-required")
+            .unwrap()
+            .is_some()
     );
     let mut conflict = required;
     conflict.payload = OutboundPayload::Text {
