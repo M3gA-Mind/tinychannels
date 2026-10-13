@@ -139,7 +139,7 @@ async fn concurrent_distinct_inserts_never_exceed_the_pending_capacity() {
             .unwrap();
     }
     let mut tasks = Vec::new();
-    for n in 0..8 {
+    for n in 0..32 {
         let store = DocumentDeliveryStore::new(backing.clone());
         tasks.push(tokio::spawn(async move {
             store.save_pending(entry(&format!("late-{n}"), 99)).await
