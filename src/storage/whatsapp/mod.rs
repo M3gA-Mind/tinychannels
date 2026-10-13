@@ -8,7 +8,7 @@
 //!
 //! [`DocumentWhatsAppBackend`] keeps wacore's in-memory backend as the working
 //! set and writes the **pairing-critical** state through to a
-//! [`DocumentStore`](tinystoragedrivers_core::DocumentStore) before the call
+//! [`DocumentStore`] before the call
 //! returns; [`open`](DocumentWhatsAppBackend::open) reads it back. Durable:
 //! the device record, Signal identities, sessions, pre-keys, signed pre-keys,
 //! sender keys, app-state sync keys, and LID to phone number mappings.
