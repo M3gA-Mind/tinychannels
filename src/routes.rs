@@ -3,11 +3,12 @@
 use crate::context::ChannelRouteSelection;
 use std::fmt::Write;
 use std::path::Path;
-pub use tinychannels_bus::module_routes::{ChannelRuntimeCommand, ModelCatalog, ModelCatalogEntry, ProviderDescriptor};
+pub use tinychannels_bus::module_routes::{
+    ChannelRuntimeCommand, ModelCatalog, ModelCatalogEntry, ProviderDescriptor,
+};
 
 const MODEL_CACHE_FILE: &str = "models_cache.json";
 const MODEL_CACHE_PREVIEW_LIMIT: usize = 10;
-
 
 #[derive(Debug, Clone)]
 pub struct RouteCommandContext {
