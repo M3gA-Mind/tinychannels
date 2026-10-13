@@ -24,14 +24,7 @@ const LOG_PREFIX: &str = "[channel-remote]";
 /// Maximum number of sessions listed by `/sessions`.
 pub const SESSIONS_LIST_LIMIT: usize = 8;
 
-/// A remote-control command.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RemoteCommand {
-    Status,
-    Sessions,
-    New,
-    Help,
-}
+pub use tinychannels_bus::module_remote::RemoteCommand;
 
 /// Parse a remote-control command. Accepts bot mentions (`/status@MyBot`) and
 /// any letter case. Returns `None` for anything else, including other slash

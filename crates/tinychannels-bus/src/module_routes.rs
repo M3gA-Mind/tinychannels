@@ -55,3 +55,19 @@ pub enum PreparedRuntimeCommand {
     /// Ready-to-send current model and catalog preview.
     ShowModel(String),
 }
+
+/// Slash-command vocabulary for runtime provider/model switching.
+///
+/// Parsing is owned by the module; hosts match on this enum.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "command", content = "value", rename_all = "snake_case")]
+pub enum ChannelRuntimeCommand {
+    /// `/models`: list providers.
+    ShowProviders,
+    /// `/models <provider>`: switch provider (raw token).
+    SetProvider(String),
+    /// `/model`: show the current model.
+    ShowModel,
+    /// `/model <id>`: switch model (raw argument).
+    SetModel(String),
+}

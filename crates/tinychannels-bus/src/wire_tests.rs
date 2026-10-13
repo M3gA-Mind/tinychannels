@@ -85,13 +85,11 @@ fn channel_controller_operations_have_closed_typed_wire_tags() {
         round_trip,
         ChannelControllerRequest::TestChannel { .. }
     ));
-    assert!(
-        serde_json::from_value::<ChannelControllerRequest>(json!({
-            "operation":"execute_arbitrary",
-            "request":{}
-        }))
-        .is_err()
-    );
+    assert!(serde_json::from_value::<ChannelControllerRequest>(json!({
+        "operation":"execute_arbitrary",
+        "request":{}
+    }))
+    .is_err());
 }
 
 #[test]
@@ -213,8 +211,8 @@ fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
     }
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible(CONTRACT_VERSION + 1));
-    assert_eq!(CONTRACT_VERSION, 18);
-    assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 18));
+    assert_eq!(CONTRACT_VERSION, 21);
+    assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 21));
 }
 
 #[test]
@@ -358,4 +356,47 @@ fn provider_health_report_has_a_transport_free_stable_wire() {
         serde_json::to_value(ChannelHealthState::Timeout).unwrap(),
         "timeout"
     );
+}
+
+#[test]
+fn runtime_and_remote_commands_have_a_stable_wire() {
+    use crate::module_remote::RemoteCommand;
+    use crate::module_routes::ChannelRuntimeCommand;
+    let cases = [
+        (
+            ChannelRuntimeCommand::ShowProviders,
+            serde_json::json!({"command":"show_providers"}),
+        ),
+        (
+            ChannelRuntimeCommand::SetProvider("openai".into()),
+            serde_json::json!({"command":"set_provider","value":"openai"}),
+        ),
+        (
+            ChannelRuntimeCommand::ShowModel,
+            serde_json::json!({"command":"show_model"}),
+        ),
+        (
+            ChannelRuntimeCommand::SetModel("gpt-5".into()),
+            serde_json::json!({"command":"set_model","value":"gpt-5"}),
+        ),
+    ];
+    for (cmd, wire) in cases {
+        assert_eq!(serde_json::to_value(&cmd).unwrap(), wire);
+        assert_eq!(
+            serde_json::from_value::<ChannelRuntimeCommand>(wire).unwrap(),
+            cmd
+        );
+    }
+    for (cmd, name) in [
+        (RemoteCommand::Status, "status"),
+        (RemoteCommand::Sessions, "sessions"),
+        (RemoteCommand::New, "new"),
+        (RemoteCommand::Help, "help"),
+    ] {
+        assert_eq!(serde_json::to_value(cmd).unwrap(), name);
+        assert_eq!(
+            serde_json::from_value::<RemoteCommand>(name.into()).unwrap(),
+            cmd
+        );
+    }
 }
