@@ -429,6 +429,9 @@ fn build_whatsapp_web(
         if let Some(lifecycle) = host.lifecycle() {
             channel = channel.with_lifecycle(lifecycle);
         }
+        if let Some(storage) = host.storage() {
+            channel = channel.with_storage(storage);
+        }
         Some(Arc::new(channel))
     }
     #[cfg(not(feature = "whatsapp-web"))]

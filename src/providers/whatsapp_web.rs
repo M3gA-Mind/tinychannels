@@ -20,7 +20,7 @@
 //!
 //! ```toml
 //! [channels.whatsapp]
-//! session_path = "~/.openhuman/whatsapp-session.db"  # Reserved for durable Web mode
+//! session_path = "~/.openhuman/whatsapp-session.db"  # Account label for the durable session
 //! pair_phone = "15551234567"                         # Optional: pair-code linking
 //! allowed_numbers = ["+1234567890", "*"]             # Same shape as Cloud API
 //! ```
@@ -31,13 +31,13 @@
 //! is set. The Cloud API channel ([`super::whatsapp`]) is used when
 //! `phone_number_id` is set instead.
 //!
-//! # Migration note
+//! # Durable session
 //!
-//! The upstream `sqlite-storage` feature currently uses Diesel, whose
-//! native sqlite binding conflicts with the TinyAgents 1.3 / rusqlite 0.40
-//! baseline. Until OpenHuman owns a rusqlite-backed durable store for the
-//! WhatsApp backend traits, this channel uses wacore's in-memory backend and
-//! requires re-linking after restart.
+//! With a [`crate::host::StorageProvider`] the pairing state is written through
+//! [`crate::storage::whatsapp::DocumentWhatsAppBackend`] to the host's document
+//! store, so a restart resumes the linked device. Without one the channel falls
+//! back to wacore's in-memory backend and needs re-linking. `session_path` no
+//! longer names a file: it only labels the account inside the scoped store.
 //!
 //! [`whatsapp-rust`]: https://docs.rs/whatsapp-rust/0.7
 
@@ -285,6 +285,9 @@ pub struct WhatsAppWebChannel {
     /// When absent, teardown is not wired into the host and `listen` still
     /// parks on the internal notify gate.
     lifecycle: Option<Arc<dyn crate::host::LifecycleRegistry>>,
+    /// Host storage for the durable session. When absent the session lives in
+    /// memory and the device must be re-linked after a restart.
+    storage: Option<Arc<dyn crate::host::StorageProvider>>,
 }
 
 #[cfg(feature = "whatsapp-web")]
@@ -315,7 +318,45 @@ impl WhatsAppWebChannel {
             allowed_groups: Arc::new(Mutex::new(HashSet::new())),
             tx: Arc::new(Mutex::new(None)),
             lifecycle: None,
+            storage: None,
         }
+    }
+
+    /// Persist the linked-device session through the host's storage so a
+    /// restart resumes it instead of asking for a new QR scan.
+    pub fn with_storage(mut self, storage: Arc<dyn crate::host::StorageProvider>) -> Self {
+        self.storage = Some(storage);
+        self
+    }
+
+    /// The session backend: durable when the host provides storage, in-memory
+    /// (with a warning) otherwise or when storage cannot be opened.
+    async fn session_backend(&self) -> Arc<dyn whatsapp_rust::store::Backend> {
+        if let Some(storage) = &self.storage {
+            let opened = async {
+                let docs = storage.documents().await?;
+                crate::storage::whatsapp::DocumentWhatsAppBackend::open(docs, &self.session_path)
+                    .await
+                    .map_err(anyhow::Error::from)
+            }
+            .await;
+            match opened {
+                Ok(backend) => {
+                    tracing::info!("[whatsapp_web] using the durable session backend");
+                    return Arc::new(backend);
+                }
+                Err(error) => tracing::warn!(
+                    "[whatsapp_web] durable session storage unavailable ({error}); \
+                     falling back to an in-memory session"
+                ),
+            }
+        } else {
+            tracing::warn!(
+                "[whatsapp_web] the host provides no storage; the session is in memory and \
+                 the device must be re-linked after a restart"
+            );
+        }
+        Arc::new(wacore::store::InMemoryBackend::new())
     }
 
     /// Wire in the host [`crate::host::LifecycleRegistry`] so `listen` can
@@ -528,17 +569,7 @@ impl WhatsAppWebChannel {
             self.session_path
         );
 
-        // Upstream's Diesel-backed SqliteStore pulls a separate sqlite3 native
-        // link chain that conflicts with the TinyAgents 1.3 / rusqlite 0.40
-        // baseline. Keep the feature buildable with wacore's full in-memory
-        // Backend until a rusqlite-backed durable store is added here.
-        tracing::warn!(
-            "[whatsapp_web] using in-memory WhatsApp Web session backend; \
-             session_path={} is reserved but not persisted in this build",
-            self.session_path
-        );
-        let backend: Arc<dyn whatsapp_rust::store::Backend> =
-            Arc::new(wacore::store::InMemoryBackend::new());
+        let backend = self.session_backend().await;
 
         let state = InboundState {
             tx,
