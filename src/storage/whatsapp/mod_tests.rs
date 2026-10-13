@@ -260,3 +260,277 @@ async fn a_failing_store_fails_the_write_instead_of_pretending_it_is_durable() {
         "a corrupt persisted record is reported, not silently skipped"
     );
 }
+
+#[tokio::test]
+async fn signal_store_reads_writes_and_deletes_through_the_working_set() {
+    let docs = docs();
+    let b = open(&docs, "session").await;
+    b.put_identity("a", [1; 32]).await.unwrap();
+    assert_eq!(b.load_identity("a").await.unwrap(), Some([1; 32]));
+    b.delete_identity("a").await.unwrap();
+    assert_eq!(b.load_identity("a").await.unwrap(), None);
+
+    b.put_session("s", b"sess").await.unwrap();
+    assert!(b.has_session("s").await.unwrap());
+    assert!(b.has_signal_state_for_user("s").await.unwrap());
+    b.delete_session("s").await.unwrap();
+    assert!(!b.has_session("s").await.unwrap());
+
+    b.store_prekey(3, b"k3", false).await.unwrap();
+    assert_eq!(
+        b.load_prekey(3).await.unwrap(),
+        Some(Bytes::from_static(b"k3"))
+    );
+    assert_eq!(b.get_max_prekey_id().await.unwrap(), 3);
+    b.mark_prekeys_uploaded(&[3, 99]).await.unwrap();
+    b.remove_prekey(3).await.unwrap();
+    assert_eq!(b.load_prekey(3).await.unwrap(), None);
+
+    b.store_signed_prekey(7, b"sp").await.unwrap();
+    assert_eq!(b.load_signed_prekey(7).await.unwrap(), Some(b"sp".to_vec()));
+    assert_eq!(b.load_all_signed_prekeys().await.unwrap().len(), 1);
+    b.remove_signed_prekey(7).await.unwrap();
+    assert_eq!(b.load_signed_prekey(7).await.unwrap(), None);
+
+    b.put_sender_keys_batch(&[("g".into(), Bytes::from_static(b"sk"))])
+        .await
+        .unwrap();
+    assert_eq!(b.get_sender_key("g").await.unwrap(), Some(b"sk".to_vec()));
+    drop(b);
+    let reopened = open(&docs, "session").await;
+    assert_eq!(
+        reopened.get_sender_key("g").await.unwrap(),
+        Some(b"sk".to_vec())
+    );
+    reopened.delete_sender_key("g").await.unwrap();
+    assert_eq!(reopened.get_sender_key("g").await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn hydration_restores_every_durable_signal_kind_after_a_restart() {
+    let docs = docs();
+    let b = open(&docs, "session").await;
+    b.put_identity("a", [4; 32]).await.unwrap();
+    b.put_session("a", b"sess").await.unwrap();
+    b.store_prekey(1, b"p1", true).await.unwrap();
+    b.store_signed_prekey(2, b"sp2").await.unwrap();
+    b.put_sender_key("g", b"sk").await.unwrap();
+    drop(b);
+
+    let r = open(&docs, "session").await;
+    assert_eq!(r.load_identity("a").await.unwrap(), Some([4; 32]));
+    assert!(r.has_session("a").await.unwrap());
+    assert_eq!(
+        r.load_prekey(1).await.unwrap(),
+        Some(Bytes::from_static(b"p1"))
+    );
+    assert_eq!(
+        r.load_signed_prekey(2).await.unwrap(),
+        Some(b"sp2".to_vec())
+    );
+    assert_eq!(r.get_sender_key("g").await.unwrap(), Some(b"sk".to_vec()));
+}
+
+#[tokio::test]
+async fn app_sync_state_is_served_from_the_working_set() {
+    use wacore::appstate::hash::HashState;
+    use wacore::appstate::processor::AppStateMutationMAC;
+
+    let b = open(&docs(), "session").await;
+    assert!(b.get_sync_key(&[1]).await.unwrap().is_none());
+    b.set_version("regular", HashState::default())
+        .await
+        .unwrap();
+    assert_eq!(b.get_version("regular").await.unwrap().version, 0);
+
+    let index = [9u8; 32];
+    b.put_mutation_macs(
+        "regular",
+        1,
+        &[AppStateMutationMAC {
+            index_mac: index.to_vec(),
+            value_mac: b"v".to_vec(),
+        }],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        b.get_mutation_mac("regular", &index).await.unwrap(),
+        Some(b"v".to_vec())
+    );
+    assert_eq!(
+        b.get_mutation_macs("regular", &[index])
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    b.delete_mutation_macs("regular", &[index.to_vec()])
+        .await
+        .unwrap();
+    assert_eq!(b.get_mutation_mac("regular", &index).await.unwrap(), None);
+    b.put_mutation_macs(
+        "regular",
+        2,
+        &[AppStateMutationMAC {
+            index_mac: index.to_vec(),
+            value_mac: b"w".to_vec(),
+        }],
+    )
+    .await
+    .unwrap();
+    b.clear_mutation_macs("regular").await.unwrap();
+    assert_eq!(b.get_mutation_mac("regular", &index).await.unwrap(), None);
+}
+
+#[tokio::test]
+async fn protocol_store_caches_round_trip_through_the_working_set() {
+    use wacore::store::traits::{
+        DeviceInfo, DeviceListRecord, MsgSecretEntry, MsgSecretStore, PendingInboundKey,
+        PendingInboundRow, TcTokenEntry,
+    };
+
+    let b = open(&docs(), "session").await;
+
+    b.set_sender_key_status("g@g.us", &[("d1", true), ("d2", false)])
+        .await
+        .unwrap();
+    assert_eq!(b.get_sender_key_devices("g@g.us").await.unwrap().len(), 2);
+    b.delete_sender_key_device_rows(&["d2"]).await.unwrap();
+    b.clear_sender_key_devices("g@g.us").await.unwrap();
+    b.clear_all_sender_key_devices().await.unwrap();
+    assert!(b.get_sender_key_devices("g@g.us").await.unwrap().is_empty());
+
+    let lid = |lid: &str, pn: &str| LidPnMappingEntry {
+        lid: lid.into(),
+        phone_number: pn.into(),
+        created_at: 1,
+        updated_at: 2,
+        learning_source: "usync".into(),
+    };
+    b.put_lid_mappings(&[lid("1", "11"), lid("2", "22")])
+        .await
+        .unwrap();
+    assert_eq!(b.get_all_lid_mappings().await.unwrap().len(), 2);
+
+    b.save_base_key("addr", "m", b"bk").await.unwrap();
+    assert!(b.has_same_base_key("addr", "m", b"bk").await.unwrap());
+    b.delete_base_key("addr", "m").await.unwrap();
+    assert!(!b.has_same_base_key("addr", "m", b"bk").await.unwrap());
+
+    let record = |user: &str| DeviceListRecord {
+        user: user.into(),
+        devices: vec![DeviceInfo::new(0, None)],
+        timestamp: 5,
+        phash: None,
+        raw_id: None,
+    };
+    b.update_device_list(record("u1")).await.unwrap();
+    b.update_device_lists(vec![record("u2")]).await.unwrap();
+    assert!(b.get_devices("u2").await.unwrap().is_some());
+    b.delete_devices("u1").await.unwrap();
+    assert!(b.get_devices("u1").await.unwrap().is_none());
+
+    b.put_group_metadata("g", b"m").await.unwrap();
+    assert_eq!(
+        b.get_group_metadata("g").await.unwrap(),
+        Some(b"m".to_vec())
+    );
+    b.delete_group_metadata("g").await.unwrap();
+    assert_eq!(b.get_group_metadata("g").await.unwrap(), None);
+
+    b.put_tc_token(
+        "j",
+        &TcTokenEntry {
+            token: b"t".to_vec(),
+            token_timestamp: 10,
+            sender_timestamp: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(b.get_tc_token("j").await.unwrap().is_some());
+    b.touch_tc_token_sender_timestamp("j", 11).await.unwrap();
+    b.store_received_tc_token("k", b"t2", 12).await.unwrap();
+    assert_eq!(b.get_all_tc_token_jids().await.unwrap().len(), 2);
+    assert_eq!(b.delete_expired_tc_tokens(100, 100).await.unwrap(), 2);
+    b.put_tc_token(
+        "j",
+        &TcTokenEntry {
+            token: b"t".to_vec(),
+            token_timestamp: 10,
+            sender_timestamp: None,
+        },
+    )
+    .await
+    .unwrap();
+    b.delete_tc_token("j").await.unwrap();
+    assert!(b.get_tc_token("j").await.unwrap().is_none());
+
+    b.store_sent_message("c", "m1", b"payload").await.unwrap();
+    assert_eq!(
+        b.take_sent_message("c", "m1").await.unwrap(),
+        Some(b"payload".to_vec())
+    );
+    assert_eq!(b.take_sent_message("c", "m1").await.unwrap(), None);
+    b.store_sent_message("c", "m2", b"p").await.unwrap();
+    b.delete_expired_sent_messages(i64::MAX).await.unwrap();
+
+    b.store_pending_inbound("c", "s", "i1", b"m").await.unwrap();
+    assert_eq!(
+        b.get_pending_inbound("c", "s", "i1").await.unwrap(),
+        Some(b"m".to_vec())
+    );
+    b.delete_pending_inbound("c", "s", "i1").await.unwrap();
+    b.store_pending_inbound_batch(&[PendingInboundRow {
+        chat: "c",
+        sender: "s",
+        id: "i2",
+        message: b"m2",
+    }])
+    .await
+    .unwrap();
+    assert!(
+        b.get_pending_inbound("c", "s", "i2")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    b.delete_pending_inbound_batch(&[PendingInboundKey {
+        chat: "c",
+        sender: "s",
+        id: "i2",
+    }])
+    .await
+    .unwrap();
+    assert!(
+        b.get_pending_inbound("c", "s", "i2")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    b.store_pending_inbound("c", "s", "i3", b"m").await.unwrap();
+    b.delete_expired_pending_inbound(i64::MAX).await.unwrap();
+
+    b.put_msg_secret("c", "s", "ms1", &[5; 32]).await.unwrap();
+    assert_eq!(
+        b.get_msg_secret("c", "s", "ms1").await.unwrap(),
+        Some(vec![5; 32])
+    );
+    assert!(
+        b.get_msg_secret_with_ts("c", "s", "ms1")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let entry = MsgSecretEntry {
+        chat: "c".into(),
+        sender: "s".into(),
+        msg_id: "ms2".into(),
+        secret: [6; 32],
+        expires_at: 1,
+        message_ts: 0,
+    };
+    assert_eq!(b.put_msg_secrets(vec![entry]).await.unwrap(), 1);
+    b.delete_expired_msg_secrets(i64::MAX).await.unwrap();
+}
