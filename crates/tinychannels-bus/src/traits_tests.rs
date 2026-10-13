@@ -99,7 +99,12 @@ async fn send_idempotent_defaults_to_send() {
     let channel = Recording(Default::default());
     // Dummy has no override; Recording overrides, so check the default via a dyn object.
     let dummy: Box<dyn Channel> = Box::new(DummyChannel);
-    assert!(dummy.send_idempotent(&SendMessage::new("x", "b")).await.is_ok());
+    assert!(
+        dummy
+            .send_idempotent(&SendMessage::new("x", "b"))
+            .await
+            .is_ok()
+    );
     drop(channel);
 }
 
