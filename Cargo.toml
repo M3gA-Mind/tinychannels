@@ -84,6 +84,7 @@ whatsapp-web = [
     "dep:whatsapp-rust-tokio-transport",
     "dep:whatsapp-rust-ureq-http-client",
     "dep:wacore",
+    "dep:bytes",
 ]
 
 [dependencies]
@@ -143,6 +144,7 @@ whatsapp-rust = { version = "0.7", optional = true, default-features = false, fe
 whatsapp-rust-tokio-transport = { version = "0.7", optional = true, default-features = false }
 whatsapp-rust-ureq-http-client = { version = "0.7", optional = true }
 wacore = { version = "0.7", optional = true, default-features = false }
+bytes = { version = "1", optional = true }
 
 [dev-dependencies]
 # Dual-declared: the optional dependency above belongs to the `lark` provider,
