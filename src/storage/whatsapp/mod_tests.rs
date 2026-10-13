@@ -270,11 +270,11 @@ async fn signal_store_reads_writes_and_deletes_through_the_working_set() {
     b.delete_identity("a").await.unwrap();
     assert_eq!(b.load_identity("a").await.unwrap(), None);
 
-    b.put_session("s", b"sess").await.unwrap();
-    assert!(b.has_session("s").await.unwrap());
+    b.put_session("s.0", b"sess").await.unwrap();
+    assert!(b.has_session("s.0").await.unwrap());
     assert!(b.has_signal_state_for_user("s").await.unwrap());
-    b.delete_session("s").await.unwrap();
-    assert!(!b.has_session("s").await.unwrap());
+    b.delete_session("s.0").await.unwrap();
+    assert!(!b.has_session("s.0").await.unwrap());
 
     b.store_prekey(3, b"k3", false).await.unwrap();
     assert_eq!(
