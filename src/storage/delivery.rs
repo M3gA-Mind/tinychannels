@@ -48,6 +48,12 @@ pub const RESULTS_COLLECTION: &str = "channels_delivery_results";
 const CAS_ATTEMPTS: usize = 4;
 const MAX_ID_BYTES: usize = 256;
 
+/// Serializes the count-then-insert of a new pending entry so concurrent
+/// writers (including separate store handles) cannot both pass the capacity
+/// check and overshoot [`DELIVERY_PENDING_CAPACITY`]. The module is the single
+/// writer of its scope, so an in-process lock is the reservation.
+static PENDING_INSERT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ResultRecord {
@@ -138,6 +144,7 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
         validate_entry(&entry)?;
         let docs = self.docs().await;
         let doc = encode_entry(&entry)?;
+        let _reservation = PENDING_INSERT.lock().await;
         for _ in 0..CAS_ATTEMPTS {
             let existing = docs
                 .get(PENDING_COLLECTION, &entry.id)

@@ -7,6 +7,11 @@
 //! own, the loaded module passes the storage-bus client, and neither opens a
 //! file.
 //!
+//! Isolation is the handle's job: bindings are keyed by channel and reply
+//! target only, so a host serving several workspaces must give each its own
+//! scoped [`DocumentStore`] (and therefore its own store and legacy marker).
+//! `workspace_dir` is only the source of the one-time legacy import.
+//!
 //! Hosts that predate the port wrote `state/channel_remote_sessions.json`
 //! (and, before that, a Telegram-only `state/telegram_remote_sessions.json`
 //! keyed by bare reply target). [`RemoteSessionStore::adopt_legacy`] imports
