@@ -19,6 +19,11 @@ resolver = "3"
 tinybus = { path = "vendor/tinybus/crates/tinybus" }
 tinybus-module = { path = "vendor/tinybus/crates/tinybus-module" }
 
+# tinystoragedrivers names tinybus by git rev; point that source at the same
+# vendored checkout so the module and the storage client share one `Connection`.
+[patch."https://github.com/tinyhumansai/tinybus"]
+tinybus = { path = "vendor/tinybus/crates/tinybus" }
+
 [workspace.package]
 # Releases update this sole workspace version before packaging every crate.
 version = "0.1.28"
@@ -90,6 +95,9 @@ whatsapp-web = [
 # happen, while still needing to be bumped in lockstep by every release.
 tinychannels-bus = { path = "crates/tinychannels-bus" }
 tinychannels-runtime = { path = "crates/tinychannels-runtime" }
+# Storage ports only: no driver crate and no database client. The host (or the
+# bus client in the module crate) supplies the backend.
+tinystoragedrivers-core = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v0.7.0" }
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.23"
