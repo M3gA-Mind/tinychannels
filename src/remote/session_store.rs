@@ -196,6 +196,7 @@ impl RemoteSessionStore {
             return Ok(0);
         }
         let mut legacy: HashMap<String, ChatBinding> = HashMap::new();
+        let mut unreadable = false;
         // The Telegram-only file is older; the shared file wins on overlap.
         for (file, prefix) in [
             (LEGACY_TELEGRAM_STORE_FILE, true),
@@ -203,6 +204,12 @@ impl RemoteSessionStore {
         ] {
             let path = workspace_dir.join(file);
             let Some(parsed) = read_legacy(&path)? else {
+                continue;
+            };
+            let Some(parsed) = parsed else {
+                // Unreadable now; leave the marker unwritten so a repaired
+                // file is imported by a later call.
+                unreadable = true;
                 continue;
             };
             for (key, binding) in parsed.bindings {
@@ -230,6 +237,151 @@ impl RemoteSessionStore {
                     ) => {}
                 Err(error) => return Err(anyhow::anyhow!(crate::storage::describe(&error))),
             }
+        }
+        if unreadable {
+            tracing::warn!(
+                "{LOG_PREFIX} legacy session file unreadable; import not marked complete, will retry"
+            );
+            return Ok(imported);
+        }
+        docs.put(
+            META_COLLECTION,
+            LEGACY_MARKER_ID,
+            serde_json::json!({ "imported": imported }),
+            Precondition::Absent,
+        )
+        .await
+        .or_else(|error| match error.kind() {
+            tinystoragedrivers_core::ErrorKind::Conflict
+            | tinystoragedrivers_core::ErrorKind::AlreadyExists => {
+                Ok(tinystoragedrivers_core::Version(0))
+            }
+            _ => Err(anyhow::anyhow!(crate::storage::describe(&error))),
+        })?;
+        tracing::info!(
+            "{LOG_PREFIX} adopted {imported} legacy binding(s) from {}",
+            workspace_dir.display()
+        );
+        Ok(imported)
+    }
+}
+
+/// `Ok(None)`: no file. `Ok(Some(None))`: the file exists but is not valid
+/// JSON (logged). `Err`: the file could not be read.
+fn read_legacy(path: &Path) -> anyhow::Result<Option<Option<LegacyStoreFile>>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let raw = std::fs::read_to_string(path)?;
+    Ok(Some(match serde_json::from_str(&raw) {
+        Ok(parsed) => Some(parsed),
+        Err(error) => {
+            tracing::warn!(
+                "{LOG_PREFIX} corrupt legacy session file at {}: {error}; skipping",
+                path.display()
+            );
+            None
+        }
+    }))
+}
+
+/// Record whether a turn is running for a chat.
+    pub async fn set_busy(
+        &self,
+        channel: &str,
+        reply_target: &str,
+        busy: bool,
+    ) -> anyhow::Result<()> {
+        let id = chat_key(channel, reply_target);
+        let docs = self.docs().await?;
+        let result = if busy {
+            let doc =
+                serde_json::json!({ "busy": true, "updated_at": chrono::Utc::now().to_rfc3339() });
+            docs.put(BUSY_COLLECTION, &id, doc, Precondition::None)
+                .await
+                .map(|_| ())
+        } else {
+            docs.delete(BUSY_COLLECTION, &id, Precondition::None)
+                .await
+                .map(|_| ())
+        };
+        result.map_err(|e| anyhow::anyhow!(crate::storage::describe(&e)))
+    }
+
+    /// Whether a turn is recorded as running for a chat.
+    pub async fn is_busy(&self, channel: &str, reply_target: &str) -> anyhow::Result<bool> {
+        let found = self
+            .docs()
+            .await?
+            .get(BUSY_COLLECTION, &chat_key(channel, reply_target))
+            .await
+            .map_err(|e| anyhow::anyhow!(crate::storage::describe(&e)))?;
+        Ok(found.is_some())
+    }
+
+    /// Import bindings from the legacy JSON files under `workspace_dir`, once.
+    ///
+    /// Idempotent: a marker document records completion, and each binding is
+    /// written with `Absent`, so a binding made through the port is never
+    /// overwritten. Busy flags are per-process turn state and do not carry
+    /// over. Returns how many bindings were imported.
+    pub async fn adopt_legacy(&self, workspace_dir: &Path) -> anyhow::Result<usize> {
+        let docs = self.docs().await?;
+        let marker = docs
+            .get(META_COLLECTION, LEGACY_MARKER_ID)
+            .await
+            .map_err(|e| anyhow::anyhow!(crate::storage::describe(&e)))?;
+        if marker.is_some() {
+            return Ok(0);
+        }
+        let mut legacy: HashMap<String, ChatBinding> = HashMap::new();
+        let mut unreadable = false;
+        // The Telegram-only file is older; the shared file wins on overlap.
+        for (file, prefix) in [
+            (LEGACY_TELEGRAM_STORE_FILE, true),
+            (LEGACY_STORE_FILE, false),
+        ] {
+            let path = workspace_dir.join(file);
+            let Some(parsed) = read_legacy(&path)? else {
+                continue;
+            };
+            let Some(parsed) = parsed else {
+                // Unreadable now; leave the marker unwritten so a repaired
+                // file is imported by a later call.
+                unreadable = true;
+                continue;
+            };
+            for (key, binding) in parsed.bindings {
+                let key = if prefix {
+                    chat_key("telegram", &key)
+                } else {
+                    key
+                };
+                legacy.insert(key, binding);
+            }
+        }
+        let mut imported = 0;
+        for (key, binding) in legacy {
+            let doc = serde_json::to_value(&binding)?;
+            match docs
+                .put(BINDINGS_COLLECTION, &key, doc, Precondition::Absent)
+                .await
+            {
+                Ok(_) => imported += 1,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        tinystoragedrivers_core::ErrorKind::Conflict
+                            | tinystoragedrivers_core::ErrorKind::AlreadyExists
+                    ) => {}
+                Err(error) => return Err(anyhow::anyhow!(crate::storage::describe(&error))),
+            }
+        }
+        if unreadable {
+            tracing::warn!(
+                "{LOG_PREFIX} legacy session file unreadable; import not marked complete, will retry"
+            );
+            return Ok(imported);
         }
         docs.put(
             META_COLLECTION,

@@ -216,9 +216,7 @@ impl DeviceStore for DocumentWhatsAppBackend {
         let id = self.inner.create().await?;
         // Persist the freshly materialised device so its identity key survives
         // a restart that happens before the first explicit save.
-        if self.get(DEVICE, "device").await?.is_none()
-            && let Some(device) = self.inner.load().await?
-        {
+        if let Some(device) = self.inner.load().await? {
             let body = json!({ "device": serde_json::to_value(&device).map_err(json_err)? });
             self.put(DEVICE, "device", body).await?;
         }
