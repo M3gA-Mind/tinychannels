@@ -2647,7 +2647,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.5",
  "windows-sys 0.61.2",
@@ -2854,8 +2854,8 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-bus"
-version = "0.10.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.10.0#44745d66089db880b83747832ab5173eb1397a75"
+version = "0.11.0"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.11.0#9eeef54aea403ac07461a612189bdf4982782823"
 dependencies = [
  "serde",
  "serde_json",
@@ -2864,8 +2864,8 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-busproxy"
-version = "0.10.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.10.0#44745d66089db880b83747832ab5173eb1397a75"
+version = "0.11.0"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.11.0#9eeef54aea403ac07461a612189bdf4982782823"
 dependencies = [
  "async-trait",
  "serde",
@@ -2879,8 +2879,8 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-client"
-version = "0.10.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.10.0#44745d66089db880b83747832ab5173eb1397a75"
+version = "0.11.0"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.11.0#9eeef54aea403ac07461a612189bdf4982782823"
 dependencies = [
  "async-trait",
  "serde",
@@ -2893,8 +2893,8 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-core"
-version = "0.10.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.10.0#44745d66089db880b83747832ab5173eb1397a75"
+version = "0.11.0"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.11.0#9eeef54aea403ac07461a612189bdf4982782823"
 dependencies = [
  "async-trait",
  "serde",
@@ -2905,8 +2905,8 @@ dependencies = [
 
 [[package]]
 name = "tinystoragedrivers-secrets"
-version = "0.10.0"
-source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.10.0#44745d66089db880b83747832ab5173eb1397a75"
+version = "0.11.0"
+source = "git+https://github.com/tinyhumansai/tinystoragedrivers?tag=v0.11.0#9eeef54aea403ac07461a612189bdf4982782823"
 dependencies = [
  "async-trait",
  "atomicwrites",
