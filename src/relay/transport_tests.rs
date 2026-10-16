@@ -145,12 +145,14 @@ async fn reconnect_stays_closed_while_cached_capabilities_are_invalidated() {
     let cache = transport.state.capabilities_v2.lock().await;
 
     let mut preparing = Box::pin(transport.prepare_connect());
-    let reached_cache_lock = std::future::poll_fn(|cx| {
-        std::task::Poll::Ready(preparing.as_mut().poll(cx).is_pending())
-    })
-    .await;
+    let reached_cache_lock =
+        std::future::poll_fn(|cx| std::task::Poll::Ready(preparing.as_mut().poll(cx).is_pending()))
+            .await;
     assert!(reached_cache_lock);
-    assert!(transport.is_closed(), "a reconnect must not expose stale cached facts");
+    assert!(
+        transport.is_closed(),
+        "a reconnect must not expose stale cached facts"
+    );
 
     drop(cache);
     preparing.await;

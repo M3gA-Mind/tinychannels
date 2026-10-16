@@ -79,7 +79,9 @@ mod legacy_length_unit {
             "chars" | "characters" => Ok(LengthUnit::Characters),
             "utf8-bytes" | "utf8_bytes" => Ok(LengthUnit::Utf8Bytes),
             "utf16-units" | "utf16_units" => Ok(LengthUnit::Utf16Units),
-            value => Err(serde::de::Error::custom(format!("unknown legacy length unit {value}"))),
+            value => Err(serde::de::Error::custom(format!(
+                "unknown legacy length unit {value}"
+            ))),
         }
     }
 }
@@ -131,7 +133,9 @@ mod legacy_markdown_dialect {
             "telegram-markdown-v2" | "telegram_markdown_v2" => {
                 Ok(MarkdownDialect::TelegramMarkdownV2)
             }
-            value => Err(serde::de::Error::custom(format!("unknown legacy markdown dialect {value}"))),
+            value => Err(serde::de::Error::custom(format!(
+                "unknown legacy markdown dialect {value}"
+            ))),
         }
     }
 }

@@ -109,7 +109,8 @@ fn supports_draft_updates_is_true() {
     assert!(capabilities.streaming_reply_pipeline);
     assert!(!capabilities.progressive_edits);
     assert!(
-        !capabilities.actions
+        !capabilities
+            .actions
             .supported
             .iter()
             .any(|name| name == "draft-update")
