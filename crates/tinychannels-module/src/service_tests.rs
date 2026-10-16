@@ -57,6 +57,10 @@ impl tinychannels::Channel for CaptureChannel {
         "fixture"
     }
 
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         self.0.send(message.clone()).await?;
         Ok(())
@@ -1783,7 +1787,20 @@ async fn inbound_preparation_service() -> Channels {
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    Channels::new(HostChannels::new(connection), None)
+    let host = HostChannels::new(connection);
+    let channels = Channels::new(host.clone(), None);
+    for configured_name in ["telegram", "discord"] {
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        channels.running.lock().await.insert(
+            configured_name.to_owned(),
+            Running::start(
+                Arc::new(CaptureChannel(sender)),
+                Arc::new(Hooks::default()),
+                host.clone(),
+            ),
+        );
+    }
+    channels
 }
 
 #[tokio::test]

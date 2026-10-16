@@ -3,11 +3,15 @@ async fn execute(
     callback: &HostChannels,
     request: RemoteOperation,
 ) -> tinybus::Result<RemoteOperationResult> {
+    let remote_control = match &request {
+        RemoteOperation::Execute { message, .. } => message.channel != "email",
+        RemoteOperation::MarkTurn { channel, .. } => channel != "email",
+    };
     super::execute(
         callback,
         request,
         tinychannels_bus::ChannelCapabilities {
-            remote_control: true,
+            remote_control,
             ..Default::default()
         },
     )
