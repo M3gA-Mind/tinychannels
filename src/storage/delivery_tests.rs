@@ -94,12 +94,7 @@ async fn pending_v21_media_file_and_voice_records_still_decode_after_upgrade() {
             "retryCount": 0
         });
         backing
-            .put(
-                PENDING_COLLECTION,
-                id,
-                record,
-                Precondition::Absent,
-            )
+            .put(PENDING_COLLECTION, id, record, Precondition::Absent)
             .await
             .unwrap();
     }
@@ -108,9 +103,18 @@ async fn pending_v21_media_file_and_voice_records_still_decode_after_upgrade() {
     assert_eq!(loaded.len(), 3);
     for entry in loaded {
         match entry.id.as_str() {
-            "old-media" => assert!(matches!(entry.intent.payload, crate::OutboundPayload::Media { .. })),
-            "old-files" => assert!(matches!(entry.intent.payload, crate::OutboundPayload::Files { .. })),
-            "old-voice" => assert!(matches!(entry.intent.payload, crate::OutboundPayload::Voice { .. })),
+            "old-media" => assert!(matches!(
+                entry.intent.payload,
+                crate::OutboundPayload::Media { .. }
+            )),
+            "old-files" => assert!(matches!(
+                entry.intent.payload,
+                crate::OutboundPayload::Files { .. }
+            )),
+            "old-voice" => assert!(matches!(
+                entry.intent.payload,
+                crate::OutboundPayload::Voice { .. }
+            )),
             unexpected => panic!("unexpected stored delivery {unexpected}"),
         }
     }
