@@ -205,7 +205,10 @@ pub trait Channel: Send + Sync {
             capabilities.actions.supported.push("edit".into());
         }
         if capabilities.reactions {
-            capabilities.actions.supported.extend(["react".into(), "reactions".into()]);
+            capabilities
+                .actions
+                .supported
+                .extend(["react".into(), "reactions".into()]);
         }
         capabilities
     }

@@ -38,8 +38,12 @@ fn legacy_presentation_projection_preserves_rich_button_constraints_and_edit_sem
     let mut capabilities = ChannelCapabilities::unknown();
     capabilities.progressive_edits = true;
     capabilities.content.button_presentation = ButtonPresentationCapabilities {
-        max_actions_per_row: Some(4), max_rows: Some(3), max_label_length: Some(32),
-        max_value_bytes: Some(512), supports_styles: true, supports_disabled: true,
+        max_actions_per_row: Some(4),
+        max_rows: Some(3),
+        max_label_length: Some(32),
+        max_value_bytes: Some(512),
+        supports_styles: true,
+        supports_disabled: true,
         supports_layout_hints: true,
     };
     // Streaming drafts do not imply a separately supported edit action.
@@ -52,5 +56,9 @@ fn legacy_presentation_projection_preserves_rich_button_constraints_and_edit_sem
     assert_eq!(presentation.max_rows, Some(3));
     assert_eq!(presentation.max_label_length, Some(32));
     assert_eq!(presentation.max_value_bytes, Some(512));
-    assert!(presentation.supports_styles && presentation.supports_disabled && presentation.supports_layout_hints);
+    assert!(
+        presentation.supports_styles
+            && presentation.supports_disabled
+            && presentation.supports_layout_hints
+    );
 }

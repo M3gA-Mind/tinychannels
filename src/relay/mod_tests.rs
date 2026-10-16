@@ -589,9 +589,18 @@ async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
     let io = Arc::new(MemoryRelayIo::default());
     let transport = Arc::new(RelayTransport::new(
         vec![
-            RelayIdentity { platform: "discord".into(), bot_id: "a".into() },
-            RelayIdentity { platform: "discord".into(), bot_id: "b".into() },
-        ], io.clone(), short_relay_timeouts()));
+            RelayIdentity {
+                platform: "discord".into(),
+                bot_id: "a".into(),
+            },
+            RelayIdentity {
+                platform: "discord".into(),
+                bot_id: "b".into(),
+            },
+        ],
+        io.clone(),
+        short_relay_timeouts(),
+    ));
     transport.connect().await.expect("connect");
     let negotiation = {
         let transport = transport.clone();
@@ -612,14 +621,23 @@ async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
     let mut unrelated = tinychannels_bus::ChannelCapabilities::unknown();
     unrelated.progressive_edits = true;
     io.push(ConnectorToGatewayFrame::DescriptorV2 {
-        platform: "discord".into(), bot_id: "other".into(), capabilities: unrelated,
-    }).await;
-    io.push(ConnectorToGatewayFrame::Descriptor { descriptor: telegram_descriptor() }).await;
+        platform: "discord".into(),
+        bot_id: "other".into(),
+        capabilities: unrelated,
+    })
+    .await;
+    io.push(ConnectorToGatewayFrame::Descriptor {
+        descriptor: telegram_descriptor(),
+    })
+    .await;
     let mut second_capabilities = tinychannels_bus::ChannelCapabilities::unknown();
     second_capabilities.reactions = true;
     io.push(ConnectorToGatewayFrame::DescriptorV2 {
-        platform: "discord".into(), bot_id: "b".into(), capabilities: second_capabilities.clone(),
-    }).await;
+        platform: "discord".into(),
+        bot_id: "b".into(),
+        capabilities: second_capabilities.clone(),
+    })
+    .await;
     io.push(ConnectorToGatewayFrame::DescriptorV2 {
         platform: "discord".into(),
         bot_id: "a".into(),
@@ -627,16 +645,37 @@ async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
     })
     .await;
     let negotiated = negotiation.await.unwrap().unwrap();
-    assert_eq!(negotiated.get(&RelayIdentity { platform: "discord".into(), bot_id: "a".into() }), Some(&capabilities));
-    assert_eq!(negotiated.get(&RelayIdentity { platform: "discord".into(), bot_id: "b".into() }), Some(&second_capabilities));
+    assert_eq!(
+        negotiated.get(&RelayIdentity {
+            platform: "discord".into(),
+            bot_id: "a".into()
+        }),
+        Some(&capabilities)
+    );
+    assert_eq!(
+        negotiated.get(&RelayIdentity {
+            platform: "discord".into(),
+            bot_id: "b".into()
+        }),
+        Some(&second_capabilities)
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
     let io = Arc::new(MemoryRelayIo::default());
     let transport = Arc::new(RelayTransport::new(
-        vec![RelayIdentity { platform: "discord".into(), bot_id: "a".into() }],
-        io.clone(), RelayTransportTimeouts { handshake_ms: 60, outbound_ms: 500, idle_ms: 500 }));
+        vec![RelayIdentity {
+            platform: "discord".into(),
+            bot_id: "a".into(),
+        }],
+        io.clone(),
+        RelayTransportTimeouts {
+            handshake_ms: 60,
+            outbound_ms: 500,
+            idle_ms: 500,
+        },
+    ));
     transport.connect().await.expect("connect");
     let negotiation = {
         let transport = transport.clone();
@@ -647,13 +686,31 @@ async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
     wrong_version.version = 99;
     let start = tokio::time::Instant::now();
     loop {
-        io.push(ConnectorToGatewayFrame::DescriptorV2 { platform: "discord".into(), bot_id: "a".into(), capabilities: wrong_version.clone() }).await;
-        io.push(ConnectorToGatewayFrame::Descriptor { descriptor: telegram_descriptor() }).await;
-        if start.elapsed() > Duration::from_millis(100) { break; }
+        io.push(ConnectorToGatewayFrame::DescriptorV2 {
+            platform: "discord".into(),
+            bot_id: "a".into(),
+            capabilities: wrong_version.clone(),
+        })
+        .await;
+        io.push(ConnectorToGatewayFrame::Descriptor {
+            descriptor: telegram_descriptor(),
+        })
+        .await;
+        if start.elapsed() > Duration::from_millis(100) {
+            break;
+        }
         tokio::task::yield_now().await;
     }
-    assert_eq!(negotiation.await.unwrap(), Err(RelayTransportError::Timeout { operation: "handshake_v2" }));
-    assert!(start.elapsed() < Duration::from_millis(200), "unrelated traffic must not restart handshake timeout");
+    assert_eq!(
+        negotiation.await.unwrap(),
+        Err(RelayTransportError::Timeout {
+            operation: "handshake_v2"
+        })
+    );
+    assert!(
+        start.elapsed() < Duration::from_millis(200),
+        "unrelated traffic must not restart handshake timeout"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

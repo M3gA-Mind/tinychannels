@@ -102,19 +102,42 @@ impl From<&crate::ChannelCapabilities> for ChannelPresentationCapabilities {
                 .first()
                 .copied()
                 .unwrap_or_default(),
-            supports_edit: capabilities.actions.supported.iter().any(|action| action == "edit"),
+            supports_edit: capabilities
+                .actions
+                .supported
+                .iter()
+                .any(|action| action == "edit"),
             max_actions: capabilities
                 .content
                 .buttons
                 .max_count
                 .and_then(|count| usize::try_from(count).ok()),
-            max_actions_per_row: capabilities.content.button_presentation.max_actions_per_row.and_then(|n| usize::try_from(n).ok()),
-            max_rows: capabilities.content.button_presentation.max_rows.and_then(|n| usize::try_from(n).ok()),
-            max_label_length: capabilities.content.button_presentation.max_label_length.and_then(|n| usize::try_from(n).ok()),
-            max_value_bytes: capabilities.content.button_presentation.max_value_bytes.and_then(|n| usize::try_from(n).ok()),
+            max_actions_per_row: capabilities
+                .content
+                .button_presentation
+                .max_actions_per_row
+                .and_then(|n| usize::try_from(n).ok()),
+            max_rows: capabilities
+                .content
+                .button_presentation
+                .max_rows
+                .and_then(|n| usize::try_from(n).ok()),
+            max_label_length: capabilities
+                .content
+                .button_presentation
+                .max_label_length
+                .and_then(|n| usize::try_from(n).ok()),
+            max_value_bytes: capabilities
+                .content
+                .button_presentation
+                .max_value_bytes
+                .and_then(|n| usize::try_from(n).ok()),
             supports_styles: capabilities.content.button_presentation.supports_styles,
             supports_disabled: capabilities.content.button_presentation.supports_disabled,
-            supports_layout_hints: capabilities.content.button_presentation.supports_layout_hints,
+            supports_layout_hints: capabilities
+                .content
+                .button_presentation
+                .supports_layout_hints,
         }
     }
 }
