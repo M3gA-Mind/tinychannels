@@ -62,3 +62,20 @@ fn legacy_presentation_projection_preserves_rich_button_constraints_and_edit_sem
             && presentation.supports_layout_hints
     );
 }
+
+#[test]
+fn legacy_presentation_keeps_v1_enum_spellings_on_the_wire() {
+    let presentation = crate::channel::ChannelPresentationCapabilities {
+        length_unit: LengthUnit::Utf8Bytes,
+        markdown_dialect: MarkdownDialect::SlackMrkdwn,
+        ..Default::default()
+    };
+
+    let value = serde_json::to_value(&presentation).unwrap();
+    assert_eq!(value["lengthUnit"], "utf8-bytes");
+    assert_eq!(value["markdownDialect"], "slack-mrkdwn");
+    let decoded: crate::channel::ChannelPresentationCapabilities =
+        serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.length_unit, LengthUnit::Utf8Bytes);
+    assert_eq!(decoded.markdown_dialect, MarkdownDialect::SlackMrkdwn);
+}
