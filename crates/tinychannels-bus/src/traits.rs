@@ -1,3 +1,4 @@
+use crate::channel::ChannelInboundEnvelope;
 use serde::{Deserialize, Serialize};
 
 /// Legacy v21 message projection retained for one release during v22 migration.
