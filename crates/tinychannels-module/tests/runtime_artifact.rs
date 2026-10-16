@@ -333,6 +333,12 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             from_phone: "+15550000001".into(),
             allowed_senders: vec![],
         }),
+        yuanbao: Some(tinychannels_bus::config::YuanbaoConfig {
+            app_key: "fixture-key".into(),
+            token: "fixture-token".into(),
+            ws_domain: "wss://example.invalid".into(),
+            ..Default::default()
+        }),
         ..Default::default()
     };
     let ordinary_calls = [
@@ -374,9 +380,18 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         )
         .await
         .unwrap();
-    assert_eq!(catalog.len(), 1);
-    assert_eq!(catalog[0].name, "linq");
-    assert_eq!(catalog[0].ingress, ChannelIngressKind::ExternalWebhook);
+    assert_eq!(catalog.len(), 2);
+    let linq = catalog
+        .iter()
+        .find(|channel| channel.name == "linq")
+        .unwrap();
+    let yuanbao = catalog
+        .iter()
+        .find(|channel| channel.name == "yuanbao")
+        .unwrap();
+    assert_eq!(linq.ingress, ChannelIngressKind::ExternalWebhook);
+    assert!(!linq.interaction.capabilities.progressive_edits);
+    assert!(yuanbao.interaction.capabilities.progressive_edits);
     first_client
         .call_confidential::<()>(
             methods::START_OUTBOUND_CHANNEL,
@@ -394,10 +409,26 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         )
         .await
         .unwrap();
-    assert!(matches!(
-        interaction,
-        tinychannels_bus::ChannelInteractionResult::Info(_)
-    ));
+    let tinychannels_bus::ChannelInteractionResult::Info(described) = interaction else {
+        panic!("Describe should return its configured capabilities")
+    };
+    let controlled: tinychannels_bus::module_control::ChannelControlResult = first_client
+        .call_confidential(
+            methods::PREPARE_CHANNEL_CONTROL,
+            (
+                tinychannels_bus::module_control::ChannelControlRequest::Capabilities {
+                    channel: "linq".into(),
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        controlled,
+        tinychannels_bus::module_control::ChannelControlResult::Capabilities(
+            described.capabilities
+        )
+    );
     let prepared: PreparedChannelIntent = first_client
         .call_confidential(
             methods::PREPARE_OUTBOUND_INTENT,
