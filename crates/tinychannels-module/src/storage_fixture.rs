@@ -231,7 +231,7 @@ impl DocumentStore for ScopeSwitchDocs {
         doc: Value,
         precondition: Precondition,
     ) -> Result<Version> {
-        self.put_with(collection, id, doc, precondition, WriteOptions::new())
+        self.put_with(collection, id, doc, precondition, Default::default())
             .await
     }
 
