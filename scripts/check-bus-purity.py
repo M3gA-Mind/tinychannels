@@ -12,17 +12,13 @@ ALLOWED = {
     'schemars', 'schemars_derive', 'thiserror', 'thiserror-impl',
     'proc-macro2', 'quote', 'syn', 'unicode-ident', 'itoa', 'memchr', 'zmij',
     'serde_derive_internals', 'dyn-clone', 'ref-cast', 'ref-cast-impl', 'base64',
-    'tokio',
 }
 FORBIDDEN = ('async fn ', 'async_trait', 'tokio::', 'std::sync', 'std::thread',
              'std::fs', 'std::env', 'std::time', 'parking_lot::', 'sha2::', 'hmac::',
              'rand::', 'uuid::', 'fn build_session_key', 'fn classify_send_error',
              'fn authenticated_inbound_event', 'fn segment_for_delivery')
 for source in (ROOT / 'crates/tinychannels-bus/src').rglob('*.rs'):
-    # The shared Channel trait declares async provider ports and uses Tokio's
-    # sync-only listener type; those are contract interfaces, not bus-side
-    # runtime implementations.
-    if source.name.endswith('_tests.rs') or source.name == 'traits.rs':
+    if source.name.endswith('_tests.rs'):
         continue
     content = source.read_text()
     for forbidden in FORBIDDEN:
