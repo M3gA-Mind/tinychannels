@@ -9,6 +9,78 @@ use async_trait::async_trait;
 use std::time::Duration;
 
 impl TelegramChannel {
+    pub(crate) fn inbound_envelope_from_update(
+        update: &serde_json::Value,
+        message: &ChannelMessage,
+    ) -> tinychannels_bus::ChannelInboundEnvelope {
+        let source = update
+            .get("message")
+            .or_else(|| update.get("edited_message"))
+            .unwrap_or(&serde_json::Value::Null);
+        let chat = source.get("chat").unwrap_or(&serde_json::Value::Null);
+        let chat_id = chat
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| message.reply_target.split(':').next().unwrap_or_default().to_owned());
+        let topic_id = source
+            .get("message_thread_id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
+        let kind = match chat.get("type").and_then(serde_json::Value::as_str) {
+            Some("private") => tinychannels_bus::ConversationKind::Dm,
+            Some("group" | "supergroup") => tinychannels_bus::ConversationKind::Group,
+            Some("channel") => tinychannels_bus::ConversationKind::Channel,
+            _ => tinychannels_bus::ConversationKind::Unknown,
+        };
+        let actor = source.get("from").or_else(|| source.get("sender_chat"));
+        let sender_id = actor
+            .and_then(|actor| actor.get("id"))
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| message.sender.clone());
+        let sender_name = actor
+            .and_then(|actor| actor.get("username"))
+            .and_then(serde_json::Value::as_str)
+            .map(ToString::to_string)
+            .or_else(|| message.sender_name.clone());
+        let provider_message_id = source
+            .get("message_id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
+        let timestamp_unix_ms = source
+            .get("date")
+            .and_then(serde_json::Value::as_u64)
+            .map(|seconds| seconds.saturating_mul(1000));
+        tinychannels_bus::ChannelInboundEnvelope {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: None,
+            },
+            message_id: message.id.clone(),
+            reply_to_id: message.reply_to_id.clone(),
+            timestamp_unix_ms,
+            conversation: tinychannels_bus::ConversationRef {
+                kind,
+                id: chat_id,
+                topic_id,
+                ..Default::default()
+            },
+            sender: tinychannels_bus::SenderRef {
+                id: sender_id,
+                name: sender_name,
+                ..Default::default()
+            },
+            text: message.content.clone(),
+            parts: vec![tinychannels_bus::ContentPart::Text {
+                text: message.content.clone(),
+                markdown_dialect: None,
+            }],
+            raw: Some(serde_json::json!({"providerMessageId": provider_message_id})),
+            ..Default::default()
+        }
+    }
+
     /// One iteration of the background typing refresher: post the chat action
     /// and log (never fail) on rejection or transport error. Returns whether
     /// Telegram accepted the refresh.
@@ -747,8 +819,9 @@ Ensure only one `openhuman` process is using this bot token."
                         continue;
                     };
 
+                    let ingress = Self::inbound_envelope_from_update(update, &msg);
                     let delivered_by_event_sink = if let Some(events) = &self.events {
-                        match events.publish_inbound(msg.clone()).await {
+                        match events.publish_ingress(tinychannels_bus::ChannelIngress::Inbound(ingress)).await {
                             Ok(delivered) => delivered,
                             Err(error) => {
                                 tracing::debug!(%error, "failed to deliver Telegram inbound through module ingress");
