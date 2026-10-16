@@ -796,8 +796,6 @@ impl tinychannels::Channel for PartialReceiptChannel {
 
 #[tokio::test]
 async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retried_blindly() {
-    use tinychannels::delivery::{DeliveryQueueStore as _, QueuedDelivery};
-
     let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (channels, callbacks, _server) = channels_with_store(Arc::new(PartialReceiptChannel(sends.clone()))).await;
     let intent = required_intent("partial-required", "multipart body");
