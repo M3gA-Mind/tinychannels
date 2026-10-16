@@ -604,9 +604,13 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
 
     let recorded = events.events.lock().unwrap().clone();
     assert_eq!(recorded.len(), 1);
-    assert_eq!(recorded[0].1, "reaction_received");
-    assert_eq!(recorded[0].2["target_message_id"], "telegram_100_4");
-    assert_eq!(recorded[0].2["emoji"], "❤");
+    assert_eq!(recorded[0].1, "reaction_added");
+    assert_eq!(recorded[0].2["type"], "reaction");
+    assert_eq!(recorded[0].2["eventId"], "telegram:update:12");
+    assert_eq!(recorded[0].2["conversation"]["id"], "100");
+    assert_eq!(recorded[0].2["messageId"], "4");
+    assert_eq!(recorded[0].2["actor"]["id"], "7");
+    assert_eq!(recorded[0].2["reaction"]["value"], "❤");
     assert_eq!(json_bodies(&server, "deleteWebhook").await.len(), 1);
     // The unauthorized sender got the approval prompt.
     let prompts = sent_texts(&server).await;
