@@ -389,6 +389,12 @@ async fn v2_capabilities_query_hides_cached_slot_after_immediate_transport_close
         tinychannels::relay::RelayTransportTimeouts::default(),
     ));
     *slot.transport.lock().await = Some(transport.clone());
+    assert!(!transport.is_closed());
+    assert_eq!(
+        manager.capabilities_v2(reservation.clone()).await.unwrap(),
+        None,
+        "an open transport without its new descriptor snapshot must not expose cached facts"
+    );
     transport.shutdown().await;
 
     assert!(transport.is_closed());

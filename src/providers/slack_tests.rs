@@ -178,9 +178,18 @@ async fn api_requests_preserve_auth_threads_and_report_http_and_slack_errors() {
     );
     assert_eq!(channel.get_bot_user_id().await.as_deref(), Some("bot"));
     assert!(channel.health_check().await);
-    let mut reply = SendMessage::new("reply", "room");
-    reply.thread_ts = Some("123.001".into());
-    channel.send(&reply).await.unwrap();
+    let mut reply = tinychannels_bus::ChannelOutboundMessage::from_intent(
+        &tinychannels_bus::ChannelOutboundIntent {
+            channel_id: "slack".into(),
+            conversation_id: "room".into(),
+            payload: tinychannels_bus::OutboundPayload::Text {
+                text: "reply".into(),
+            },
+            ..Default::default()
+        },
+    );
+    reply.thread_id = Some("123.001".into());
+    channel.send_typed(&reply).await.unwrap();
     for (text, error) in [
         ("http-error", "permission denied"),
         ("app-error", "channel_not_found"),
