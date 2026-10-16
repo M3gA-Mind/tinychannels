@@ -481,54 +481,103 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         assert!(!typed.parts.is_empty(), "payload {index} must stay typed");
         assert!(serde_json::to_string(&typed).unwrap().contains("\"kind\":"));
         match index {
-            0 => assert!(matches!(
-                typed.parts[0],
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Text { .. }
-                }
-            )),
-            1 => assert!(matches!(
-                typed.parts[1],
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Image { .. }
-                }
-            )),
-            2 => assert!(matches!(
-                typed.parts[0],
-                tinychannels_bus::OutboundContentPart::Voice {
-                    voice: tinychannels_bus::OutboundVoice::Media { .. }
-                }
-            )),
-            3 => assert!(matches!(
-                typed.parts[0],
-                tinychannels_bus::OutboundContentPart::Voice {
-                    voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
-                }
-            )),
-            4 => assert!(matches!(
-                typed.parts[0],
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::File { .. }
-                }
-            )),
-            5 => assert!(matches!(
-                typed.parts[0],
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Poll { .. }
-                }
-            )),
-            6 => assert!(matches!(
-                typed.parts[0],
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Presentation { .. }
-                }
-            )),
-            7 => assert!(matches!(
-                typed.parts[0],
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Native { .. }
-                }
-            )),
+            0 => {
+                let tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { text, .. },
+                } = &typed.parts[0]
+                else {
+                    panic!("text intent must produce a typed text part")
+                };
+                assert_eq!(text, "hello");
+            }
+            1 => {
+                assert_eq!(typed.parts.len(), 2, "caption precedes media");
+                let tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { text, .. },
+                } = &typed.parts[0]
+                else {
+                    panic!("media caption must remain first")
+                };
+                assert_eq!(text, "caption");
+                let tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Image { media, .. },
+                } = &typed.parts[1]
+                else {
+                    panic!("media URL must remain a typed image part")
+                };
+                assert_eq!(media.url.as_deref(), Some("https://example.test/image.png"));
+            }
+            2 => {
+                let tinychannels_bus::OutboundContentPart::Voice {
+                    voice:
+                        tinychannels_bus::OutboundVoice::Media {
+                            media,
+                            codec,
+                            duration_ms,
+                        },
+                } = &typed.parts[0]
+                else {
+                    panic!("voice media intent must remain typed")
+                };
+                assert_eq!(media.url.as_deref(), Some("https://example.test/audio.ogg"));
+                assert_eq!(codec.as_deref(), Some("audio/ogg"));
+                assert_eq!(*duration_ms, Some(1200));
+            }
+            3 => {
+                let tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Synthesize { text, voice },
+                } = &typed.parts[0]
+                else {
+                    panic!("voice synthesis intent must remain typed")
+                };
+                assert_eq!(text, "hello spoken aloud");
+                assert_eq!(voice.as_deref(), Some("voice-a"));
+            }
+            4 => {
+                let tinychannels_bus::OutboundContentPart::Content {
+                    part:
+                        tinychannels_bus::ContentPart::File {
+                            media, file_name, ..
+                        },
+                } = &typed.parts[0]
+                else {
+                    panic!("file URL must remain a typed file part")
+                };
+                assert_eq!(media.url.as_deref(), Some("https://example.test/file.pdf"));
+                assert_eq!(file_name.as_deref(), Some("file.pdf"));
+            }
+            5 => {
+                let tinychannels_bus::OutboundContentPart::Content {
+                    part:
+                        tinychannels_bus::ContentPart::Poll {
+                            question, options, ..
+                        },
+                } = &typed.parts[0]
+                else {
+                    panic!("poll must remain a typed poll part")
+                };
+                assert_eq!(question, "Q?");
+                assert_eq!(options, &["A", "B"]);
+            }
+            6 => {
+                let tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Presentation { blocks },
+                } = &typed.parts[0]
+                else {
+                    panic!("presentation must remain a typed part")
+                };
+                assert_eq!(blocks, &serde_json::json!([{"type":"text"}]));
+            }
+            7 => {
+                let tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Native { provider, data },
+                } = &typed.parts[0]
+                else {
+                    panic!("native payload must remain typed and provider-scoped")
+                };
+                assert_eq!(provider, "fixture");
+                assert_eq!(data, &serde_json::json!({"opaque":true}));
+            }
             8 => assert_eq!(typed.parts, rich_parts),
             _ => unreachable!(),
         }
