@@ -192,6 +192,8 @@ pub trait Channel: Send + Sync {
         capabilities.progressive_edits = self.supports_progressive_edits();
         capabilities.streaming_reply_pipeline = self.supports_draft_updates();
         capabilities.reactions = self.supports_reactions();
+        capabilities.addressing.reply_to_id = self.supports_reply_to_id();
+        capabilities.addressing.thread_id = self.supports_thread_id();
         capabilities.content.parts = vec!["text".into()];
         capabilities.content.text = crate::capabilities::ContentCapability {
             inbound: true,
@@ -204,6 +206,12 @@ pub trait Channel: Send + Sync {
         }
         if self.supports_edit() {
             capabilities.actions.supported.push("edit".into());
+        }
+        if capabilities.addressing.reply_to_id || capabilities.addressing.thread_id {
+            capabilities.actions.supported.push("reply".into());
+        }
+        if capabilities.addressing.thread_id {
+            capabilities.actions.supported.push("thread-reply".into());
         }
         if capabilities.reactions {
             capabilities
@@ -249,6 +257,16 @@ pub trait Channel: Send + Sync {
 
     /// Whether an existing sent message can be edited independently of draft streaming.
     fn supports_edit(&self) -> bool {
+        false
+    }
+
+    /// Whether outbound messages may address a source message directly.
+    fn supports_reply_to_id(&self) -> bool {
+        false
+    }
+
+    /// Whether outbound messages may address a conversation thread.
+    fn supports_thread_id(&self) -> bool {
         false
     }
 

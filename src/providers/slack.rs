@@ -86,6 +86,10 @@ impl Channel for SlackChannel {
         true
     }
 
+    fn supports_thread_id(&self) -> bool {
+        true
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let mut body = serde_json::json!({
             "channel": message.recipient,
