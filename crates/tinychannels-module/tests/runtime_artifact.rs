@@ -394,7 +394,8 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         .unwrap();
     assert_eq!(linq.ingress, ChannelIngressKind::ExternalWebhook);
     assert!(!linq.interaction.capabilities.progressive_edits);
-    assert!(yuanbao.interaction.capabilities.progressive_edits);
+    assert!(yuanbao.interaction.capabilities.streaming_reply_pipeline);
+    assert!(!yuanbao.interaction.capabilities.progressive_edits);
     first_client
         .call_confidential::<()>(
             methods::START_OUTBOUND_CHANNEL,

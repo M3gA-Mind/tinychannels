@@ -239,6 +239,8 @@ same DTO. The legacy relay v1 descriptor remains a frozen wire projection:
 | addressing.conversationTypes | Supported dm, group, channel, and thread conversation kinds. |
 | addressing | Support for accountId, scopeId, parentId, topicId, replyToId, and threadId, with provider restrictions represented per operation. |
 | actions | Supported send/reply/thread/edit/delete/reaction/read/typing/draft/poll/buttons/native-command actions. |
+| progressiveEdits | Whether the configured instance can visibly update a draft while a reply is running. |
+| streamingReplyPipeline | Whether provider replies require the streaming parser, independently of visible draft editing. |
 | text | textLimit, lengthUnit (characters, utf8_bytes, utf16_units), markdown dialect, and chunk constraints. |
 | content.image, content.video, content.audio, content.file, content.sticker | Accepted/emitted codec or media types, maxSizeBytes, and applicable duration/dimension limits. |
 | content.location, content.contact, content.buttons, content.poll, content.presentation, content.native | Support flags plus typed size/count/action limits where applicable. |
