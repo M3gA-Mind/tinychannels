@@ -710,7 +710,12 @@ Ensure only one `openhuman` process is using this bot token."
                                             }
                                             _ => tinychannels_bus::ConversationKind::Unknown,
                                         },
-                                        id: message.reply_target.clone(),
+                                        id: edited
+                                            .get("chat")
+                                            .and_then(|chat| chat.get("id"))
+                                            .and_then(serde_json::Value::as_i64)
+                                            .map(|id| id.to_string())
+                                            .unwrap_or_else(|| message.reply_target.clone()),
                                         topic_id: thread_id,
                                         ..Default::default()
                                     }),
