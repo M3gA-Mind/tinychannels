@@ -740,6 +740,32 @@ async fn relay_v2_rejects_an_unsupported_version_for_a_configured_identity() {
     );
 }
 
+#[tokio::test]
+async fn relay_v2_refuses_cached_capabilities_after_terminal_shutdown() {
+    let io = Arc::new(MemoryRelayIo::default());
+    let transport = Arc::new(discord_transport(io.clone()));
+    transport.connect_v2().await.expect("connect v2");
+    let negotiation = {
+        let transport = transport.clone();
+        tokio::spawn(async move { transport.negotiate_v2().await })
+    };
+    io.wait_for_sent_len(1).await;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    capabilities.progressive_edits = true;
+    io.push(ConnectorToGatewayFrame::DescriptorV2 {
+        platform: "discord".into(),
+        bot_id: "appShared".into(),
+        capabilities: Box::new(capabilities),
+    })
+    .await;
+    assert!(negotiation.await.unwrap().is_ok());
+    transport.shutdown().await;
+    assert_eq!(
+        transport.negotiate_v2().await,
+        Err(RelayTransportError::Closed)
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn relay_transport_outbound_waits_for_matching_result() {
     let io = Arc::new(MemoryRelayIo::default());
