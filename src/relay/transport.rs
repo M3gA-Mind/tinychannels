@@ -246,7 +246,14 @@ impl RelayTransport {
             {
                 return Ok(capabilities);
             }
-            if let Some(error) = self.state.capability_errors.lock().await.get(identity).cloned() {
+            if let Some(error) = self
+                .state
+                .capability_errors
+                .lock()
+                .await
+                .get(identity)
+                .cloned()
+            {
                 return Err(error);
             }
             tokio::time::timeout_at(deadline, notified)
