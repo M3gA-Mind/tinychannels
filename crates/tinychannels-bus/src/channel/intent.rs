@@ -1,5 +1,6 @@
 //! Outbound channel intent types.
 
+use crate::channel::envelope::{ContentPart, MediaReference};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -41,6 +42,102 @@ pub enum OutboundPayload {
     NativeChannelData {
         data: Value,
     },
+}
+
+/// Explicit outbound voice operation. Synthesis is opt-in and keeps its text.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OutboundVoice {
+    Media { media: MediaReference, codec: Option<String>, duration_ms: Option<u64> },
+    Synthesize { text: String, voice: Option<String> },
+}
+
+/// Typed outbound parts accepted by migrated provider adapters.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum OutboundContentPart {
+    Content { part: ContentPart },
+    Voice { voice: OutboundVoice },
+}
+
+/// Complete provider-facing v2 send with ordered content and lossless addressing.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ChannelOutboundMessage {
+    pub channel_id: String,
+    pub conversation_id: String,
+    pub reply_to_id: Option<String>,
+    pub thread_id: Option<String>,
+    pub idempotency_key: String,
+    pub parts: Vec<OutboundContentPart>,
+}
+
+impl ChannelOutboundMessage {
+    /// Adapt an intent to typed ordered parts without serializing payloads into text.
+    pub fn from_intent(intent: &ChannelOutboundIntent) -> Self {
+        use crate::channel::envelope::MediaKind;
+        let mut parts = Vec::new();
+        match &intent.payload {
+            OutboundPayload::Text { text } => parts.push(OutboundContentPart::Content {
+                part: ContentPart::Text { text: text.clone() },
+            }),
+            OutboundPayload::Media { text, media_urls } => {
+                if let Some(text) = text {
+                    parts.push(OutboundContentPart::Content { part: ContentPart::Text { text: text.clone() } });
+                }
+                parts.extend(media_urls.iter().map(|url| OutboundContentPart::Content {
+                    part: ContentPart::Image {
+                        media: MediaReference { url: Some(url.clone()), kind: MediaKind::Image, ..Default::default() },
+                        caption: None,
+                        alt_text: None,
+                    },
+                }));
+            }
+            OutboundPayload::Voice { media_url } => parts.push(OutboundContentPart::Voice {
+                voice: OutboundVoice::Media {
+                    media: MediaReference { url: Some(media_url.clone()), kind: MediaKind::Audio, ..Default::default() },
+                    codec: None,
+                    duration_ms: None,
+                },
+            }),
+            OutboundPayload::Files { file_urls } => parts.extend(file_urls.iter().map(|url| OutboundContentPart::Content {
+                part: ContentPart::File {
+                    media: MediaReference { url: Some(url.clone()), kind: MediaKind::Document, ..Default::default() },
+                    file_name: None,
+                    caption: None,
+                },
+            })),
+            OutboundPayload::Poll { question, options } => parts.push(OutboundContentPart::Content {
+                part: ContentPart::Poll { question: question.clone(), options: options.clone() },
+            }),
+            OutboundPayload::PresentationBlocks { blocks } => parts.push(OutboundContentPart::Content {
+                part: ContentPart::Presentation { blocks: blocks.clone() },
+            }),
+            OutboundPayload::NativeChannelData { data } => parts.push(OutboundContentPart::Content {
+                part: ContentPart::Native { provider: intent.channel_id.clone(), data: data.clone() },
+            }),
+        }
+        Self {
+            channel_id: intent.channel_id.clone(),
+            conversation_id: intent.conversation_id.clone(),
+            reply_to_id: intent.reply_to_id.clone(),
+            thread_id: intent.thread_id.clone(),
+            idempotency_key: intent.idempotency_key.clone(),
+            parts,
+        }
+    }
+
+    /// Build the documented one-release text-only v21 projection.
+    pub fn legacy_text(&self) -> anyhow::Result<String> {
+        let mut text = Vec::new();
+        for part in &self.parts {
+            match part {
+                OutboundContentPart::Content { part: ContentPart::Text { text: value } } => text.push(value.as_str()),
+                _ => anyhow::bail!("provider does not support typed channel content"),
+            }
+        }
+        Ok(text.join("\n"))
+    }
 }
 
 /// Logical outbound send request.

@@ -83,6 +83,64 @@ pub struct MediaReference {
     pub local_cache_path: Option<String>,
 }
 
+/// Transcript enrichment attached to a voice note without replacing its audio.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct VoiceTranscript {
+    pub text: String,
+    pub language: Option<String>,
+    pub state: VoiceTranscriptState,
+    pub source: VoiceTranscriptSource,
+}
+
+/// Whether a voice transcript is still being produced or is final.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceTranscriptState {
+    Pending,
+    Complete,
+    Unavailable,
+}
+
+/// Origin of voice transcript enrichment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum VoiceTranscriptSource {
+    Provider,
+    HostStt,
+}
+
+/// Audio message metadata and optional transcript enrichment.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct VoiceNote {
+    pub media: MediaReference,
+    pub codec: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub waveform: Option<Vec<f32>>,
+    pub push_to_talk: bool,
+    pub transcript: Option<VoiceTranscript>,
+}
+
+/// Provider-neutral ordered inbound content.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ContentPart {
+    Text { text: String },
+    Image { media: MediaReference, caption: Option<String>, alt_text: Option<String> },
+    Video { media: MediaReference, caption: Option<String>, duration_ms: Option<u64> },
+    Audio { media: MediaReference, transcript: Option<String> },
+    File { media: MediaReference, file_name: Option<String>, caption: Option<String> },
+    VoiceNote { voice_note: VoiceNote },
+    Sticker { media: MediaReference, alt_text: Option<String> },
+    Location { latitude: f64, longitude: f64, label: Option<String>, address: Option<String> },
+    Contact { display_name: String, phone_numbers: Vec<String>, emails: Vec<String> },
+    Buttons { rows: Vec<Vec<serde_json::Value>> },
+    Poll { question: String, options: Vec<String> },
+    Presentation { blocks: Value },
+    Native { provider: String, data: Value },
+}
+
 /// Legacy prompt-media fields projected from normalized media references.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "PascalCase")]
@@ -105,6 +163,8 @@ pub struct ChannelInboundEnvelope {
     pub conversation: ConversationRef,
     pub sender: SenderRef,
     pub text: String,
+    /// Canonical ordered content. `text` and `media` remain compatibility projections.
+    pub parts: Vec<ContentPart>,
     pub access: AccessContext,
     pub media: Vec<MediaReference>,
     pub raw: Option<Value>,
