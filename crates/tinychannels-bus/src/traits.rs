@@ -42,6 +42,9 @@ pub struct SendMessage {
     pub subject: Option<String>,
     /// Platform thread identifier for threaded replies (e.g. Slack `thread_ts`).
     pub thread_ts: Option<String>,
+    /// Independent provider topic identifier where supported.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "topicId")]
+    pub topic_id: Option<String>,
     /// Source message identifier for a provider reply.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "replyToId")]
     pub reply_to_id: Option<String>,
