@@ -253,6 +253,34 @@ fn parse_update_reactions_preserves_all_changes_and_custom_emoji_identity() {
 }
 
 #[test]
+fn anonymous_chat_reactions_keep_actor_identity_and_native_paid_reaction() {
+    let ch = TelegramChannel::new("tok".into(), vec!["-100".into()], false);
+    let changes = ch.parse_update_reactions(&serde_json::json!({
+        "update_id": 92,
+        "message_reaction": {
+            "chat": {"id": -10, "type": "channel"}, "message_id": 8,
+            "actor_chat": {"id": -100, "title": "moderators"},
+            "old_reaction": [],
+            "new_reaction": [{"type": "paid"}]
+        }
+    }));
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].sender_id, "-100");
+    assert_eq!(changes[0].sender, "moderators");
+    assert_eq!(changes[0].emoji, "paid");
+    assert_eq!(changes[0].custom_emoji_id, None);
+
+    let denied = TelegramChannel::new("tok".into(), vec!["alice".into()], false);
+    assert!(denied.parse_update_reactions(&serde_json::json!({
+        "message_reaction": {
+            "chat": {"id": -10}, "message_id": 8,
+            "actor_chat": {"id": -100, "title": "moderators"},
+            "old_reaction": [], "new_reaction": [{"type": "paid"}]
+        }
+    })).is_empty(), "anonymous actors still obey the configured allowlist");
+}
+
+#[test]
 fn redact_bot_token_is_identity_for_empty_token() {
     let ch = TelegramChannel::new(String::new(), vec!["*".into()], false);
     assert_eq!(ch.redact_bot_token("keep /bot/ as is"), "keep /bot/ as is");
