@@ -1078,6 +1078,7 @@ async fn replayed_terminal_result_acknowledges_a_remaining_pending_record() {
             id: "terminal-cleanup".into(),
             intent_fingerprint: fingerprint,
             completed_at_unix_ms: now_unix_ms(),
+            receipt: None,
         })
         .await
         .unwrap();
@@ -1108,6 +1109,7 @@ async fn startup_recovery_acks_a_matching_terminal_result_without_resending() {
             id: "recovery-terminal".into(),
             intent_fingerprint: intent_fingerprint(&intent).unwrap(),
             completed_at_unix_ms: now_unix_ms(),
+            receipt: None,
         })
         .await
         .unwrap();
@@ -1145,6 +1147,7 @@ async fn startup_recovery_rejects_a_conflicting_terminal_result() {
             id: "recovery-conflict".into(),
             intent_fingerprint: "f".repeat(64),
             completed_at_unix_ms: now_unix_ms(),
+            receipt: None,
         })
         .await
         .unwrap();
@@ -1230,6 +1233,7 @@ async fn changed_intent_cannot_reuse_a_terminal_result_key() {
                 id: "result-conflict".into(),
                 intent_fingerprint: "a".repeat(64),
                 completed_at_unix_ms: now_unix_ms(),
+            receipt: None,
             },
         )
         .await;

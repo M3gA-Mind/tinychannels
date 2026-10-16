@@ -705,6 +705,7 @@ async fn durable_store_rejects_invalid_and_expired_records() {
         id: "op-validate".into(),
         intent_fingerprint: "a".repeat(64),
         completed_at_unix_ms: 1,
+            receipt: None,
     };
     store.save_result(expired).await.unwrap();
     assert!(store.load_result("op-validate").await.unwrap().is_none());
