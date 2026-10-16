@@ -762,6 +762,65 @@ impl tinychannels::Channel for FailingChannel {
 
 struct EndedChannel(Arc<std::sync::atomic::AtomicUsize>);
 
+struct PartialReceiptChannel(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for PartialReceiptChannel {
+    fn name(&self) -> &str { "fixture" }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> { Ok(()) }
+
+    async fn send_typed_with_receipt(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<tinychannels_bus::ChannelSendOutcome> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(tinychannels_bus::ChannelSendOutcome {
+            receipt: tinychannels_bus::MessageReceipt {
+                platform_message_ids: vec!["actual-provider-id-1".into(), "actual-provider-id-2".into()],
+                ..Default::default()
+            },
+            error: Some(tinychannels_bus::ChannelSendError {
+                message: "third part rejected".into(),
+                retryable: true,
+                ..Default::default()
+            }),
+        })
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> { std::future::pending().await }
+}
+
+#[tokio::test]
+async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retried_blindly() {
+    use tinychannels::delivery::{DeliveryQueueStore as _, QueuedDelivery};
+
+    let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (channels, callbacks, _server) = channels_with_store(Arc::new(PartialReceiptChannel(sends.clone()))).await;
+    let intent = required_intent("partial-required", "multipart body");
+    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
+    store.save_pending(QueuedDelivery::new("partial-required", intent, now_unix_ms())).await.unwrap();
+
+    let summary = channels.drain_pending_deliveries().await.unwrap();
+    assert_eq!(summary.failed, 1);
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    let scopes = callbacks.storage.snapshot().await;
+    let queue = scopes.get("scope-a").unwrap();
+    let pending = queue.pending.get("partial-required").expect("partial send remains pending for reconciliation");
+    assert_eq!(pending.recovery_state, Some(tinychannels_bus::DeliveryRecoveryState::UnknownAfterSend));
+    let receipt = pending.partial_receipt.as_ref().expect("actual partial provider receipt is durable");
+    assert_eq!(receipt.platform_message_ids, ["actual-provider-id-1", "actual-provider-id-2"]);
+    drop(scopes);
+
+    let summary = channels.drain_pending_deliveries().await.unwrap();
+    assert_eq!(summary.failed, 1);
+    assert_eq!(sends.load(Ordering::SeqCst), 1, "unknown partial sends must never be replayed as untouched sends");
+    channels.shutdown().await.unwrap();
+}
+
 #[async_trait::async_trait]
 impl tinychannels::Channel for EndedChannel {
     fn name(&self) -> &str {
