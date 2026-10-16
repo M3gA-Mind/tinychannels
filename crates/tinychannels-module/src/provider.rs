@@ -140,10 +140,13 @@ impl std::fmt::Display for RunningSendError {
 
 /// Native hooks registered while the selected provider starts.
 #[derive(Default)]
-pub(crate) struct Hooks(StdMutex<Vec<ShutdownHook>>);
+pub(crate) struct Hooks {
+    hooks: StdMutex<Vec<ShutdownHook>>,
+    configured_instance: StdMutex<Option<String>>,
+}
 impl LifecycleRegistry for Hooks {
     fn register_shutdown(&self, _name: &str, hook: ShutdownHook) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(hook);
+        self.hooks.lock().unwrap_or_else(|e| e.into_inner()).push(hook);
     }
 }
 impl Hooks {
@@ -152,6 +155,7 @@ impl Hooks {
         callbacks: HostChannels,
         configured_instance: String,
     ) -> Arc<dyn tinychannels::host::ChannelHost> {
+        *self.configured_instance.lock().unwrap_or_else(|e| e.into_inner()) = Some(configured_instance.clone());
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
@@ -164,7 +168,7 @@ impl Hooks {
             .build()
     }
     async fn drain(&self) {
-        let hooks = std::mem::take(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()));
+        let hooks = std::mem::take(&mut *self.hooks.lock().unwrap_or_else(|e| e.into_inner()));
         for hook in hooks {
             hook().await;
         }
@@ -348,6 +352,12 @@ impl Running {
         let task_finished = finished.clone();
         let listen_channel = channel.clone();
         let send_channel = channel.clone();
+        let configured_instance = hooks
+            .configured_instance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| listen_channel.name().to_owned());
         let worker_cancel = cancel.clone();
         let worker = tokio::spawn(async move {
             let name = listen_channel.name().to_owned();
@@ -392,8 +402,8 @@ impl Running {
                             .await
                             .map(|mut outcome| {
                                 outcome.receipt.channel = Some(tinychannels_bus::ChannelRef {
-                                    id: tinychannels_bus::provider_id(&name).to_owned(),
-                                    account_id: Some(name.clone()),
+                                    id: tinychannels_bus::provider_id(&configured_instance).to_owned(),
+                                    account_id: Some(configured_instance.clone()),
                                 });
                                 if outcome.receipt.conversation.is_none() {
                                     outcome.receipt.conversation = Some(
