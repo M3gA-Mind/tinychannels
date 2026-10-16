@@ -629,7 +629,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
                 }
             },
             {
-                "update_id": 13,
+                "update_id": 15,
                 "edited_message": {
                     "message_id": 5, "edit_date": 1234,
                     "message_thread_id": 88,
@@ -638,7 +638,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
                 }
             },
             {
-                "update_id": 14,
+                "update_id": 16,
                 "edited_message": {
                     "message_id": 5, "edit_date": 1235,
                     "chat": { "id": 100, "type": "supergroup" },
