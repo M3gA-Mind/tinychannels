@@ -185,7 +185,10 @@ pub trait Channel: Send + Sync {
 
     /// Instance-specific product interaction capabilities.
     fn capabilities(&self) -> crate::capabilities::ChannelCapabilities {
-        crate::capabilities::capabilities_for(self.name())
+        let mut capabilities = crate::capabilities::capabilities_for(self.name());
+        capabilities.progressive_edits = self.supports_draft_updates();
+        capabilities.reactions = self.supports_reactions();
+        capabilities
     }
 
     /// Whether native emoji reactions are supported.

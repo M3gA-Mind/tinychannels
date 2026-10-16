@@ -39,7 +39,12 @@ pub mod relay;
 )]
 pub mod traits;
 pub mod version;
-pub use capabilities::{ChannelCapabilities, capabilities_for, provider_id};
+pub use capabilities::{
+    AccountCapabilities, ActionCapabilities, AddressingCapabilities, ChannelCapabilities,
+    ContentCapabilities, ContentCapability, DeliveryCapabilities, EventCapabilities,
+    LengthUnit, MarkdownDialect, TextCapabilities, VoiceCapabilities, VoiceSupport,
+    capabilities_for, provider_id,
+};
 pub use channel::{
     ButtonAction, ButtonStyle, ChannelInboundEnvelope, ChannelOutboundIntent,
     ChannelOutboundMessage, ChannelRef, ContactMethod, ContentPart, ConversationKind,

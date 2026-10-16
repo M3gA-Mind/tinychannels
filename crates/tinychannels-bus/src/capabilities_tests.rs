@@ -1,52 +1,40 @@
 use super::*;
 
 #[test]
-fn telegram_and_its_alias_share_capabilities() {
-    let tg = capabilities_for("telegram");
-    assert_eq!(capabilities_for("tg"), tg);
-    assert_eq!(capabilities_for("tg:12345"), tg);
-    assert_eq!(capabilities_for("telegram:-100"), tg);
-    assert!(tg.remote_control && tg.chat_approvals && tg.progressive_edits);
-    assert!(tg.history_key_ignores_thread);
+fn v2_capabilities_round_trip_with_voice_and_typed_limits() {
+    let mut capabilities = ChannelCapabilities::unknown();
+    capabilities.voice.voice_in = VoiceCapabilities {
+        supported: true,
+        accepted_codecs: vec!["ogg/opus".into()],
+        max_duration_ms: Some(60_000),
+        native_waveform: true,
+        ..Default::default()
+    };
+    capabilities.content.parts.push("voice_note".into());
+    capabilities.content.image.max_size_bytes = Some(10_000);
+
+    let json = serde_json::to_vec(&capabilities).unwrap();
+    let decoded: ChannelCapabilities = serde_json::from_slice(&json).unwrap();
+    assert_eq!(decoded, capabilities);
+    assert_eq!(ChannelCapabilities::VERSION, 2);
 }
 
 #[test]
-fn chat_providers_get_remote_control_and_approvals_but_not_edits() {
-    for provider in [
-        "discord",
-        "slack",
-        "mattermost",
-        "imessage",
-        "signal",
-        "whatsapp",
-        "irc",
-    ] {
-        let caps = capabilities_for(provider);
-        assert!(caps.remote_control, "{provider} remote_control");
-        assert!(caps.chat_approvals, "{provider} chat_approvals");
-        assert!(!caps.progressive_edits, "{provider} progressive_edits");
-        assert!(!caps.history_key_ignores_thread, "{provider} thread key");
-    }
-    assert_eq!(
-        capabilities_for("discord:guild/chan"),
-        ChannelCapabilities::CHAT
-    );
-}
-
-#[test]
-fn unknown_and_non_conversational_providers_fail_safe() {
-    for provider in ["email", "cli", "webhook", "brand-new", ""] {
-        assert_eq!(
-            capabilities_for(provider),
-            ChannelCapabilities::NONE,
-            "{provider}"
-        );
-    }
-}
-
-#[test]
-fn provider_id_strips_prefix_and_resolves_alias() {
-    assert_eq!(provider_id("tg:1"), "telegram");
+fn provider_identifier_strips_instance_address() {
+    assert_eq!(provider_id("tg:1"), "tg");
     assert_eq!(provider_id("slack:C1"), "slack");
     assert_eq!(provider_id("email"), "email");
+}
+
+#[test]
+fn channel_message_action_names_are_unique() {
+    let names = crate::channel::CHANNEL_MESSAGE_ACTION_NAMES;
+    let unique: std::collections::BTreeSet<_> = names.iter().copied().collect();
+    assert_eq!(unique.len(), names.len());
+}
+
+#[test]
+fn yuanbao_legacy_projection_includes_draft_updates() {
+    let capabilities = capabilities_for("yuanbao");
+    assert!(capabilities.progressive_edits);
 }

@@ -4,26 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-/// Length unit used by a provider's presentation and chunking limits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum LengthUnit {
-    Characters,
-    Utf8Bytes,
-    Utf16Units,
-}
-
-/// Markdown or markup dialect accepted by a provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "kebab-case")]
-pub enum MarkdownDialect {
-    Plain,
-    Markdown,
-    Html,
-    SlackMrkdwn,
-    DiscordMarkdown,
-    TelegramMarkdownV2,
-}
+use crate::capabilities::{LengthUnit, MarkdownDialect};
 
 /// Static provider feature flags.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -176,9 +157,7 @@ pub const CHANNEL_MESSAGE_ACTION_NAMES: &[&str] = &[
     "timeout",
     "kick",
     "ban",
-    "set-profile",
     "set-presence",
-    "set-profile",
     "download-file",
     "upload-file",
 ];
