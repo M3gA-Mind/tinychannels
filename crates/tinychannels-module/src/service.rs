@@ -215,6 +215,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 error: "delivery payload could not be encoded".into(),
                 sent_before_error: false,
                 permanent: Some(true),
+                receipt: None,
             });
         };
         let running = self.running.lock().await;
@@ -227,6 +228,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 error: "delivery target is unavailable".into(),
                 sent_before_error: false,
                 permanent: None,
+                receipt: None,
             });
         };
         drop(running);
@@ -260,6 +262,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 error: "terminal delivery result could not be persisted".into(),
                 sent_before_error: true,
                 permanent: None,
+                receipt: Some(outcome.receipt),
             });
         }
         Ok(DeliveryAttemptSuccess { receipt: Some(outcome.receipt) })
