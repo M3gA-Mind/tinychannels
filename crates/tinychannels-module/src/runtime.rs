@@ -233,4 +233,5 @@ fn activation_failed() -> Error {
 
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
+#[allow(deprecated, reason = "runtime test doubles still exercise the v21 provider seam")]
 mod tests;

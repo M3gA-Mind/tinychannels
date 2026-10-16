@@ -25,4 +25,5 @@ pub(crate) async fn check_providers(
 
 #[cfg(test)]
 #[path = "health_tests.rs"]
+#[allow(deprecated, reason = "provider test doubles still implement the v21 trait seam")]
 mod tests;
