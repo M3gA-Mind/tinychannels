@@ -439,3 +439,26 @@ async fn marking_a_turn_on_unavailable_storage_is_advisory_and_never_panics() {
     super::session_store::mark_turn(&RemoteSessionStore::unavailable(), "telegram", "c", true)
         .await;
 }
+
+#[tokio::test]
+async fn bindings_and_busy_flags_are_stored_in_the_v2_shape_under_key_ids() {
+    let docs = memory_docs();
+    let sessions = RemoteSessionStore::new(Arc::clone(&docs));
+    sessions
+        .set_binding("discord", "room/1:2", "th".into(), "sk".into(), None)
+        .await
+        .unwrap();
+    sessions.set_busy("discord", "room/1:2", true).await.unwrap();
+
+    let id = chat_key("discord", "room/1:2");
+    assert_eq!(id, "discord/room%2F1:2");
+    let binding = docs.get(BINDINGS_COLLECTION, &id).await.unwrap().unwrap();
+    assert_eq!(
+        binding.doc,
+        serde_json::json!({ "thread_id": "th", "sender_key": "sk", "title": null })
+    );
+    assert_eq!(binding.meta.schema, 2);
+    let busy = docs.get(BUSY_COLLECTION, &id).await.unwrap().unwrap();
+    assert_eq!(busy.doc, serde_json::json!({ "busy": true }));
+    assert!(sessions.is_busy("discord", "room/1:2").await.unwrap());
+}
