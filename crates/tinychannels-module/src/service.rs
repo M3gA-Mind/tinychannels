@@ -392,7 +392,7 @@ impl Channels {
                 } else {
                     ChannelIngressKind::Listener
                 },
-                interaction: tinychannels_bus::ChannelInteractionInfo {
+                interaction: tinychannels_bus::ChannelInteractionInfoV2 {
                     capabilities: crate::interaction::configured_capabilities(channel.as_ref()),
                 },
             })

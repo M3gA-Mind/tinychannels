@@ -30,7 +30,9 @@ pub(crate) async fn dispatch(
         }
         Op::DescribeV2 => {
             return Ok(ChannelInteractionResult::InfoV2(Box::new(
-                configured_capabilities(provider),
+                tinychannels_bus::ChannelInteractionInfoV2 {
+                    capabilities: configured_capabilities(provider),
+                },
             )));
         }
         Op::StartTyping { recipient } => provider.start_typing(&recipient).await,

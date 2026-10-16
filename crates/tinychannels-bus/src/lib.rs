@@ -83,7 +83,8 @@ pub use version::{CONTRACT_VERSION, is_compatible};
 mod tests;
 
 pub use module_interaction::{
-    ChannelInteraction, ChannelInteractionInfo, ChannelInteractionRequest, ChannelInteractionResult,
+    ChannelInteraction, ChannelInteractionInfo, ChannelInteractionInfoV2,
+    ChannelInteractionRequest, ChannelInteractionResult,
 };
 
 pub use module_supervision::ChannelSupervisionPolicy;

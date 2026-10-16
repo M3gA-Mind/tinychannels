@@ -60,6 +60,13 @@ pub struct ChannelInteractionInfo {
     pub supports_draft_updates: bool,
 }
 
+/// Canonical configured-instance information returned by `DescribeV2` and
+/// configured-channel catalog queries.
+#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ChannelInteractionInfoV2 {
+    pub capabilities: ChannelCapabilities,
+}
+
 /// Result of a provider interaction.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
@@ -67,7 +74,7 @@ pub enum ChannelInteractionResult {
     Completed,
     Draft(Option<String>),
     Info(Box<ChannelInteractionInfo>),
-    InfoV2(Box<ChannelCapabilities>),
+    InfoV2(Box<ChannelInteractionInfoV2>),
     TypingRefresh { handle: String },
 }
 

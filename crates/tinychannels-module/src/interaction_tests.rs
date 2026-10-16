@@ -79,10 +79,10 @@ impl Channel for NoDraftProvider {
 #[tokio::test]
 async fn interaction_dispatch_preserves_provider_draft_and_typing_behavior() {
     let provider = Arc::new(DraftProvider::default());
-    let info = dispatch(provider.as_ref(), ChannelInteraction::Describe)
+    let info = dispatch(provider.as_ref(), ChannelInteraction::DescribeV2)
         .await
         .unwrap();
-    let ChannelInteractionResult::Info(info) = info else {
+    let ChannelInteractionResult::InfoV2(info) = info else {
         panic!("missing provider facts")
     };
     assert_eq!(
@@ -171,16 +171,16 @@ async fn describe_preserves_the_pre_v2_wire_projection_for_existing_hosts() {
 
 #[tokio::test]
 async fn describe_reports_capabilities_for_each_configured_instance() {
-    let draft = dispatch(&DraftProvider::default(), ChannelInteraction::Describe)
+    let draft = dispatch(&DraftProvider::default(), ChannelInteraction::DescribeV2)
         .await
         .unwrap();
-    let no_draft = dispatch(&NoDraftProvider, ChannelInteraction::Describe)
+    let no_draft = dispatch(&NoDraftProvider, ChannelInteraction::DescribeV2)
         .await
         .unwrap();
-    let ChannelInteractionResult::Info(draft) = draft else {
+    let ChannelInteractionResult::InfoV2(draft) = draft else {
         panic!("missing draft facts")
     };
-    let ChannelInteractionResult::Info(no_draft) = no_draft else {
+    let ChannelInteractionResult::InfoV2(no_draft) = no_draft else {
         panic!("missing no-draft facts")
     };
     assert!(draft.capabilities.progressive_edits);
