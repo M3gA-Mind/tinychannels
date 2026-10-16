@@ -3,7 +3,7 @@
 use crate::channel::envelope::{ContentPart, MediaReference};
 use crate::channel::types::{ChannelRef, ConversationRef};
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 
 /// Delivery durability requested by core when sending agent output.
@@ -21,7 +21,7 @@ pub enum DeliveryDurability {
     clippy::large_enum_variant,
     reason = "the v22 wire enum keeps ergonomic, unboxed payload variants"
 )]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, JsonSchema)]
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
@@ -55,6 +55,64 @@ pub enum OutboundPayload {
     Parts {
         parts: Vec<OutboundContentPart>,
     },
+}
+
+#[derive(Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
+enum OutboundPayloadWire {
+    Text { text: String },
+    Media {
+        text: Option<String>,
+        #[serde(alias = "media_urls")]
+        media_urls: Vec<String>,
+    },
+    Voice { voice: OutboundVoice },
+    Files {
+        #[serde(alias = "file_urls")]
+        file_urls: Vec<String>,
+    },
+    Poll { question: String, options: Vec<String> },
+    PresentationBlocks { blocks: Value },
+    NativeChannelData { data: Value },
+    Parts { parts: Vec<OutboundContentPart> },
+}
+
+impl<'de> Deserialize<'de> for OutboundPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let mut value = Value::deserialize(deserializer)?;
+        if value.get("kind").and_then(Value::as_str) == Some("voice")
+            && let Some(media_url) = value.get("media_url").and_then(Value::as_str)
+        {
+            value = serde_json::json!({
+                "kind": "voice",
+                "voice": {
+                    "kind": "media",
+                    "media": { "url": media_url, "kind": "audio" },
+                    "codec": null,
+                    "durationMs": null
+                }
+            });
+        }
+        let wire: OutboundPayloadWire =
+            serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        Ok(match wire {
+            OutboundPayloadWire::Text { text } => Self::Text { text },
+            OutboundPayloadWire::Media { text, media_urls } => Self::Media { text, media_urls },
+            OutboundPayloadWire::Voice { voice } => Self::Voice { voice },
+            OutboundPayloadWire::Files { file_urls } => Self::Files { file_urls },
+            OutboundPayloadWire::Poll { question, options } => Self::Poll { question, options },
+            OutboundPayloadWire::PresentationBlocks { blocks } => Self::PresentationBlocks { blocks },
+            OutboundPayloadWire::NativeChannelData { data } => Self::NativeChannelData { data },
+            OutboundPayloadWire::Parts { parts } => Self::Parts { parts },
+        })
+    }
 }
 
 /// Explicit outbound voice operation. Synthesis is opt-in and keeps its text.
@@ -329,3 +387,7 @@ impl Default for ChannelOutboundIntent {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "intent_tests.rs"]
+mod tests;
