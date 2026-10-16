@@ -130,5 +130,6 @@ fn intent_suffix(payload: &OutboundPayload) -> &'static str {
         OutboundPayload::Poll { .. } => "poll",
         OutboundPayload::PresentationBlocks { .. } => "presentation",
         OutboundPayload::NativeChannelData { .. } => "native",
+        OutboundPayload::Parts { .. } => "parts",
     }
 }
