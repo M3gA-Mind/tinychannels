@@ -118,3 +118,70 @@ async fn local_adapter_preserves_identity_and_ack_policy_across_stop() {
     assert_eq!(adapter.descriptor().account_id.as_deref(), Some("host"));
     assert!(sink.ids.lock().unwrap().is_empty());
 }
+
+#[test]
+fn local_adapters_keep_per_instance_v2_facts_and_project_legacy_flags() {
+    let mut rich = tinychannels_bus::ChannelCapabilities::default();
+    rich.progressive_edits = true;
+    rich.reactions = true;
+    rich.text.text_limit = Some(8192);
+    rich.addressing.conversation_types = vec!["group".into()];
+    rich.addressing.thread_id = true;
+    rich.actions.supported = vec![
+        "send".into(),
+        "reply".into(),
+        "edit".into(),
+        "delete".into(),
+        "native-command".into(),
+    ];
+    rich.content.image.outbound = true;
+    rich.content.poll.outbound = true;
+    rich.content.buttons.max_count = Some(12);
+    rich.content.button_presentation.max_actions_per_row = Some(3);
+    rich.content.button_presentation.max_rows = Some(4);
+    rich.content.button_presentation.supports_styles = true;
+
+    let mut limited = tinychannels_bus::ChannelCapabilities::default();
+    limited.progressive_edits = true;
+    limited.text.text_limit = Some(512);
+    limited.actions.supported = vec!["send".into()];
+
+    let sink = Arc::new(RecordingOutboundSink::default());
+    let first = LocalChannelAdapter::new(
+        ChannelDescriptor {
+            id: "local-a".into(),
+            account_id: Some("account-a".into()),
+            ..Default::default()
+        },
+        rich.clone(),
+        sink.clone(),
+    );
+    let second = LocalChannelAdapter::new(
+        ChannelDescriptor {
+            id: "local-b".into(),
+            account_id: Some("account-b".into()),
+            ..Default::default()
+        },
+        limited.clone(),
+        sink,
+    );
+
+    assert_eq!(first.capabilities(), &rich);
+    assert_eq!(second.capabilities(), &limited);
+    assert_eq!(first.descriptor().account_id.as_deref(), Some("account-a"));
+    assert_eq!(second.descriptor().account_id.as_deref(), Some("account-b"));
+
+    let first_legacy = first.static_capabilities();
+    assert_eq!(first_legacy.chat_types, ["group"]);
+    assert!(first_legacy.polls && first_legacy.reactions);
+    assert!(first_legacy.edit && first_legacy.unsend && first_legacy.reply);
+    assert!(first_legacy.threads && first_legacy.media && first_legacy.native_commands);
+    assert!(first_legacy.block_streaming);
+
+    let second_legacy = second.static_capabilities();
+    assert!(second_legacy.chat_types.is_empty());
+    assert!(!second_legacy.polls && !second_legacy.reactions);
+    assert!(!second_legacy.edit && !second_legacy.unsend && !second_legacy.reply);
+    assert!(!second_legacy.threads && !second_legacy.media && !second_legacy.native_commands);
+    assert!(second_legacy.block_streaming);
+}
