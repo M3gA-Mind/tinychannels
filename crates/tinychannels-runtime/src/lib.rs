@@ -217,12 +217,18 @@ pub fn spawn_scoped_typing_task(
 
 #[cfg(test)]
 #[path = "runtime_extras_tests.rs"]
-#[allow(deprecated, reason = "tests still exercise the explicit v21 provider seam")]
+#[allow(
+    deprecated,
+    reason = "tests still exercise the explicit v21 provider seam"
+)]
 mod runtime_extras_tests;
 
 #[cfg(test)]
 #[path = "lib_tests.rs"]
-#[allow(deprecated, reason = "tests still exercise the explicit v21 provider seam")]
+#[allow(
+    deprecated,
+    reason = "tests still exercise the explicit v21 provider seam"
+)]
 mod tests;
 
 pub mod adapters;
@@ -248,4 +254,8 @@ pub mod config;
 
 #[cfg(test)]
 #[path = "relocation_tests.rs"]
+#[allow(
+    deprecated,
+    reason = "tests still exercise the explicit v21 DTO re-exports"
+)]
 mod relocation_tests;

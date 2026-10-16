@@ -71,7 +71,10 @@ pub use version::{CONTRACT_VERSION, is_compatible};
 
 #[cfg(test)]
 #[path = "wire_tests.rs"]
-#[allow(deprecated, reason = "wire tests pin the v21 conversion shape during migration")]
+#[allow(
+    deprecated,
+    reason = "wire tests pin the v21 conversion shape during migration"
+)]
 mod tests;
 
 pub use module_interaction::{
