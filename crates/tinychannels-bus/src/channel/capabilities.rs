@@ -28,8 +28,10 @@ pub struct ChannelStaticCapabilities {
 pub struct ChannelPresentationCapabilities {
     pub text_limit: Option<usize>,
     #[serde(with = "legacy_length_unit")]
+    #[schemars(with = "legacy_length_unit::LegacyLengthUnit")]
     pub length_unit: LengthUnit,
     #[serde(with = "legacy_markdown_dialect")]
+    #[schemars(with = "legacy_markdown_dialect::LegacyMarkdownDialect")]
     pub markdown_dialect: MarkdownDialect,
     pub supports_edit: bool,
     pub max_actions: Option<usize>,
@@ -44,7 +46,19 @@ pub struct ChannelPresentationCapabilities {
 
 mod legacy_length_unit {
     use super::LengthUnit;
+    use schemars::JsonSchema;
     use serde::{Deserialize, Deserializer, Serializer};
+
+    #[derive(JsonSchema)]
+    #[allow(dead_code)]
+    enum LegacyLengthUnit {
+        #[schemars(rename = "chars")]
+        Characters,
+        #[schemars(rename = "utf8-bytes")]
+        Utf8Bytes,
+        #[schemars(rename = "utf16-units")]
+        Utf16Units,
+    }
 
     pub fn serialize<S>(value: &LengthUnit, serializer: S) -> Result<S::Ok, S::Error>
     where
@@ -72,7 +86,23 @@ mod legacy_length_unit {
 
 mod legacy_markdown_dialect {
     use super::MarkdownDialect;
+    use schemars::JsonSchema;
     use serde::{Deserialize, Deserializer, Serializer};
+
+    #[derive(JsonSchema)]
+    #[allow(dead_code)]
+    #[schemars(rename_all = "snake_case")]
+    enum LegacyMarkdownDialect {
+        Plain,
+        Markdown,
+        Html,
+        #[schemars(rename = "slack-mrkdwn")]
+        SlackMrkdwn,
+        #[schemars(rename = "discord-markdown")]
+        DiscordMarkdown,
+        #[schemars(rename = "telegram-markdown-v2")]
+        TelegramMarkdownV2,
+    }
 
     pub fn serialize<S>(value: &MarkdownDialect, serializer: S) -> Result<S::Ok, S::Error>
     where
