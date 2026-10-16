@@ -78,6 +78,8 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
     assert_eq!(
         &METHODS[13..],
         &[
+            methods::SEND_CHANNEL_INTENT,
+            methods::SEND_EMAIL,
             methods::BEGIN_EMAIL_UPLOAD,
             methods::APPEND_EMAIL_UPLOAD_CHUNK,
             methods::SEND_EMAIL_UPLOAD,
