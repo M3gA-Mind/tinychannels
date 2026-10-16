@@ -184,7 +184,12 @@ async fn typed_send_receipt_keeps_ordered_multiple_text_parts() {
 #[tokio::test]
 async fn typed_send_receipt_applies_tool_call_tag_sanitization() {
     let server = mock_api().await;
-    mount_post(&server, "sendMessage", ok_with(serde_json::json!({ "message_id": 655 }))).await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 655 })),
+    )
+    .await;
     let ch = channel_for(&server, &["*"]);
     let message = typed_text(
         "sanitize",
@@ -201,7 +206,11 @@ async fn typed_send_receipt_applies_tool_call_tag_sanitization() {
     );
     assert_eq!(bodies[0]["message_id"], serde_json::Value::Null);
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 1, "typed markers remain text, not operations");
+    assert_eq!(
+        requests.len(),
+        1,
+        "typed markers remain text, not operations"
+    );
     assert_eq!(outcome.receipt.platform_message_ids, ["655"]);
 }
 
@@ -215,7 +224,11 @@ async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
 
     let error = ch.send_typed_with_receipt(&message).await.unwrap_err();
 
-    assert!(error.to_string().contains("reply_to_id must be a numeric message ID"));
+    assert!(
+        error
+            .to_string()
+            .contains("reply_to_id must be a numeric message ID")
+    );
     assert!(json_bodies(&server, "sendMessage").await.is_empty());
 }
 
@@ -243,7 +256,10 @@ fn inbound_envelope_keeps_chat_channel_and_legacy_identity_fallbacks() {
         }
     });
     let channel = TelegramChannel::inbound_envelope_from_update(&channel_update, &legacy);
-    assert_eq!(channel.conversation.kind, tinychannels_bus::ConversationKind::Channel);
+    assert_eq!(
+        channel.conversation.kind,
+        tinychannels_bus::ConversationKind::Channel
+    );
     assert_eq!(channel.conversation.id, "-100");
     assert_eq!(channel.sender.id, "9001");
     assert_eq!(channel.reply_to_id.as_deref(), Some("3"));
@@ -256,7 +272,10 @@ fn inbound_envelope_keeps_chat_channel_and_legacy_identity_fallbacks() {
         }
     });
     let unknown = TelegramChannel::inbound_envelope_from_update(&unknown_update, &legacy);
-    assert_eq!(unknown.conversation.kind, tinychannels_bus::ConversationKind::Unknown);
+    assert_eq!(
+        unknown.conversation.kind,
+        tinychannels_bus::ConversationKind::Unknown
+    );
     assert_eq!(unknown.conversation.id, "17");
     assert_eq!(unknown.sender.id, "legacy-sender");
 }
@@ -336,7 +355,10 @@ async fn typed_send_connection_refusal_is_definitely_not_sent_and_sanitized() {
     let error = outcome
         .error
         .expect("transport failure must not become success");
-    assert!(!error.sent_before_error, "connection refusal precedes dispatch");
+    assert!(
+        !error.sent_before_error,
+        "connection refusal precedes dispatch"
+    );
     assert!(error.message.contains("request failed"));
     assert!(!error.message.contains(TOKEN));
     assert!(!serde_json::to_string(&error).unwrap().contains(TOKEN));

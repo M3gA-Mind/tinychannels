@@ -846,7 +846,7 @@ Ensure only one `openhuman` process is using this bot token."
                             Ok(delivered) => delivered,
                             Err(error) => {
                                 tracing::debug!(%error, "failed to deliver Telegram inbound through module ingress");
-                                false
+                                return Err(error);
                             }
                         }
                     } else {
