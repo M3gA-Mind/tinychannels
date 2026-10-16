@@ -281,6 +281,47 @@ impl tinychannels::host::EventSink for ModuleEvents {
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))
     }
+
+    async fn publish_ingress(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> anyhow::Result<bool> {
+        match ingress {
+            tinychannels_bus::ChannelIngress::Inbound(mut envelope) => {
+                envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+                envelope.channel.account_id = Some(self.1.clone());
+                self.0
+                    .deliver_inbound(&self.1, serde_json::to_value(envelope)?)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                Ok(true)
+            }
+            tinychannels_bus::ChannelIngress::Event(event) => {
+                self.publish_channel_event(event).await?;
+                Ok(true)
+            }
+        }
+    }
+
+    async fn publish_inbound(
+        &self,
+        message: tinychannels_bus::ChannelMessage,
+    ) -> anyhow::Result<bool> {
+        let mut envelope = tinychannels::inbound_envelope_from_legacy_message(&message);
+        if tinychannels_bus::provider_id(&self.1) == "telegram" {
+            if let Some((chat, topic)) = message.reply_target.split_once(':') {
+                envelope.conversation.id = chat.to_owned();
+                envelope.conversation.topic_id = Some(topic.to_owned());
+                envelope.conversation.thread_id = None;
+            }
+            let raw_message_id = message
+                .id
+                .strip_prefix("telegram_")
+                .and_then(|id| id.rsplit_once('_').map(|(_, message_id)| message_id.to_owned()));
+            envelope.raw = Some(serde_json::json!({"providerMessageId": raw_message_id}));
+        }
+        self.publish_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope)).await
+    }
 }
 
 /// Reconnect execution stays in the module; raw provider errors never cross callbacks.

@@ -54,12 +54,16 @@ pub enum ChannelEventKind {
     /// A user added a reaction.
     ReactionAdded {
         message_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_message_id: Option<String>,
         actor: SenderRef,
         reaction: ChannelReaction,
     },
     /// A user removed a reaction.
     ReactionRemoved {
         message_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_message_id: Option<String>,
         actor: SenderRef,
         reaction: ChannelReaction,
     },
@@ -72,10 +76,16 @@ pub enum ChannelEventKind {
     /// A provider edited an existing message.
     MessageUpdated {
         message_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_message_id: Option<String>,
         parts: Vec<ContentPart>,
     },
     /// A provider deleted an existing message.
-    MessageDeleted { message_id: String },
+    MessageDeleted {
+        message_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_message_id: Option<String>,
+    },
     /// Account or user presence changed.
     Presence {
         actor: SenderRef,

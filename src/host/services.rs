@@ -239,6 +239,15 @@ pub trait EventSink: Send + Sync {
             tinychannels_bus::ChannelIngress::Inbound(_) => Ok(false),
         }
     }
+
+    /// Deliver one provider message on the ordered v22 ingress path.
+    /// Legacy hosts return `false` and continue receiving the v21 message.
+    async fn publish_inbound(
+        &self,
+        _message: tinychannels_bus::ChannelMessage,
+    ) -> anyhow::Result<bool> {
+        Ok(false)
+    }
 }
 
 // ---------------------------------------------------------------------------
