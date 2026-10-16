@@ -232,17 +232,28 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
         drop(running);
 
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&entry.intent);
-        if let Err(error) = provider.send_typed(message).await {
-            return Err(DeliveryAttemptFailure {
+        let outcome = match provider.send_typed(message).await {
+            Ok(outcome) => outcome,
+            Err(error) => return Err(DeliveryAttemptFailure {
                 error: "provider send failed".into(),
                 sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
                 permanent: None,
+                receipt: None,
+            }),
+        };
+        if let Some(error) = outcome.error {
+            return Err(DeliveryAttemptFailure {
+                error: error.message,
+                sent_before_error: !outcome.receipt.platform_message_ids.is_empty(),
+                permanent: Some(!error.retryable),
+                receipt: Some(outcome.receipt),
             });
         }
         let result = tinychannels_bus::DeliveryTerminalResult {
             id: entry.id.clone(),
             intent_fingerprint,
             completed_at_unix_ms: now_unix_ms(),
+            receipt: Some(outcome.receipt.clone()),
         };
         if self.store.save_result(result).await.is_err() {
             return Err(DeliveryAttemptFailure {
@@ -251,7 +262,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 permanent: None,
             });
         }
-        Ok(DeliveryAttemptSuccess::default())
+        Ok(DeliveryAttemptSuccess { receipt: Some(outcome.receipt) })
     }
 
     async fn reconcile_unknown_send(
@@ -270,7 +281,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
             ));
         }
         Ok(Some(UnknownSendReconciliation::Sent {
-            receipt: tinychannels::channel::MessageReceipt::default(),
+            receipt: result.receipt.unwrap_or_default(),
             message_id: None,
         }))
     }

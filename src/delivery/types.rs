@@ -44,13 +44,15 @@ pub struct DeliveryAttemptSuccess {
 }
 
 /// Delivery attempt failure returned by the host delivery driver.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct DeliveryAttemptFailure {
     pub error: String,
     pub sent_before_error: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permanent: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub receipt: Option<MessageReceipt>,
 }
 
 /// Result of one host delivery attempt.
