@@ -22,6 +22,7 @@ enum State {
     Reserved,
     Starting,
     Connected(CapabilityDescriptor),
+    ConnectedV2(RelayCapabilitiesV2),
     Reconnecting,
     Stopping,
     Stopped,
@@ -32,7 +33,7 @@ impl State {
         match self {
             Self::Reserved => RelayPhase::Reserved,
             Self::Starting => RelayPhase::Starting,
-            Self::Connected(_) => RelayPhase::Connected,
+            Self::Connected(_) | Self::ConnectedV2(_) => RelayPhase::Connected,
             Self::Reconnecting => RelayPhase::Reconnecting,
             Self::Stopping => RelayPhase::Stopping,
             Self::Stopped => RelayPhase::Stopped,
@@ -128,6 +129,29 @@ impl Relays {
         id: RelayReservation,
         config: RelayRuntimeConfig,
     ) -> Result<CapabilityDescriptor> {
+        match self.start_mode(id, config, false).await? {
+            State::Connected(descriptor) => Ok(descriptor),
+            _ => Err(Error::failed("relay v1 handshake returned the wrong result")),
+        }
+    }
+
+    pub(crate) async fn start_v2(
+        &self,
+        id: RelayReservation,
+        config: RelayRuntimeConfig,
+    ) -> Result<RelayCapabilitiesV2> {
+        match self.start_mode(id, config, true).await? {
+            State::ConnectedV2(capabilities) => Ok(capabilities),
+            _ => Err(Error::failed("relay v2 handshake returned the wrong result")),
+        }
+    }
+
+    async fn start_mode(
+        &self,
+        id: RelayReservation,
+        config: RelayRuntimeConfig,
+        v2: bool,
+    ) -> Result<State> {
         validate_config(&config)?;
         if self.terminal.load(Ordering::SeqCst) {
             return Err(closed());
@@ -135,7 +159,7 @@ impl Relays {
         let slot = self.get(&id).await?;
         let bytes = serde_json::to_string(&config)
             .map_err(|_| Error::failed("invalid relay configuration"))?;
-        let hash = tinychannels::security::hash_token(&bytes);
+        let hash = tinychannels::security::hash_token(&format!("{bytes}:v{}", if v2 { 2 } else { 1 }));
         let mut worker = slot.worker.lock().await;
         if self.terminal.load(Ordering::SeqCst) || *slot.cancel.borrow() {
             return Err(closed());
@@ -155,7 +179,7 @@ impl Relays {
                 let owner = slot.clone();
                 let host = self.host.clone();
                 *worker = Some(tokio::spawn(async move {
-                    run(owner, config, host).await;
+                    run(owner, config, host, v2).await;
                 }));
             }
         }
@@ -163,7 +187,8 @@ impl Relays {
         let mut state = slot.state.subscribe();
         loop {
             match state.borrow().clone() {
-                State::Connected(descriptor) => return Ok(descriptor),
+                State::Connected(descriptor) if !v2 => return Ok(State::Connected(descriptor)),
+                State::ConnectedV2(capabilities) if v2 => return Ok(State::ConnectedV2(capabilities)),
                 State::Stopped | State::Stopping => return Err(closed()),
                 State::Failed => return Err(Error::failed("relay startup failed")),
                 State::Reserved | State::Starting | State::Reconnecting => {}
@@ -174,7 +199,7 @@ impl Relays {
     pub(crate) async fn status(&self, id: RelayReservation) -> Result<RelayStatus> {
         let slot = self.get(&id).await?;
         let state = slot.state.borrow().clone();
-        let state = if matches!(state, State::Connected(_))
+        let state = if matches!(state, State::Connected(_) | State::ConnectedV2(_))
             && slot
                 .transport
                 .lock()
@@ -191,6 +216,16 @@ impl Relays {
             state: state.phase(),
         })
     }
+    pub(crate) async fn capabilities_v2(
+        &self,
+        id: RelayReservation,
+    ) -> Result<Option<RelayCapabilitiesV2>> {
+        let slot = self.get(&id).await?;
+        Ok(match slot.state.borrow().clone() {
+            State::ConnectedV2(capabilities) => Some(capabilities),
+            _ => None,
+        })
+    }
     pub(crate) async fn send(
         &self,
         id: RelayReservation,
@@ -205,7 +240,7 @@ impl Relays {
         if self.terminal.load(Ordering::SeqCst) || *slot.cancel.borrow() {
             return Err(closed());
         }
-        if !matches!(*slot.state.borrow(), State::Connected(_)) {
+        if !matches!(*slot.state.borrow(), State::Connected(_) | State::ConnectedV2(_)) {
             return Err(Error::failed("relay is not connected"));
         }
         let bytes =
