@@ -1814,7 +1814,11 @@ async fn inbound_preparation_service() -> Channels {
         .await
         .unwrap();
     let host = HostChannels::new(connection);
-    let channels = Channels::new(host.clone(), None);
+    Channels::new(host, None)
+}
+
+async fn enable_remote_providers(channels: &Channels) {
+    let host = channels.host.clone();
     for configured_name in ["telegram", "discord"] {
         let (sender, _receiver) = tokio::sync::mpsc::channel(1);
         channels.running.lock().await.insert(
@@ -1826,7 +1830,6 @@ async fn inbound_preparation_service() -> Channels {
             ),
         );
     }
-    channels
 }
 
 #[tokio::test]
@@ -2137,6 +2140,7 @@ async fn progressive_reply_is_opened_owned_and_closed_inside_the_module() {
 async fn remote_help_is_parsed_and_rendered_inside_the_module() {
     use tinychannels_bus::module_remote::{RemoteOperation, RemoteRoute};
     let service = inbound_preparation_service().await;
+    enable_remote_providers(&service).await;
     let message = serde_json::from_value(serde_json::json!({
         "id":"fixture", "sender":"sender", "reply_target":"chat",
         "content":"/HELP@FixtureBot", "channel":"telegram", "timestamp":1
@@ -2242,6 +2246,7 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
     };
     use tinychannels_bus::module_remote::RemoteRoute;
     let service = inbound_preparation_service().await;
+    enable_remote_providers(&service).await;
     let request = |content: &str, channel: &str| {
         Request::Route {
         workspace_dir: ".".into(),
