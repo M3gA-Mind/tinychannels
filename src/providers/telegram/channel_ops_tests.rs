@@ -182,6 +182,19 @@ async fn typed_send_receipt_keeps_ordered_multiple_text_parts() {
 }
 
 #[tokio::test]
+async fn typed_send_receipt_applies_tool_call_tag_sanitization() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok_with(serde_json::json!({ "message_id": 655 }))).await;
+    let ch = channel_for(&server, &["*"]);
+    let message = typed_text("sanitize", "before<tool_call>hidden</tool_call>after".into());
+
+    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.error, None);
+    assert_eq!(json_bodies(&server, "sendMessage").await[0]["text"], "beforeafter");
+}
+
+#[tokio::test]
 async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
     let server = mock_api().await;
     mount_post(&server, "sendMessage", ok()).await;
@@ -266,6 +279,7 @@ async fn typed_send_keeps_delivered_chunk_ids_when_later_chunk_fails() {
     assert_eq!(outcome.receipt.platform_message_ids, ["321"]);
     assert_eq!(outcome.receipt.parts.len(), 1);
     assert!(outcome.error.as_ref().is_some_and(|error| !error.retryable));
+    assert!(outcome.error.as_ref().unwrap().sent_before_error);
     assert_eq!(
         outcome.error.as_ref().unwrap().continuation_message_ids,
         ["321"]
