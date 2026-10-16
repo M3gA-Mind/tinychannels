@@ -17,9 +17,9 @@ pub use capabilities::{
     MarkdownDialect, channel_message_action_names, durable_final_delivery_capabilities,
 };
 pub use envelope::{
-    AccessContext, ChannelInboundEnvelope, ContentPart, GroupAccessPolicy, InboundMediaPayload,
-    MediaKind, MediaReference, MentionGate, SenderDmDecision, VoiceNote, VoiceTranscript,
-    VoiceTranscriptSource, VoiceTranscriptState,
+    AccessContext, ButtonAction, ButtonStyle, ChannelInboundEnvelope, ContactMethod, ContentPart,
+    GroupAccessPolicy, InboundMediaPayload, MediaKind, MediaReference, MentionGate,
+    SenderDmDecision, VoiceNote, VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
 };
 pub use error::{ChannelSendError, SendErrorKind};
 pub use intent::{ChannelOutboundIntent, DeliveryDurability, OutboundPayload};
