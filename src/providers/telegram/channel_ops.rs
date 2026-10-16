@@ -547,7 +547,7 @@ Ensure only one `openhuman` process is using this bot token."
                         if let Some(events) = &self.events {
                             let source_id = reaction.update_id.clone();
                             let conversation = tinychannels_bus::ConversationRef {
-                                kind: tinychannels_bus::ConversationKind::Unknown,
+                                kind: reaction.conversation_kind,
                                 id: reaction.reply_target.clone(),
                                 thread_id: reaction.thread_id.clone(),
                                 ..Default::default()
@@ -556,27 +556,28 @@ Ensure only one `openhuman` process is using this bot token."
                                 tinychannels_bus::ChannelEventKind::ReactionAdded {
                                     message_id: reaction.target_message_id.clone(),
                                     actor: tinychannels_bus::SenderRef { id: reaction.sender_id.clone(), name: Some(reaction.sender.clone()), ..Default::default() },
-                                    reaction: tinychannels_bus::ChannelReaction { value: reaction.emoji.clone(), custom_emoji_id: None },
+                                    reaction: tinychannels_bus::ChannelReaction { value: reaction.emoji.clone(), custom_emoji_id: reaction.custom_emoji_id.clone() },
                                 }
                             } else {
                                 tinychannels_bus::ChannelEventKind::ReactionRemoved {
                                     message_id: reaction.target_message_id.clone(),
                                     actor: tinychannels_bus::SenderRef { id: reaction.sender_id.clone(), name: Some(reaction.sender.clone()), ..Default::default() },
-                                    reaction: tinychannels_bus::ChannelReaction { value: reaction.emoji.clone(), custom_emoji_id: None },
+                                    reaction: tinychannels_bus::ChannelReaction { value: reaction.emoji.clone(), custom_emoji_id: reaction.custom_emoji_id.clone() },
                                 }
                             };
                             let event = tinychannels_bus::ChannelEvent {
                                 version: 2,
                                 event_id: source_id
                                     .as_ref()
-                                    .map(|id| format!("telegram:update:{id}"))
+                                    .map(|id| format!("telegram:update:{id}:reaction:{}:{}:{}:{}", if reaction.added { "added" } else { "removed" }, reaction.reply_target, reaction.target_message_id, reaction.emoji))
                                     .unwrap_or_else(|| {
                                         format!(
-                                            "telegram:reaction:{}:{}:{}:{}",
+                                            "telegram:reaction:{}:{}:{}:{}:{}",
                                             reaction.reply_target,
                                             reaction.target_message_id,
                                             reaction.sender_id,
-                                            reaction.emoji
+                                            reaction.emoji,
+                                            if reaction.added { "added" } else { "removed" }
                                         )
                                     }),
                                 source_event_id: source_id,
@@ -614,7 +615,7 @@ Ensure only one `openhuman` process is using this bot token."
                                     version: 2,
                                     event_id: source_id
                                         .as_ref()
-                                        .map(|id| format!("telegram:update:{id}"))
+                                        .map(|id| format!("telegram:update:{id}:edit:{}", message.id))
                                         .unwrap_or_else(|| format!("telegram:edit:{}", message.id)),
                                     source_event_id: source_id,
                                     source_timestamp: edited
@@ -626,7 +627,12 @@ Ensure only one `openhuman` process is using this bot token."
                                         account_id: None,
                                     },
                                     conversation: Some(tinychannels_bus::ConversationRef {
-                                        kind: tinychannels_bus::ConversationKind::Unknown,
+                                        kind: match edited.get("chat").and_then(|chat| chat.get("type")).and_then(serde_json::Value::as_str) {
+                                            Some("private") => tinychannels_bus::ConversationKind::Dm,
+                                            Some("group" | "supergroup") => tinychannels_bus::ConversationKind::Group,
+                                            Some("channel") => tinychannels_bus::ConversationKind::Channel,
+                                            _ => tinychannels_bus::ConversationKind::Unknown,
+                                        },
                                         id: message.reply_target.clone(),
                                         thread_id,
                                         ..Default::default()
