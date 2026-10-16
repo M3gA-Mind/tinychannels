@@ -1359,6 +1359,7 @@ async fn inbound_preparation_preserves_escaped_persisted_keys_and_provider_threa
         reply_target: "room#b".into(),
         content: "fixture content".into(),
         timestamp: 42,
+        topic_id: None,
         thread_ts: Some("thread/c".into()),
         sender_name: Some("Display".into()),
     };

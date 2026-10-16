@@ -231,6 +231,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             content: "/HELP@FixtureBot".into(),
             channel: "telegram".into(),
             timestamp: 1,
+            topic_id: None,
             thread_ts: None,
             sender_name: None,
         },

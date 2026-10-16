@@ -199,6 +199,7 @@ impl Channel for SlackChannel {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
+                        topic_id: None,
                         thread_ts: Self::inbound_thread_ts(msg, ts),
                         sender_name: None,
                     };

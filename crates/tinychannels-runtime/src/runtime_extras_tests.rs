@@ -17,6 +17,7 @@ fn message(id: &str) -> ChannelMessage {
         content: "hi".into(),
         channel: "test".into(),
         timestamp: 0,
+        topic_id: None,
         thread_ts: None,
         sender_name: None,
     }
