@@ -462,9 +462,9 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels, v2
                 } else {
                     (RelayPhase::Reconnecting, State::Reconnecting)
                 };
+                observed_slot.state.send_replace(state);
                 if next != previous {
                     previous = next;
-                    observed_slot.state.send_replace(state);
                     let label = match next {
                         RelayPhase::Connected => "connected",
                         RelayPhase::Reconnecting => "reconnecting",
