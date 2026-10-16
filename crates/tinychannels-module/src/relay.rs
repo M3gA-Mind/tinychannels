@@ -209,17 +209,29 @@ impl Relays {
     pub(crate) async fn status(&self, id: RelayReservation) -> Result<RelayStatus> {
         let slot = self.get(&id).await?;
         let state = slot.state.borrow().clone();
-        let state = if matches!(state, State::Connected(_) | State::ConnectedV2(_))
-            && slot
-                .transport
-                .lock()
-                .await
-                .as_ref()
-                .is_some_and(|transport| transport.is_closed())
-        {
-            State::Reconnecting
-        } else {
-            state
+        let state = match &state {
+            State::ConnectedV2(capabilities) => {
+                let expected = relay_v2_identities(capabilities);
+                if self.live_v2_descriptors(&slot, &expected).await.is_some() {
+                    state
+                } else {
+                    State::Reconnecting
+                }
+            }
+            State::Connected(_) => {
+                if slot
+                    .transport
+                    .lock()
+                    .await
+                    .as_ref()
+                    .is_some_and(|transport| transport.is_closed())
+                {
+                    State::Reconnecting
+                } else {
+                    state
+                }
+            }
+            _ => state,
         };
         Ok(RelayStatus {
             contract_version: MODULE_OPERATION_VERSION,
@@ -232,29 +244,12 @@ impl Relays {
     ) -> Result<Option<RelayCapabilitiesV2>> {
         let slot = self.get(&id).await?;
         let expected = match slot.state.borrow().clone() {
-            State::ConnectedV2(capabilities) => capabilities
-                .instances
-                .into_iter()
-                .map(|instance| RelayIdentity {
-                    platform: instance.platform,
-                    bot_id: instance.bot_id,
-                })
-                .collect::<Vec<_>>(),
+            State::ConnectedV2(capabilities) => relay_v2_identities(&capabilities),
             _ => return Ok(None),
         };
-        if self.terminal.load(Ordering::SeqCst) || *slot.cancel.borrow() {
-            return Ok(None);
-        }
-        let Some(transport) = slot.transport.lock().await.as_ref().cloned() else {
+        let Some(descriptors) = self.live_v2_descriptors(&slot, &expected).await else {
             return Ok(None);
         };
-        if transport.is_closed() {
-            return Ok(None);
-        }
-        let descriptors = transport.capabilities_v2().await;
-        if transport.is_closed() || !v2_capabilities_complete(&expected, &descriptors) {
-            return Ok(None);
-        }
         let instances = descriptors
             .into_iter()
             .map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 {
@@ -267,6 +262,26 @@ impl Relays {
             contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
             instances,
         }))
+    }
+
+    async fn live_v2_descriptors(
+        &self,
+        slot: &Slot,
+        expected: &[RelayIdentity],
+    ) -> Option<std::collections::HashMap<RelayIdentity, tinychannels_bus::ChannelCapabilities>>
+    {
+        if self.terminal.load(Ordering::SeqCst) || *slot.cancel.borrow() {
+            return None;
+        }
+        let transport = slot.transport.lock().await.as_ref().cloned()?;
+        if transport.is_closed() {
+            return None;
+        }
+        let descriptors = transport.capabilities_v2().await;
+        if transport.is_closed() || !v2_capabilities_complete(expected, &descriptors) {
+            return None;
+        }
+        Some(descriptors)
     }
     pub(crate) async fn send(
         &self,
@@ -563,6 +578,17 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels, v2
     )
     .await;
     slot.state.send_replace(phase);
+}
+
+fn relay_v2_identities(capabilities: &RelayCapabilitiesV2) -> Vec<RelayIdentity> {
+    capabilities
+        .instances
+        .iter()
+        .map(|instance| RelayIdentity {
+            platform: instance.platform.clone(),
+            bot_id: instance.bot_id.clone(),
+        })
+        .collect()
 }
 
 fn v2_capabilities_complete(
