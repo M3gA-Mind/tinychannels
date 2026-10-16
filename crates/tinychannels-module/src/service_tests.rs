@@ -582,29 +582,48 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
             _ => unreachable!(),
         }
     }
-    let empty_parts = ChannelOutboundIntent {
-        idempotency_key: "empty-parts".into(),
-        channel_id: "fixture".into(),
-        conversation_id: "room".into(),
-        durability: tinychannels_bus::DeliveryDurability::BestEffort,
-        payload: tinychannels_bus::OutboundPayload::Parts { parts: Vec::new() },
-        ..Default::default()
-    };
-    let empty_result = client
-        .call::<tinychannels_bus::controllers::ChannelSendMessageResult>(
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::methods::SEND_CHANNEL_INTENT
-                .try_into()
-                .unwrap(),
-            ("fixture", empty_parts),
-        )
-        .await;
-    assert!(
-        empty_result.is_err(),
-        "an empty canonical parts list is invalid"
-    );
+    for (key, payload) in [
+        (
+            "empty-parts",
+            tinychannels_bus::OutboundPayload::Parts { parts: Vec::new() },
+        ),
+        (
+            "empty-media",
+            tinychannels_bus::OutboundPayload::Media {
+                text: None,
+                media_urls: Vec::new(),
+            },
+        ),
+        (
+            "empty-files",
+            tinychannels_bus::OutboundPayload::Files {
+                file_urls: Vec::new(),
+            },
+        ),
+    ] {
+        let result = client
+            .call::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                tinychannels_bus::BUS_NAME.try_into().unwrap(),
+                tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+                tinychannels_bus::BUS_NAME.try_into().unwrap(),
+                tinychannels_bus::methods::SEND_CHANNEL_INTENT
+                    .try_into()
+                    .unwrap(),
+                (
+                    "fixture",
+                    ChannelOutboundIntent {
+                        idempotency_key: key.into(),
+                        channel_id: "fixture".into(),
+                        conversation_id: "room".into(),
+                        durability: tinychannels_bus::DeliveryDurability::BestEffort,
+                        payload,
+                        ..Default::default()
+                    },
+                ),
+            )
+            .await;
+        assert!(result.is_err(), "{key} normalizes to invalid empty parts");
+    }
     client
         .call::<()>(
             tinychannels_bus::BUS_NAME.try_into().unwrap(),
