@@ -423,7 +423,10 @@ async fn accepted_request_disconnect_remains_ambiguous() {
         .unwrap();
     let body = &request[header_end + 4..];
     assert_eq!(body.len(), content_length);
-    assert_eq!(serde_json::from_slice::<serde_json::Value>(body).unwrap()["text"], "hello");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(body).unwrap()["text"],
+        "hello"
+    );
     let error = outcome.error.expect("server accepted then disconnected");
     assert!(error.sent_before_error);
     assert!(outcome.receipt.platform_message_ids.is_empty());
