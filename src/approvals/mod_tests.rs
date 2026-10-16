@@ -31,6 +31,12 @@ impl Channel for RecordingChannel {
     fn name(&self) -> &str {
         &self.name
     }
+    fn capabilities(&self) -> crate::ChannelCapabilities {
+        crate::ChannelCapabilities {
+            chat_approvals: self.name != "email",
+            ..crate::ChannelCapabilities::default()
+        }
+    }
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         if self.fail {
             anyhow::bail!("send refused");
