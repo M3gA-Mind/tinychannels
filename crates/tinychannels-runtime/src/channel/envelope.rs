@@ -53,6 +53,15 @@ fn aligned_strings(values: Vec<Option<String>>) -> Option<Vec<String>> {
 /// Project the legacy host `ChannelMessage` shape into a normalized inbound
 /// envelope without inferring provider-specific conversation kind.
 pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInboundEnvelope {
+    // v21 providers used Unix seconds while a few newer providers already
+    // supplied milliseconds. Values below this year-5138 boundary are
+    // unambiguously seconds for contemporary channel timestamps.
+    const MILLIS_THRESHOLD: u64 = 100_000_000_000;
+    let timestamp_unix_ms = Some(if msg.timestamp < MILLIS_THRESHOLD {
+        msg.timestamp.saturating_mul(1000)
+    } else {
+        msg.timestamp
+    });
     let thread_ts = msg
         .thread_ts
         .as_deref()
@@ -76,7 +85,7 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
         },
         message_id: msg.id.clone(),
         reply_to_id: msg.reply_to_id.clone(),
-        timestamp_unix_ms: Some(msg.timestamp),
+        timestamp_unix_ms,
         conversation: ConversationRef {
             id: msg.reply_target.clone(),
             thread_id,
