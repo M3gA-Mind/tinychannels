@@ -1294,7 +1294,7 @@ pub(crate) mod exports {
             "SendMessage",
             "ListChannels",
             "ChannelStatus",
-            "ReserveRelay", "StartRelay", "StopRelay", "RelayStatus", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
+            "ReserveRelay", "StartRelay", "StartRelayV2", "StopRelay", "RelayStatus", "RelayCapabilitiesV2", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
             "BeginEmailUpload", "AppendEmailUploadChunk", "SendEmailUpload", "AbortEmailUpload",
             "StartChannelConfigured",
             "ChannelController",
