@@ -437,6 +437,7 @@ async fn handle_frame(
             *state.descriptor.lock().await = Some(descriptor);
             state.descriptor_ready.notify_waiters();
         }
+        ConnectorToGatewayFrame::DescriptorV2 { .. } => {}
         ConnectorToGatewayFrame::Inbound { event, buffer_id } => {
             let frame = ConnectorToGatewayFrame::Inbound { event, buffer_id };
             let Some(inbound) = frame.authenticated_inbound_event() else {

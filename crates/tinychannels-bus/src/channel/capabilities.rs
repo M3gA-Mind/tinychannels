@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use crate::capabilities::{LengthUnit, MarkdownDialect};
+pub use crate::capabilities::{LengthUnit, MarkdownDialect};
 
 /// Static provider feature flags.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
