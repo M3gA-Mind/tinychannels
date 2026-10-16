@@ -50,7 +50,7 @@ fn relay_send_content(payload: &OutboundPayload) -> String {
         },
         OutboundPayload::Files { file_urls } => file_urls.join("\n"),
         OutboundPayload::Poll { question, .. } => question.clone(),
-        OutboundPayload::PresentationBlocks { .. } => String::new(),
+        OutboundPayload::PresentationBlocks { .. } | OutboundPayload::Parts { .. } => String::new(),
         OutboundPayload::NativeChannelData { data } => data
             .get("content")
             .or_else(|| data.get("text"))

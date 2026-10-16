@@ -455,7 +455,7 @@ fn legacy_inbound_envelope_projects_back_to_legacy_messages() {
     };
     let envelope = inbound_envelope_from_legacy_message(&msg);
 
-    let projected = legacy_message_from_inbound_envelope(&envelope, 456);
+    let projected = legacy_message_from_inbound_envelope(&envelope, 456).unwrap();
 
     assert_eq!(projected.id, "msg-1");
     assert_eq!(projected.channel, "telegram");
@@ -486,7 +486,7 @@ fn inbound_envelope_roundtrip_keeps_reply_thread_and_topic_distinct() {
     assert_eq!(envelope.reply_to_id.as_deref(), Some("parent-message"));
     assert_eq!(envelope.conversation.thread_id.as_deref(), Some("thread-a"));
     assert_eq!(envelope.conversation.topic_id.as_deref(), Some("topic-b"));
-    let projected = legacy_message_from_inbound_envelope(&envelope, 456);
+    let projected = legacy_message_from_inbound_envelope(&envelope, 456).unwrap();
     assert_eq!(projected.reply_to_id, msg.reply_to_id);
     assert_eq!(projected.thread_ts, msg.thread_ts);
     assert_eq!(projected.topic_id, msg.topic_id);
@@ -503,7 +503,7 @@ fn typed_text_parts_are_authoritative_over_stale_compatibility_text() {
         ..Default::default()
     };
 
-    let projected = legacy_message_from_inbound_envelope(&envelope, 1);
+    let projected = legacy_message_from_inbound_envelope(&envelope, 1).unwrap();
 
     assert_eq!(projected.content, "first\nsecond");
 }
@@ -523,7 +523,7 @@ fn telegram_legacy_projection_keeps_simultaneous_thread_and_topic_ids() {
         ..Default::default()
     };
 
-    let legacy = legacy_message_from_inbound_envelope(&envelope, 1);
+    let legacy = legacy_message_from_inbound_envelope(&envelope, 1).unwrap();
     let roundtrip = inbound_envelope_from_legacy_message(&legacy);
 
     assert_eq!(roundtrip.reply_to_id.as_deref(), Some("reply-parent"));
@@ -543,7 +543,7 @@ fn the_sender_name_survives_the_envelope_both_ways() {
     let envelope = inbound_envelope_from_legacy_message(&msg);
     assert_eq!(envelope.sender.name.as_deref(), Some("Alice"));
 
-    let projected = legacy_message_from_inbound_envelope(&envelope, 1);
+    let projected = legacy_message_from_inbound_envelope(&envelope, 1).unwrap();
     assert_eq!(projected.sender_name.as_deref(), Some("Alice"));
 }
 
