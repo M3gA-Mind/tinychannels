@@ -922,7 +922,7 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
     assert_eq!(v2.instances[0].bot_id, "v2-fixture");
     assert!(v2.instances[0].capabilities.progressive_edits);
     let queried: Option<tinychannels_bus::module_relay::RelayCapabilitiesV2> = proxy
-        .call("RelayCapabilitiesV2", (v2_reservation.clone(),))
+        .call_confidential("RelayCapabilitiesV2", (v2_reservation.clone(),))
         .await
         .unwrap();
     assert_eq!(queried, Some(v2));
