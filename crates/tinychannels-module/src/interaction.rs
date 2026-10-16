@@ -53,5 +53,8 @@ pub(crate) async fn dispatch(
 
 #[cfg(test)]
 #[path = "interaction_tests.rs"]
-#[allow(deprecated, reason = "interaction test doubles still implement the v21 adapter")]
+#[allow(
+    deprecated,
+    reason = "interaction test doubles still implement the v21 adapter"
+)]
 mod tests;

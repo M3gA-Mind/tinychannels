@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "integration fixtures still exercise one-release v21 adapters"
+)]
+
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::BTreeMap;

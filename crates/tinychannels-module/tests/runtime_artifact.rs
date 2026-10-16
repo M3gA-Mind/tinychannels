@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "integration fixtures still exercise one-release v21 adapters"
+)]
+
 use sha2::{Digest, Sha256};
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory::MemoryTransport};
