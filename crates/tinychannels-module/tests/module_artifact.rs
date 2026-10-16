@@ -926,6 +926,13 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         .await
         .unwrap();
     assert_eq!(queried, Some(v2));
+    assert!(proxy
+        .call::<Option<tinychannels_bus::module_relay::RelayCapabilitiesV2>>(
+            "RelayCapabilitiesV2",
+            (v2_reservation.clone(),),
+        )
+        .await
+        .is_err());
     proxy
         .call::<()>("StopRelay", (v2_reservation,))
         .await

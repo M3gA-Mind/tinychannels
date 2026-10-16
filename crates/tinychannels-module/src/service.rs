@@ -1068,6 +1068,7 @@ impl Channels {
         self.relays.status(id).await
     }
     /// Return identity-correlated v2 capabilities negotiated for this reservation.
+    #[tinybus(confidential)]
     async fn relay_capabilities_v2(
         &self,
         id: RelayReservation,
