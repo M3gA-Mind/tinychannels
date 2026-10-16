@@ -48,13 +48,10 @@ pub enum ChannelInteraction {
     },
 }
 
-/// Instance-specific facts supplied by the provider, rather than guessed by hosts.
+/// Canonical instance-specific capability declaration.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ChannelInteractionInfo {
     pub capabilities: ChannelCapabilities,
-    pub proactive_target: Option<String>,
-    pub supports_reactions: bool,
-    pub supports_draft_updates: bool,
 }
 
 /// Result of a provider interaction.

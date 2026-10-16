@@ -105,10 +105,11 @@ pub struct DeliveryCapabilities {
 pub struct AccountCapabilities {
     pub linked: Option<bool>, pub configured: Option<bool>, pub enabled: Option<bool>,
     pub healthy: Option<bool>, pub reconnecting: Option<bool>, pub health: Option<String>,
+    pub proactive_target: Option<String>,
 }
 
 /// Canonical capability descriptor shared by module, host and relay v2.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct ChannelCapabilities {
     pub version: u32,
@@ -126,9 +127,31 @@ impl ChannelCapabilities {
 
     /// Conservative facts for an unconfigured or unknown channel instance.
     pub fn unknown() -> Self {
-        Self { version: Self::VERSION, ..Self::default() }
+        Self::default()
     }
 
+}
+
+impl Default for ChannelCapabilities {
+    fn default() -> Self {
+        Self {
+            version: Self::VERSION,
+            remote_control: false,
+            chat_approvals: false,
+            progressive_edits: false,
+            history_key_ignores_thread: false,
+            reactions: false,
+            content: ContentCapabilities::default(),
+            voice: VoiceSupport::default(),
+            events: EventCapabilities::default(),
+            addressing: AddressingCapabilities::default(),
+            actions: ActionCapabilities::default(),
+            text: TextCapabilities::default(),
+            delivery: DeliveryCapabilities::default(),
+            account: AccountCapabilities::default(),
+            extensions: BTreeMap::new(),
+        }
+    }
 }
 
 /// Map a channel id (optionally provider-prefixed) to its provider id.

@@ -377,10 +377,11 @@ impl Channels {
                     ChannelIngressKind::Listener
                 },
                 interaction: tinychannels_bus::ChannelInteractionInfo {
-                    capabilities: channel.capabilities(),
-                    proactive_target: channel.proactive_target(),
-                    supports_reactions: channel.supports_reactions(),
-                    supports_draft_updates: channel.supports_draft_updates(),
+                    capabilities: {
+                        let mut capabilities = channel.capabilities();
+                        capabilities.account.proactive_target = channel.proactive_target();
+                        capabilities
+                    },
                 },
             })
             .collect())

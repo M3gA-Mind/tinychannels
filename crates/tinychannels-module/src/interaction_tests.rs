@@ -70,8 +70,11 @@ async fn interaction_dispatch_preserves_provider_draft_and_typing_behavior() {
     let ChannelInteractionResult::Info(info) = info else {
         panic!("missing provider facts")
     };
-    assert_eq!(info.proactive_target.as_deref(), Some("configured-room"));
-    assert!(info.supports_reactions && info.supports_draft_updates);
+    assert_eq!(
+        info.capabilities.account.proactive_target.as_deref(),
+        Some("configured-room")
+    );
+    assert!(info.capabilities.reactions && info.capabilities.progressive_edits);
     dispatch(
         provider.as_ref(),
         ChannelInteraction::StartTyping {

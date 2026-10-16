@@ -9,11 +9,10 @@ pub(crate) async fn dispatch(
     use ChannelInteraction as Op;
     let result = match interaction {
         Op::Describe => {
+            let mut capabilities = provider.capabilities();
+            capabilities.account.proactive_target = provider.proactive_target();
             return Ok(ChannelInteractionResult::Info(ChannelInteractionInfo {
-                capabilities: provider.capabilities(),
-                proactive_target: provider.proactive_target(),
-                supports_reactions: provider.supports_reactions(),
-                supports_draft_updates: provider.supports_draft_updates(),
+                capabilities,
             }));
         }
         Op::StartTyping { recipient } => provider.start_typing(&recipient).await,
