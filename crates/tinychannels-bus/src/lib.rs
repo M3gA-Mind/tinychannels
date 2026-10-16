@@ -41,9 +41,9 @@ pub mod traits;
 pub mod version;
 pub use capabilities::{
     AccountCapabilities, ActionCapabilities, AddressingCapabilities, ChannelCapabilities,
-    ContentCapabilities, ContentCapability, DeliveryCapabilities, EventCapabilities,
-    LengthUnit, MarkdownDialect, TextCapabilities, VoiceCapabilities, VoiceSupport,
-    capabilities_for, provider_id,
+    ContentCapabilities, ContentCapability, DeliveryCapabilities, EventCapabilities, LengthUnit,
+    MarkdownDialect, TextCapabilities, VoiceCapabilities, VoiceSupport, capabilities_for,
+    provider_id,
 };
 pub use channel::{
     ButtonAction, ButtonStyle, ChannelInboundEnvelope, ChannelOutboundIntent,

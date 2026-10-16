@@ -224,16 +224,19 @@ mean the current account is configured or available. A legacy relay v1
 handshake may use an adapter for its frozen wire shape during the one-release
 compatibility window; v2 uses the shared descriptor directly.
 
-The descriptor has explicit fields:
+The bus DTO is `ChannelCapabilities` (version 2). It has typed groups for the
+following explicit fields; `Describe` resolves them from the configured
+provider instance and includes account/runtime state. Relay v2 transports the
+same DTO. The legacy relay v1 descriptor remains a frozen wire projection:
 
 | Field | Meaning |
 | --- | --- |
-| contentParts | Supported ContentPart kinds: text, image, video, audio, file, voice_note, sticker, location, contact, buttons, poll, presentation, native. |
+| content.parts | Supported ContentPart kinds: text, image, video, audio, file, voice_note, sticker, location, contact, buttons, poll, presentation, native. |
 | markdownDialects | Accepted/emitted markup dialects for text parts. |
-| voiceIn | Whether voice notes are accepted; acceptedCodecs, maxDurationMs, maxSizeBytes, normalizedWaveform, nativeWaveform, and transcriptSources (provider/host_stt). |
-| voiceOut | Whether Voice media and Voice synthesize are supported; acceptedCodecs, maxDurationMs, maxSizeBytes, normalizedWaveform, nativeWaveform, available voice identifiers, and synthesis support. |
+| voice.voiceIn | Whether voice notes are accepted; acceptedCodecs, maxDurationMs, maxSizeBytes, normalizedWaveform, nativeWaveform, and transcriptSources (provider/host_stt). |
+| voice.voiceOut | Whether Voice media and Voice synthesize are supported; acceptedCodecs, maxDurationMs, maxSizeBytes, normalizedWaveform, nativeWaveform, available voice identifiers, and synthesis support. |
 | events | Supported normalized event types: stream_open/delta/finalize, inbound message, edit/delete, inbound/outbound reaction, read/delivered receipt, presence, typing, lifecycle, delivery_status, approval, tool_progress, subagent, usage, artifact, queue, suggestion. |
-| conversationTypes | Supported dm, group, channel, and thread conversation kinds. |
+| addressing.conversationTypes | Supported dm, group, channel, and thread conversation kinds. |
 | addressing | Support for accountId, scopeId, parentId, topicId, replyToId, and threadId, with provider restrictions represented per operation. |
 | actions | Supported send/reply/thread/edit/delete/reaction/read/typing/draft/poll/buttons/native-command actions. |
 | text | textLimit, lengthUnit (characters, utf8_bytes, utf16_units), markdown dialect, and chunk constraints. |

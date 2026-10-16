@@ -1,7 +1,7 @@
 //! Relay WebSocket frame contract.
 
-use crate::relay::CapabilityDescriptor;
 use crate::ChannelCapabilities;
+use crate::relay::CapabilityDescriptor;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use schemars::JsonSchema;

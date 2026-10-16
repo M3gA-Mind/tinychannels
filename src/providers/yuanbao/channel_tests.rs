@@ -105,6 +105,7 @@ async fn alias_map_clears_when_cap_is_hit() {
 fn supports_draft_updates_is_true() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     assert!(ch.supports_draft_updates());
+    assert!(ch.capabilities().progressive_edits);
 }
 
 #[test]
