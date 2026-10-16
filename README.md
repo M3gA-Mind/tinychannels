@@ -15,6 +15,11 @@ schema, connection metadata, route helpers, and backend delegation layer used to
 connect channel surfaces to OpenHuman harnesses without coupling this crate to
 the OpenHuman application crate.
 
+> **Channel contract:** the normative v2 target and migration rules are in
+> [docs/spec/contract-v2.md](docs/spec/contract-v2.md). This README describes
+> the current crate and implementation; it does not define the v2 wire
+> contract.
+
 Configured provider discovery, legacy intent normalization, and external-webhook
 outbound startup are confidential module operations. The catalog returns provider
 facts without listening; outbound-only startup preserves Linq and WhatsApp Cloud

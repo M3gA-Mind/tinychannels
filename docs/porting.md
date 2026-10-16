@@ -1,5 +1,10 @@
 # OpenHuman Channels Port
 
+> **Superseded for contract shape and status:** use
+> [spec/contract-v2.md](spec/contract-v2.md) for the normative channel model,
+> migration window, and capability expectations. This page remains historical
+> porting context; its progress claims are not authoritative.
+
 This crate now owns the portable parts of `openhuman-4/src/openhuman/channels`
 that can compile independently from the OpenHuman application crate.
 
