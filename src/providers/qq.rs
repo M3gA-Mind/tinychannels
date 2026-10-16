@@ -196,6 +196,9 @@ impl Channel for QQChannel {
         "qq"
     }
 
+    fn supports_remote_control(&self) -> bool { true }
+    fn supports_chat_approvals(&self) -> bool { true }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let token = self.get_token().await?;
 

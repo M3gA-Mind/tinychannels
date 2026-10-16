@@ -115,7 +115,10 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
-        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+        progressive: Arc::new(crate::progressive::Replies::new(
+            host.clone(),
+            Arc::new(Mutex::new(running.clone())),
+        )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
         running: Arc::new(Mutex::new(running)),
@@ -198,7 +201,10 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         Running::start(channel, Arc::new(Hooks::default()), host.clone()),
     );
     let channels = Channels {
-        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+        progressive: Arc::new(crate::progressive::Replies::new(
+            host.clone(),
+            Arc::new(Mutex::new(running.clone())),
+        )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
         running: Arc::new(Mutex::new(running)),
@@ -654,7 +660,10 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
         Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
-        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+        progressive: Arc::new(crate::progressive::Replies::new(
+            host.clone(),
+            Arc::new(Mutex::new(running.clone())),
+        )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
         running: Arc::new(Mutex::new(running)),
@@ -801,7 +810,10 @@ async fn channels_with_store(
     )]);
     let relays = Arc::new(Relays::new(host.clone()));
     let channels = Channels {
-        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+        progressive: Arc::new(crate::progressive::Replies::new(
+            host.clone(),
+            Arc::new(Mutex::new(running.clone())),
+        )),
         host,
         email: crate::email::EmailSender::new(),
         running: Arc::new(Mutex::new(running)),

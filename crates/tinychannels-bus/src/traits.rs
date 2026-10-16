@@ -188,6 +188,7 @@ pub trait Channel: Send + Sync {
         let mut capabilities = crate::capabilities::ChannelCapabilities::unknown();
         capabilities.remote_control = self.supports_remote_control();
         capabilities.chat_approvals = self.supports_chat_approvals();
+        capabilities.history_key_ignores_thread = self.history_key_ignores_thread();
         capabilities.progressive_edits = self.supports_draft_updates();
         capabilities.reactions = self.supports_reactions();
         capabilities.content.parts = vec!["text".into()];
@@ -207,6 +208,11 @@ pub trait Channel: Send + Sync {
 
     /// Whether approval prompts can be returned to this configured instance.
     fn supports_chat_approvals(&self) -> bool {
+        false
+    }
+
+    /// Whether this provider treats a thread marker as a reply target only.
+    fn history_key_ignores_thread(&self) -> bool {
         false
     }
 

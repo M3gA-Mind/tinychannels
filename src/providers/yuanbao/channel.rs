@@ -195,6 +195,9 @@ impl Channel for YuanbaoChannel {
         "yuanbao"
     }
 
+    fn supports_remote_control(&self) -> bool { true }
+    fn supports_chat_approvals(&self) -> bool { true }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let chunks = self.split_message(&message.content);
         let ref_msg_id = message.thread_ts.as_deref();

@@ -45,7 +45,7 @@ pub fn conversation_history_key_parts(
         .join("_");
     // Some providers (Telegram topics) use thread_ts as a reply target, not as
     // a distinct conversation boundary.
-    if crate::capabilities::capabilities_for(channel).history_key_ignores_thread {
+    if legacy_v21_history_key_ignores_thread(channel) {
         return base_key;
     }
     if let Some(thread_ts) = thread_ts {
@@ -58,6 +58,13 @@ pub fn conversation_history_key_parts(
         }
     }
     base_key
+}
+
+/// Whether the frozen v21 history key treated a Telegram topic as a reply
+/// target instead of a separate conversation. This is migration behavior, not
+/// current provider capability discovery.
+pub fn legacy_v21_history_key_ignores_thread(channel: &str) -> bool {
+    matches!(tinychannels_bus::provider_id(channel), "tg" | "telegram")
 }
 
 pub fn should_skip_memory_context_entry(key: &str, content: &str) -> bool {

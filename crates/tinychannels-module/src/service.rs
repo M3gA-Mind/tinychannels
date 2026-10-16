@@ -120,12 +120,16 @@ struct ModuleDeliveryHandler {
 
 impl Channels {
     pub(crate) fn new(host: HostChannels, runtimes: Option<Arc<crate::runtime::Runtimes>>) -> Self {
+        let running = Arc::new(Mutex::new(HashMap::new()));
         Self {
-            progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+            progressive: Arc::new(crate::progressive::Replies::new(
+                host.clone(),
+                running.clone(),
+            )),
             relays: Arc::new(Relays::new(host.clone())),
             host,
             email: EmailSender::new(),
-            running: Arc::new(Mutex::new(HashMap::new())),
+            running,
             terminal: AtomicBool::new(false),
             runtimes,
             shutdown_task: Mutex::new(None),
