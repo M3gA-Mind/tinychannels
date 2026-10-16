@@ -445,10 +445,6 @@ impl Channel for TelegramChannel {
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
-        if message.parts.len() > 1 {
-            self.send_typed(message).await?;
-            return Ok(tinychannels_bus::channel::ChannelSendOutcome::default());
-        }
         let text_parts = message
             .parts
             .iter()
@@ -850,7 +846,7 @@ Ensure only one `openhuman` process is using this bot token."
                             Ok(delivered) => delivered,
                             Err(error) => {
                                 tracing::debug!(%error, "failed to deliver Telegram inbound through module ingress");
-                                return Err(error);
+                                false
                             }
                         }
                     } else {
