@@ -134,6 +134,9 @@ impl ChannelOutboundMessage {
                     part: ContentPart::Poll {
                         question: question.clone(),
                         options: options.clone(),
+                        multiple_choice: false,
+                        closes_at_unix_ms: None,
+                        provider_poll_id: None,
                     },
                 })
             }

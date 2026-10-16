@@ -77,6 +77,12 @@ pub struct MediaReference {
     pub path: Option<String>,
     pub url: Option<String>,
     pub content_type: Option<String>,
+    pub codec: Option<String>,
+    pub file_name: Option<String>,
+    pub size_bytes: Option<u64>,
+    pub duration_ms: Option<u64>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
     pub kind: MediaKind,
     pub transcribed: bool,
     pub platform_message_id: Option<String>,
@@ -160,18 +166,24 @@ pub enum ContentPart {
         longitude: f64,
         label: Option<String>,
         address: Option<String>,
+        accuracy_meters: Option<f64>,
+        live_until_unix_ms: Option<u64>,
     },
     Contact {
         display_name: String,
-        phone_numbers: Vec<String>,
-        emails: Vec<String>,
+        phone_numbers: Vec<ContactMethod>,
+        emails: Vec<ContactMethod>,
+        organization: Option<String>,
     },
     Buttons {
-        rows: Vec<Vec<serde_json::Value>>,
+        rows: Vec<Vec<ButtonAction>>,
     },
     Poll {
         question: String,
         options: Vec<String>,
+        multiple_choice: bool,
+        closes_at_unix_ms: Option<u64>,
+        provider_poll_id: Option<String>,
     },
     Presentation {
         blocks: Value,
@@ -180,6 +192,33 @@ pub enum ContentPart {
         provider: String,
         data: Value,
     },
+}
+
+/// One provider-neutral action button in an ordered content row.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ButtonAction {
+    pub id: String,
+    pub label: String,
+    pub style: Option<ButtonStyle>,
+    pub disabled: bool,
+}
+
+/// Visual button emphasis; it does not change action authority.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ButtonStyle {
+    Primary,
+    Secondary,
+    Danger,
+}
+
+/// One typed phone number or email address on a contact card.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactMethod {
+    pub value: String,
+    pub label: Option<String>,
 }
 
 /// Legacy prompt-media fields projected from normalized media references.
