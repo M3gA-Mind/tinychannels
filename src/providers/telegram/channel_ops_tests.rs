@@ -197,6 +197,29 @@ async fn typed_send_without_provider_message_id_is_ambiguous_and_not_retried() {
 }
 
 #[tokio::test]
+async fn typed_send_transport_failure_is_ambiguous_and_sanitized() {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    ch.api_base = format!("http://{address}");
+    let outcome = ch
+        .send_typed_with_receipt(&typed_text("transport-error", "hello".into()))
+        .await
+        .unwrap();
+    let error = outcome
+        .error
+        .expect("transport failure must not become success");
+    assert!(
+        error.sent_before_error,
+        "remote delivery may have occurred before transport failure"
+    );
+    assert!(error.message.contains("request failed"));
+    assert!(!error.message.contains(TOKEN));
+    assert!(!serde_json::to_string(&error).unwrap().contains(TOKEN));
+}
+
+#[tokio::test]
 async fn update_draft_edits_message_and_records_edit_time() {
     let server = mock_api().await;
     mount_post(&server, "editMessageText", ok()).await;

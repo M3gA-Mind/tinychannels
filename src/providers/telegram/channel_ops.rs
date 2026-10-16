@@ -512,6 +512,7 @@ impl Channel for TelegramChannel {
             .collect::<Vec<_>>();
         let single_part = (parts.len() == 1).then(|| parts[0].platform_message_id.clone());
         let receipt = tinychannels_bus::channel::MessageReceipt {
+            idempotency_key: Some(message.idempotency_key.clone()),
             channel: Some(tinychannels_bus::ChannelRef {
                 id: "telegram".into(),
                 account_id: None,
