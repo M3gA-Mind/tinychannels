@@ -1210,17 +1210,15 @@ impl TelegramChannel {
         &self,
         update: &serde_json::Value,
     ) -> Option<TelegramReactionEvent> {
-        let reaction = update.get("message_reaction")?;
+        self.parse_update_reactions(update).into_iter().next()
+    }
 
-        let chat_id = reaction
-            .get("chat")
-            .and_then(|chat| chat.get("id"))
-            .and_then(serde_json::Value::as_i64)
-            .map(|id| id.to_string())?;
-        let message_id = reaction
-            .get("message_id")
-            .and_then(serde_json::Value::as_i64)
-            .map(|id| id.to_string())?;
+    pub(crate) fn parse_update_reactions(&self, update: &serde_json::Value) -> Vec<TelegramReactionEvent> {
+        let Some(reaction) = update.get("message_reaction") else { return Vec::new() };
+        let Some(chat_id) = reaction.get("chat").and_then(|chat| chat.get("id"))
+            .and_then(serde_json::Value::as_i64).map(|id| id.to_string()) else { return Vec::new() };
+        let Some(message_id) = reaction.get("message_id").and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string()) else { return Vec::new() };
         let actor = reaction
             .get("user")
             .and_then(|user| user.get("username"))
@@ -1252,7 +1250,7 @@ impl TelegramChannel {
                 message_id,
                 "Telegram reaction ignored: actor is not allowlisted"
             );
-            return None;
+            return Vec::new();
         }
 
         let new_reactions = reaction
@@ -1261,39 +1259,31 @@ impl TelegramChannel {
         let old_reactions = reaction
             .get("old_reaction")
             .and_then(serde_json::Value::as_array);
-        let added = new_reactions.is_some_and(|items| !items.is_empty());
-        let selected = if added { new_reactions } else { old_reactions };
-        let emoji = selected.and_then(|arr| {
-            arr.iter().find_map(|entry| {
-                entry
-                    .get("emoji")
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToString::to_string)
-            })
-        })?;
-
         let sender_id = user_id.clone().unwrap_or_else(|| actor.clone());
         let thread_id = reaction
             .get("message_thread_id")
             .and_then(serde_json::Value::as_i64)
             .map(|id| id.to_string());
-        Some(TelegramReactionEvent {
-            sender: actor,
-            sender_id,
-            reply_target: chat_id,
-            target_message_id: message_id,
-            emoji,
-            added,
-            update_id: update
-                .get("update_id")
-                .and_then(serde_json::Value::as_i64)
-                .map(|id| id.to_string()),
-            timestamp: reaction
-                .get("date")
-                .and_then(serde_json::Value::as_u64)
-                .map(|seconds| seconds.saturating_mul(1000)),
-            thread_id,
-        })
+        let identity = |entry: &serde_json::Value| (
+            entry.get("type").and_then(serde_json::Value::as_str).unwrap_or("").to_owned(),
+            entry.get("emoji").and_then(serde_json::Value::as_str).unwrap_or("").to_owned(),
+            entry.get("custom_emoji_id").and_then(serde_json::Value::as_str).unwrap_or("").to_owned(),
+        );
+        let old = old_reactions.into_iter().flatten().map(identity).collect::<std::collections::BTreeSet<_>>();
+        let new = new_reactions.into_iter().flatten().map(identity).collect::<std::collections::BTreeSet<_>>();
+        let update_id = update.get("update_id").and_then(serde_json::Value::as_i64).map(|id| id.to_string());
+        let timestamp = reaction.get("date").and_then(serde_json::Value::as_u64).map(|seconds| seconds.saturating_mul(1000));
+        let make = |(kind, emoji, custom): (String, String, String), added| TelegramReactionEvent {
+            sender: actor.clone(), sender_id: sender_id.clone(), reply_target: chat_id.clone(), target_message_id: message_id.clone(),
+            emoji: if emoji.is_empty() { format!("custom:{custom}") } else { emoji },
+            custom_emoji_id: (!custom.is_empty()).then_some(custom), added, update_id: update_id.clone(), timestamp, thread_id: thread_id.clone(),
+        };
+        let mut events = old.difference(&new).cloned().map(|change| make(change, false)).collect::<Vec<_>>();
+        events.extend(new.difference(&old).cloned().map(|change| make(change, true)));
+        if reaction.get("old_reaction").is_none() {
+            events = new.into_iter().map(|change| make(change, true)).collect();
+        }
+        events
     }
 }
 
