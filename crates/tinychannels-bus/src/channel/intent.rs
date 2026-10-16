@@ -26,9 +26,7 @@ pub enum OutboundPayload {
         text: Option<String>,
         media_urls: Vec<String>,
     },
-    Voice {
-        media_url: String,
-    },
+    Voice { voice: OutboundVoice },
     Files {
         file_urls: Vec<String>,
     },
@@ -106,16 +104,8 @@ impl ChannelOutboundMessage {
                     },
                 }));
             }
-            OutboundPayload::Voice { media_url } => parts.push(OutboundContentPart::Voice {
-                voice: OutboundVoice::Media {
-                    media: MediaReference {
-                        url: Some(media_url.clone()),
-                        kind: MediaKind::Audio,
-                        ..Default::default()
-                    },
-                    codec: None,
-                    duration_ms: None,
-                },
+            OutboundPayload::Voice { voice } => parts.push(OutboundContentPart::Voice {
+                voice: voice.clone(),
             }),
             OutboundPayload::Files { file_urls } => {
                 parts.extend(file_urls.iter().map(|url| OutboundContentPart::Content {
