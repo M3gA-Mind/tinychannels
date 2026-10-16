@@ -212,9 +212,11 @@ The descriptor has explicit fields:
 | --- | --- |
 | content_parts | Supported ContentPart kinds: text, image, video, audio, file, voice_note, sticker, location, contact, buttons, poll, presentation, native. |
 | markdown_dialects | Accepted/emitted markup dialects for text parts. |
-| voice_in | Whether voice notes are accepted; accepted codecs, max_duration_ms, max_size_bytes, waveform support, and transcript sources (provider/host_stt). |
-| voice_out | Whether Voice media and Voice synthesize are supported; accepted codecs, max_duration_ms, max_size_bytes, available voice identifiers, and synthesis support. |
+| voice_in | Whether voice notes are accepted; accepted codecs, max_duration_ms, max_size_bytes, normalized_waveform, native_waveform, and transcript sources (provider/host_stt). |
+| voice_out | Whether Voice media and Voice synthesize are supported; accepted codecs, max_duration_ms, max_size_bytes, normalized_waveform, native_waveform, available voice identifiers, and synthesis support. |
 | events | Supported normalized event types: stream_open/delta/finalize, inbound message, edit/delete, inbound/outbound reaction, read/delivered receipt, presence, typing, lifecycle, delivery_status, approval, tool_progress, subagent, usage, artifact, queue, suggestion. |
+| conversation_types | Supported dm, group, channel, and thread conversation kinds. |
+| addressing | Support for account_id, scope_id, parent_id, topic_id, reply_to_id, and thread_id, with provider restrictions represented per operation. |
 | actions | Supported send/reply/thread/edit/delete/reaction/read/typing/draft/poll/buttons/native-command actions. |
 | text | text_limit, length_unit (characters, utf8_bytes, utf16_units), markdown dialect, and chunk constraints. |
 | image, video, audio, file, sticker | Accepted/emitted codec or media types, maximum size, and applicable duration/dimension limits. |
@@ -240,6 +242,7 @@ ChannelCapabilities as other transports. It emits a versioned tagged union:
 | type | Payload |
 | --- | --- |
 | message | Full inbound or committed outbound envelope. |
+| message_updated, message_deleted | Address, message ID, updated parts or deletion, source timestamp. |
 | stream_open, stream_delta, stream_finalize | Turn identifier, ordered deltas/final parts, and final receipt. |
 | tool, subagent | Typed identifiers, state, and bounded progress data. |
 | usage | Input, output, and cached token counts when known. |
@@ -247,7 +250,9 @@ ChannelCapabilities as other transports. It emits a versioned tagged union:
 | artifact | Artifact reference and create/update/delete operation. |
 | queue | Queue item reference, state, and optional position. |
 | suggestion | Typed suggestion and state. |
-| receipt, reaction, presence, typing, lifecycle | The corresponding normalized channel event payload. |
+| reaction_added, reaction_removed, outbound_reaction | Address, message ID, actor/reaction, and result where applicable. |
+| read_receipt, delivered_receipt | Address, message ID, actor, timestamp. |
+| presence, typing, lifecycle, delivery_status | The corresponding normalized channel event payload. |
 
 Every event carries schemaVersion, conversation/runtime scope, and a
 monotonically increasing sequence number for replay. Text deltas are ephemeral
@@ -258,11 +263,6 @@ commands; event payloads never establish authority. The web adapter preserves
 unknown native content as opaque data; rendering requires an explicit safe
 renderer. Attachment URLs must be host-authorized, and replay cannot cross
 account/conversation scope.
-
-Provider-independent web payloads preserve unknown native content as opaque
-data but render it only through an explicit safe renderer. Attachment URLs
-must be host-authorized, and event replay must not expose another account's
-conversation.
 
 ## Migration and compatibility window
 
@@ -310,7 +310,7 @@ every capability; query the configured descriptor.
 | Email send-only | email-send | Text and file attachments; no inbound/listen capability | No Channel listener implementation by design. |
 | Lark/Feishu | lark | Text, media/files, threads, cards/native content, receipts | Optional provider dependency. |
 | IRC, iMessage, Mattermost, QQ, Yuanbao/DingTalk, Linq | always-on (Cargo default is empty) | Text and the provider-supported subset of addressing/events/receipts | Capability is reported per provider/account; no blanket rich-media promise. |
-| Web surface | host-owned, no TinyChannels provider feature | All portable content/events, subject to host authorization | Remains an OpenHuman consumer, not a TinyChannels provider. |
+| Web surface adapter | tinychannels-runtime adapter using host-supplied transport | All portable content/events, subject to host authorization | Host supplies transport, authentication, authorization, and application event wiring. |
 | Relay connector | relay-websocket for WebSocket I/O | Projection of portable events, content and capability facts | Existing descriptor wire v1 remains frozen. |
 
 Contract feature coverage is summarized separately from build features:
