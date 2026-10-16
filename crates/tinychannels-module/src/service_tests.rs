@@ -105,7 +105,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let host = HostChannels::new(connection);
+    let host = HostChannels::new(connection.clone());
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let channel = Arc::new(CaptureChannel(sent));
     let hooks = Arc::new(Hooks::default());
@@ -125,6 +125,14 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         shutdown_task: Mutex::new(None),
         delivery_admission: Arc::new(Mutex::new(())),
     };
+    connection
+        .serve_at(tinychannels_bus::OBJECT_PATH.try_into().unwrap(), channels.clone())
+        .await
+        .unwrap();
+    connection.request_name(tinychannels_bus::BUS_NAME).await.unwrap();
+    let client = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
     let intent = ChannelOutboundIntent {
         idempotency_key: "delivery-42".to_owned(),
         channel_id: "fixture".to_owned(),
@@ -220,10 +228,15 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         },
     ];
     for (index, payload) in payloads.into_iter().enumerate() {
-        channels
-            .send_channel_intent(
-                "fixture".into(),
-                ChannelOutboundIntent {
+        client
+            .call::<tinychannels_bus::ChannelSendMessageResult>(
+                tinychannels_bus::BUS_NAME.try_into().unwrap(),
+                tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+                tinychannels_bus::BUS_NAME.try_into().unwrap(),
+                tinychannels_bus::methods::SEND_CHANNEL_INTENT.try_into().unwrap(),
+                (
+                    "fixture",
+                    ChannelOutboundIntent {
                     idempotency_key: format!("key-{index}"),
                     channel_id: "fixture".into(),
                     conversation_id: "room".into(),
@@ -242,8 +255,9 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                     reply_to_id: Some("source-message".into()),
                     thread_id: Some("thread".into()),
                     durability: tinychannels_bus::DeliveryDurability::BestEffort,
-                    payload,
-                },
+                        payload,
+                    },
+                ),
             )
             .await
             .unwrap();
