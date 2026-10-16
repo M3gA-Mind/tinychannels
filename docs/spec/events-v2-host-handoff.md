@@ -6,9 +6,11 @@ to `ai.tinyhumans.tinychannels.ChannelsHost`. A provider uses
 `ChannelIngress::{Inbound, Event}` at its listener boundary; the module stamps
 the configured channel/account identity, serializes the ingress through the
 same ordered host callback path, and invokes `DeliverInbound` or `DeliverEvent`.
-The DTO crate stays transport-free. Legacy `Channel::listen(Sender<ChannelMessage>)`
-providers remain supported by the module's compatibility bridge during the
-provider migration window.
+The new DTOs add no transport behavior or dependencies. The bus crate still has
+legacy async/runtime dependencies through its existing provider trait; removal
+of that edge remains tracked by #101/#103. Legacy
+`Channel::listen(Sender<ChannelMessage>)` providers remain supported by the
+module's compatibility bridge during the provider migration window.
 
 `ChannelEvent` is the v2 vocabulary from contract-v2: its flattened `type`
 discriminator covers `typing`, `read_receipt`, `delivered_receipt`,
