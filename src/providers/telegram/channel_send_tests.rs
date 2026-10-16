@@ -48,8 +48,10 @@ async fn send_message_reaction_success_publishes_reaction_sent_event() {
     let recorded = events.events.lock().unwrap().clone();
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].0, "channel");
-    assert_eq!(recorded[0].1, "reaction_sent");
-    assert_eq!(recorded[0].2["target_message_id"], "telegram_55_7");
+    assert_eq!(recorded[0].1, "outbound_reaction");
+    assert_eq!(recorded[0].2["type"], "outbound_reaction");
+    assert_eq!(recorded[0].2["messageId"], "7");
+    assert_eq!(recorded[0].2["reaction"]["value"], "👍");
     assert_eq!(recorded[0].2["success"], true);
 }
 
@@ -68,6 +70,7 @@ async fn send_message_reaction_rejection_is_not_an_error_and_reports_failure() {
     assert!(!ch.send_message_reaction("55", 7, "🦄").await.unwrap());
     let recorded = events.events.lock().unwrap().clone();
     assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].1, "outbound_reaction");
     assert_eq!(recorded[0].2["success"], false);
 }
 

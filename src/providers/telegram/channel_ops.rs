@@ -414,7 +414,7 @@ impl Channel for TelegramChannel {
                     platform_message_id: id.clone(),
                     kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
                     index,
-                thread_id: thread_id.clone(),
+                    thread_id: thread_id.clone(),
                     reply_to_id: message.reply_to_id.clone(),
                     edit_token: Some(id.clone()),
                     delete_token: Some(id.clone()),

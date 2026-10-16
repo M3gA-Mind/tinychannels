@@ -1327,23 +1327,24 @@ impl TelegramChannel {
             .get("date")
             .and_then(serde_json::Value::as_u64)
             .map(|seconds| seconds.saturating_mul(1000));
-        let make = |(_kind, emoji, custom): (String, String, String), added| TelegramReactionEvent {
-            sender: actor.clone(),
-            sender_id: sender_id.clone(),
-            reply_target: chat_id.clone(),
-            target_message_id: message_id.clone(),
-            emoji: if emoji.is_empty() {
-                format!("custom:{custom}")
-            } else {
-                emoji
-            },
-            custom_emoji_id: (!custom.is_empty()).then_some(custom),
-            added,
-            update_id: update_id.clone(),
-            timestamp,
-            thread_id: thread_id.clone(),
-            conversation_kind,
-        };
+        let make =
+            |(_kind, emoji, custom): (String, String, String), added| TelegramReactionEvent {
+                sender: actor.clone(),
+                sender_id: sender_id.clone(),
+                reply_target: chat_id.clone(),
+                target_message_id: message_id.clone(),
+                emoji: if emoji.is_empty() {
+                    format!("custom:{custom}")
+                } else {
+                    emoji
+                },
+                custom_emoji_id: (!custom.is_empty()).then_some(custom),
+                added,
+                update_id: update_id.clone(),
+                timestamp,
+                thread_id: thread_id.clone(),
+                conversation_kind,
+            };
         let mut events = old
             .difference(&new)
             .cloned()

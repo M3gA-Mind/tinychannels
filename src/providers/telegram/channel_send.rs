@@ -102,19 +102,36 @@ impl TelegramChannel {
         success: bool,
     ) {
         if let Some(events) = &self.events {
-            events
-                .publish(
-                    "channel",
-                    "reaction_sent",
-                    serde_json::json!({
-                        "channel": "telegram",
-                        "target_message_id": format!("telegram_{chat_id}_{message_id}"),
-                        "emoji": emoji,
-                        "success": success,
-                    }),
-                )
-                .await
-                .ok();
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let event = tinychannels_bus::ChannelEvent {
+                version: 2,
+                event_id: format!("telegram:outbound-reaction:{}", uuid::Uuid::new_v4()),
+                source_event_id: None,
+                source_timestamp: Some(timestamp),
+                channel: tinychannels_bus::ChannelRef {
+                    id: "telegram".into(),
+                    account_id: None,
+                },
+                conversation: Some(tinychannels_bus::ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Unknown,
+                    id: chat_id.to_owned(),
+                    ..Default::default()
+                }),
+                event: tinychannels_bus::ChannelEventKind::OutboundReaction {
+                    message_id: message_id.to_string(),
+                    reaction: tinychannels_bus::ChannelReaction {
+                        value: emoji.trim().to_owned(),
+                        custom_emoji_id: None,
+                    },
+                    success,
+                },
+            };
+            if let Err(error) = events.publish_channel_event(event).await {
+                tracing::debug!(%error, "failed to deliver Telegram outbound reaction event");
+            }
         }
     }
 
