@@ -3,6 +3,7 @@
 pub mod adapter;
 pub mod capabilities;
 pub mod envelope;
+pub mod event;
 pub mod error;
 pub mod intent;
 pub mod receipt;
@@ -21,6 +22,7 @@ pub use envelope::{
     GroupAccessPolicy, InboundMediaPayload, MediaKind, MediaReference, MentionGate,
     SenderDmDecision, VoiceNote, VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
 };
+pub use event::{ChannelEvent, ChannelEventKind, ChannelReaction, ChannelReceiptKind};
 pub use error::{ChannelSendError, SendErrorKind};
 pub use intent::{ChannelOutboundIntent, DeliveryDurability, OutboundPayload};
 pub use intent::{ChannelOutboundMessage, OutboundContentPart, OutboundVoice};

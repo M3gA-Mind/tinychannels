@@ -202,6 +202,27 @@ pub trait EventSink: Send + Sync {
         kind: &str,
         payload: serde_json::Value,
     ) -> anyhow::Result<()>;
+
+    /// Publish one normalized channel event. Legacy hosts keep working through
+    /// the default projection while module hosts override this with DeliverEvent.
+    async fn publish_channel_event(
+        &self,
+        event: tinychannels_bus::ChannelEvent,
+    ) -> anyhow::Result<()> {
+        let kind = match &event.event {
+            tinychannels_bus::ChannelEventKind::Typing { .. } => "typing",
+            tinychannels_bus::ChannelEventKind::Receipt { kind: tinychannels_bus::ChannelReceiptKind::Read, .. } => "read_receipt",
+            tinychannels_bus::ChannelEventKind::Receipt { .. } => "delivered_receipt",
+            tinychannels_bus::ChannelEventKind::Reaction { added: true, .. } => "reaction_added",
+            tinychannels_bus::ChannelEventKind::Reaction { .. } => "reaction_removed",
+            tinychannels_bus::ChannelEventKind::OutboundReaction { .. } => "outbound_reaction",
+            tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "message_updated",
+            tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",
+            tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
+            tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
+        };
+        self.publish("channel", kind, serde_json::to_value(event)?).await
+    }
 }
 
 // ---------------------------------------------------------------------------

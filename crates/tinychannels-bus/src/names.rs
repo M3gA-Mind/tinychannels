@@ -98,6 +98,8 @@ pub mod methods {
 
 /// One constant per method name on [`HOST_BUS_NAME`].
 pub mod host_methods {
+    /// `DeliverEvent` — deliver one typed provider event to the host.
+    pub const DELIVER_EVENT: &str = "DeliverEvent";
     /// `DeliverInbound` — hand the host one authenticated v22 inbound envelope.
     pub const DELIVER_INBOUND: &str = "DeliverInbound";
     /// Complete one admitted v22 inbound envelope turn. Opt-in runtimes invoke
