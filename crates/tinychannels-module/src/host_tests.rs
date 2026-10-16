@@ -24,6 +24,7 @@ fn consume_failure(counter: &AtomicUsize) -> bool {
 #[derive(Clone)]
 struct Callback {
     events: Arc<Mutex<Vec<String>>>,
+    typed_events: Arc<Mutex<Vec<tinychannels_bus::ChannelEvent>>>,
     blocked: Arc<AtomicBool>,
     gate: Arc<tokio::sync::Notify>,
     transcription_blocked: Arc<AtomicBool>,
@@ -45,6 +46,7 @@ impl Callback {
         if consume_failure(&self.event_failures) {
             return Err(tinybus::Error::failed("fixture event failure"));
         }
+        self.typed_events.lock().await.push(event.clone());
         self.events
             .lock()
             .await
@@ -161,6 +163,7 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
     let storage = Arc::new(crate::storage_fixture::StorageHost::serve(&server, "scope-a").await);
     let callback = Callback {
         events: Arc::new(Mutex::new(Vec::new())),
+        typed_events: Arc::new(Mutex::new(Vec::new())),
         blocked: Arc::new(AtomicBool::new(false)),
         gate: Arc::new(tokio::sync::Notify::new()),
         transcription_blocked: Arc::new(AtomicBool::new(false)),
@@ -536,6 +539,7 @@ async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
         callback.events.lock().await.as_slice(),
         ["typed_event:telegram:update:44"]
     );
+    assert_eq!(callback.typed_events.lock().await.as_slice(), &[event]);
     host.shutdown().await.unwrap();
 }
 
