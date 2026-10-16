@@ -787,7 +787,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     let polls = json_bodies(&server, "getUpdates").await;
     assert!(polls.len() >= 6, "{polls:?}");
     assert_eq!(polls[0]["offset"], 0);
-    assert!(polls.iter().any(|poll| poll["offset"] == 15));
+    assert!(polls.iter().any(|poll| poll["offset"] == 16));
 }
 
 #[tokio::test]
