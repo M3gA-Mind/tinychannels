@@ -115,7 +115,10 @@ pub trait Channel: Send + Sync {
 
     /// Deliver canonical typed content. Migrated providers override this; the
     /// default is the explicit text-only one-release compatibility projection.
-    async fn send_typed(&self, message: &crate::channel::ChannelOutboundMessage) -> anyhow::Result<()> {
+    async fn send_typed(
+        &self,
+        message: &crate::channel::ChannelOutboundMessage,
+    ) -> anyhow::Result<()> {
         let content = message.legacy_text()?;
         self.send(&SendMessage {
             content,
@@ -124,7 +127,8 @@ pub trait Channel: Send + Sync {
             thread_ts: message.thread_id.clone(),
             reply_to_id: message.reply_to_id.clone(),
             idempotency_key: Some(message.idempotency_key.clone()),
-        }).await
+        })
+        .await
     }
 
     /// Legacy listener seam used by isolated test doubles.

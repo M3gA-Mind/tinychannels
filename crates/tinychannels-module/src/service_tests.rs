@@ -70,6 +70,34 @@ impl tinychannels::Channel for CaptureChannel {
     }
 }
 
+struct CaptureTypedChannel(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelOutboundMessage>);
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for CaptureTypedChannel {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        anyhow::bail!("typed test provider expects typed sends")
+    }
+
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<()> {
+        self.0.send(message.clone()).await?;
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
 #[tokio::test]
 async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
     let bus = tinybus::transport::memory::MemoryBus::new();
@@ -126,33 +154,79 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
 
 #[tokio::test]
 async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
-    let intent = ChannelOutboundIntent {
-        idempotency_key: "key".into(),
-        channel_id: "fixture".into(),
-        conversation_id: "room".into(),
-        reply_to_id: Some("source-message".into()),
-        thread_id: Some("thread".into()),
-        durability: tinychannels_bus::DeliveryDurability::BestEffort,
-        payload: tinychannels_bus::OutboundPayload::Media {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    let (sent, mut received) = tokio::sync::mpsc::channel(8);
+    let channel = Arc::new(CaptureTypedChannel(sent));
+    let mut running = HashMap::new();
+    running.insert(
+        "fixture".to_owned(),
+        Running::start(channel, Arc::new(Hooks::default()), host.clone()),
+    );
+    let channels = Channels {
+        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+        host: host.clone(),
+        email: crate::email::EmailSender::new(),
+        running: Arc::new(Mutex::new(running)),
+        relays: Arc::new(Relays::new(host.clone())),
+        terminal: AtomicBool::new(false),
+        runtimes: None,
+        shutdown_task: Mutex::new(None),
+        delivery_admission: Arc::new(Mutex::new(())),
+    };
+    let payloads = vec![
+        tinychannels_bus::OutboundPayload::Text {
+            text: "hello".into(),
+        },
+        tinychannels_bus::OutboundPayload::Media {
             text: Some("caption".into()),
             media_urls: vec!["https://example.test/image.png".into()],
         },
-    };
-
-    let sent = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
-    assert_eq!(sent.reply_to_id.as_deref(), Some("source-message"));
-    assert_eq!(sent.thread_id.as_deref(), Some("thread"));
-    assert!(matches!(
-        sent.parts.as_slice(),
-        [
-            tinychannels_bus::OutboundContentPart::Content {
-                part: tinychannels_bus::ContentPart::Text { text }
-            },
-            tinychannels_bus::OutboundContentPart::Content {
-                part: tinychannels_bus::ContentPart::Image { media, .. }
-            }
-        ] if text == "caption" && media.url.as_deref() == Some("https://example.test/image.png")
-    ));
+        tinychannels_bus::OutboundPayload::Voice {
+            media_url: "https://example.test/audio.ogg".into(),
+        },
+        tinychannels_bus::OutboundPayload::Files {
+            file_urls: vec!["https://example.test/file.pdf".into()],
+        },
+        tinychannels_bus::OutboundPayload::Poll {
+            question: "Q?".into(),
+            options: vec!["A".into(), "B".into()],
+        },
+        tinychannels_bus::OutboundPayload::PresentationBlocks {
+            blocks: serde_json::json!([{"type":"text"}]),
+        },
+        tinychannels_bus::OutboundPayload::NativeChannelData {
+            data: serde_json::json!({"opaque":true}),
+        },
+    ];
+    for (index, payload) in payloads.into_iter().enumerate() {
+        channels
+            .send_channel_intent(
+                "fixture".into(),
+                ChannelOutboundIntent {
+                    idempotency_key: format!("key-{index}"),
+                    channel_id: "fixture".into(),
+                    conversation_id: "room".into(),
+                    reply_to_id: Some("source-message".into()),
+                    thread_id: Some("thread".into()),
+                    durability: tinychannels_bus::DeliveryDurability::BestEffort,
+                    payload,
+                },
+            )
+            .await
+            .unwrap();
+        let typed = received.recv().await.unwrap();
+        assert_eq!(typed.reply_to_id.as_deref(), Some("source-message"));
+        assert_eq!(typed.thread_id.as_deref(), Some("thread"));
+        assert!(!typed.parts.is_empty(), "payload {index} must stay typed");
+        assert!(serde_json::to_string(&typed).unwrap().contains("\"kind\":"));
+    }
+    channels.shutdown().await.unwrap();
+    host.shutdown().await.unwrap();
 }
 
 #[tokio::test]

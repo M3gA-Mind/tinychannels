@@ -48,8 +48,15 @@ pub enum OutboundPayload {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum OutboundVoice {
-    Media { media: MediaReference, codec: Option<String>, duration_ms: Option<u64> },
-    Synthesize { text: String, voice: Option<String> },
+    Media {
+        media: MediaReference,
+        codec: Option<String>,
+        duration_ms: Option<u64>,
+    },
+    Synthesize {
+        text: String,
+        voice: Option<String>,
+    },
 }
 
 /// Typed outbound parts accepted by migrated provider adapters.
@@ -83,11 +90,17 @@ impl ChannelOutboundMessage {
             }),
             OutboundPayload::Media { text, media_urls } => {
                 if let Some(text) = text {
-                    parts.push(OutboundContentPart::Content { part: ContentPart::Text { text: text.clone() } });
+                    parts.push(OutboundContentPart::Content {
+                        part: ContentPart::Text { text: text.clone() },
+                    });
                 }
                 parts.extend(media_urls.iter().map(|url| OutboundContentPart::Content {
                     part: ContentPart::Image {
-                        media: MediaReference { url: Some(url.clone()), kind: MediaKind::Image, ..Default::default() },
+                        media: MediaReference {
+                            url: Some(url.clone()),
+                            kind: MediaKind::Image,
+                            ..Default::default()
+                        },
                         caption: None,
                         alt_text: None,
                     },
@@ -95,27 +108,51 @@ impl ChannelOutboundMessage {
             }
             OutboundPayload::Voice { media_url } => parts.push(OutboundContentPart::Voice {
                 voice: OutboundVoice::Media {
-                    media: MediaReference { url: Some(media_url.clone()), kind: MediaKind::Audio, ..Default::default() },
+                    media: MediaReference {
+                        url: Some(media_url.clone()),
+                        kind: MediaKind::Audio,
+                        ..Default::default()
+                    },
                     codec: None,
                     duration_ms: None,
                 },
             }),
-            OutboundPayload::Files { file_urls } => parts.extend(file_urls.iter().map(|url| OutboundContentPart::Content {
-                part: ContentPart::File {
-                    media: MediaReference { url: Some(url.clone()), kind: MediaKind::Document, ..Default::default() },
-                    file_name: None,
-                    caption: None,
-                },
-            })),
-            OutboundPayload::Poll { question, options } => parts.push(OutboundContentPart::Content {
-                part: ContentPart::Poll { question: question.clone(), options: options.clone() },
-            }),
-            OutboundPayload::PresentationBlocks { blocks } => parts.push(OutboundContentPart::Content {
-                part: ContentPart::Presentation { blocks: blocks.clone() },
-            }),
-            OutboundPayload::NativeChannelData { data } => parts.push(OutboundContentPart::Content {
-                part: ContentPart::Native { provider: intent.channel_id.clone(), data: data.clone() },
-            }),
+            OutboundPayload::Files { file_urls } => {
+                parts.extend(file_urls.iter().map(|url| OutboundContentPart::Content {
+                    part: ContentPart::File {
+                        media: MediaReference {
+                            url: Some(url.clone()),
+                            kind: MediaKind::Document,
+                            ..Default::default()
+                        },
+                        file_name: None,
+                        caption: None,
+                    },
+                }))
+            }
+            OutboundPayload::Poll { question, options } => {
+                parts.push(OutboundContentPart::Content {
+                    part: ContentPart::Poll {
+                        question: question.clone(),
+                        options: options.clone(),
+                    },
+                })
+            }
+            OutboundPayload::PresentationBlocks { blocks } => {
+                parts.push(OutboundContentPart::Content {
+                    part: ContentPart::Presentation {
+                        blocks: blocks.clone(),
+                    },
+                })
+            }
+            OutboundPayload::NativeChannelData { data } => {
+                parts.push(OutboundContentPart::Content {
+                    part: ContentPart::Native {
+                        provider: intent.channel_id.clone(),
+                        data: data.clone(),
+                    },
+                })
+            }
         }
         Self {
             channel_id: intent.channel_id.clone(),
@@ -132,7 +169,9 @@ impl ChannelOutboundMessage {
         let mut text = Vec::new();
         for part in &self.parts {
             match part {
-                OutboundContentPart::Content { part: ContentPart::Text { text: value } } => text.push(value.as_str()),
+                OutboundContentPart::Content {
+                    part: ContentPart::Text { text: value },
+                } => text.push(value.as_str()),
                 _ => anyhow::bail!("provider does not support typed channel content"),
             }
         }

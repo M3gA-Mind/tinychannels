@@ -421,7 +421,9 @@ impl Running {
         &self,
         message: tinychannels_bus::ChannelOutboundMessage,
     ) -> std::result::Result<(), RunningSendError> {
-        self.submit(ProviderOperation::SendTyped(message)).await.map(|_| ())
+        self.submit(ProviderOperation::SendTyped(message))
+            .await
+            .map(|_| ())
     }
 
     pub(crate) async fn interact(

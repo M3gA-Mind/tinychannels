@@ -126,19 +126,60 @@ pub struct VoiceNote {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ContentPart {
-    Text { text: String },
-    Image { media: MediaReference, caption: Option<String>, alt_text: Option<String> },
-    Video { media: MediaReference, caption: Option<String>, duration_ms: Option<u64> },
-    Audio { media: MediaReference, transcript: Option<String> },
-    File { media: MediaReference, file_name: Option<String>, caption: Option<String> },
-    VoiceNote { voice_note: VoiceNote },
-    Sticker { media: MediaReference, alt_text: Option<String> },
-    Location { latitude: f64, longitude: f64, label: Option<String>, address: Option<String> },
-    Contact { display_name: String, phone_numbers: Vec<String>, emails: Vec<String> },
-    Buttons { rows: Vec<Vec<serde_json::Value>> },
-    Poll { question: String, options: Vec<String> },
-    Presentation { blocks: Value },
-    Native { provider: String, data: Value },
+    Text {
+        text: String,
+    },
+    Image {
+        media: MediaReference,
+        caption: Option<String>,
+        alt_text: Option<String>,
+    },
+    Video {
+        media: MediaReference,
+        caption: Option<String>,
+        duration_ms: Option<u64>,
+    },
+    Audio {
+        media: MediaReference,
+        transcript: Option<String>,
+    },
+    File {
+        media: MediaReference,
+        file_name: Option<String>,
+        caption: Option<String>,
+    },
+    VoiceNote {
+        voice_note: VoiceNote,
+    },
+    Sticker {
+        media: MediaReference,
+        alt_text: Option<String>,
+    },
+    Location {
+        latitude: f64,
+        longitude: f64,
+        label: Option<String>,
+        address: Option<String>,
+    },
+    Contact {
+        display_name: String,
+        phone_numbers: Vec<String>,
+        emails: Vec<String>,
+    },
+    Buttons {
+        rows: Vec<Vec<serde_json::Value>>,
+    },
+    Poll {
+        question: String,
+        options: Vec<String>,
+    },
+    Presentation {
+        blocks: Value,
+    },
+    Native {
+        provider: String,
+        data: Value,
+    },
 }
 
 /// Legacy prompt-media fields projected from normalized media references.
