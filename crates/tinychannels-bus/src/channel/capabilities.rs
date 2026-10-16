@@ -47,16 +47,17 @@ pub struct ChannelPresentationCapabilities {
 mod legacy_length_unit {
     use super::LengthUnit;
     use schemars::JsonSchema;
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    #[derive(JsonSchema)]
-    #[allow(dead_code)]
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "kebab-case")]
+    #[schemars(rename_all = "kebab-case")]
     pub enum LegacyLengthUnit {
-        #[schemars(rename = "characters")]
+        #[serde(alias = "chars", alias = "characters")]
         Characters,
-        #[schemars(rename = "utf8-bytes")]
+        #[serde(alias = "utf8_bytes")]
         Utf8Bytes,
-        #[schemars(rename = "utf16-units")]
+        #[serde(alias = "utf16_units")]
         Utf16Units,
     }
 
@@ -64,45 +65,43 @@ mod legacy_length_unit {
     where
         S: Serializer,
     {
-        serializer.serialize_str(match value {
-            LengthUnit::Characters => "characters",
-            LengthUnit::Utf8Bytes => "utf8-bytes",
-            LengthUnit::Utf16Units => "utf16-units",
-        })
+        let legacy = match value {
+            LengthUnit::Characters => LegacyLengthUnit::Characters,
+            LengthUnit::Utf8Bytes => LegacyLengthUnit::Utf8Bytes,
+            LengthUnit::Utf16Units => LegacyLengthUnit::Utf16Units,
+        };
+        legacy.serialize(serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<LengthUnit, D::Error>
     where
         D: Deserializer<'de>,
     {
-        match String::deserialize(deserializer)?.as_str() {
-            "characters" | "chars" => Ok(LengthUnit::Characters),
-            "utf8-bytes" | "utf8_bytes" => Ok(LengthUnit::Utf8Bytes),
-            "utf16-units" | "utf16_units" => Ok(LengthUnit::Utf16Units),
-            value => Err(serde::de::Error::custom(format!(
-                "unknown legacy length unit {value}"
-            ))),
-        }
+        Ok(match LegacyLengthUnit::deserialize(deserializer)? {
+            LegacyLengthUnit::Characters => LengthUnit::Characters,
+            LegacyLengthUnit::Utf8Bytes => LengthUnit::Utf8Bytes,
+            LegacyLengthUnit::Utf16Units => LengthUnit::Utf16Units,
+        })
     }
 }
 
 mod legacy_markdown_dialect {
     use super::MarkdownDialect;
     use schemars::JsonSchema;
-    use serde::{Deserialize, Deserializer, Serializer};
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
-    #[derive(JsonSchema)]
-    #[allow(dead_code)]
-    #[schemars(rename_all = "snake_case")]
+    #[derive(Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "kebab-case")]
+    #[schemars(rename_all = "kebab-case")]
     pub enum LegacyMarkdownDialect {
         Plain,
         Markdown,
         Html,
-        #[schemars(rename = "slack-mrkdwn")]
+        #[serde(alias = "slack_mrkdwn")]
         SlackMrkdwn,
-        #[schemars(rename = "discord-markdown")]
+        #[serde(alias = "discord_markdown")]
         DiscordMarkdown,
-        #[schemars(rename = "telegram-markdown-v2")]
+        #[serde(alias = "telegram_markdown_v2")]
         TelegramMarkdownV2,
     }
 
@@ -110,33 +109,29 @@ mod legacy_markdown_dialect {
     where
         S: Serializer,
     {
-        serializer.serialize_str(match value {
-            MarkdownDialect::Plain => "plain",
-            MarkdownDialect::Markdown => "markdown",
-            MarkdownDialect::Html => "html",
-            MarkdownDialect::SlackMrkdwn => "slack-mrkdwn",
-            MarkdownDialect::DiscordMarkdown => "discord-markdown",
-            MarkdownDialect::TelegramMarkdownV2 => "telegram-markdown-v2",
-        })
+        let legacy = match value {
+            MarkdownDialect::Plain => LegacyMarkdownDialect::Plain,
+            MarkdownDialect::Markdown => LegacyMarkdownDialect::Markdown,
+            MarkdownDialect::Html => LegacyMarkdownDialect::Html,
+            MarkdownDialect::SlackMrkdwn => LegacyMarkdownDialect::SlackMrkdwn,
+            MarkdownDialect::DiscordMarkdown => LegacyMarkdownDialect::DiscordMarkdown,
+            MarkdownDialect::TelegramMarkdownV2 => LegacyMarkdownDialect::TelegramMarkdownV2,
+        };
+        legacy.serialize(serializer)
     }
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<MarkdownDialect, D::Error>
     where
         D: Deserializer<'de>,
     {
-        match String::deserialize(deserializer)?.as_str() {
-            "plain" => Ok(MarkdownDialect::Plain),
-            "markdown" => Ok(MarkdownDialect::Markdown),
-            "html" => Ok(MarkdownDialect::Html),
-            "slack-mrkdwn" | "slack_mrkdwn" => Ok(MarkdownDialect::SlackMrkdwn),
-            "discord-markdown" | "discord_markdown" => Ok(MarkdownDialect::DiscordMarkdown),
-            "telegram-markdown-v2" | "telegram_markdown_v2" => {
-                Ok(MarkdownDialect::TelegramMarkdownV2)
-            }
-            value => Err(serde::de::Error::custom(format!(
-                "unknown legacy markdown dialect {value}"
-            ))),
-        }
+        Ok(match LegacyMarkdownDialect::deserialize(deserializer)? {
+            LegacyMarkdownDialect::Plain => MarkdownDialect::Plain,
+            LegacyMarkdownDialect::Markdown => MarkdownDialect::Markdown,
+            LegacyMarkdownDialect::Html => MarkdownDialect::Html,
+            LegacyMarkdownDialect::SlackMrkdwn => MarkdownDialect::SlackMrkdwn,
+            LegacyMarkdownDialect::DiscordMarkdown => MarkdownDialect::DiscordMarkdown,
+            LegacyMarkdownDialect::TelegramMarkdownV2 => MarkdownDialect::TelegramMarkdownV2,
+        })
     }
 }
 
