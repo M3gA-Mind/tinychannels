@@ -2146,6 +2146,7 @@ async fn host_control_facts_preserve_module_timeout_floor_and_overflow_classific
         ChannelControlRequest as Request, ChannelControlResult as Response,
     };
     let service = inbound_preparation_service().await;
+    enable_remote_providers(&service).await;
     assert_eq!(
         service
             .prepare_channel_control(Request::RuntimeLimits {
