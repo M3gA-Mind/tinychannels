@@ -213,7 +213,10 @@ async fn send_text_chunks_retries_without_markdown_when_markdown_rejected() {
         .and(body_partial_json(
             serde_json::json!({ "parse_mode": "Markdown" }),
         ))
-        .respond_with(ResponseTemplate::new(400).set_body_string("can't parse entities"))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "ok": false,
+            "description": "Bad Request: can't parse entities: can't find end of the entity"
+        })))
         .with_priority(1)
         .mount(&server)
         .await;
@@ -238,14 +241,25 @@ async fn send_text_chunks_retries_without_markdown_when_markdown_rejected() {
 }
 
 #[tokio::test]
-async fn send_text_chunks_fails_when_markdown_and_plain_both_rejected() {
+async fn send_text_chunks_fails_when_markdown_fallback_is_rejected() {
     let server = mock_api().await;
-    mount_post(
-        &server,
-        "sendMessage",
-        ResponseTemplate::new(403).set_body_string("bot was blocked"),
-    )
-    .await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .and(body_partial_json(serde_json::json!({"parse_mode":"Markdown"})))
+        .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
+            "ok": false,
+            "description": "Bad Request: can't parse entities: can't find end of the entity"
+        })))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .and(body_partial_json(serde_json::json!({"text":"hi"})))
+        .respond_with(ResponseTemplate::new(403).set_body_string("bot was blocked"))
+        .with_priority(2)
+        .mount(&server)
+        .await;
     let ch = channel_for(&server, &["*"]);
 
     let err = ch
