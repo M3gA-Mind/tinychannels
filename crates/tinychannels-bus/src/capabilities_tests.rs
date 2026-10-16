@@ -97,4 +97,19 @@ fn legacy_presentation_keeps_v1_enum_spellings_on_the_wire() {
             assert_eq!(decoded.markdown_dialect, markdown_dialect);
         }
     }
+    let schema = schemars::schema_for!(crate::channel::ChannelPresentationCapabilities);
+    let schema_json = serde_json::to_string(&schema).unwrap();
+    for legacy_value in [
+        "characters",
+        "utf8-bytes",
+        "utf16-units",
+        "slack-mrkdwn",
+        "discord-markdown",
+        "telegram-markdown-v2",
+    ] {
+        assert!(
+            schema_json.contains(legacy_value),
+            "schema lacks {legacy_value}"
+        );
+    }
 }
