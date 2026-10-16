@@ -294,6 +294,7 @@ impl SignalChannel {
             channel: "signal".to_string(),
             timestamp: timestamp / 1000, // millis to secs.
             topic_id: None,
+            reply_to_id: None,
             thread_ts: None,
             sender_name: envelope
                 .source_name

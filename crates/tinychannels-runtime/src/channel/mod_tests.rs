@@ -397,6 +397,7 @@ fn legacy_inbound_envelope_preserves_telegram_topics_separately_from_threads() {
         reply_target: "-100123".into(),
         timestamp: 123,
         topic_id: None,
+        reply_to_id: None,
         thread_ts: Some(" topic-99 ".into()),
         sender_name: None,
     };
@@ -421,6 +422,7 @@ fn legacy_inbound_envelope_recognizes_qualified_telegram_channel_ids() {
         let msg = ChannelMessage {
             channel: channel.into(),
             topic_id: None,
+            reply_to_id: None,
             thread_ts: Some("topic-99".into()),
             ..Default::default()
         };
@@ -440,6 +442,7 @@ fn legacy_inbound_envelope_projects_back_to_legacy_messages() {
         reply_target: "-100123".into(),
         timestamp: 123,
         topic_id: None,
+        reply_to_id: None,
         thread_ts: Some("topic-99".into()),
         sender_name: None,
     };
@@ -505,6 +508,7 @@ fn legacy_inbound_envelope_preserves_non_telegram_threads() {
         reply_target: "channel-123".into(),
         timestamp: 123,
         topic_id: None,
+        reply_to_id: None,
         thread_ts: Some(" thread-99 ".into()),
         sender_name: None,
     };
@@ -531,6 +535,7 @@ fn legacy_inbound_envelope_discards_whitespace_only_thread_ids() {
     let msg = ChannelMessage {
         channel: "discord".into(),
         topic_id: None,
+        reply_to_id: None,
         thread_ts: Some(" \t ".into()),
         ..Default::default()
     };
@@ -551,6 +556,7 @@ fn legacy_session_key_candidates_match_openhuman_helpers() {
         reply_target: "-100123".into(),
         timestamp: 123,
         topic_id: None,
+        reply_to_id: None,
         thread_ts: Some("topic-99".into()),
         sender_name: None,
     };
@@ -567,6 +573,7 @@ fn legacy_session_key_candidates_preserve_unescaped_stored_keys() {
         sender: "c".into(),
         reply_target: "room_part".into(),
         topic_id: None,
+        reply_to_id: None,
         thread_ts: Some("thread_part".into()),
         ..Default::default()
     };

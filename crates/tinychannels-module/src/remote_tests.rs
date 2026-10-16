@@ -108,6 +108,7 @@ fn command(workspace: &std::path::Path, content: &str, channel: &str) -> RemoteO
             channel: channel.into(),
             timestamp: 1,
             topic_id: None,
+            reply_to_id: None,
             thread_ts: None,
             sender_name: None,
         },

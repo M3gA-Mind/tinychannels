@@ -19,6 +19,9 @@ pub struct ChannelMessage {
     /// Platform thread identifier (e.g. Slack `ts`, Discord thread ID).
     /// When set, replies should be posted as threaded responses.
     pub thread_ts: Option<String>,
+    /// Provider message identifier this inbound message replies to.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "replyToId")]
+    pub reply_to_id: Option<String>,
     /// Independent provider topic identifier where supported.
     #[serde(default, skip_serializing_if = "Option::is_none", rename = "topicId")]
     pub topic_id: Option<String>,

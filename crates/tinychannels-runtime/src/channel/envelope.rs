@@ -73,6 +73,7 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
             account_id: None,
         },
         message_id: msg.id.clone(),
+        reply_to_id: msg.reply_to_id.clone(),
         timestamp_unix_ms: Some(msg.timestamp),
         conversation: ConversationRef {
             id: msg.reply_target.clone(),
@@ -108,6 +109,7 @@ pub fn legacy_message_from_inbound_envelope(
         timestamp,
         thread_ts: envelope.conversation.thread_id.clone(),
         topic_id: envelope.conversation.topic_id.clone(),
+        reply_to_id: envelope.reply_to_id.clone(),
         sender_name: envelope.sender.name.clone(),
     }
 }

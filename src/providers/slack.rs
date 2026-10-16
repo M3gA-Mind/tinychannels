@@ -200,6 +200,7 @@ impl Channel for SlackChannel {
                             .unwrap_or_default()
                             .as_secs(),
                         topic_id: None,
+                        reply_to_id: None,
                         thread_ts: Self::inbound_thread_ts(msg, ts),
                         sender_name: None,
                     };

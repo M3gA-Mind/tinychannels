@@ -10,6 +10,7 @@ fn channel_message_clone_preserves_fields() {
         channel: "dummy".into(),
         timestamp: 999,
         topic_id: None,
+        reply_to_id: None,
         thread_ts: None,
         sender_name: None,
     };
