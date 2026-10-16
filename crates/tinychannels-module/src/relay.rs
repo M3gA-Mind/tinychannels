@@ -189,6 +189,7 @@ impl Relays {
             match state.borrow().clone() {
                 State::Connected(descriptor) if !v2 => return Ok(State::Connected(descriptor)),
                 State::ConnectedV2(capabilities) if v2 => return Ok(State::ConnectedV2(capabilities)),
+                State::Connected(_) | State::ConnectedV2(_) => return Err(Error::failed("relay handshake mode mismatch")),
                 State::Stopped | State::Stopping => return Err(closed()),
                 State::Failed => return Err(Error::failed("relay startup failed")),
                 State::Reserved | State::Starting | State::Reconnecting => {}
@@ -349,7 +350,7 @@ async fn canceled(cancel: &mut watch::Receiver<bool>) {
     }
     let _ = cancel.wait_for(|value| *value).await;
 }
-async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels) {
+async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels, v2: bool) {
     let mut cancel = slot.cancel.subscribe();
     let dialer = Arc::new(WebSocketRelayDialer::new_bounded(
         WebSocketRelayConfig::from(&config),
@@ -368,8 +369,26 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels) {
         native
             .set_inbound_handler(Arc::new(Inbound { host: host.clone() }))
             .await;
-        native.connect().await?;
-        native.handshake().await
+        if v2 {
+            native.connect_v2().await?;
+            let instances = native
+                .negotiate_v2()
+                .await?
+                .into_iter()
+                .map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 {
+                    platform: identity.platform,
+                    bot_id: identity.bot_id,
+                    capabilities,
+                })
+                .collect();
+            Ok::<_, RelayTransportError>(State::ConnectedV2(RelayCapabilitiesV2 {
+                contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
+                instances,
+            }))
+        } else {
+            native.connect().await?;
+            native.handshake().await.map(State::Connected)
+        }
     };
     let outcome = tokio::select! { biased;
         ()=canceled(&mut cancel)=>Err(RelayTransportError::Closed),
@@ -377,10 +396,10 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels) {
     };
     let mut reconnect = None;
     let mut observer = None;
-    if let Ok(descriptor) = outcome
+    if let Ok(connected) = outcome
         && let Some(native) = transport.as_ref()
     {
-        slot.state.send_replace(State::Connected(descriptor));
+        slot.state.send_replace(connected);
         host.report_status("relay", "connected", None).await;
         reconnect = Some(native.spawn_reconnect_supervisor(dialer, config.reconnect));
         let observed_slot = slot.clone();
@@ -396,7 +415,10 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels) {
                 }
                 let (next, state) = if observed_native.is_closed() {
                     (RelayPhase::Reconnecting, State::Reconnecting)
-                } else if let Some(descriptor) = observed_native.descriptor().await {
+                } else if v2 && !observed_native.capabilities_v2().await.is_empty() {
+                    let instances = observed_native.capabilities_v2().await.into_iter().map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 { platform: identity.platform, bot_id: identity.bot_id, capabilities }).collect();
+                    (RelayPhase::Connected, State::ConnectedV2(RelayCapabilitiesV2 { contract_version: tinychannels_bus::ChannelCapabilities::VERSION, instances }))
+                } else if !v2 && let Some(descriptor) = observed_native.descriptor().await {
                     (RelayPhase::Connected, State::Connected(descriptor))
                 } else {
                     (RelayPhase::Reconnecting, State::Reconnecting)

@@ -1050,6 +1050,15 @@ impl Channels {
     ) -> BusResult<tinychannels::relay::CapabilityDescriptor> {
         self.relays.start(id, config).await
     }
+    /// Start a relay through the canonical v2 per-identity capability handshake.
+    #[tinybus(confidential)]
+    async fn start_relay_v2(
+        &self,
+        id: RelayReservation,
+        config: RelayRuntimeConfig,
+    ) -> BusResult<tinychannels_bus::module_relay::RelayCapabilitiesV2> {
+        self.relays.start_v2(id, config).await
+    }
     /// Cancel pending startup and join relay/reconnect/native callback work.
     async fn stop_relay(&self, id: RelayReservation) -> BusResult<()> {
         self.relays.stop(id).await
@@ -1057,6 +1066,13 @@ impl Channels {
     /// Report safe lifecycle facts without URL, identities or credentials.
     async fn relay_status(&self, id: RelayReservation) -> BusResult<RelayStatus> {
         self.relays.status(id).await
+    }
+    /// Return identity-correlated v2 capabilities negotiated for this reservation.
+    async fn relay_capabilities_v2(
+        &self,
+        id: RelayReservation,
+    ) -> BusResult<Option<tinychannels_bus::module_relay::RelayCapabilitiesV2>> {
+        self.relays.capabilities_v2(id).await
     }
     /// Enqueue one bounded, ordered relay intent.
     async fn send_relay_intent(

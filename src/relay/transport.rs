@@ -26,6 +26,7 @@ pub struct RelayTransport {
     state: Arc<RelayTransportState>,
     reader: Mutex<Option<JoinHandle<()>>>,
     terminal: AtomicBool,
+    v2_mode: AtomicBool,
 }
 
 impl RelayTransport {
@@ -45,6 +46,7 @@ impl RelayTransport {
             }),
             reader: Mutex::new(None),
             terminal: AtomicBool::new(false),
+            v2_mode: AtomicBool::new(false),
         }
     }
 
@@ -53,6 +55,7 @@ impl RelayTransport {
             return Err(RelayTransportError::Closed);
         }
         self.prepare_connect().await;
+        self.v2_mode.store(false, Ordering::SeqCst);
         self.start_reader().await;
         self.send_hellos().await
     }
@@ -63,6 +66,7 @@ impl RelayTransport {
             return Err(RelayTransportError::Closed);
         }
         self.prepare_connect().await;
+        self.v2_mode.store(true, Ordering::SeqCst);
         self.start_reader().await;
         let io = self.current_io().await;
         for identity in &self.identities {
@@ -81,7 +85,11 @@ impl RelayTransport {
         io: Arc<dyn RelayFrameIo>,
     ) -> Result<(), RelayTransportError> {
         *self.io.write().await = io;
-        self.connect().await
+        if self.v2_mode.load(Ordering::SeqCst) {
+            self.connect_v2().await
+        } else {
+            self.connect().await
+        }
     }
 
     pub fn spawn_reconnect_supervisor(
