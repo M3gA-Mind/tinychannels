@@ -387,6 +387,7 @@ impl Channel for TelegramChannel {
         let thread_id = conversation
             .thread_id
             .as_deref()
+            .or(conversation.topic_id.as_deref())
             .or(message.thread_id.as_deref());
         let reply_to_id = match message.reply_to_id.as_deref() {
             Some(id) => Some(id.parse::<i64>().map_err(|_| anyhow::anyhow!("Telegram reply_to_id must be a numeric message ID"))?),
