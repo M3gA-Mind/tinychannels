@@ -2627,9 +2627,9 @@ async fn exported_tinybus_describe_and_control_use_each_running_instances_capabi
         .unwrap();
     let proxy = client
         .proxy(
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::BUS_NAME,
+            tinychannels_bus::OBJECT_PATH,
+            tinychannels_bus::BUS_NAME,
         )
         .unwrap();
     for (id, expected) in [("same-provider:a", true), ("same-provider:b", false)] {
