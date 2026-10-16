@@ -129,6 +129,8 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         idempotency_key: "delivery-42".to_owned(),
         channel_id: "fixture".to_owned(),
         conversation_id: "room-7".to_owned(),
+            channel_ref: None,
+            conversation_ref: None,
         reply_to_id: Some("message-3".to_owned()),
         thread_id: Some("thread-9".to_owned()),
         durability: tinychannels::DeliveryDurability::BestEffort,
@@ -219,6 +221,8 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                     idempotency_key: format!("key-{index}"),
                     channel_id: "fixture".into(),
                     conversation_id: "room".into(),
+            channel_ref: None,
+            conversation_ref: None,
                     reply_to_id: Some("source-message".into()),
                     thread_id: Some("thread".into()),
                     durability: tinychannels_bus::DeliveryDurability::BestEffort,
@@ -270,6 +274,8 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
             ChannelOutboundIntent {
                 channel_id: "fixture".to_owned(),
                 conversation_id: "room-7".to_owned(),
+            channel_ref: None,
+            conversation_ref: None,
                 idempotency_key: "delivery-required".to_owned(),
                 durability: tinychannels::DeliveryDurability::Required,
                 payload: tinychannels::OutboundPayload::Text {
@@ -417,6 +423,8 @@ fn required_intent(id: &str, text: &str) -> ChannelOutboundIntent {
         idempotency_key: id.into(),
         channel_id: "fixture".into(),
         conversation_id: "room-1".into(),
+            channel_ref: None,
+            conversation_ref: None,
         durability: tinychannels::DeliveryDurability::Required,
         payload: tinychannels::OutboundPayload::Text { text: text.into() },
         ..Default::default()

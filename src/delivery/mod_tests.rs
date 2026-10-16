@@ -136,6 +136,8 @@ fn intent(payload: OutboundPayload) -> ChannelOutboundIntent {
         idempotency_key: "idem-1".into(),
         channel_id: "telegram".into(),
         conversation_id: "chat-1".into(),
+            channel_ref: None,
+            conversation_ref: None,
         reply_to_id: None,
         thread_id: None,
         durability: DeliveryDurability::Required,
