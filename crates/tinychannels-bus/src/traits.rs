@@ -39,6 +39,9 @@ pub struct SendMessage {
     pub subject: Option<String>,
     /// Platform thread identifier for threaded replies (e.g. Slack `thread_ts`).
     pub thread_ts: Option<String>,
+    /// Source message identifier for a provider reply.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "replyToId")]
+    pub reply_to_id: Option<String>,
     /// Caller-provided or generated idempotency key for retry-safe delivery.
     pub idempotency_key: Option<String>,
 }
@@ -51,6 +54,7 @@ impl SendMessage {
             recipient: recipient.into(),
             subject: None,
             thread_ts: None,
+            reply_to_id: None,
             idempotency_key: None,
         }
     }
@@ -66,6 +70,7 @@ impl SendMessage {
             recipient: recipient.into(),
             subject: Some(subject.into()),
             thread_ts: None,
+            reply_to_id: None,
             idempotency_key: None,
         }
     }
@@ -107,6 +112,20 @@ pub trait Channel: Send + Sync {
 
     /// Deliver one message through the configured provider.
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()>;
+
+    /// Deliver canonical typed content. Migrated providers override this; the
+    /// default is the explicit text-only one-release compatibility projection.
+    async fn send_typed(&self, message: &crate::channel::ChannelOutboundMessage) -> anyhow::Result<()> {
+        let content = message.legacy_text()?;
+        self.send(&SendMessage {
+            content,
+            recipient: message.conversation_id.clone(),
+            subject: None,
+            thread_ts: message.thread_id.clone(),
+            reply_to_id: message.reply_to_id.clone(),
+            idempotency_key: Some(message.idempotency_key.clone()),
+        }).await
+    }
 
     /// Legacy listener seam used by isolated test doubles.
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()>;
