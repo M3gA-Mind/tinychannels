@@ -151,6 +151,9 @@ async fn typed_send_receipt_keeps_ordered_multiple_text_parts() {
     .await;
     let ch = channel_for(&server, &["*"]);
     let mut message = typed_text("multi-text", "first".into());
+    message.conversation_ref = None;
+    message.conversation_id = "600".into();
+    message.thread_id = Some("18".into());
     message
         .parts
         .push(tinychannels_bus::OutboundContentPart::Content {
@@ -172,6 +175,24 @@ async fn typed_send_receipt_keeps_ordered_multiple_text_parts() {
         Some("multi-text")
     );
     assert_eq!(outcome.receipt.parts[0].edit_token.as_deref(), Some("654"));
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(bodies[0]["chat_id"], "600");
+    assert_eq!(bodies[0]["message_thread_id"], "18");
+    assert_eq!(outcome.receipt.thread_id.as_deref(), Some("18"));
+}
+
+#[tokio::test]
+async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &["*"]);
+    let mut message = typed_text("bad-reply-id", "hello".into());
+    message.reply_to_id = Some("reply:legacy".into());
+
+    let error = ch.send_typed_with_receipt(&message).await.unwrap_err();
+
+    assert!(error.to_string().contains("reply_to_id must be a numeric message ID"));
+    assert!(json_bodies(&server, "sendMessage").await.is_empty());
 }
 
 #[tokio::test]
