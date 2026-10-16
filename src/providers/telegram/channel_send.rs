@@ -111,7 +111,21 @@ impl TelegramChannel {
         thread_id: Option<&str>,
         reply_to_message_id: Option<i64>,
     ) -> anyhow::Result<()> {
+        self.send_text_chunks_with_ids(message, chat_id, thread_id, reply_to_message_id)
+            .await
+            .map(|_| ())
+    }
+
+    /// Send text and retain only message IDs returned by Telegram itself.
+    pub(crate) async fn send_text_chunks_with_ids(
+        &self,
+        message: &str,
+        chat_id: &str,
+        thread_id: Option<&str>,
+        reply_to_message_id: Option<i64>,
+    ) -> anyhow::Result<Vec<String>> {
         let chunks = split_message_for_telegram(message);
+        let mut message_ids = Vec::new();
 
         for (index, chunk) in chunks.iter().enumerate() {
             let text = if chunks.len() > 1 {
@@ -150,6 +164,9 @@ impl TelegramChannel {
                 .await?;
 
             if markdown_resp.status().is_success() {
+                if let Some(id) = Self::telegram_result_message_id(markdown_resp.json::<serde_json::Value>().await.ok()) {
+                    message_ids.push(id);
+                }
                 if index < chunks.len() - 1 {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
@@ -196,12 +213,20 @@ impl TelegramChannel {
                 );
             }
 
+            if let Some(id) = Self::telegram_result_message_id(plain_resp.json::<serde_json::Value>().await.ok()) {
+                message_ids.push(id);
+            }
+
             if index < chunks.len() - 1 {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
 
-        Ok(())
+        Ok(message_ids)
+    }
+
+    fn telegram_result_message_id(response: Option<serde_json::Value>) -> Option<String> {
+        response?.get("result")?.get("message_id")?.as_i64().map(|id| id.to_string())
     }
 
     async fn send_media_by_url(

@@ -357,6 +357,66 @@ impl Channel for TelegramChannel {
             .await
     }
 
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<tinychannels_bus::MessageReceipt> {
+        let text = match message.parts.as_slice() {
+            [tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. },
+            }] => text,
+            _ => {
+                self.send_typed(message).await?;
+                return Ok(tinychannels_bus::MessageReceipt::default());
+            }
+        };
+        let conversation = message.conversation_ref.clone().unwrap_or_else(|| {
+            tinychannels_bus::ConversationRef {
+                id: message.conversation_id.clone(),
+                thread_id: message.thread_id.clone(),
+                ..Default::default()
+            }
+        });
+        let thread_id = conversation.thread_id.as_deref().or(message.thread_id.as_deref());
+        let reply_to_id = message.reply_to_id.as_deref().and_then(|id| id.parse::<i64>().ok());
+        let ids = self
+            .send_text_chunks_with_ids(text, &conversation.id, thread_id, reply_to_id)
+            .await?;
+        let parts = ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| tinychannels_bus::MessageReceiptPart {
+                platform_message_id: id.clone(),
+                kind: tinychannels_bus::MessageReceiptPartKind::Text,
+                index,
+                thread_id: thread_id.map(str::to_owned),
+                reply_to_id: message.reply_to_id.clone(),
+                edit_token: Some(id.clone()),
+                delete_token: Some(id.clone()),
+                raw: Some(tinychannels_bus::MessageReceiptSourceResult {
+                    channel: Some("telegram".into()),
+                    message_id: Some(id.clone()),
+                    chat_id: Some(conversation.id.clone()),
+                    ..Default::default()
+                }),
+            })
+            .collect::<Vec<_>>();
+        let single_part = (parts.len() == 1).then(|| parts[0].platform_message_id.clone());
+        Ok(tinychannels_bus::MessageReceipt {
+            channel: message.channel_ref.clone().or_else(|| Some(tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None })),
+            conversation: Some(conversation),
+            primary_platform_message_id: parts.first().map(|part| part.platform_message_id.clone()),
+            platform_message_ids: ids,
+            parts,
+            thread_id: thread_id.map(str::to_owned),
+            reply_to_id: message.reply_to_id.clone(),
+            edit_token: single_part.clone(),
+            delete_token: single_part,
+            sent_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+            raw: None,
+        })
+    }
+
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         let mut offset: i64 = 0;
 
