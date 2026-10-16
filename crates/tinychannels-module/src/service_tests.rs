@@ -764,6 +764,52 @@ struct EndedChannel(Arc<std::sync::atomic::AtomicUsize>);
 
 struct PartialReceiptChannel(Arc<std::sync::atomic::AtomicUsize>);
 
+struct SuccessfulReceiptChannel(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for SuccessfulReceiptChannel {
+    fn name(&self) -> &str { "fixture" }
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> { Ok(()) }
+    async fn send_typed_with_receipt(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(tinychannels_bus::channel::ChannelSendOutcome {
+            receipt: tinychannels_bus::channel::MessageReceipt {
+                primary_platform_message_id: Some("actual-id-9".into()),
+                platform_message_ids: vec!["actual-id-9".into()],
+                edit_token: Some("telegram:edit:9".into()),
+                delete_token: Some("telegram:delete:9".into()),
+                ..Default::default()
+            },
+            error: None,
+        })
+    }
+    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn required_success_and_replay_return_same_actual_scoped_receipt_without_resending() {
+    let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (channels, _callbacks, _server) = channels_with_store(Arc::new(SuccessfulReceiptChannel(sends.clone()))).await;
+    let intent = required_intent("receipt-replay", "receipt body");
+    let first = channels.send_channel_intent("fixture".into(), intent.clone()).await.unwrap();
+    let second = channels.send_channel_intent("fixture".into(), intent).await.unwrap();
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    assert_eq!(first, second);
+    let receipt = first.receipt.unwrap();
+    assert_eq!(receipt.platform_message_ids, ["actual-id-9"]);
+    assert_eq!(receipt.edit_token.as_deref(), Some("telegram:edit:9"));
+    assert_eq!(receipt.delete_token.as_deref(), Some("telegram:delete:9"));
+    assert_eq!(receipt.channel.as_ref().unwrap().id, "fixture");
+    assert_eq!(receipt.channel.as_ref().unwrap().account_id.as_deref(), Some("fixture"));
+    assert_eq!(receipt.conversation.as_ref().unwrap().id, "room-receipt-replay");
+    channels.shutdown().await.unwrap();
+}
+
 #[async_trait::async_trait]
 impl tinychannels::Channel for PartialReceiptChannel {
     fn name(&self) -> &str { "fixture" }
