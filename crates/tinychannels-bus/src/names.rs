@@ -160,7 +160,7 @@ pub const METHODS: [&str; 37] = [
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 7] = [
+pub const HOST_METHODS: [&str; 8] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,
@@ -168,6 +168,7 @@ pub const HOST_METHODS: [&str; 7] = [
     host_methods::PUBLISH_EVENT,
     host_methods::DISPATCH_CONTROLLER_BACKEND,
     host_methods::PROCESS_INBOUND,
+    host_methods::DELIVER_EVENT,
 ];
 
 #[cfg(test)]

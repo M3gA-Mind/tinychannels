@@ -455,7 +455,7 @@ impl Channel for TelegramChannel {
         }
         // Match the v21 text projection's ordered newline join while keeping
         // the provider's actual per-message IDs in the v22 receipt path.
-        let text = text_parts.join("\n");
+        let text = strip_tool_call_tags(&text_parts.join("\n"));
         let mut conversation =
             message
                 .conversation_ref
@@ -489,7 +489,7 @@ impl Channel for TelegramChannel {
                 Some(partial) => (
                     partial.message_ids.clone(),
                     Some(partial.error.clone()),
-                    partial.sent_before_error,
+                    partial.sent_before_error || !partial.message_ids.is_empty(),
                 ),
                 None => return Err(error),
             },
