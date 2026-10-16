@@ -564,7 +564,7 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
         conversation: None,
         event: tinychannels_bus::ChannelEventKind::Typing {
             active: true,
-            actor: None,
+            actor: Default::default(),
             expires_at: None,
         },
     };
