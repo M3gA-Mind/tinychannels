@@ -424,3 +424,38 @@ fn legacy_send_projection_roundtrips_reply_thread_and_topic_keys() {
     assert_eq!(wire["topicId"], "topic-2");
     assert_eq!(wire["thread_ts"], "thread-1");
 }
+
+#[test]
+fn inbound_voice_note_keeps_audio_transcript_source_and_waveform_typed() {
+    let envelope = ChannelInboundEnvelope {
+        reply_to_id: Some("reply-target".into()),
+        parts: vec![ContentPart::VoiceNote {
+            voice_note: VoiceNote {
+                media: MediaReference {
+                    url: Some("https://example.test/voice.ogg".into()),
+                    content_type: Some("audio/ogg".into()),
+                    kind: MediaKind::Audio,
+                    ..Default::default()
+                },
+                codec: Some("opus".into()),
+                duration_ms: Some(1500),
+                waveform: Some(vec![0.0, 0.5, 1.0]),
+                push_to_talk: true,
+                transcript: Some(VoiceTranscript {
+                    text: "hello".into(),
+                    language: Some("en".into()),
+                    state: VoiceTranscriptState::Complete,
+                    source: VoiceTranscriptSource::HostStt,
+                }),
+            },
+        }],
+        ..Default::default()
+    };
+    let wire = serde_json::to_value(&envelope).unwrap();
+    assert_eq!(wire["replyToId"], "reply-target");
+    assert_eq!(wire["parts"][0]["kind"], "voice_note");
+    assert_eq!(wire["parts"][0]["voiceNote"]["waveform"], json!([0.0, 0.5, 1.0]));
+    assert_eq!(wire["parts"][0]["voiceNote"]["transcript"]["source"], "host_stt");
+    let decoded: ChannelInboundEnvelope = serde_json::from_value(wire).unwrap();
+    assert_eq!(decoded, envelope);
+}

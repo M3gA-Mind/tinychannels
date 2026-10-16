@@ -43,6 +43,13 @@ Dispatch mode and effective limit cannot change after activation. Flush waits
 for preceding accepted turns; stop freezes admission and retains pending work
 across canceled waiters. The existing module cleanup deadline reports pending
 cleanup after ten seconds while retaining the owner for a later stop retry.
+Contract version 22 carries `ChannelInboundEnvelope` content parts through
+`DeliverInbound` and `ProcessInbound`, and sends `ChannelOutboundMessage` values
+with ordered typed parts through `SendChannelIntent`. The legacy `ChannelMessage`
+and `SendMessage` conversions are one-release compatibility projections. Their
+outbound adapter accepts text parts only; rich payloads remain available to
+providers that implement `Channel::send_typed`.
+
 This source contract still requires a compatible published native module before
 a downstream host can claim released composition.
 

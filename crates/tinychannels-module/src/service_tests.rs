@@ -264,6 +264,17 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         assert_eq!(address.topic_id.as_deref(), Some("topic"));
         assert!(!typed.parts.is_empty(), "payload {index} must stay typed");
         assert!(serde_json::to_string(&typed).unwrap().contains("\"kind\":"));
+        match index {
+            0 => assert!(matches!(typed.parts[0], tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Text { .. } })),
+            1 => assert!(matches!(typed.parts[1], tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Image { .. } })),
+            2 => assert!(matches!(typed.parts[0], tinychannels_bus::OutboundContentPart::Voice { voice: tinychannels_bus::OutboundVoice::Media { .. } })),
+            3 => assert!(matches!(typed.parts[0], tinychannels_bus::OutboundContentPart::Voice { voice: tinychannels_bus::OutboundVoice::Synthesize { .. } })),
+            4 => assert!(matches!(typed.parts[0], tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::File { .. } })),
+            5 => assert!(matches!(typed.parts[0], tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Poll { .. } })),
+            6 => assert!(matches!(typed.parts[0], tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Presentation { .. } })),
+            7 => assert!(matches!(typed.parts[0], tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Native { .. } })),
+            _ => unreachable!(),
+        }
     }
     channels.shutdown().await.unwrap();
     host.shutdown().await.unwrap();
