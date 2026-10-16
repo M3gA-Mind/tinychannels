@@ -214,13 +214,15 @@ fn inbound_envelope_keeps_chat_channel_and_legacy_identity_fallbacks() {
         "message": {
             "message_id": 7,
             "chat": {"type":"channel"},
-            "sender_chat": {"id": 9001}
+            "sender_chat": {"id": 9001},
+            "reply_to_message": {"message_id": 3}
         }
     });
     let channel = TelegramChannel::inbound_envelope_from_update(&channel_update, &legacy);
     assert_eq!(channel.conversation.kind, tinychannels_bus::ConversationKind::Channel);
     assert_eq!(channel.conversation.id, "-100");
     assert_eq!(channel.sender.id, "9001");
+    assert_eq!(channel.reply_to_id.as_deref(), Some("3"));
     assert_eq!(channel.sender.name.as_deref(), Some("Legacy display"));
 
     let unknown_update = serde_json::json!({

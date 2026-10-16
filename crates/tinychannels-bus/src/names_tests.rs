@@ -55,6 +55,7 @@ fn every_declared_member_appears_in_its_method_table() {
         host_methods::PUBLISH_EVENT,
         host_methods::DISPATCH_CONTROLLER_BACKEND,
         host_methods::PROCESS_INBOUND,
+        host_methods::DELIVER_EVENT,
     ] {
         assert!(HOST_METHODS.contains(&m), "{m} missing from HOST_METHODS");
     }
