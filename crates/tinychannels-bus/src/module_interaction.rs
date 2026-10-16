@@ -57,6 +57,7 @@ pub struct ChannelInteractionInfo {
 /// Result of a provider interaction.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)] // Info carries the canonical descriptor unchanged over TinyBus.
 pub enum ChannelInteractionResult {
     Completed,
     Draft(Option<String>),
