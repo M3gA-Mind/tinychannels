@@ -257,7 +257,10 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         .call_confidential(methods::EXECUTE_REMOTE, request)
         .await
         .unwrap();
-    assert!(remote.reply.unwrap().contains("Remote control:"));
+    assert_eq!(
+        remote.reply, None,
+        "an unconfigured channel has no remote-control capability"
+    );
     let _: RemoteOperationResult = first_client
         .call_confidential(
             methods::EXECUTE_REMOTE,
