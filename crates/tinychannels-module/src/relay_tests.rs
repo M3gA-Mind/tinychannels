@@ -265,22 +265,37 @@ async fn v2_reconnect_waits_for_each_configured_identity_before_publishing_conne
         }
     });
     let identities = vec![
-        RelayRuntimeIdentityConfig { platform: "telegram".into(), bot_id: "first".into() },
-        RelayRuntimeIdentityConfig { platform: "telegram".into(), bot_id: "second".into() },
+        RelayRuntimeIdentityConfig {
+            platform: "telegram".into(),
+            bot_id: "first".into(),
+        },
+        RelayRuntimeIdentityConfig {
+            platform: "telegram".into(),
+            bot_id: "second".into(),
+        },
     ];
     let reservation = manager.reserve().await.unwrap();
     let config = RelayRuntimeConfig {
         url,
         identities,
-        reconnect: RelayReconnectPolicy { backoff_ms: 10, max_backoff_ms: 50 },
+        reconnect: RelayReconnectPolicy {
+            backoff_ms: 10,
+            max_backoff_ms: 50,
+        },
         ..Default::default()
     };
     let initial = manager.start_v2(reservation.clone(), config).await.unwrap();
     assert_eq!(initial.instances.len(), 2);
     partial_seen.await.unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
-    assert_eq!(manager.status(reservation.clone()).await.unwrap().state, RelayPhase::Reconnecting);
-    assert_eq!(manager.capabilities_v2(reservation.clone()).await.unwrap(), None);
+    assert_eq!(
+        manager.status(reservation.clone()).await.unwrap().state,
+        RelayPhase::Reconnecting
+    );
+    assert_eq!(
+        manager.capabilities_v2(reservation.clone()).await.unwrap(),
+        None
+    );
 
     release_final.send(()).unwrap();
     tokio::time::timeout(Duration::from_secs(2), async {
@@ -293,10 +308,17 @@ async fn v2_reconnect_waits_for_each_configured_identity_before_publishing_conne
     })
     .await
     .expect("all configured identities reconnect");
-    let refreshed = manager.capabilities_v2(reservation.clone()).await.unwrap().unwrap();
+    let refreshed = manager
+        .capabilities_v2(reservation.clone())
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(refreshed.instances.len(), 2);
-    let ids: std::collections::BTreeSet<_> = refreshed.instances.iter()
-        .map(|instance| instance.bot_id.as_str()).collect();
+    let ids: std::collections::BTreeSet<_> = refreshed
+        .instances
+        .iter()
+        .map(|instance| instance.bot_id.as_str())
+        .collect();
     assert_eq!(ids, ["first", "second"].into_iter().collect());
     manager.stop(reservation).await.unwrap();
     peer.await.unwrap();
@@ -312,8 +334,12 @@ async fn send_v2_descriptor(
         bot_id: bot_id.into(),
         capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
     };
-    stream.send(Message::Text(format!("{}\n", serde_json::to_string(&frame).unwrap()).into()))
-        .await.unwrap();
+    stream
+        .send(Message::Text(
+            format!("{}\n", serde_json::to_string(&frame).unwrap()).into(),
+        ))
+        .await
+        .unwrap();
 }
 
 #[tokio::test]

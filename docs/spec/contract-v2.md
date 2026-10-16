@@ -232,7 +232,7 @@ same DTO. The legacy relay v1 descriptor remains a frozen wire projection:
 | Field | Meaning |
 | --- | --- |
 | content.parts | Supported ContentPart kinds: text, image, video, audio, file, voice_note, sticker, location, contact, buttons, poll, presentation, native. |
-| markdownDialects | Accepted/emitted markup dialects for text parts. |
+| text.markdownDialects | Accepted/emitted markup dialects for text parts. |
 | voiceIn | Whether voice notes are accepted; acceptedCodecs, maxDurationMs, maxSizeBytes, normalizedWaveform, nativeWaveform, and transcriptSources (provider/host_stt). |
 | voiceOut | Whether Voice media and Voice synthesize are supported; acceptedCodecs, maxDurationMs, maxSizeBytes, normalizedWaveform, nativeWaveform, available voice identifiers, and synthesis support. |
 | events | Supported normalized event types: stream_open/delta/finalize, inbound message, edit/delete, inbound/outbound reaction, read/delivered receipt, presence, typing, lifecycle, delivery_status, approval, tool_progress, subagent, usage, artifact, queue, suggestion. |
