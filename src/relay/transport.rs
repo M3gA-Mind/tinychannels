@@ -34,12 +34,13 @@ impl RelayTransport {
         io: Arc<dyn RelayFrameIo>,
         timeouts: RelayTransportTimeouts,
     ) -> Self {
+        let configured_identities = identities.iter().cloned().collect();
         Self {
             identities,
             io: RwLock::new(io),
             timeouts,
             state: Arc::new(RelayTransportState {
-                configured_identities: identities.iter().cloned().collect(),
+                configured_identities,
                 ..RelayTransportState::default()
             }),
             reader: Mutex::new(None),
