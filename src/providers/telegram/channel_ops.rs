@@ -550,6 +550,19 @@ Ensure only one `openhuman` process is using this bot token."
                                 thread_id: reaction.thread_id.clone(),
                                 ..Default::default()
                             };
+                            let reaction_kind = if reaction.added {
+                                tinychannels_bus::ChannelEventKind::ReactionAdded {
+                                    message_id: reaction.target_message_id.clone(),
+                                    actor: tinychannels_bus::SenderRef { id: reaction.sender_id.clone(), name: Some(reaction.sender.clone()), ..Default::default() },
+                                    reaction: tinychannels_bus::ChannelReaction { value: reaction.emoji.clone(), custom_emoji_id: None },
+                                }
+                            } else {
+                                tinychannels_bus::ChannelEventKind::ReactionRemoved {
+                                    message_id: reaction.target_message_id.clone(),
+                                    actor: tinychannels_bus::SenderRef { id: reaction.sender_id.clone(), name: Some(reaction.sender.clone()), ..Default::default() },
+                                    reaction: tinychannels_bus::ChannelReaction { value: reaction.emoji.clone(), custom_emoji_id: None },
+                                }
+                            };
                             let event = tinychannels_bus::ChannelEvent {
                                 version: 2,
                                 event_id: source_id
@@ -571,19 +584,7 @@ Ensure only one `openhuman` process is using this bot token."
                                     account_id: None,
                                 },
                                 conversation: Some(conversation),
-                                event: tinychannels_bus::ChannelEventKind::Reaction {
-                                    added: reaction.added,
-                                    message_id: reaction.target_message_id.clone(),
-                                    actor: tinychannels_bus::SenderRef {
-                                        id: reaction.sender_id,
-                                        name: Some(reaction.sender),
-                                        ..Default::default()
-                                    },
-                                    reaction: tinychannels_bus::ChannelReaction {
-                                        value: reaction.emoji,
-                                        custom_emoji_id: None,
-                                    },
-                                },
+                                event: reaction_kind,
                             };
                             if let Err(error) = events.publish_channel_event(event).await {
                                 tracing::debug!(%error, "failed to deliver Telegram reaction event");

@@ -519,8 +519,7 @@ async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
             thread_id: Some("thread-9".into()),
             scope_id: Some("scope-1".into()),
         }),
-        event: tinychannels_bus::ChannelEventKind::Reaction {
-            added: true,
+        event: tinychannels_bus::ChannelEventKind::ReactionAdded {
             message_id: "msg-22".into(),
             actor: tinychannels_bus::SenderRef {
                 id: "actor-3".into(),

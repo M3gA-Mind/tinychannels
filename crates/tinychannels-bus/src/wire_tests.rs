@@ -70,8 +70,7 @@ fn channel_events_round_trip_with_discriminator_source_and_full_address() {
             thread_id: Some("thread".into()),
             topic_id: Some("topic".into()),
         }),
-        event: ChannelEventKind::Reaction {
-            added: false,
+        event: ChannelEventKind::ReactionRemoved {
             message_id: "message".into(),
             actor: SenderRef {
                 id: "actor".into(),
