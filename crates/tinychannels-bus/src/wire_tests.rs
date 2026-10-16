@@ -58,7 +58,10 @@ fn channel_events_round_trip_with_discriminator_source_and_full_address() {
         event_id: "telegram:update:7".into(),
         source_event_id: Some("7".into()),
         source_timestamp: Some(1234),
-        channel: ChannelRef { id: "telegram".into(), account_id: Some("bot".into()) },
+        channel: ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("bot".into()),
+        },
         conversation: Some(ConversationRef {
             kind: ConversationKind::Group,
             id: "chat".into(),
@@ -70,8 +73,14 @@ fn channel_events_round_trip_with_discriminator_source_and_full_address() {
         event: ChannelEventKind::Reaction {
             added: false,
             message_id: "message".into(),
-            actor: SenderRef { id: "actor".into(), ..Default::default() },
-            reaction: ChannelReaction { value: "🔥".into(), custom_emoji_id: Some("emoji-1".into()) },
+            actor: SenderRef {
+                id: "actor".into(),
+                ..Default::default()
+            },
+            reaction: ChannelReaction {
+                value: "🔥".into(),
+                custom_emoji_id: Some("emoji-1".into()),
+            },
         },
     };
     let wire = serde_json::to_value(&event).unwrap();

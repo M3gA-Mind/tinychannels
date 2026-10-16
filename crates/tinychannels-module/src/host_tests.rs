@@ -45,7 +45,10 @@ impl Callback {
         if consume_failure(&self.event_failures) {
             return Err(tinybus::Error::failed("fixture event failure"));
         }
-        self.events.lock().await.push(format!("typed_event:{}", event.event_id));
+        self.events
+            .lock()
+            .await
+            .push(format!("typed_event:{}", event.event_id));
         Ok(())
     }
 
@@ -504,7 +507,10 @@ async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
         event_id: "telegram:update:44".into(),
         source_event_id: Some("44".into()),
         source_timestamp: Some(1_700_000_000_000),
-        channel: tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: Some("bot-7".into()) },
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("bot-7".into()),
+        },
         conversation: Some(tinychannels_bus::ConversationRef {
             kind: tinychannels_bus::ConversationKind::Group,
             id: "-10042".into(),
@@ -516,12 +522,21 @@ async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
         event: tinychannels_bus::ChannelEventKind::Reaction {
             added: true,
             message_id: "msg-22".into(),
-            actor: tinychannels_bus::SenderRef { id: "actor-3".into(), ..Default::default() },
-            reaction: tinychannels_bus::ChannelReaction { value: "🔥".into(), custom_emoji_id: None },
+            actor: tinychannels_bus::SenderRef {
+                id: "actor-3".into(),
+                ..Default::default()
+            },
+            reaction: tinychannels_bus::ChannelReaction {
+                value: "🔥".into(),
+                custom_emoji_id: None,
+            },
         },
     };
     host.deliver_event(event.clone()).await.unwrap();
-    assert_eq!(callback.events.lock().await.as_slice(), ["typed_event:telegram:update:44"]);
+    assert_eq!(
+        callback.events.lock().await.as_slice(),
+        ["typed_event:telegram:update:44"]
+    );
     host.shutdown().await.unwrap();
 }
 

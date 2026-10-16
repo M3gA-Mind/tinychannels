@@ -241,8 +241,14 @@ impl tinychannels::host::EventSink for ModuleEvents {
             .map_err(|error| anyhow::anyhow!(error.to_string()))
     }
 
-    async fn publish_channel_event(&self, event: tinychannels_bus::ChannelEvent) -> anyhow::Result<()> {
-        self.0.deliver_event(event).await.map_err(|error| anyhow::anyhow!(error.to_string()))
+    async fn publish_channel_event(
+        &self,
+        event: tinychannels_bus::ChannelEvent,
+    ) -> anyhow::Result<()> {
+        self.0
+            .deliver_event(event)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
     }
 }
 

@@ -70,8 +70,12 @@ pub fn create_message_receipt_from_outbound_results(
             index: result_index,
             thread_id: thread_id.clone(),
             reply_to_id: reply_to_id.clone(),
-            edit_token: supports_message_operations.then(|| result.message_id.clone()).flatten(),
-            delete_token: supports_message_operations.then(|| result.message_id.clone()).flatten(),
+            edit_token: supports_message_operations
+                .then(|| result.message_id.clone())
+                .flatten(),
+            delete_token: supports_message_operations
+                .then(|| result.message_id.clone())
+                .flatten(),
             raw: Some(result.clone()),
         });
     }

@@ -474,17 +474,37 @@ Ensure only one `openhuman` process is using this bot token."
                             };
                             let event = tinychannels_bus::ChannelEvent {
                                 version: 2,
-                                event_id: source_id.as_ref().map(|id| format!("telegram:update:{id}"))
-                                    .unwrap_or_else(|| format!("telegram:reaction:{}:{}:{}:{}", reaction.reply_target, reaction.target_message_id, reaction.sender_id, reaction.emoji)),
+                                event_id: source_id
+                                    .as_ref()
+                                    .map(|id| format!("telegram:update:{id}"))
+                                    .unwrap_or_else(|| {
+                                        format!(
+                                            "telegram:reaction:{}:{}:{}:{}",
+                                            reaction.reply_target,
+                                            reaction.target_message_id,
+                                            reaction.sender_id,
+                                            reaction.emoji
+                                        )
+                                    }),
                                 source_event_id: source_id,
                                 source_timestamp: reaction.timestamp,
-                                channel: tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None },
+                                channel: tinychannels_bus::ChannelRef {
+                                    id: "telegram".into(),
+                                    account_id: None,
+                                },
                                 conversation: Some(conversation),
                                 event: tinychannels_bus::ChannelEventKind::Reaction {
                                     added: reaction.added,
                                     message_id: reaction.target_message_id.clone(),
-                                    actor: tinychannels_bus::SenderRef { id: reaction.sender_id, name: Some(reaction.sender), ..Default::default() },
-                                    reaction: tinychannels_bus::ChannelReaction { value: reaction.emoji, custom_emoji_id: None },
+                                    actor: tinychannels_bus::SenderRef {
+                                        id: reaction.sender_id,
+                                        name: Some(reaction.sender),
+                                        ..Default::default()
+                                    },
+                                    reaction: tinychannels_bus::ChannelReaction {
+                                        value: reaction.emoji,
+                                        custom_emoji_id: None,
+                                    },
                                 },
                             };
                             if let Err(error) = events.publish_channel_event(event).await {
@@ -500,15 +520,29 @@ Ensure only one `openhuman` process is using this bot token."
                     if let Some(edited) = update.get("edited_message") {
                         if let Some(message) = self.parse_update_message(update) {
                             if let Some(events) = &self.events {
-                                let source_id = update.get("update_id").and_then(serde_json::Value::as_i64).map(|id| id.to_string());
-                                let thread_id = edited.get("message_thread_id").and_then(serde_json::Value::as_i64).map(|id| id.to_string());
+                                let source_id = update
+                                    .get("update_id")
+                                    .and_then(serde_json::Value::as_i64)
+                                    .map(|id| id.to_string());
+                                let thread_id = edited
+                                    .get("message_thread_id")
+                                    .and_then(serde_json::Value::as_i64)
+                                    .map(|id| id.to_string());
                                 let event = tinychannels_bus::ChannelEvent {
                                     version: 2,
-                                    event_id: source_id.as_ref().map(|id| format!("telegram:update:{id}"))
+                                    event_id: source_id
+                                        .as_ref()
+                                        .map(|id| format!("telegram:update:{id}"))
                                         .unwrap_or_else(|| format!("telegram:edit:{}", message.id)),
                                     source_event_id: source_id,
-                                    source_timestamp: edited.get("edit_date").and_then(serde_json::Value::as_u64).map(|seconds| seconds.saturating_mul(1000)),
-                                    channel: tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None },
+                                    source_timestamp: edited
+                                        .get("edit_date")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .map(|seconds| seconds.saturating_mul(1000)),
+                                    channel: tinychannels_bus::ChannelRef {
+                                        id: "telegram".into(),
+                                        account_id: None,
+                                    },
                                     conversation: Some(tinychannels_bus::ConversationRef {
                                         kind: tinychannels_bus::ConversationKind::Unknown,
                                         id: message.reply_target.clone(),
@@ -517,7 +551,10 @@ Ensure only one `openhuman` process is using this bot token."
                                     }),
                                     event: tinychannels_bus::ChannelEventKind::MessageUpdated {
                                         message_id: message.id,
-                                        parts: vec![tinychannels_bus::ContentPart::Text { text: message.content, markdown_dialect: None }],
+                                        parts: vec![tinychannels_bus::ContentPart::Text {
+                                            text: message.content,
+                                            markdown_dialect: None,
+                                        }],
                                     },
                                 };
                                 if let Err(error) = events.publish_channel_event(event).await {

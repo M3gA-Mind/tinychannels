@@ -46,12 +46,11 @@ pub use capabilities::{
     MarkdownDialect, TextCapabilities, VoiceCapabilities, provider_id,
 };
 pub use channel::{
-    ButtonAction, ButtonStyle, ChannelEvent, ChannelEventKind, ChannelReaction,
-    ChannelReceiptKind, ChannelInboundEnvelope, ChannelOutboundIntent,
-    ChannelOutboundMessage, ChannelRef, ContactMethod, ContentPart, ConversationKind,
-    ConversationRef, DeliveryDurability, MediaKind, MediaReference, OutboundContentPart,
-    OutboundPayload, OutboundVoice, SenderRef, VoiceNote, VoiceTranscript, VoiceTranscriptSource,
-    VoiceTranscriptState,
+    ButtonAction, ButtonStyle, ChannelEvent, ChannelEventKind, ChannelInboundEnvelope,
+    ChannelOutboundIntent, ChannelOutboundMessage, ChannelReaction, ChannelReceiptKind, ChannelRef,
+    ContactMethod, ContentPart, ConversationKind, ConversationRef, DeliveryDurability, MediaKind,
+    MediaReference, OutboundContentPart, OutboundPayload, OutboundVoice, SenderRef, VoiceNote,
+    VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
 };
 pub use config::ChannelsConfig;
 pub use controllers::{ChannelAuthMode, ChannelDefinition};

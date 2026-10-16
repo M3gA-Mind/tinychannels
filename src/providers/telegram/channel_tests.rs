@@ -1687,7 +1687,9 @@ fn parse_update_reaction_identifies_removed_reactions() {
             "new_reaction": []
         }
     });
-    let parsed = ch.parse_update_reaction(&update).expect("removal event is preserved");
+    let parsed = ch
+        .parse_update_reaction(&update)
+        .expect("removal event is preserved");
     assert!(!parsed.added);
     assert_eq!(parsed.emoji, "👍");
 }

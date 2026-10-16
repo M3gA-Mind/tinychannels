@@ -211,7 +211,10 @@ pub trait EventSink: Send + Sync {
     ) -> anyhow::Result<()> {
         let kind = match &event.event {
             tinychannels_bus::ChannelEventKind::Typing { .. } => "typing",
-            tinychannels_bus::ChannelEventKind::Receipt { kind: tinychannels_bus::ChannelReceiptKind::Read, .. } => "read_receipt",
+            tinychannels_bus::ChannelEventKind::Receipt {
+                kind: tinychannels_bus::ChannelReceiptKind::Read,
+                ..
+            } => "read_receipt",
             tinychannels_bus::ChannelEventKind::Receipt { .. } => "delivered_receipt",
             tinychannels_bus::ChannelEventKind::Reaction { added: true, .. } => "reaction_added",
             tinychannels_bus::ChannelEventKind::Reaction { .. } => "reaction_removed",
@@ -221,7 +224,8 @@ pub trait EventSink: Send + Sync {
             tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
             tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
         };
-        self.publish("channel", kind, serde_json::to_value(event)?).await
+        self.publish("channel", kind, serde_json::to_value(event)?)
+            .await
     }
 }
 

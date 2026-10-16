@@ -49,10 +49,10 @@
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use tinybus::{Connection, Error, Result};
+use tinychannels_bus::ChannelEvent;
 use tinychannels_bus::names::{HOST_BUS_NAME, HOST_OBJECT_PATH, host_methods};
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
 use tinychannels_bus::{HostEventPublication, HostTranscriptionRequest, HostTranscriptionResult};
-use tinychannels_bus::ChannelEvent;
 use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
@@ -246,9 +246,14 @@ impl HostChannels {
                 }
                 if let Notification::DeliverEvent { event, reply } = notification {
                     let result = async {
-                        let proxy = callback_connection.proxy(HOST_BUS_NAME, callback_path.as_ref(), HOST_BUS_NAME)?;
+                        let proxy = callback_connection.proxy(
+                            HOST_BUS_NAME,
+                            callback_path.as_ref(),
+                            HOST_BUS_NAME,
+                        )?;
                         proxy.call::<()>(host_methods::DELIVER_EVENT, event).await
-                    }.await;
+                    }
+                    .await;
                     let _ = reply.send(result);
                     continue;
                 }
@@ -454,10 +459,13 @@ impl HostChannels {
         if self.owner.terminal.load(Ordering::SeqCst) {
             return Err(Error::failed("callback consumer is closed"));
         }
-        self.outbox.send(Notification::DeliverEvent { event, reply }).await
+        self.outbox
+            .send(Notification::DeliverEvent { event, reply })
+            .await
             .map_err(|_| Error::failed("callback consumer is closed"))?;
         drop(_publication);
-        wait.await.map_err(|_| Error::failed("event delivery was interrupted"))?
+        wait.await
+            .map_err(|_| Error::failed("event delivery was interrupted"))?
     }
 
     /// Enqueue one inbound message; a flush observes delivery failures.
