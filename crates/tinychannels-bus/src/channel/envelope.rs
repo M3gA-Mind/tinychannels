@@ -201,6 +201,8 @@ pub struct InboundMediaPayload {
 pub struct ChannelInboundEnvelope {
     pub channel: ChannelRef,
     pub message_id: String,
+    /// Provider source message referenced by this reply, when available.
+    pub reply_to_id: Option<String>,
     pub conversation: ConversationRef,
     pub sender: SenderRef,
     pub text: String,

@@ -19,6 +19,9 @@ pub struct ChannelMessage {
     /// Platform thread identifier (e.g. Slack `ts`, Discord thread ID).
     /// When set, replies should be posted as threaded responses.
     pub thread_ts: Option<String>,
+    /// Independent provider topic identifier where supported.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "topicId")]
+    pub topic_id: Option<String>,
     /// The sender's display name as the platform gives it (WhatsApp push
     /// name, Telegram first and last name, Signal profile name, ...). Never
     /// a saved contact name: no channel exposes one. `None` when the
@@ -54,6 +57,7 @@ impl SendMessage {
             recipient: recipient.into(),
             subject: None,
             thread_ts: None,
+            topic_id: None,
             reply_to_id: None,
             idempotency_key: None,
         }
@@ -70,6 +74,7 @@ impl SendMessage {
             recipient: recipient.into(),
             subject: Some(subject.into()),
             thread_ts: None,
+            topic_id: None,
             reply_to_id: None,
             idempotency_key: None,
         }

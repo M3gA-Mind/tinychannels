@@ -1,6 +1,7 @@
 //! Outbound channel intent types.
 
 use crate::channel::envelope::{ContentPart, MediaReference};
+use crate::channel::types::{ChannelRef, ConversationRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -73,6 +74,12 @@ pub enum OutboundContentPart {
 pub struct ChannelOutboundMessage {
     pub channel_id: String,
     pub conversation_id: String,
+    /// Full account address when supplied by a v22 caller.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_ref: Option<ChannelRef>,
+    /// Full conversation address, including independent thread and topic IDs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_ref: Option<ConversationRef>,
     pub reply_to_id: Option<String>,
     pub thread_id: Option<String>,
     pub idempotency_key: String,
@@ -149,8 +156,20 @@ impl ChannelOutboundMessage {
         Self {
             channel_id: intent.channel_id.clone(),
             conversation_id: intent.conversation_id.clone(),
+            channel_ref: intent.channel_ref.clone(),
+            conversation_ref: intent.conversation_ref.clone().map(|mut reference| {
+                if reference.thread_id.is_none() {
+                    reference.thread_id.clone_from(&intent.thread_id);
+                }
+                reference
+            }),
             reply_to_id: intent.reply_to_id.clone(),
-            thread_id: intent.thread_id.clone(),
+            thread_id: intent.thread_id.clone().or_else(|| {
+                intent
+                    .conversation_ref
+                    .as_ref()
+                    .and_then(|reference| reference.thread_id.clone())
+            }),
             idempotency_key: intent.idempotency_key.clone(),
             parts,
         }
@@ -179,6 +198,8 @@ impl ChannelOutboundMessage {
         Self {
             channel_id: channel_id.into(),
             conversation_id: message.recipient.clone(),
+            channel_ref: None,
+            conversation_ref: None,
             reply_to_id: message.reply_to_id.clone(),
             thread_id: message.thread_ts.clone(),
             idempotency_key: message.idempotency_key.clone().unwrap_or_default(),
@@ -211,6 +232,12 @@ pub struct ChannelOutboundIntent {
     pub idempotency_key: String,
     pub channel_id: String,
     pub conversation_id: String,
+    /// Optional lossless account address for v22 callers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_ref: Option<ChannelRef>,
+    /// Optional lossless conversation scope for v22 callers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_ref: Option<ConversationRef>,
     pub reply_to_id: Option<String>,
     pub thread_id: Option<String>,
     pub durability: DeliveryDurability,
@@ -223,6 +250,8 @@ impl Default for ChannelOutboundIntent {
             idempotency_key: String::new(),
             channel_id: String::new(),
             conversation_id: String::new(),
+            channel_ref: None,
+            conversation_ref: None,
             reply_to_id: None,
             thread_id: None,
             durability: DeliveryDurability::BestEffort,
