@@ -414,6 +414,67 @@ async fn accepted_request_disconnect_remains_ambiguous() {
 }
 
 #[tokio::test]
+async fn fallback_connection_refusal_after_markdown_rejection_is_not_sent() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let first_request = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = socket.read(&mut buffer).await.unwrap();
+            if count == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or_default();
+            if bytes.len() >= header_end + 4 + content_length {
+                let body = br#"{"description":"Bad Request: can't parse entities"}"#;
+                socket
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                socket.write_all(body).await.unwrap();
+                return bytes;
+            }
+        }
+        bytes
+    });
+    let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    ch.api_base = format!("http://{address}");
+
+    let outcome = ch
+        .send_typed_with_receipt(&typed_text("fallback-refused", "hello".into()))
+        .await
+        .unwrap();
+    let request = first_request.await.unwrap();
+    assert!(request.windows(10).any(|window| window == b"parse_mode"));
+    let error = outcome.error.expect("fallback connection is refused");
+    assert!(!error.sent_before_error);
+    assert!(outcome.receipt.platform_message_ids.is_empty());
+}
+
+#[tokio::test]
 async fn update_draft_edits_message_and_records_edit_time() {
     let server = mock_api().await;
     mount_post(&server, "editMessageText", ok()).await;

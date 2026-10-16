@@ -261,13 +261,14 @@ impl TelegramChannel {
                 .json(&plain_body)
                 .send()
                 .await
-                .map_err(|_error| {
+                .map_err(|error| {
                     tracing::debug!("Telegram sendMessage fallback transport failed");
+                    let definitely_not_sent = error.is_connect();
                     partial_text_send_error(
                         message_ids.clone(),
                         "Telegram sendMessage request failed".into(),
                         true,
-                        true,
+                        !definitely_not_sent,
                     )
                 })?;
 
