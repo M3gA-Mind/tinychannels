@@ -76,32 +76,6 @@ impl tinychannels::Channel for CaptureChannel {
 
 struct CaptureTypedChannel(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelOutboundMessage>);
 
-struct DescribeFixtureChannel {
-    draft_updates: bool,
-}
-
-#[async_trait::async_trait]
-impl tinychannels::Channel for DescribeFixtureChannel {
-    fn name(&self) -> &str {
-        "same-provider"
-    }
-
-    fn supports_draft_updates(&self) -> bool {
-        self.draft_updates
-    }
-
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        std::future::pending().await
-    }
-}
-
 #[async_trait::async_trait]
 impl tinychannels::Channel for CaptureTypedChannel {
     fn name(&self) -> &str {
