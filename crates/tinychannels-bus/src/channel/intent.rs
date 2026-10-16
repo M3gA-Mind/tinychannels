@@ -58,6 +58,10 @@ pub enum OutboundPayload {
 }
 
 #[derive(Deserialize)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the compatibility wire enum preserves the public unboxed payload shape"
+)]
 #[serde(
     tag = "kind",
     rename_all = "snake_case",
