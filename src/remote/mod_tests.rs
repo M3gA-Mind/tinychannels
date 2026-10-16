@@ -337,7 +337,7 @@ async fn corrupt_legacy_file_is_skipped_instead_of_failing() {
     let sessions = store();
     assert_eq!(sessions.adopt_legacy(dir.path()).await.unwrap(), 0);
     assert!(sessions.binding("telegram", "x").await.unwrap().is_none());
-    assert_eq!(chat_key("slack", "C1"), "slack:C1");
+    assert_eq!(chat_key("slack", "C1"), "slack/C1");
 }
 
 #[tokio::test]
