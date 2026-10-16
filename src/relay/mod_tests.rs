@@ -565,7 +565,7 @@ async fn relay_transport_connect_sends_hello_and_handshake_reads_descriptor() {
     let io = Arc::new(MemoryRelayIo::default());
     let transport = discord_transport(io.clone());
 
-    transport.connect_v2().await.expect("connect v2");
+    transport.connect().await.expect("connect");
     assert_eq!(
         io.sent(),
         vec![GatewayToConnectorFrame::Hello {
@@ -601,7 +601,7 @@ async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
         io.clone(),
         short_relay_timeouts(),
     ));
-    transport.connect().await.expect("connect");
+    transport.connect_v2().await.expect("connect v2");
     let negotiation = {
         let transport = transport.clone();
         tokio::spawn(async move { transport.negotiate_v2().await })
