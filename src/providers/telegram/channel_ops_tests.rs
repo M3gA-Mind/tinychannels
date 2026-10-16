@@ -607,14 +607,6 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         5,
         updates(serde_json::json!([
             {
-                "update_id": 15,
-                "message_reaction": {
-                    "chat": { "id": 100 }, "message_id": 5, "message_thread_id": 88,
-                    "user": { "id": 7, "username": "alice" },
-                    "new_reaction": [{ "type": "emoji", "emoji": "❤" }]
-                }
-            },
-            {
                 "update_id": 11,
                 "message": {
                     "message_id": 5, "chat": { "id": 100, "type": "private" },
@@ -644,6 +636,14 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
                     "message_id": 5, "edit_date": 1235,
                     "chat": { "id": 100, "type": "supergroup" },
                     "from": { "id": 8, "username": "mallory" }, "text": "unauthorized edit"
+                }
+            },
+            {
+                "update_id": 15,
+                "message_reaction": {
+                    "chat": { "id": 100 }, "message_id": 5, "message_thread_id": 88,
+                    "user": { "id": 7, "username": "alice" },
+                    "new_reaction": [{ "type": "emoji", "emoji": "❤" }]
                 }
             },
         ])),
