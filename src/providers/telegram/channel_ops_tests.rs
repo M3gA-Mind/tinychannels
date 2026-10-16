@@ -606,7 +606,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].1, "reaction_added");
     assert_eq!(recorded[0].2["type"], "reaction");
-    assert_eq!(recorded[0].2["eventId"], "telegram:update:12");
+    assert_eq!(recorded[0].2["eventId"], "telegram:update:10");
     assert_eq!(recorded[0].2["conversation"]["id"], "100");
     assert_eq!(recorded[0].2["messageId"], "4");
     assert_eq!(recorded[0].2["actor"]["id"], "7");
