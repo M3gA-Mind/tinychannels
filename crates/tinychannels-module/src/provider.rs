@@ -471,7 +471,7 @@ impl Running {
                                                 .and_then(|r| r.thread_id.clone())
                                         });
                                 }
-                                tinychannels_bus::ChannelInteractionResult::Sent(outcome)
+                                tinychannels_bus::ChannelInteractionResult::Sent(Box::new(outcome))
                             })
                             .map_err(|error| Error::failed(error.to_string())),
                         ProviderOperation::Interaction(interaction) => {
@@ -534,7 +534,7 @@ impl Running {
         message: tinychannels_bus::ChannelOutboundMessage,
     ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, RunningSendError> {
         match self.submit(ProviderOperation::SendTyped(message)).await? {
-            tinychannels_bus::ChannelInteractionResult::Sent(receipt) => Ok(receipt),
+            tinychannels_bus::ChannelInteractionResult::Sent(receipt) => Ok(*receipt),
             _ => Err(RunningSendError::AfterDispatch(
                 "typed send returned no receipt".into(),
             )),
