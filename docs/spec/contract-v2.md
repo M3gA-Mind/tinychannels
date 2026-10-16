@@ -121,11 +121,13 @@ ChannelInboundEnvelope contains:
 | raw | Optional provider payload for diagnostics/adaptation; private data must be redacted before logging. |
 | timestamp | Optional source timestamp in Unix milliseconds. |
 
-The legacy implementation has a top-level text and media vector. During
-migration, producers populate both parts and those legacy projections when
-they can represent the same content. The canonical v2 representation is parts;
-consumers prefer it whenever present and must not concatenate it with the
-projections.
+The legacy implementation has a top-level text and media vector. The v21
+compatibility shim projects text parts by joining their text values in order
+with one U+000A LINE FEED between adjacent text parts. It does not trim or
+escape text. Non-text parts are not included in text; a send containing
+non-text content must fail as unsupported unless the caller explicitly chose a
+fallback before conversion. The canonical v22 representation is parts; never
+concatenate both forms in one consumer.
 
 access records dmDecision (allow, pairing, deny), groupPolicy (open,
 allowlist, disabled), mentionGate (explicit mention, bot reply, thread
@@ -142,10 +144,12 @@ durable queue must accept the request before provider send; providers must not
 claim durable acceptance themselves.
 
 Session keys derive from namespace, channel, account, conversation kind,
-scope, conversation, thread, and optionally participant according to explicit
-session policy. Keep scope and topic distinct. A migration must preserve the
-existing key lookup path; do not switch identities by selecting recent files or
-inventing timestamps.
+scope, conversation, topic, thread, and optionally participant according to
+explicit session policy. Include topic_id and thread_id as distinct segments
+when present; a topic-only address remains distinct when thread_id is absent.
+When both are present, include both in that order. Keep scope, topic and thread
+distinct. A migration must preserve the existing key lookup path; do not switch
+identities by selecting recent files or inventing timestamps.
 
 ## Events and delivery receipts
 

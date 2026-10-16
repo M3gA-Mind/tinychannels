@@ -1,5 +1,10 @@
 # Goal
 
+> **Historical prompt:** this phase-by-phase plan is superseded by
+> [docs/spec/contract-v2.md](docs/spec/contract-v2.md). Do not execute the
+> phases below as the current implementation plan; use v2 as the contract and
+> obtain an updated implementation task before changing code.
+
 Implement the TinyChannels channel layer described in
 `docs/spec/tinychannels-execution-plan.md`, phase by phase, and integrate it
 into OpenHuman per `../openhuman-4/docs/plans/tinychannels-integration.md`.
