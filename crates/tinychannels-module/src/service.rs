@@ -792,7 +792,7 @@ impl Channels {
                 })?
         };
         entry
-            .send(
+            .send_typed(
                 tinychannels_bus::ChannelOutboundMessage::from_intent(&intent),
             )
             .await
@@ -1198,7 +1198,9 @@ fn intent_to_legacy_message(
     intent: &ChannelOutboundIntent,
 ) -> Result<SendMessage, serde_json::Error> {
     let typed = tinychannels_bus::ChannelOutboundMessage::from_intent(intent);
-    let content = typed.legacy_text().map_err(|error| <serde_json::Error as serde::ser::Error>::custom(error.to_string()))?;
+    let content = typed.legacy_text().map_err(|error| {
+        serde_json::Error::io(std::io::Error::other(error.to_string()))
+    })?;
     Ok(SendMessage {
         content,
         recipient: intent.conversation_id.clone(),
