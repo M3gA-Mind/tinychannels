@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 use tinybus::{Error, Result};
 use tinychannels::config::RelayRuntimeConfigExt as _;
 use tinychannels::relay::{
-    CapabilityDescriptor, RelayFrameDialer, RelayInboundHandler, RelayTransport,
-    RelayIdentity, RelayTransportError, WebSocketRelayConfig, WebSocketRelayDialer,
+    CapabilityDescriptor, RelayFrameDialer, RelayIdentity, RelayInboundHandler, RelayTransport,
+    RelayTransportError, WebSocketRelayConfig, WebSocketRelayDialer,
 };
 use tinychannels_bus::config::RelayRuntimeConfig;
 use tinychannels_bus::controllers::ChannelSendMessageResult;
@@ -432,7 +432,10 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels, v2
                     let descriptors = observed_native.capabilities_v2().await;
                     v2_capabilities_complete(&expected_identities, &descriptors)
                 } {
-                    let instances = observed_native.capabilities_v2().await.into_iter()
+                    let instances = observed_native
+                        .capabilities_v2()
+                        .await
+                        .into_iter()
                         .map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 {
                             platform: identity.platform,
                             bot_id: identity.bot_id,
@@ -526,7 +529,10 @@ fn v2_capabilities_complete(
     expected: &[RelayIdentity],
     actual: &std::collections::HashMap<RelayIdentity, tinychannels_bus::ChannelCapabilities>,
 ) -> bool {
-    expected.len() == actual.len() && expected.iter().all(|identity| actual.contains_key(identity))
+    expected.len() == actual.len()
+        && expected
+            .iter()
+            .all(|identity| actual.contains_key(identity))
 }
 
 #[cfg(test)]
