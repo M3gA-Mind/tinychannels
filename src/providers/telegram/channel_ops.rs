@@ -388,7 +388,8 @@ impl Channel for TelegramChannel {
             .thread_id
             .as_deref()
             .or(conversation.topic_id.as_deref())
-            .or(message.thread_id.as_deref());
+            .or(message.thread_id.as_deref())
+            .map(str::to_owned);
         let reply_to_id = match message.reply_to_id.as_deref() {
             Some(id) => Some(id.parse::<i64>().map_err(|_| {
                 anyhow::anyhow!("Telegram reply_to_id must be a numeric message ID")
@@ -396,7 +397,7 @@ impl Channel for TelegramChannel {
             None => None,
         };
         let (ids, error) = match self
-            .send_text_chunks_with_ids(text, &conversation.id, thread_id, reply_to_id)
+            .send_text_chunks_with_ids(text, &conversation.id, thread_id.as_deref(), reply_to_id)
             .await
         {
             Ok(ids) => (ids, None),
@@ -413,7 +414,7 @@ impl Channel for TelegramChannel {
                     platform_message_id: id.clone(),
                     kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
                     index,
-                    thread_id: thread_id.map(str::to_owned),
+                thread_id: thread_id.clone(),
                     reply_to_id: message.reply_to_id.clone(),
                     edit_token: Some(id.clone()),
                     delete_token: Some(id.clone()),
@@ -436,7 +437,7 @@ impl Channel for TelegramChannel {
             primary_platform_message_id: parts.first().map(|part| part.platform_message_id.clone()),
             platform_message_ids: ids,
             parts,
-            thread_id: thread_id.map(str::to_owned),
+            thread_id,
             reply_to_id: message.reply_to_id.clone(),
             edit_token: single_part.clone(),
             delete_token: single_part,

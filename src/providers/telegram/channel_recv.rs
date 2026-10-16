@@ -1327,7 +1327,7 @@ impl TelegramChannel {
             .get("date")
             .and_then(serde_json::Value::as_u64)
             .map(|seconds| seconds.saturating_mul(1000));
-        let make = |(kind, emoji, custom): (String, String, String), added| TelegramReactionEvent {
+        let make = |(_kind, emoji, custom): (String, String, String), added| TelegramReactionEvent {
             sender: actor.clone(),
             sender_id: sender_id.clone(),
             reply_target: chat_id.clone(),
