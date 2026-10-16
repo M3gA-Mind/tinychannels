@@ -3,6 +3,20 @@
 
 use super::attachments::{TelegramAttachment, TelegramAttachmentKind, is_http_url};
 use super::channel_types::TelegramChannel;
+
+#[derive(Debug)]
+pub(crate) struct PartialTextSendError {
+    pub(crate) message_ids: Vec<String>,
+    pub(crate) error: tinychannels_bus::channel::ChannelSendError,
+}
+
+impl std::fmt::Display for PartialTextSendError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.error.message)
+    }
+}
+
+impl std::error::Error for PartialTextSendError {}
 use super::text::split_message_for_telegram;
 use reqwest::multipart::{Form, Part};
 use std::path::Path;
@@ -161,7 +175,8 @@ impl TelegramChannel {
                 .post(self.api_url("sendMessage"))
                 .json(&markdown_body)
                 .send()
-                .await?;
+                .await
+                .map_err(|error| partial_text_send_error(message_ids.clone(), error.to_string(), true))?;
 
             if markdown_resp.status().is_success() {
                 if let Some(id) = Self::telegram_result_message_id(
@@ -201,18 +216,17 @@ impl TelegramChannel {
                 .post(self.api_url("sendMessage"))
                 .json(&plain_body)
                 .send()
-                .await?;
+                .await
+                .map_err(|error| partial_text_send_error(message_ids.clone(), error.to_string(), true))?;
 
             if !plain_resp.status().is_success() {
                 let plain_status = plain_resp.status();
                 let plain_err = plain_resp.text().await.unwrap_or_default();
-                anyhow::bail!(
-                    "Telegram sendMessage failed (markdown {}: {}; plain {}: {})",
-                    markdown_status,
-                    markdown_err,
-                    plain_status,
-                    plain_err
-                );
+                return Err(partial_text_send_error(
+                    message_ids,
+                    format!("Telegram sendMessage failed (markdown {markdown_status}: {markdown_err}; plain {plain_status}: {plain_err})"),
+                    plain_status.is_server_error() || plain_status.as_u16() == 429,
+                ));
             }
 
             if let Some(id) =
@@ -731,6 +745,23 @@ impl TelegramChannel {
         self.send_media_by_url("sendVoice", "voice", chat_id, thread_id, url, caption)
             .await
     }
+}
+
+fn partial_text_send_error(
+    message_ids: Vec<String>,
+    message: String,
+    retryable: bool,
+) -> anyhow::Error {
+    anyhow::Error::new(PartialTextSendError {
+        error: tinychannels_bus::channel::ChannelSendError {
+            kind: if retryable { tinychannels_bus::channel::SendErrorKind::Transient } else { tinychannels_bus::channel::SendErrorKind::Unknown },
+            message,
+            retryable,
+            continuation_message_ids: message_ids.clone(),
+            ..Default::default()
+        },
+        message_ids,
+    })
 }
 
 #[cfg(test)]

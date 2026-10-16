@@ -360,7 +360,7 @@ impl Channel for TelegramChannel {
     async fn send_typed_with_receipt(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
         let text = match message.parts.as_slice() {
             [
                 tinychannels_bus::OutboundContentPart::Content {
@@ -369,7 +369,7 @@ impl Channel for TelegramChannel {
             ] => text,
             _ => {
                 self.send_typed(message).await?;
-                return Ok(tinychannels_bus::channel::MessageReceipt::default());
+                return Ok(tinychannels_bus::channel::ChannelSendOutcome::default());
             }
         };
         let mut conversation =
@@ -392,9 +392,16 @@ impl Channel for TelegramChannel {
             Some(id) => Some(id.parse::<i64>().map_err(|_| anyhow::anyhow!("Telegram reply_to_id must be a numeric message ID"))?),
             None => None,
         };
-        let ids = self
+        let (ids, error) = match self
             .send_text_chunks_with_ids(text, &conversation.id, thread_id, reply_to_id)
-            .await?;
+            .await
+        {
+            Ok(ids) => (ids, None),
+            Err(error) => match error.downcast_ref::<super::channel_send::PartialTextSendError>() {
+                Some(partial) => (partial.message_ids.clone(), Some(partial.error.clone())),
+                None => return Err(error),
+            },
+        };
         let parts = ids
             .iter()
             .enumerate()
@@ -415,7 +422,7 @@ impl Channel for TelegramChannel {
             })
             .collect::<Vec<_>>();
         let single_part = (parts.len() == 1).then(|| parts[0].platform_message_id.clone());
-        Ok(tinychannels_bus::channel::MessageReceipt {
+        let receipt = tinychannels_bus::channel::MessageReceipt {
             channel: Some(tinychannels_bus::ChannelRef {
                 id: "telegram".into(),
                 account_id: None,
@@ -433,7 +440,8 @@ impl Channel for TelegramChannel {
                 .unwrap_or_default()
                 .as_millis() as u64,
             raw: None,
-        })
+        };
+        Ok(tinychannels_bus::channel::ChannelSendOutcome { receipt, error })
     }
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
