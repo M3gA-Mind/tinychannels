@@ -4,6 +4,7 @@ use tinybus::Connection;
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinychannels::relay::{ConnectorToGatewayFrame, GatewayToConnectorFrame};
+use tinychannels_bus::RelayReconnectPolicy;
 use tinychannels_bus::config::RelayRuntimeIdentityConfig;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -239,8 +240,8 @@ async fn v2_reconnect_waits_for_each_configured_identity_before_publishing_conne
                 GatewayToConnectorFrame::HelloV2 { .. }
             ));
         }
-        send_v2_descriptor(&mut first, "telegram", "first").await;
-        send_v2_descriptor(&mut first, "telegram", "second").await;
+        send_v2_descriptor(&mut first, "telegram", "first", "initial").await;
+        send_v2_descriptor(&mut first, "telegram", "second", "initial").await;
         drop(first);
 
         // On reconnect, return only the second identity first. The transport
@@ -254,10 +255,10 @@ async fn v2_reconnect_waits_for_each_configured_identity_before_publishing_conne
                 GatewayToConnectorFrame::HelloV2 { .. }
             ));
         }
-        send_v2_descriptor(&mut second, "telegram", "second").await;
+        send_v2_descriptor(&mut second, "telegram", "second", "partial").await;
         let _ = partial_sent.send(());
         let _ = final_released.await;
-        send_v2_descriptor(&mut second, "telegram", "first").await;
+        send_v2_descriptor(&mut second, "telegram", "first", "reconnected").await;
         while let Some(Ok(message)) = second.next().await {
             if message.is_close() {
                 break;
@@ -314,6 +315,17 @@ async fn v2_reconnect_waits_for_each_configured_identity_before_publishing_conne
         .unwrap()
         .unwrap();
     assert_eq!(refreshed.instances.len(), 2);
+    assert_eq!(
+        refreshed
+            .instances
+            .iter()
+            .find(|instance| instance.bot_id == "first")
+            .unwrap()
+            .capabilities
+            .extensions
+            .get("marker"),
+        Some(&serde_json::json!("reconnected")),
+    );
     let ids: std::collections::BTreeSet<_> = refreshed
         .instances
         .iter()
@@ -328,11 +340,16 @@ async fn send_v2_descriptor(
     stream: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
     platform: &str,
     bot_id: &str,
+    marker: &str,
 ) {
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    capabilities
+        .extensions
+        .insert("marker".into(), serde_json::json!(marker));
     let frame = ConnectorToGatewayFrame::DescriptorV2 {
         platform: platform.into(),
         bot_id: bot_id.into(),
-        capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+        capabilities,
     };
     stream
         .send(Message::Text(
