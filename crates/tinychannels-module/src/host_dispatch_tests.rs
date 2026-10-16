@@ -107,7 +107,7 @@ async fn failed_turns_do_not_stop_dispatch_and_flush_observes_accepted_frontier(
     let (host, callback, _server) = fixture(2).await;
     host.deliver_inbound("telegram", inbound(serde_json::json!({"fail":true})))
         .await;
-    host.deliver_inbound("telegram", serde_json::json!({"id":2}))
+    host.deliver_inbound("telegram", inbound(serde_json::json!({"id":2})))
         .await;
     started(&host, &callback, 2).await;
     let flushing = host.clone();
