@@ -415,7 +415,8 @@ fn legacy_inbound_envelope_preserves_telegram_topics_separately_from_threads() {
     assert_eq!(
         envelope.parts,
         vec![ContentPart::Text {
-            text: "hello".into()
+            text: "hello".into(),
+            markdown_dialect: None,
         }]
     );
 
@@ -497,8 +498,8 @@ fn typed_text_parts_are_authoritative_over_stale_compatibility_text() {
     let envelope = ChannelInboundEnvelope {
         text: "stale projection".into(),
         parts: vec![
-            ContentPart::Text { text: "first".into() },
-            ContentPart::Text { text: "second".into() },
+            ContentPart::Text { text: "first".into(), markdown_dialect: None },
+            ContentPart::Text { text: "second".into(), markdown_dialect: None },
         ],
         ..Default::default()
     };
