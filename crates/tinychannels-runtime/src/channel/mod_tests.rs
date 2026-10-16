@@ -17,16 +17,16 @@ fn durable_final_delivery_capabilities_match_openclaw_order() {
 
 #[test]
 fn message_action_names_preserve_openclaw_contract_order() {
-    assert_eq!(channel_message_action_names().len(), 57);
+    assert_eq!(channel_message_action_names().len(), 56);
     assert_eq!(channel_message_action_names()[0], "send");
     assert_eq!(channel_message_action_names()[20], "list-pins");
-    assert_eq!(channel_message_action_names()[56], "upload-file");
+    assert_eq!(channel_message_action_names()[55], "upload-file");
     assert_eq!(
         channel_message_action_names()
             .iter()
             .filter(|name| **name == "set-profile")
             .count(),
-        2
+        1
     );
 }
 
