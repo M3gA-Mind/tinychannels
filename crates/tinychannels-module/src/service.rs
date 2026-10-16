@@ -87,6 +87,18 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
                 .is_some_and(|wa| wa.backend_type() == "cloud"))
 }
 
+async fn configured_capabilities(
+    running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    name: &str,
+) -> tinychannels_bus::ChannelCapabilities {
+    running
+        .lock()
+        .await
+        .get(name)
+        .map(|provider| provider.channel.capabilities())
+        .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
+}
+
 /// The served object.
 pub(crate) struct Channels {
     pub(crate) host: HostChannels,
@@ -422,7 +434,7 @@ impl Channels {
             }
             _ => "",
         };
-        let capabilities = self.configured_capabilities(name).await;
+        let capabilities = configured_capabilities(&self.running, name).await;
         crate::control::prepare(&self.host, request, capabilities).await
     }
 
@@ -444,17 +456,8 @@ impl Channels {
                 channel.as_str()
             }
         };
-        let capabilities = self.configured_capabilities(name).await;
+        let capabilities = configured_capabilities(&self.running, name).await;
         crate::remote::execute(&self.host, request, capabilities).await
-    }
-
-    async fn configured_capabilities(&self, name: &str) -> tinychannels_bus::ChannelCapabilities {
-        self.running
-            .lock()
-            .await
-            .get(name)
-            .map(|running| running.channel.capabilities())
-            .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
     }
 
     /// Drive progressive delivery without exposing its state to the host.
