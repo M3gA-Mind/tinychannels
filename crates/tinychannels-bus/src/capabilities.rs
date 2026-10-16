@@ -118,6 +118,20 @@ pub struct ContentCapabilities {
     pub poll: ContentCapability,
     pub presentation: ContentCapability,
     pub native: ContentCapability,
+    pub button_presentation: ButtonPresentationCapabilities,
+}
+
+/// Rich button rendering constraints formerly carried by the presentation DTO.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ButtonPresentationCapabilities {
+    pub max_actions_per_row: Option<u32>,
+    pub max_rows: Option<u32>,
+    pub max_label_length: Option<u32>,
+    pub max_value_bytes: Option<u32>,
+    pub supports_styles: bool,
+    pub supports_disabled: bool,
+    pub supports_layout_hints: bool,
 }
 
 /// Final delivery guarantees offered by this configured instance.

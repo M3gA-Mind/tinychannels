@@ -198,6 +198,12 @@ pub trait Channel: Send + Sync {
             ..Default::default()
         };
         capabilities.actions.supported = vec!["send".into()];
+        if capabilities.progressive_edits {
+            capabilities.actions.supported.push("edit".into());
+        }
+        if capabilities.reactions {
+            capabilities.actions.supported.extend(["react".into(), "reactions".into()]);
+        }
         capabilities
     }
 

@@ -40,7 +40,7 @@ pub mod relay;
 pub mod traits;
 pub mod version;
 pub use capabilities::{
-    AccountCapabilities, ActionCapabilities, AddressingCapabilities, ChannelCapabilities,
+    AccountCapabilities, ActionCapabilities, AddressingCapabilities, ButtonPresentationCapabilities, ChannelCapabilities,
     ContentCapabilities, ContentCapability, DeliveryCapabilities, EventCapabilities, LengthUnit,
     MarkdownDialect, TextCapabilities, VoiceCapabilities, provider_id,
 };
