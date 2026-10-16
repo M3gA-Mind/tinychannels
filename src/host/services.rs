@@ -242,6 +242,10 @@ pub trait EventSink: Send + Sync {
 
     /// Deliver one provider message on the ordered v22 ingress path.
     /// Legacy hosts return `false` and continue receiving the v21 message.
+    #[allow(
+        deprecated,
+        reason = "this default bridge preserves the one-release ChannelMessage adapter"
+    )]
     async fn publish_inbound(
         &self,
         _message: tinychannels_bus::ChannelMessage,

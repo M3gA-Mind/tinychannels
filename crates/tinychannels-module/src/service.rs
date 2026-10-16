@@ -289,7 +289,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
             ));
         }
         Ok(Some(UnknownSendReconciliation::Sent {
-            receipt: result.receipt.unwrap_or_default(),
+            receipt: Box::new(result.receipt.unwrap_or_default()),
             message_id: None,
         }))
     }

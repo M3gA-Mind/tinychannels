@@ -22,7 +22,7 @@ pub enum DeliveryRetryEligibility {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum UnknownSendReconciliation {
     Sent {
-        receipt: MessageReceipt,
+        receipt: Box<MessageReceipt>,
         #[serde(skip_serializing_if = "Option::is_none")]
         message_id: Option<String>,
     },
