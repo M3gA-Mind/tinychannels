@@ -52,7 +52,7 @@ mod legacy_length_unit {
     #[derive(JsonSchema)]
     #[allow(dead_code)]
     pub enum LegacyLengthUnit {
-        #[schemars(rename = "chars")]
+        #[schemars(rename = "characters")]
         Characters,
         #[schemars(rename = "utf8-bytes")]
         Utf8Bytes,
@@ -65,7 +65,7 @@ mod legacy_length_unit {
         S: Serializer,
     {
         serializer.serialize_str(match value {
-            LengthUnit::Characters => "chars",
+            LengthUnit::Characters => "characters",
             LengthUnit::Utf8Bytes => "utf8-bytes",
             LengthUnit::Utf16Units => "utf16-units",
         })
@@ -76,7 +76,7 @@ mod legacy_length_unit {
         D: Deserializer<'de>,
     {
         match String::deserialize(deserializer)?.as_str() {
-            "chars" | "characters" => Ok(LengthUnit::Characters),
+            "characters" | "chars" => Ok(LengthUnit::Characters),
             "utf8-bytes" | "utf8_bytes" => Ok(LengthUnit::Utf8Bytes),
             "utf16-units" | "utf16_units" => Ok(LengthUnit::Utf16Units),
             value => Err(serde::de::Error::custom(format!(

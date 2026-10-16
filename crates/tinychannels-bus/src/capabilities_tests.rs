@@ -65,17 +65,31 @@ fn legacy_presentation_projection_preserves_rich_button_constraints_and_edit_sem
 
 #[test]
 fn legacy_presentation_keeps_v1_enum_spellings_on_the_wire() {
-    let presentation = crate::channel::ChannelPresentationCapabilities {
-        length_unit: LengthUnit::Utf8Bytes,
-        markdown_dialect: MarkdownDialect::SlackMrkdwn,
-        ..Default::default()
-    };
-
-    let value = serde_json::to_value(&presentation).unwrap();
-    assert_eq!(value["lengthUnit"], "utf8-bytes");
-    assert_eq!(value["markdownDialect"], "slack-mrkdwn");
-    let decoded: crate::channel::ChannelPresentationCapabilities =
-        serde_json::from_value(value).unwrap();
-    assert_eq!(decoded.length_unit, LengthUnit::Utf8Bytes);
-    assert_eq!(decoded.markdown_dialect, MarkdownDialect::SlackMrkdwn);
+    for (length_unit, length_wire) in [
+        (LengthUnit::Characters, "characters"),
+        (LengthUnit::Utf8Bytes, "utf8-bytes"),
+        (LengthUnit::Utf16Units, "utf16-units"),
+    ] {
+        for (markdown_dialect, markdown_wire) in [
+            (MarkdownDialect::Plain, "plain"),
+            (MarkdownDialect::Markdown, "markdown"),
+            (MarkdownDialect::Html, "html"),
+            (MarkdownDialect::SlackMrkdwn, "slack-mrkdwn"),
+            (MarkdownDialect::DiscordMarkdown, "discord-markdown"),
+            (MarkdownDialect::TelegramMarkdownV2, "telegram-markdown-v2"),
+        ] {
+            let presentation = crate::channel::ChannelPresentationCapabilities {
+                length_unit,
+                markdown_dialect,
+                ..Default::default()
+            };
+            let value = serde_json::to_value(&presentation).unwrap();
+            assert_eq!(value["lengthUnit"], length_wire);
+            assert_eq!(value["markdownDialect"], markdown_wire);
+            let decoded: crate::channel::ChannelPresentationCapabilities =
+                serde_json::from_value(value).unwrap();
+            assert_eq!(decoded.length_unit, length_unit);
+            assert_eq!(decoded.markdown_dialect, markdown_dialect);
+        }
+    }
 }
