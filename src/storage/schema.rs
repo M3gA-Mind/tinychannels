@@ -21,7 +21,7 @@ use super::migrate;
 pub const OWNER: &str = "channels";
 
 /// Body version of every `channels.*` collection. Version 1 is the pre-registry
-/// layout stored under the legacy names; the steps in [`migrate`] write 2.
+/// layout stored under the legacy names; the migration steps write 2.
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// Entries awaiting a terminal outcome.
