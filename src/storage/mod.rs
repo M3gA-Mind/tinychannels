@@ -15,6 +15,9 @@
 //! [`crate::remote::session_store`].
 
 pub mod delivery;
+mod migrate;
+pub mod records;
+pub mod schema;
 #[cfg(feature = "whatsapp-web")]
 pub mod whatsapp;
 
@@ -23,6 +26,7 @@ use std::sync::Arc;
 use tinystoragedrivers_core::{CollectionSpec, DocumentStore, StorageError};
 
 pub use delivery::DocumentDeliveryStore;
+pub use schema::storage_schema;
 
 const LOG_PREFIX: &str = "[channel-storage]";
 

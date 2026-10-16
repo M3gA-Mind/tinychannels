@@ -23,26 +23,30 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tinystoragedrivers_core::{CollectionSpec, DocumentStore, DocumentStoreExt, Precondition};
+use tinystoragedrivers_core::{
+    CollectionSpec, DocumentStore, DocumentStoreExt, Key, Precondition, WriteOptions,
+};
+
+use crate::storage::schema::{self, SCHEMA_VERSION};
 
 const LEGACY_STORE_FILE: &str = "state/channel_remote_sessions.json";
 const LEGACY_TELEGRAM_STORE_FILE: &str = "state/telegram_remote_sessions.json";
 const LOG_PREFIX: &str = "[channel-remote]";
 
 /// Collection of chat → thread bindings.
-pub const BINDINGS_COLLECTION: &str = "channel_remote_bindings";
+pub const BINDINGS_COLLECTION: &str = schema::REMOTE_BINDINGS;
 /// Collection of chats with a turn in flight.
-pub const BUSY_COLLECTION: &str = "channel_remote_busy";
+pub const BUSY_COLLECTION: &str = schema::REMOTE_BUSY;
 /// Collection holding the one-time legacy import marker.
-pub const META_COLLECTION: &str = "channel_remote_meta";
+pub const META_COLLECTION: &str = schema::REMOTE_META;
 const LEGACY_MARKER_ID: &str = "legacy-import";
 
-/// A chat's binding to a host conversation thread.
+/// A chat's binding to a host conversation thread. When it was last bound is
+/// the record's own `updated_ms` metadata, not a field here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChatBinding {
     pub thread_id: String,
     pub sender_key: String,
-    pub updated_at: String,
     /// Title captured at `/new` time so `/status` can show it without listing
     /// every thread.
     #[serde(default)]
@@ -55,9 +59,20 @@ struct LegacyStoreFile {
     bindings: HashMap<String, ChatBinding>,
 }
 
-/// Store key for one chat on one channel.
+/// Document id for one chat on one channel: [`Key::of`] over
+/// `[channel, reply_target]`, so the same chat id on two providers never
+/// collides and a target holding `:` or `/` stays one unambiguous key.
 pub fn chat_key(channel: &str, reply_target: &str) -> String {
-    format!("{channel}:{reply_target}")
+    Key::of([channel, reply_target]).map_or_else(
+        // Two parts always make a key; the fallback only keeps this infallible.
+        |_| format!("{channel}/{reply_target}"),
+        |key| key.as_str().to_owned(),
+    )
+}
+
+/// The write options every v2 document is stamped with.
+fn write_options() -> WriteOptions {
+    WriteOptions::new().schema(SCHEMA_VERSION)
 }
 
 /// The remote-control session store over one scoped document handle.
@@ -130,16 +145,16 @@ impl RemoteSessionStore {
         let binding = ChatBinding {
             thread_id,
             sender_key,
-            updated_at: chrono::Utc::now().to_rfc3339(),
             title,
         };
         self.docs()
             .await?
-            .put_as(
+            .put_with(
                 BINDINGS_COLLECTION,
                 &chat_key(channel, reply_target),
-                &binding,
+                serde_json::to_value(&binding)?,
                 Precondition::None,
+                write_options(),
             )
             .await
             .map_err(|e| anyhow::anyhow!(crate::storage::describe(&e)))?;
@@ -156,11 +171,15 @@ impl RemoteSessionStore {
         let id = chat_key(channel, reply_target);
         let docs = self.docs().await?;
         let result = if busy {
-            let doc =
-                serde_json::json!({ "busy": true, "updated_at": chrono::Utc::now().to_rfc3339() });
-            docs.put(BUSY_COLLECTION, &id, doc, Precondition::None)
-                .await
-                .map(|_| ())
+            docs.put_with(
+                BUSY_COLLECTION,
+                &id,
+                serde_json::json!({ "busy": true }),
+                Precondition::None,
+                write_options(),
+            )
+            .await
+            .map(|_| ())
         } else {
             docs.delete(BUSY_COLLECTION, &id, Precondition::None)
                 .await
@@ -195,7 +214,8 @@ impl RemoteSessionStore {
         if marker.is_some() {
             return Ok(0);
         }
-        let mut legacy: HashMap<String, ChatBinding> = HashMap::new();
+        // (channel, reply target) -> binding.
+        let mut legacy: HashMap<(String, String), ChatBinding> = HashMap::new();
         let mut unreadable = false;
         // The Telegram-only file is older; the shared file wins on overlap.
         for (file, prefix) in [
@@ -213,19 +233,33 @@ impl RemoteSessionStore {
                 continue;
             };
             for (key, binding) in parsed.bindings {
-                let key = if prefix {
-                    chat_key("telegram", &key)
+                let chat = if prefix {
+                    Some(("telegram".to_owned(), key))
                 } else {
-                    key
+                    key.split_once(':')
+                        .map(|(channel, target)| (channel.to_owned(), target.to_owned()))
                 };
-                legacy.insert(key, binding);
+                match chat {
+                    Some(chat) => {
+                        legacy.insert(chat, binding);
+                    }
+                    None => tracing::warn!(
+                        "{LOG_PREFIX} legacy binding key is not <channel>:<reply target>; skipped"
+                    ),
+                }
             }
         }
         let mut imported = 0;
-        for (key, binding) in legacy {
+        for ((channel, target), binding) in legacy {
             let doc = serde_json::to_value(&binding)?;
             match docs
-                .put(BINDINGS_COLLECTION, &key, doc, Precondition::Absent)
+                .put_with(
+                    BINDINGS_COLLECTION,
+                    &chat_key(&channel, &target),
+                    doc,
+                    Precondition::Absent,
+                    write_options(),
+                )
                 .await
             {
                 Ok(_) => imported += 1,
@@ -244,11 +278,12 @@ impl RemoteSessionStore {
             );
             return Ok(imported);
         }
-        docs.put(
+        docs.put_with(
             META_COLLECTION,
             LEGACY_MARKER_ID,
             serde_json::json!({ "imported": imported }),
             Precondition::Absent,
+            write_options(),
         )
         .await
         .or_else(|error| match error.kind() {

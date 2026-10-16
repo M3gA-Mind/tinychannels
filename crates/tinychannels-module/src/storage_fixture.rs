@@ -9,17 +9,18 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tinybus::Connection;
 use tinychannels::storage::delivery::{PENDING_COLLECTION, RESULTS_COLLECTION};
+use tinychannels::storage::records::{StoredDelivery, StoredResult};
 use tinychannels_bus::{DeliveryQueueEntry, DeliveryTerminalResult};
 use tinystoragedrivers_busproxy::{PerCallerEndpoint, ServedStorage, serve};
 use tinystoragedrivers_client::StorageServer;
 use tinystoragedrivers_core::{
     Capabilities, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, MemoryStorage,
     Precondition, Query, ReadCheck, Result, Scope, ScopedStorage, SearchHit, StorageBackend,
-    StorageError, Version, Versioned, WriteOp, WriteResult,
+    StorageError, Version, Versioned, WriteOp, WriteOptions, WriteResult,
 };
 
 /// One-shot faults and counters on the delivery records.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct Faults {
     pub(crate) fail_pending_write: AtomicBool,
     pub(crate) fail_queue_read: AtomicBool,
@@ -134,19 +135,29 @@ impl StorageHost {
             .collect()
     }
 
+    /// Entries are keyed by their idempotency key, as the wire type reports it.
+    async fn entries(&self, scope: &str, name: &str) -> BTreeMap<String, DeliveryQueueEntry> {
+        let raw: BTreeMap<String, StoredDelivery> = self.collection(scope, name).await;
+        raw.into_values()
+            .map(DeliveryQueueEntry::from)
+            .map(|entry| (entry.id.clone(), entry))
+            .collect()
+    }
+
     pub(crate) async fn pending(&self, scope: &str) -> BTreeMap<String, DeliveryQueueEntry> {
-        self.collection(scope, PENDING_COLLECTION).await
+        self.entries(scope, PENDING_COLLECTION).await
     }
 
     pub(crate) async fn failed(&self, scope: &str) -> BTreeMap<String, DeliveryQueueEntry> {
-        self.collection(scope, tinychannels::storage::delivery::FAILED_COLLECTION)
+        self.entries(scope, tinychannels::storage::delivery::FAILED_COLLECTION)
             .await
     }
 
     pub(crate) async fn results(&self, scope: &str) -> BTreeMap<String, DeliveryTerminalResult> {
-        let raw: BTreeMap<String, Value> = self.collection(scope, RESULTS_COLLECTION).await;
-        raw.into_iter()
-            .map(|(id, doc)| (id, serde_json::from_value(doc["result"].clone()).unwrap()))
+        let raw: BTreeMap<String, StoredResult> = self.collection(scope, RESULTS_COLLECTION).await;
+        raw.into_values()
+            .map(DeliveryTerminalResult::from)
+            .map(|result| (result.id.clone(), result))
             .collect()
     }
 
@@ -193,12 +204,6 @@ impl ScopeSwitchDocs {
     }
 }
 
-impl std::fmt::Debug for Faults {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Faults")
-    }
-}
-
 #[async_trait]
 impl DocumentStore for ScopeSwitchDocs {
     fn capabilities(&self) -> Capabilities {
@@ -220,12 +225,27 @@ impl DocumentStore for ScopeSwitchDocs {
         doc: Value,
         precondition: Precondition,
     ) -> Result<Version> {
+        self.put_with(collection, id, doc, precondition, Default::default())
+            .await
+    }
+
+    async fn put_with(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: Value,
+        precondition: Precondition,
+        options: WriteOptions,
+    ) -> Result<Version> {
         if collection == PENDING_COLLECTION
             && self.faults.fail_pending_write.swap(false, Ordering::SeqCst)
         {
             return Err(StorageError::backend("fixture pending write failed"));
         }
-        let version = self.inner().put(collection, id, doc, precondition).await?;
+        let version = self
+            .inner()
+            .put_with(collection, id, doc, precondition, options)
+            .await?;
         if collection == RESULTS_COLLECTION
             && self.faults.lose_result_reply.swap(false, Ordering::SeqCst)
         {

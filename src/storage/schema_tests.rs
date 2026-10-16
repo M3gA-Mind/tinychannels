@@ -1,0 +1,52 @@
+use super::*;
+use tinystoragedrivers_core::schema::{Item, Registry};
+
+#[test]
+fn the_schema_composes_and_declares_every_collection_as_module_scoped() {
+    let schema = storage_schema();
+    Registry::compose([schema.clone()]).expect("the channels schema composes");
+
+    let declared: Vec<_> = schema
+        .items
+        .iter()
+        .map(|item| {
+            assert_eq!(item.scope(), ScopeClass::Module, "{}", item.name());
+            assert!(
+                matches!(item, Item::Collection { version: 2, .. }),
+                "{}",
+                item.name()
+            );
+            item.name()
+        })
+        .collect();
+    assert_eq!(declared, COLLECTIONS);
+}
+
+#[test]
+fn every_v1_collection_has_one_step_into_its_v2_name() {
+    let schema = storage_schema();
+    let legacy: Vec<_> = schema.steps.iter().filter_map(|step| step.source).collect();
+    let mut expected = vec![
+        "channels_delivery_pending",
+        "channels_delivery_failed",
+        "channels_delivery_results",
+        "channel_remote_bindings",
+        "channel_remote_busy",
+        "channel_remote_meta",
+        "whatsapp_device",
+        "whatsapp_identity",
+        "whatsapp_session",
+        "whatsapp_prekey",
+        "whatsapp_signed_prekey",
+        "whatsapp_sender_key",
+        "whatsapp_sync_key",
+        "whatsapp_lid_mapping",
+    ];
+    let mut actual = legacy.clone();
+    expected.sort_unstable();
+    actual.sort_unstable();
+    assert_eq!(actual, expected);
+    for step in &schema.steps {
+        assert_eq!((step.from, step.to), (1, 2), "{}", step.id);
+    }
+}

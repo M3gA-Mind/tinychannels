@@ -98,7 +98,7 @@ tinychannels-bus = { path = "crates/tinychannels-bus" }
 tinychannels-runtime = { path = "crates/tinychannels-runtime" }
 # Storage ports only: no driver crate and no database client. The host (or the
 # bus client in the module crate) supplies the backend.
-tinystoragedrivers-core = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v0.11.0" }
+tinystoragedrivers-core = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.23"
