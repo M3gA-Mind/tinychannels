@@ -562,7 +562,11 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
             account_id: Some("caller-spoof".into()),
         },
         conversation: None,
-        event: tinychannels_bus::ChannelEventKind::Typing { active: true },
+        event: tinychannels_bus::ChannelEventKind::Typing {
+            active: true,
+            actor: None,
+            expires_at: None,
+        },
     };
     crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
         .publish_channel_event(source.clone()).await.unwrap();

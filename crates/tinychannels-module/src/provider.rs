@@ -225,7 +225,7 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
     }
 }
 
-pub(crate) struct ModuleEvents(HostChannels, String);
+pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String);
 
 #[async_trait::async_trait]
 impl tinychannels::host::EventSink for ModuleEvents {
