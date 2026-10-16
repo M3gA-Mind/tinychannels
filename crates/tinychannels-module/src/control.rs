@@ -38,9 +38,7 @@ pub(crate) async fn prepare(
         Request::Overflow { message } => Response::Overflow(
             tinychannels::context::is_context_window_overflow_message(&message),
         ),
-        Request::Capabilities { .. } => {
-            Response::Capabilities((&instance_capabilities).into())
-        }
+        Request::Capabilities { .. } => Response::Capabilities((&instance_capabilities).into()),
         Request::CapabilitiesV2 { .. } => {
             Response::CapabilitiesV2(Box::new(instance_capabilities.clone()))
         }

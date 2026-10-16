@@ -42,7 +42,7 @@ pub mod version;
 pub use capabilities::{
     AccountCapabilities, ActionCapabilities, AddressingCapabilities,
     ButtonPresentationCapabilities, ChannelCapabilities, ContentCapabilities, ContentCapability,
-    DeliveryCapabilities, EventCapabilities, LengthUnit, LegacyChannelCapabilities,
+    DeliveryCapabilities, EventCapabilities, LegacyChannelCapabilities, LengthUnit,
     MarkdownDialect, TextCapabilities, VoiceCapabilities, provider_id,
 };
 pub use channel::{

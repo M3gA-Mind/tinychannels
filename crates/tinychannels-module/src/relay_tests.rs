@@ -8,6 +8,27 @@ use tinychannels_bus::config::RelayRuntimeIdentityConfig;
 use tinychannels_bus::relay::RelayReconnectPolicy;
 use tokio_tungstenite::tungstenite::Message;
 
+struct IdleRelayIo;
+
+#[async_trait::async_trait]
+impl tinychannels::relay::RelayFrameIo for IdleRelayIo {
+    async fn send(
+        &self,
+        _frame: GatewayToConnectorFrame,
+    ) -> std::result::Result<(), tinychannels::relay::RelayTransportError> {
+        Ok(())
+    }
+
+    async fn recv(
+        &self,
+    ) -> std::result::Result<
+        Option<ConnectorToGatewayFrame>,
+        tinychannels::relay::RelayTransportError,
+    > {
+        std::future::pending().await
+    }
+}
+
 #[test]
 fn v2_reconnect_is_not_connected_until_every_configured_identity_replies() {
     let identities = vec![
@@ -337,6 +358,42 @@ async fn v2_reconnect_waits_for_each_configured_identity_before_publishing_conne
     assert_eq!(ids, ["first", "second"].into_iter().collect());
     manager.stop(reservation).await.unwrap();
     peer.await.unwrap();
+}
+
+#[tokio::test]
+async fn v2_capabilities_query_hides_cached_slot_after_immediate_transport_close() {
+    let (manager, _callback, _server, host) = manager().await;
+    let reservation = manager.reserve().await.unwrap();
+    let slot = manager.get(&reservation).await.unwrap();
+    let capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    slot.state
+        .send_replace(State::ConnectedV2(RelayCapabilitiesV2 {
+            contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
+            instances: vec![RelayInstanceCapabilitiesV2 {
+                platform: "telegram".into(),
+                bot_id: "fixture".into(),
+                capabilities,
+            }],
+        }));
+    let transport = Arc::new(tinychannels::relay::RelayTransport::new(
+        vec![tinychannels::relay::RelayIdentity {
+            platform: "telegram".into(),
+            bot_id: "fixture".into(),
+        }],
+        Arc::new(IdleRelayIo),
+        tinychannels::relay::RelayTransportTimeouts::default(),
+    ));
+    *slot.transport.lock().await = Some(transport.clone());
+    transport.shutdown().await;
+
+    assert!(transport.is_closed());
+    assert_eq!(
+        manager.capabilities_v2(reservation.clone()).await.unwrap(),
+        None
+    );
+    manager.stop(reservation).await.unwrap();
+    manager.shutdown().await.unwrap();
+    host.shutdown().await.unwrap();
 }
 
 async fn send_v2_descriptor(

@@ -162,8 +162,20 @@ async fn api_requests_preserve_auth_threads_and_report_http_and_slack_errors() {
         SlackChannel::with_http_client("test-token".into(), None, vec![], server.client.clone());
     let capabilities = channel.capabilities();
     assert!(capabilities.addressing.thread_id);
-    assert!(capabilities.actions.supported.iter().any(|action| action == "reply"));
-    assert!(capabilities.actions.supported.iter().any(|action| action == "thread-reply"));
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "reply")
+    );
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "thread-reply")
+    );
     assert_eq!(channel.get_bot_user_id().await.as_deref(), Some("bot"));
     assert!(channel.health_check().await);
     let mut reply = SendMessage::new("reply", "room");

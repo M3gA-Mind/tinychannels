@@ -425,9 +425,7 @@ impl Channels {
         }
         let name = match &request {
             tinychannels_bus::module_control::ChannelControlRequest::Capabilities { channel }
-            | tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 {
-                channel,
-            } => {
+            | tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 { channel } => {
                 channel.as_str()
             }
             tinychannels_bus::module_control::ChannelControlRequest::Route { message, .. } => {

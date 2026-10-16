@@ -2138,20 +2138,22 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
         Some(tinychannels::remote::build_remote_help_response().as_str())
     );
     let route = service
-        .prepare_channel_control(tinychannels_bus::module_control::ChannelControlRequest::Route {
-            workspace_dir: ".".into(),
-            message: serde_json::from_value(serde_json::json!({
-                "id":"fixture", "sender":"sender", "reply_target":"chat",
-                "content":"/help", "channel":"telegram:fixture", "timestamp":1
-            }))
-            .unwrap(),
-            route: RemoteRoute {
-                provider: "fixture".into(),
-                model: "fixture".into(),
+        .prepare_channel_control(
+            tinychannels_bus::module_control::ChannelControlRequest::Route {
+                workspace_dir: ".".into(),
+                message: serde_json::from_value(serde_json::json!({
+                    "id":"fixture", "sender":"sender", "reply_target":"chat",
+                    "content":"/help", "channel":"telegram:fixture", "timestamp":1
+                }))
+                .unwrap(),
+                route: RemoteRoute {
+                    provider: "fixture".into(),
+                    model: "fixture".into(),
+                },
+                history_len: 0,
+                providers: vec![],
             },
-            history_len: 0,
-            providers: vec![],
-        })
+        )
         .await
         .unwrap();
     assert!(matches!(

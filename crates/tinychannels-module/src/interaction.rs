@@ -21,12 +21,14 @@ pub(crate) async fn dispatch(
     let result = match interaction {
         Op::Describe => {
             let capabilities = configured_capabilities(provider);
-            return Ok(ChannelInteractionResult::Info(Box::new(ChannelInteractionInfo {
-                capabilities: (&capabilities).into(),
-                proactive_target: capabilities.account.proactive_target.clone(),
-                supports_reactions: capabilities.reactions,
-                supports_draft_updates: capabilities.streaming_reply_pipeline,
-            })));
+            return Ok(ChannelInteractionResult::Info(Box::new(
+                ChannelInteractionInfo {
+                    capabilities: (&capabilities).into(),
+                    proactive_target: capabilities.account.proactive_target.clone(),
+                    supports_reactions: capabilities.reactions,
+                    supports_draft_updates: capabilities.streaming_reply_pipeline,
+                },
+            )));
         }
         Op::DescribeV2 => {
             return Ok(ChannelInteractionResult::InfoV2(Box::new(
