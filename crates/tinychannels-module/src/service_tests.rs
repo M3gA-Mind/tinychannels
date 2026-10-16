@@ -199,6 +199,12 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 duration_ms: Some(1200),
             },
         },
+        tinychannels_bus::OutboundPayload::Voice {
+            voice: tinychannels_bus::OutboundVoice::Synthesize {
+                text: "hello spoken aloud".into(),
+                voice: Some("voice-a".into()),
+            },
+        },
         tinychannels_bus::OutboundPayload::Files {
             file_urls: vec!["https://example.test/file.pdf".into()],
         },
@@ -221,8 +227,18 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                     idempotency_key: format!("key-{index}"),
                     channel_id: "fixture".into(),
                     conversation_id: "room".into(),
-            channel_ref: None,
-            conversation_ref: None,
+                    channel_ref: Some(tinychannels_bus::channel::ChannelRef {
+                        id: "fixture".into(),
+                        account_id: Some("account-a".into()),
+                    }),
+                    conversation_ref: Some(tinychannels_bus::channel::ConversationRef {
+                        kind: tinychannels_bus::channel::ConversationKind::Thread,
+                        id: "room".into(),
+                        scope_id: Some("workspace-a".into()),
+                        parent_id: Some("parent-room".into()),
+                        thread_id: Some("thread".into()),
+                        topic_id: Some("topic".into()),
+                    }),
                     reply_to_id: Some("source-message".into()),
                     thread_id: Some("thread".into()),
                     durability: tinychannels_bus::DeliveryDurability::BestEffort,
@@ -234,6 +250,12 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         let typed = received.recv().await.unwrap();
         assert_eq!(typed.reply_to_id.as_deref(), Some("source-message"));
         assert_eq!(typed.thread_id.as_deref(), Some("thread"));
+        assert_eq!(typed.channel_ref.as_ref().and_then(|channel| channel.account_id.as_deref()), Some("account-a"));
+        let address = typed.conversation_ref.as_ref().unwrap();
+        assert_eq!(address.scope_id.as_deref(), Some("workspace-a"));
+        assert_eq!(address.parent_id.as_deref(), Some("parent-room"));
+        assert_eq!(address.thread_id.as_deref(), Some("thread"));
+        assert_eq!(address.topic_id.as_deref(), Some("topic"));
         assert!(!typed.parts.is_empty(), "payload {index} must stay typed");
         assert!(serde_json::to_string(&typed).unwrap().contains("\"kind\":"));
     }

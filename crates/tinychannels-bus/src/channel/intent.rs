@@ -154,8 +154,16 @@ impl ChannelOutboundMessage {
             }
         }
         Self {
-            channel_id: intent.channel_id.clone(),
-            conversation_id: intent.conversation_id.clone(),
+            channel_id: intent
+                .channel_ref
+                .as_ref()
+                .map(|channel| channel.id.clone())
+                .unwrap_or_else(|| intent.channel_id.clone()),
+            conversation_id: intent
+                .conversation_ref
+                .as_ref()
+                .map(|conversation| conversation.id.clone())
+                .unwrap_or_else(|| intent.conversation_id.clone()),
             channel_ref: intent.channel_ref.clone(),
             conversation_ref: intent.conversation_ref.clone().map(|mut reference| {
                 if reference.thread_id.is_none() {
@@ -199,7 +207,12 @@ impl ChannelOutboundMessage {
             channel_id: channel_id.into(),
             conversation_id: message.recipient.clone(),
             channel_ref: None,
-            conversation_ref: None,
+            conversation_ref: Some(ConversationRef {
+                id: message.recipient.clone(),
+                thread_id: message.thread_ts.clone(),
+                topic_id: message.topic_id.clone(),
+                ..Default::default()
+            }),
             reply_to_id: message.reply_to_id.clone(),
             thread_id: message.thread_ts.clone(),
             idempotency_key: message.idempotency_key.clone().unwrap_or_default(),
@@ -215,9 +228,21 @@ impl ChannelOutboundMessage {
     pub fn to_legacy_message(&self) -> anyhow::Result<crate::traits::SendMessage> {
         Ok(crate::traits::SendMessage {
             content: self.legacy_text()?,
-            recipient: self.conversation_id.clone(),
+            recipient: self
+                .conversation_ref
+                .as_ref()
+                .map(|conversation| conversation.id.clone())
+                .unwrap_or_else(|| self.conversation_id.clone()),
             subject: None,
-            thread_ts: self.thread_id.clone(),
+            thread_ts: self.thread_id.clone().or_else(|| {
+                self.conversation_ref
+                    .as_ref()
+                    .and_then(|conversation| conversation.thread_id.clone())
+            }),
+            topic_id: self
+                .conversation_ref
+                .as_ref()
+                .and_then(|reference| reference.topic_id.clone()),
             reply_to_id: self.reply_to_id.clone(),
             idempotency_key: (!self.idempotency_key.is_empty())
                 .then(|| self.idempotency_key.clone()),
