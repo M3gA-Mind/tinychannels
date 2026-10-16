@@ -1263,16 +1263,14 @@ impl TelegramChannel {
             .and_then(serde_json::Value::as_array);
         let added = new_reactions.is_some_and(|items| !items.is_empty());
         let selected = if added { new_reactions } else { old_reactions };
-        let emoji = selected
-            .and_then(serde_json::Value::as_array)
-            .and_then(|arr| {
-                arr.iter().find_map(|entry| {
-                    entry
-                        .get("emoji")
-                        .and_then(serde_json::Value::as_str)
-                        .map(ToString::to_string)
-                })
-            })?;
+        let emoji = selected.and_then(|arr| {
+            arr.iter().find_map(|entry| {
+                entry
+                    .get("emoji")
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string)
+            })
+        })?;
 
         let sender_id = user_id.clone().unwrap_or_else(|| actor.clone());
         let thread_id = reaction
