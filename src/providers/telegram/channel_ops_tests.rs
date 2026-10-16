@@ -622,6 +622,13 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
                 }
             },
             {
+                "update_id": 12,
+                "message": {
+                    "message_id": 6, "chat": { "id": 100, "type": "private" },
+                    "from": { "id": 7, "username": "alice" }, "text": "hello bot"
+                }
+            },
+            {
                 "update_id": 13,
                 "edited_message": {
                     "message_id": 5, "edit_date": 1234,
@@ -638,13 +645,6 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
                     "from": { "id": 8, "username": "mallory" }, "text": "unauthorized edit"
                 }
             },
-            {
-                "update_id": 12,
-                "message": {
-                    "message_id": 6, "chat": { "id": 100, "type": "private" },
-                    "from": { "id": 7, "username": "alice" }, "text": "hello bot"
-                }
-            }
         ])),
     )
     .await;
