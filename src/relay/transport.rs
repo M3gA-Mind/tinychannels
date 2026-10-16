@@ -99,14 +99,10 @@ impl RelayTransport {
     }
 
     /// Wait for the negotiated v2 handshake descriptor.
-    pub async fn capabilities_v2(&self) -> Option<tinychannels_bus::ChannelCapabilities> {
-        self.state
-            .capabilities_v2
-            .lock()
-            .await
-            .values()
-            .next()
-            .cloned()
+    pub async fn capabilities_v2(
+        &self,
+    ) -> HashMap<RelayIdentity, tinychannels_bus::ChannelCapabilities> {
+        self.state.capabilities_v2.lock().await.clone()
     }
 
     /// Return the v2 descriptor negotiated for one configured relay identity.
