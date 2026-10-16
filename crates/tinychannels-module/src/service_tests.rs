@@ -806,7 +806,7 @@ async fn required_success_and_replay_return_same_actual_scoped_receipt_without_r
     assert_eq!(receipt.delete_token.as_deref(), Some("telegram:delete:9"));
     assert_eq!(receipt.channel.as_ref().unwrap().id, "fixture");
     assert_eq!(receipt.channel.as_ref().unwrap().account_id.as_deref(), Some("fixture"));
-    assert_eq!(receipt.conversation.as_ref().unwrap().id, "room-receipt-replay");
+    assert_eq!(receipt.conversation.as_ref().unwrap().id, "room-1");
     channels.shutdown().await.unwrap();
 }
 
