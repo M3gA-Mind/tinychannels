@@ -30,11 +30,20 @@ pub fn outbound_intent_from_legacy_message(
         ],
     );
     let thread_id = first_string_field(&message, &["threadId", "thread_id", "thread_ts"]);
+    let topic_id = first_string_field(&message, &["topicId", "topic_id"]);
+    let conversation_ref = tinychannels_bus::ConversationRef {
+        id: conversation_id.clone(),
+        thread_id: thread_id.clone(),
+        topic_id,
+        ..Default::default()
+    };
 
     ChannelOutboundIntent {
         idempotency_key,
         channel_id,
         conversation_id,
+        channel_ref: None,
+        conversation_ref: Some(conversation_ref),
         reply_to_id,
         thread_id,
         durability: DeliveryDurability::BestEffort,
@@ -52,6 +61,8 @@ pub fn outbound_intent_from_send_message(
         "recipient": message.recipient,
         "subject": message.subject,
         "thread_ts": message.thread_ts,
+        "replyToId": message.reply_to_id,
+        "topicId": message.topic_id,
     });
     if let Some(idempotency_key) = message.idempotency_key.as_deref()
         && !idempotency_key.trim().is_empty()
