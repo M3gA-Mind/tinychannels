@@ -1,8 +1,7 @@
 use serde_json::{Value, json};
 use tinystoragedrivers_core::schema::{MigrateOptions, Registry};
 use tinystoragedrivers_core::{
-    CollectionSpec, MemoryStorage, Precondition, Scope, ScopedStorage, StorageBackend,
-    WriteOptions,
+    CollectionSpec, MemoryStorage, Precondition, Scope, ScopedStorage, StorageBackend, WriteOptions,
 };
 
 use crate::storage::schema::{self, storage_schema};
@@ -115,7 +114,10 @@ async fn pending_and_failed_deliveries_become_snake_case_ms_records_under_key_id
         .unwrap()
         .meta;
     assert_eq!(meta.schema, 2);
-    assert_eq!(body(&storage, "channels_delivery_pending", "op/1").await, None);
+    assert_eq!(
+        body(&storage, "channels_delivery_pending", "op/1").await,
+        None
+    );
 }
 
 #[tokio::test]
@@ -128,8 +130,16 @@ async fn an_entry_whose_id_disagrees_with_its_idempotency_key_is_dropped_not_fat
     ])
     .await;
 
-    assert!(body(&storage, schema::DELIVERY_PENDING, "good").await.is_some());
-    assert!(body(&storage, schema::DELIVERY_PENDING, "other").await.is_none());
+    assert!(
+        body(&storage, schema::DELIVERY_PENDING, "good")
+            .await
+            .is_some()
+    );
+    assert!(
+        body(&storage, schema::DELIVERY_PENDING, "other")
+            .await
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -176,8 +186,16 @@ async fn bindings_and_busy_flags_are_rekeyed_by_channel_and_target() {
             "telegram:9",
             json!({ "thread_id": "t2", "sender_key": "s2", "updated_at": "bad", "title": null }),
         ),
-        ("channel_remote_busy", "discord:room:42", json!({ "busy": true, "updated_at": "2026-01-01T00:00:00Z" })),
-        ("channel_remote_bindings", "no-colon", json!({ "thread_id": "x", "sender_key": "y" })),
+        (
+            "channel_remote_busy",
+            "discord:room:42",
+            json!({ "busy": true, "updated_at": "2026-01-01T00:00:00Z" }),
+        ),
+        (
+            "channel_remote_bindings",
+            "no-colon",
+            json!({ "thread_id": "x", "sender_key": "y" }),
+        ),
     ])
     .await;
 
@@ -192,7 +210,10 @@ async fn bindings_and_busy_flags_are_rekeyed_by_channel_and_target() {
         found.doc,
         json!({ "thread_id": "th", "sender_key": "sk", "title": "Chat" })
     );
-    assert_eq!(found.meta.created_ms, 1_767_225_600_000, "updated_at kept as creation time");
+    assert_eq!(
+        found.meta.created_ms, 1_767_225_600_000,
+        "updated_at kept as creation time"
+    );
     assert_eq!(
         body(&storage, schema::REMOTE_BINDINGS, "telegram/9").await,
         Some(json!({ "thread_id": "t2", "sender_key": "s2", "title": null }))
@@ -201,7 +222,11 @@ async fn bindings_and_busy_flags_are_rekeyed_by_channel_and_target() {
         body(&storage, schema::REMOTE_BUSY, "discord/room:42").await,
         Some(json!({ "busy": true }))
     );
-    assert!(body(&storage, schema::REMOTE_BINDINGS, "no-colon").await.is_none());
+    assert!(
+        body(&storage, schema::REMOTE_BINDINGS, "no-colon")
+            .await
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -242,7 +267,12 @@ async fn whatsapp_key_material_is_copied_byte_for_byte() {
     .await;
 
     assert_eq!(
-        body(&storage, schema::WHATSAPP_IDENTITY, "ab12/111@s.whatsapp.net.0").await,
+        body(
+            &storage,
+            schema::WHATSAPP_IDENTITY,
+            "ab12/111@s.whatsapp.net.0"
+        )
+        .await,
         Some(json!({ "account": "ab12", "key": "111@s.whatsapp.net.0", "data_b64": material }))
     );
     assert_eq!(
@@ -276,9 +306,18 @@ async fn whatsapp_library_records_keep_their_payload_and_only_move_ids() {
     ])
     .await;
 
-    assert_eq!(body(&storage, schema::WHATSAPP_DEVICE, "ab12/device").await, Some(device));
-    assert_eq!(body(&storage, schema::WHATSAPP_SYNC_KEY, "ab12/0a0b").await, Some(sync));
-    assert_eq!(body(&storage, schema::WHATSAPP_LID_MAPPING, "ab12/100").await, Some(lid));
+    assert_eq!(
+        body(&storage, schema::WHATSAPP_DEVICE, "ab12/device").await,
+        Some(device)
+    );
+    assert_eq!(
+        body(&storage, schema::WHATSAPP_SYNC_KEY, "ab12/0a0b").await,
+        Some(sync)
+    );
+    assert_eq!(
+        body(&storage, schema::WHATSAPP_LID_MAPPING, "ab12/100").await,
+        Some(lid)
+    );
 }
 
 #[tokio::test]

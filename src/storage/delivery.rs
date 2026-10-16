@@ -29,11 +29,11 @@ use tinychannels_bus::module_delivery::{
     DELIVERY_RESULT_TTL_SECONDS,
 };
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, Key, Precondition, Query,
-    Sort, StorageError, Versioned, WriteOptions,
+    CollectionSpec, DocumentStore, DocumentStoreExt, EXPIRES_FIELD, ErrorKind, Filter, Key,
+    Precondition, Query, Sort, StorageError, Versioned, WriteOptions,
 };
 
-use super::records::{StoredDelivery, StoredResult, from_stored_ms, to_stored_ms};
+use super::records::{StoredDelivery, StoredResult, to_stored_ms};
 use super::schema::{self, SCHEMA_VERSION};
 use crate::delivery::{
     DeliveryQueueError, DeliveryQueueStore, DeliveryResultStore, QueuedDelivery,

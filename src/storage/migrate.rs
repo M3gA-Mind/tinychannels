@@ -27,9 +27,9 @@ use tinystoragedrivers_core::schema::{SourceRecord, Step, TargetRecord};
 
 use super::records::{StoredDelivery, StoredResult, to_stored_ms};
 use super::schema::{
-    DELIVERY_FAILED, DELIVERY_PENDING, DELIVERY_RESULTS, REMOTE_BINDINGS, REMOTE_BUSY,
-    REMOTE_META, WHATSAPP_DEVICE, WHATSAPP_IDENTITY, WHATSAPP_LID_MAPPING, WHATSAPP_PREKEY,
-    WHATSAPP_SENDER_KEY, WHATSAPP_SESSION, WHATSAPP_SIGNED_PREKEY, WHATSAPP_SYNC_KEY,
+    DELIVERY_FAILED, DELIVERY_PENDING, DELIVERY_RESULTS, REMOTE_BINDINGS, REMOTE_BUSY, REMOTE_META,
+    WHATSAPP_DEVICE, WHATSAPP_IDENTITY, WHATSAPP_LID_MAPPING, WHATSAPP_PREKEY, WHATSAPP_SENDER_KEY,
+    WHATSAPP_SESSION, WHATSAPP_SIGNED_PREKEY, WHATSAPP_SYNC_KEY,
 };
 use crate::delivery::QueuedDelivery;
 use crate::remote::ChatBinding;
@@ -39,8 +39,16 @@ const LOG_PREFIX: &str = "[channel-storage-migrate]";
 /// Every step, in the order the schema runs them.
 pub(crate) fn steps() -> Vec<Step> {
     vec![
-        delivery_entries("delivery-pending-v2", "channels_delivery_pending", DELIVERY_PENDING),
-        delivery_entries("delivery-failed-v2", "channels_delivery_failed", DELIVERY_FAILED),
+        delivery_entries(
+            "delivery-pending-v2",
+            "channels_delivery_pending",
+            DELIVERY_PENDING,
+        ),
+        delivery_entries(
+            "delivery-failed-v2",
+            "channels_delivery_failed",
+            DELIVERY_FAILED,
+        ),
         Step::new("delivery-results-v2", DELIVERY_RESULTS, 1, 2, |batch| {
             Ok(batch.into_iter().filter_map(delivery_result).collect())
         })
@@ -57,10 +65,30 @@ pub(crate) fn steps() -> Vec<Step> {
             Ok(batch.into_iter().map(remote_meta).collect())
         })
         .source("channel_remote_meta"),
-        whatsapp("whatsapp-device-v2", "whatsapp_device", WHATSAPP_DEVICE, false),
-        whatsapp("whatsapp-identity-v2", "whatsapp_identity", WHATSAPP_IDENTITY, true),
-        whatsapp("whatsapp-session-v2", "whatsapp_session", WHATSAPP_SESSION, true),
-        whatsapp("whatsapp-prekey-v2", "whatsapp_prekey", WHATSAPP_PREKEY, true),
+        whatsapp(
+            "whatsapp-device-v2",
+            "whatsapp_device",
+            WHATSAPP_DEVICE,
+            false,
+        ),
+        whatsapp(
+            "whatsapp-identity-v2",
+            "whatsapp_identity",
+            WHATSAPP_IDENTITY,
+            true,
+        ),
+        whatsapp(
+            "whatsapp-session-v2",
+            "whatsapp_session",
+            WHATSAPP_SESSION,
+            true,
+        ),
+        whatsapp(
+            "whatsapp-prekey-v2",
+            "whatsapp_prekey",
+            WHATSAPP_PREKEY,
+            true,
+        ),
         whatsapp(
             "whatsapp-signed-prekey-v2",
             "whatsapp_signed_prekey",
@@ -73,7 +101,12 @@ pub(crate) fn steps() -> Vec<Step> {
             WHATSAPP_SENDER_KEY,
             true,
         ),
-        whatsapp("whatsapp-sync-key-v2", "whatsapp_sync_key", WHATSAPP_SYNC_KEY, false),
+        whatsapp(
+            "whatsapp-sync-key-v2",
+            "whatsapp_sync_key",
+            WHATSAPP_SYNC_KEY,
+            false,
+        ),
         whatsapp(
             "whatsapp-lid-mapping-v2",
             "whatsapp_lid_mapping",
@@ -94,7 +127,9 @@ fn rewritten(collection: &str, id: Key, body: Value, source: &SourceRecord) -> T
 }
 
 fn skipped(collection: &str, id: &str, why: &str) {
-    tracing::warn!("{LOG_PREFIX} dropping unreadable v1 record collection={collection} id={id}: {why}");
+    tracing::warn!(
+        "{LOG_PREFIX} dropping unreadable v1 record collection={collection} id={id}: {why}"
+    );
 }
 
 fn key_of(parts: &[&str]) -> Result<Key> {
@@ -115,7 +150,11 @@ fn delivery_entries(id: &'static str, legacy: &'static str, target: &'static str
                 }
             };
             if entry.id.is_empty() || entry.intent.idempotency_key != entry.id {
-                skipped(target, &record.id, "entry id does not match its idempotency key");
+                skipped(
+                    target,
+                    &record.id,
+                    "entry id does not match its idempotency key",
+                );
                 continue;
             }
             let body = serde_json::to_value(StoredDelivery::from(&entry))
@@ -196,7 +235,12 @@ fn remote_binding(record: SourceRecord) -> Option<TargetRecord> {
 
 fn remote_busy(record: SourceRecord) -> Option<TargetRecord> {
     let id = chat_id(REMOTE_BUSY, &record.id)?;
-    Some(rewritten(REMOTE_BUSY, id, serde_json::json!({ "busy": true }), &record))
+    Some(rewritten(
+        REMOTE_BUSY,
+        id,
+        serde_json::json!({ "busy": true }),
+        &record,
+    ))
 }
 
 /// The legacy import marker keeps its id and body.
@@ -211,7 +255,13 @@ fn remote_meta(record: SourceRecord) -> TargetRecord {
 
 /// A v1 WhatsApp id is `<account>:<key>`; the body repeats both parts.
 fn whatsapp_parts(record: &SourceRecord) -> Option<(String, String)> {
-    let field = |name: &str| record.body.get(name).and_then(Value::as_str).map(str::to_owned);
+    let field = |name: &str| {
+        record
+            .body
+            .get(name)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    };
     match (field("account"), field("key")) {
         (Some(account), Some(key)) => Some((account, key)),
         _ => record
