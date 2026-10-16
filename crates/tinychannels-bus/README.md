@@ -56,6 +56,12 @@ compatibility.
 This source contract still requires a compatible published native module before
 a downstream host can claim released composition.
 
+Provider notifications use `ChannelEvent`, a versioned DTO with a `type`
+discriminator, stable event/source IDs, source time, `ChannelRef`, and the full
+optional `ConversationRef`. The module sends it through `ChannelsHost.DeliverEvent`
+in the same ordered callback queue as inbound messages. `PublishEvent` remains
+available for older, unrelated domain publications.
+
 The controller vocabulary includes complete Discord guild, text-channel and
 permission DTOs. Provider APIs re-export these types at their existing paths;
 REST calls and permission calculations remain implementation behavior.

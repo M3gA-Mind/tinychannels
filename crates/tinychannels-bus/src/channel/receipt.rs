@@ -45,8 +45,10 @@ pub struct MessageReceiptPart {
     pub thread_id: Option<String>,
     pub reply_to_id: Option<String>,
     /// Opaque provider token for editing this part, when supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub edit_token: Option<String>,
     /// Opaque provider token for deleting this part, when supported.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub delete_token: Option<String>,
     pub raw: Option<MessageReceiptSourceResult>,
 }
