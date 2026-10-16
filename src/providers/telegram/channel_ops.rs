@@ -34,7 +34,11 @@ impl TelegramChannel {
             .get("message_thread_id")
             .and_then(serde_json::Value::as_i64)
             .map(|id| id.to_string());
-        let reply_to_id = None;
+        let reply_to_id = source
+            .get("reply_to_message")
+            .and_then(|reply| reply.get("message_id"))
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
         let kind = match chat.get("type").and_then(serde_json::Value::as_str) {
             Some("private") => tinychannels_bus::ConversationKind::Dm,
             Some("group" | "supergroup") => tinychannels_bus::ConversationKind::Group,
