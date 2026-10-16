@@ -139,9 +139,20 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         },
     };
 
-    let sent = intent_to_legacy_message(&intent).unwrap();
-    assert_eq!(sent.content, "caption");
-    assert_eq!(sent.thread_ts.as_deref(), Some("thread"));
+    let sent = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+    assert_eq!(sent.reply_to_id.as_deref(), Some("source-message"));
+    assert_eq!(sent.thread_id.as_deref(), Some("thread"));
+    assert!(matches!(
+        sent.parts.as_slice(),
+        [
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text }
+            },
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image { media, .. }
+            }
+        ] if text == "caption" && media.url.as_deref() == Some("https://example.test/image.png")
+    ));
 }
 
 #[tokio::test]
