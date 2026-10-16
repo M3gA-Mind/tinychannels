@@ -16,6 +16,7 @@
 
 pub mod delivery;
 mod migrate;
+mod records;
 pub mod schema;
 #[cfg(feature = "whatsapp-web")]
 pub mod whatsapp;
