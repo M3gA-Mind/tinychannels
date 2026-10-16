@@ -74,10 +74,13 @@ The original 2026-07-04 portability ladder, now resolved:
 - Not porting targets (app-side consumers of this crate): the `runtime/`
   dispatch engine and the `web` provider — unchanged, they stay in OpenHuman.
 
-Remaining provider debt: WhatsApp Web still uses `wacore`'s in-memory session
-backend and re-links after restart, pending a rusqlite-backed durable store
-(see the remaining-work plan). The finishing slices for the migration are
-tracked in [spec/tinychannels-migration-remaining-plan.md](spec/tinychannels-migration-remaining-plan.md).
+WhatsApp Web persists pairing-critical state through the host's
+`StorageProvider` and `DocumentWhatsAppBackend`. It falls back to the in-memory
+`wacore` session backend only when host storage is absent or unavailable; the
+older rusqlite migration proposal below is historical. See the
+[v2 channel contract](spec/contract-v2.md) for the current target and the
+[historical remaining-work audit](spec/tinychannels-migration-remaining-plan.md)
+for its superseded status and provenance.
 
 ## Current Status and Next Steps
 

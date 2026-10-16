@@ -22,11 +22,14 @@ not replace portable fields when portable fields apply.
 
 ## Wire conventions
 
-- JSON object fields use camelCase; enum values use snake_case.
-- Addressing fields retain the established wire spellings reply_to_id and
-  thread_id in every v21 compatibility shape and in every adapter projection.
-  They are stable exceptions to camelCase and must never be renamed to
-  replyToId/threadId during migration.
+- v21 channel DTO structs use camelCase JSON member names under Serde and
+  snake_case Rust field names; enum values use snake_case.
+- Preserve deployed v21 JSON keys replyToId, threadId, and topicId in v22.
+  These correspond to Rust fields reply_to_id, thread_id, and topic_id.
+  Legacy ChannelMessage and SendMessage have no type-level camelCase rename:
+  their Rust thread_ts field remains thread_ts on the wire. Adapters map
+  legacy thread_ts to/from ConversationRef.threadId without renaming either
+  deployed wire field.
 - Discriminated unions use a stable kind or type field. Unknown additive
   object fields are ignored when safe. Unknown enum variants must fail closed
   where they affect authorization or delivery; otherwise adapters preserve them
@@ -102,7 +105,7 @@ Channel and conversation addressing is lossless. A channel reference contains
 provider/channel id and optional accountId. A conversation reference contains
 kind, opaque id, and optional scopeId, parentId, threadId, and topicId.
 scopeId distinguishes tenants, servers, workspaces, or guilds; parentId
-identifies a parent conversation; thread and topic are separate because
+identifies a parent conversation; threadId and topicId are separate because
 provider semantics differ. A sender reference contains opaque id, ordered
 altIds, optional display name, isBot, and provider roles.
 
@@ -115,8 +118,8 @@ ChannelInboundEnvelope contains:
 | conversation | Lossless conversation and scope address. |
 | sender | Sender identity facts as provided by the channel. |
 | parts | Ordered content parts; text is retained as a compatibility projection during migration. |
-| reply_to_id | Optional source message being replied to. Preserve the exact provider ID. |
-| thread_id | Optional provider thread identifier. Preserve separately from topic_id. |
+| replyToId | Optional source message being replied to, where supported by the owning DTO. Preserve the exact provider ID. |
+| threadId | Optional provider thread identifier, mapped from legacy thread_ts. Preserve separately from topicId. |
 | access | Ingress facts and upstream authorization result; not host policy. |
 | raw | Optional provider payload for diagnostics/adaptation; private data must be redacted before logging. |
 | timestamp | Optional source timestamp in Unix milliseconds. |
@@ -137,19 +140,28 @@ is authenticated transport provenance held out-of-band and is never accepted
 from serialized input. Authorization decisions remain host owned.
 
 Outbound requests address channel/account, conversation, optional
-reply_to_id and thread_id, ordered parts, idempotency key, and durability policy
+replyToId and threadId, ordered parts, idempotency key, and durability policy
 (required, best_effort, disabled). Retries for a given idempotency key must not
 intentionally create a second logical delivery. required means the host's
 durable queue must accept the request before provider send; providers must not
 claim durable acceptance themselves.
 
 Session keys derive from namespace, channel, account, conversation kind,
-scope, conversation, topic, thread, and optionally participant according to
-explicit session policy. Include topic_id and thread_id as distinct segments
-when present; a topic-only address remains distinct when thread_id is absent.
-When both are present, include both in that order. Keep scope, topic and thread
-distinct. A migration must preserve the existing key lookup path; do not switch
-identities by selecting recent files or inventing timestamps.
+scopeId, conversation id, parentId, topicId, threadId, and optionally
+participant according to explicit session policy. A canonical v22 key has a
+version prefix and fixed field order. Each field is encoded as its tag plus
+either an absent marker or a present marker, UTF-8 byte length, and value;
+delimiters inside values cannot collide with field boundaries. An absent topic
+and a present empty topic therefore have different encodings.
+
+Always encode scopeId, parentId, topicId, and threadId separately. If both
+topicId and threadId exist, encode both in that order; topic-only addresses
+remain distinct from addresses without a topic. Apply session policy only to
+the participant segment; it must not erase scope, topic, or thread identity.
+During migration, look up the canonical v22 key first and then the exact v21
+legacy candidates. Do not rewrite legacy keys or choose one by recency. If
+multiple legacy candidates are ambiguous, do not merge their histories; report
+the ambiguity for host resolution.
 
 ## Events and delivery receipts
 
@@ -185,19 +197,21 @@ possible. Preserve source timestamps and provider IDs. A replayed event must
 remain identifiable as the same event. Events do not carry credentials or
 unsanitized exception text.
 
-A send returns MessageReceipt: the idempotency key, sent time, primary
-platform message ID when available, and ordered parts. Each receipt part
-identifies the platform message ID, logical content kind, zero-based part
-index, optional thread_id/reply_to_id, optional edit_token and delete_token,
-and optional opaque raw source result.
+A send returns MessageReceipt: the idempotency key, sent time, channel and
+full ConversationRef, primary platform message ID when available, and ordered
+parts. ConversationRef preserves channel/account scope, parentId, topicId, and
+threadId for the receipt address. Each receipt part identifies the platform
+message ID, logical content kind, zero-based part index, optional threadId and
+replyToId, optional editToken and deleteToken, and optional opaque raw source
+result.
 Multi-message sends return every emitted platform message. A partial send must
 report the parts already delivered and a typed failure for the remainder; it
 must never fabricate all-or-nothing success.
 
-edit_token and delete_token, when required by a provider, are opaque and scoped
+editToken and deleteToken, when required by a provider, are opaque and scoped
 to the receipt part. Receipt raw data is for round-tripping only; callers use
-the normalized fields. Receipt part thread_id and reply_to_id retain those
-exact spellings.
+the normalized fields. v21 DTO Rust fields remain snake_case and preserve their
+deployed camelCase JSON spellings.
 
 ## Unified capabilities
 
@@ -214,16 +228,16 @@ The descriptor has explicit fields:
 
 | Field | Meaning |
 | --- | --- |
-| content_parts | Supported ContentPart kinds: text, image, video, audio, file, voice_note, sticker, location, contact, buttons, poll, presentation, native. |
-| markdown_dialects | Accepted/emitted markup dialects for text parts. |
-| voice_in | Whether voice notes are accepted; accepted codecs, max_duration_ms, max_size_bytes, normalized_waveform, native_waveform, and transcript sources (provider/host_stt). |
-| voice_out | Whether Voice media and Voice synthesize are supported; accepted codecs, max_duration_ms, max_size_bytes, normalized_waveform, native_waveform, available voice identifiers, and synthesis support. |
+| contentParts | Supported ContentPart kinds: text, image, video, audio, file, voice_note, sticker, location, contact, buttons, poll, presentation, native. |
+| markdownDialects | Accepted/emitted markup dialects for text parts. |
+| voiceIn | Whether voice notes are accepted; acceptedCodecs, maxDurationMs, maxSizeBytes, normalizedWaveform, nativeWaveform, and transcriptSources (provider/host_stt). |
+| voiceOut | Whether Voice media and Voice synthesize are supported; acceptedCodecs, maxDurationMs, maxSizeBytes, normalizedWaveform, nativeWaveform, available voice identifiers, and synthesis support. |
 | events | Supported normalized event types: stream_open/delta/finalize, inbound message, edit/delete, inbound/outbound reaction, read/delivered receipt, presence, typing, lifecycle, delivery_status, approval, tool_progress, subagent, usage, artifact, queue, suggestion. |
-| conversation_types | Supported dm, group, channel, and thread conversation kinds. |
-| addressing | Support for account_id, scope_id, parent_id, topic_id, reply_to_id, and thread_id, with provider restrictions represented per operation. |
+| conversationTypes | Supported dm, group, channel, and thread conversation kinds. |
+| addressing | Support for accountId, scopeId, parentId, topicId, replyToId, and threadId, with provider restrictions represented per operation. |
 | actions | Supported send/reply/thread/edit/delete/reaction/read/typing/draft/poll/buttons/native-command actions. |
-| text | text_limit, length_unit (characters, utf8_bytes, utf16_units), markdown dialect, and chunk constraints. |
-| image, video, audio, file, sticker | Accepted/emitted codec or media types, maximum size, and applicable duration/dimension limits. |
+| text | textLimit, lengthUnit (characters, utf8_bytes, utf16_units), markdown dialect, and chunk constraints. |
+| image, video, audio, file, sticker | Accepted/emitted codec or media types, maxSizeBytes, and applicable duration/dimension limits. |
 | location, contact, buttons, poll, presentation, native | Support flags plus typed size/count/action limits where applicable. |
 | delivery | Durable-final support, idempotency, batch, partial result, and unknown-send reconciliation facts. |
 | account | linked/not_linked/configured/not_configured/enabled/disabled state, health and reconnect facts. |
@@ -281,8 +295,8 @@ The migration has one full release compatibility window:
    DTOs. It retains ChannelMessage, SendMessage, the Channel trait and all
    existing TinyBus members.
 2. Ship a single v21 compatibility shim at the boundary. It maps legacy text
-   to one text part and back, preserves reply_to_id/thread_id exactly, and
-   passes through address fields when available. It rejects or explicitly
+   to one text part and back, preserves replyToId/threadId/topicId JSON keys,
+   and passes through address fields when available. It rejects or explicitly
    degrades rich parts according to caller policy; it never fabricates them.
 3. During the first released revision-22 host/module pair, the shim is
    supported and covered in both directions. New v22 paths use parts and the
@@ -309,7 +323,7 @@ every capability; query the configured descriptor.
 | Slack | always-on (Cargo default is empty) | Text, files/media, threads, receipts, reactions, edits, typing, drafts | Workspace scope must remain in address/session identity. |
 | Signal | always-on (Cargo default is empty) | Text, attachments, voice notes, receipts, reactions where supported | Provider capability varies by runtime. |
 | WhatsApp Cloud | always-on (Cargo default is empty) | Text, media/files, voice notes, receipts, reactions where supported | Preserve provider message IDs for idempotency/reconciliation. |
-| WhatsApp Web | whatsapp-web | Same portable content and addressing as supported by runtime | Session persistence is currently in-memory; not a contract guarantee. |
+| WhatsApp Web | whatsapp-web | Same portable content and addressing as supported by runtime | Host StorageProvider persists pairing-critical state through DocumentWhatsAppBackend; in-memory fallback is used only when storage is absent or unavailable. |
 | Email | email | Text, files/media, receipts, reply/reference addressing | Send-only build uses the separate gate below. |
 | Email send-only | email-send | Text and file attachments; no inbound/listen capability | No Channel listener implementation by design. |
 | Lark/Feishu | lark | Text, media/files, threads, cards/native content, receipts | Optional provider dependency. |
@@ -321,11 +335,11 @@ Contract feature coverage is summarized separately from build features:
 
 | Contract feature | Part family | Event family | Capability fields |
 | --- | --- | --- | --- |
-| Rich text | text, markdown dialect | stream_open/delta/finalize | text, markdown_dialects, length_unit, text_limit |
-| Attachments | image, video, audio, file, sticker | message, delivery_status | per-kind media types/codecs, max_size_bytes, duration/dimensions |
-| Voice | voice_note; Voice media/synthesize | message, stream_finalize | voice_in, voice_out, accepted codecs, max duration/size, waveform, transcript source |
+| Rich text | text, markdown dialect | stream_open/delta/finalize | text, markdownDialects, lengthUnit, textLimit |
+| Attachments | image, video, audio, file, sticker | message, delivery_status | per-kind media types/codecs, maxSizeBytes, duration/dimensions |
+| Voice | voice_note; Voice media/synthesize | message, stream_finalize | voiceIn, voiceOut, accepted codecs, max duration/size, normalizedWaveform, nativeWaveform, transcript source |
 | Structured interaction | buttons, poll, presentation, native | outbound_reaction, approval, artifact, suggestion | actions, per-kind support and limits |
-| Identity and addressing | sender, channel, conversation, scope, reply_to_id, thread_id | message, reaction, receipts, presence, typing | conversation types, address features |
+| Identity and addressing | sender, channel, conversation, scopeId, parentId, topicId, replyToId, threadId | message, reaction, receipts, presence, typing | conversationTypes, addressing |
 | Delivery | ordered parts and idempotency key | delivery_status, read_receipt, delivered_receipt | durability, partial results, reconcileUnknownSend |
 | Runtime and harness | all applicable parts | lifecycle, tools, subagent, usage, queue | events, account state, health, reconnect facts |
 
@@ -356,6 +370,8 @@ finished the contract.
 This contract supersedes the earlier channel-model and migration claims in
 [tinychannels-execution-plan.md](tinychannels-execution-plan.md),
 [openclaw-hermes-channel-porting.md](openclaw-hermes-channel-porting.md), and
-[porting.md](../porting.md). Those documents remain historical research and
-migration context; their proposed shapes and status statements are not
-authoritative where they conflict with this contract.
+[porting.md](../porting.md), and
+[tinychannels-migration-remaining-plan.md](tinychannels-migration-remaining-plan.md).
+Those documents remain historical research and migration context; their
+proposed shapes and status statements are not authoritative where they conflict
+with this contract.
