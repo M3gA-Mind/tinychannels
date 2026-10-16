@@ -28,9 +28,10 @@ pub mod traits;
 pub mod version;
 pub use capabilities::{ChannelCapabilities, capabilities_for, provider_id};
 pub use channel::{
-    ChannelInboundEnvelope, ChannelOutboundIntent, ChannelOutboundMessage, ContentPart,
-    DeliveryDurability, MediaKind, MediaReference, OutboundContentPart, OutboundPayload,
-    OutboundVoice, VoiceNote, VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
+    ChannelInboundEnvelope, ChannelOutboundIntent, ChannelOutboundMessage, ChannelRef,
+    ContentPart, ConversationKind, ConversationRef, DeliveryDurability, MediaKind, MediaReference,
+    OutboundContentPart, OutboundPayload, OutboundVoice, VoiceNote, VoiceTranscript,
+    VoiceTranscriptSource, VoiceTranscriptState, SenderRef,
 };
 pub use config::ChannelsConfig;
 pub use controllers::{ChannelAuthMode, ChannelDefinition};
