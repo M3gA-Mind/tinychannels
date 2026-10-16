@@ -195,6 +195,46 @@ async fn typed_send_rejects_non_numeric_reply_reference_before_provider_io() {
     assert!(json_bodies(&server, "sendMessage").await.is_empty());
 }
 
+#[test]
+#[allow(
+    deprecated,
+    reason = "the normalization fallback is specifically for the v21 provider adapter"
+)]
+fn inbound_envelope_keeps_chat_channel_and_legacy_identity_fallbacks() {
+    let legacy = ChannelMessage {
+        id: "telegram_-100_7".into(),
+        sender: "legacy-sender".into(),
+        sender_name: Some("Legacy display".into()),
+        reply_target: "-100:topic-4".into(),
+        content: "legacy body".into(),
+        channel: "telegram".into(),
+        ..Default::default()
+    };
+    let channel_update = serde_json::json!({
+        "message": {
+            "message_id": 7,
+            "chat": {"type":"channel"},
+            "sender_chat": {"id": 9001}
+        }
+    });
+    let channel = TelegramChannel::inbound_envelope_from_update(&channel_update, &legacy);
+    assert_eq!(channel.conversation.kind, tinychannels_bus::ConversationKind::Channel);
+    assert_eq!(channel.conversation.id, "-100");
+    assert_eq!(channel.sender.id, "9001");
+    assert_eq!(channel.sender.name.as_deref(), Some("Legacy display"));
+
+    let unknown_update = serde_json::json!({
+        "message": {
+            "chat": {"id": 17, "type":"unknown"},
+            "from": {}
+        }
+    });
+    let unknown = TelegramChannel::inbound_envelope_from_update(&unknown_update, &legacy);
+    assert_eq!(unknown.conversation.kind, tinychannels_bus::ConversationKind::Unknown);
+    assert_eq!(unknown.conversation.id, "17");
+    assert_eq!(unknown.sender.id, "legacy-sender");
+}
+
 #[tokio::test]
 async fn typed_send_keeps_delivered_chunk_ids_when_later_chunk_fails() {
     let server = mock_api().await;
