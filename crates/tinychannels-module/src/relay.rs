@@ -313,8 +313,14 @@ fn closed() -> Error {
     Error::failed("relay is stopped or module is shutting down")
 }
 fn validate_config(config: &RelayRuntimeConfig) -> Result<()> {
+    let unique_identities: std::collections::BTreeSet<_> = config
+        .identities
+        .iter()
+        .map(|identity| (identity.platform.as_str(), identity.bot_id.as_str()))
+        .collect();
     if !config.is_listener_configured()
         || config.identities.len() > 32
+        || unique_identities.len() != config.identities.len()
         || config.url.len() > 4096
         || config
             .upgrade_secret
@@ -428,27 +434,29 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels, v2
                 }
                 let (next, state) = if observed_native.is_closed() {
                     (RelayPhase::Reconnecting, State::Reconnecting)
-                } else if v2 && {
+                } else if v2 {
                     let descriptors = observed_native.capabilities_v2().await;
-                    v2_capabilities_complete(&expected_identities, &descriptors)
-                } {
-                    let instances = observed_native
-                        .capabilities_v2()
-                        .await
-                        .into_iter()
-                        .map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 {
-                            platform: identity.platform,
-                            bot_id: identity.bot_id,
-                            capabilities,
-                        })
-                        .collect();
-                    (
-                        RelayPhase::Connected,
-                        State::ConnectedV2(RelayCapabilitiesV2 {
-                            contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
-                            instances,
-                        }),
-                    )
+                    if !observed_native.is_closed()
+                        && v2_capabilities_complete(&expected_identities, &descriptors)
+                    {
+                        let instances = descriptors
+                            .into_iter()
+                            .map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 {
+                                platform: identity.platform,
+                                bot_id: identity.bot_id,
+                                capabilities,
+                            })
+                            .collect();
+                        (
+                            RelayPhase::Connected,
+                            State::ConnectedV2(RelayCapabilitiesV2 {
+                                contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
+                                instances,
+                            }),
+                        )
+                    } else {
+                        (RelayPhase::Reconnecting, State::Reconnecting)
+                    }
                 } else if !v2 && let Some(descriptor) = observed_native.descriptor().await {
                     (RelayPhase::Connected, State::Connected(descriptor))
                 } else {
@@ -529,10 +537,15 @@ fn v2_capabilities_complete(
     expected: &[RelayIdentity],
     actual: &std::collections::HashMap<RelayIdentity, tinychannels_bus::ChannelCapabilities>,
 ) -> bool {
-    expected.len() == actual.len()
-        && expected
-            .iter()
-            .all(|identity| actual.contains_key(identity))
+    let expected: std::collections::BTreeSet<_> = expected
+        .iter()
+        .map(|identity| (identity.platform.as_str(), identity.bot_id.as_str()))
+        .collect();
+    let actual: std::collections::BTreeSet<_> = actual
+        .keys()
+        .map(|identity| (identity.platform.as_str(), identity.bot_id.as_str()))
+        .collect();
+    !expected.is_empty() && expected == actual
 }
 
 #[cfg(test)]
