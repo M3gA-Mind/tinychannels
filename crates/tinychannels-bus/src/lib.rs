@@ -2,6 +2,10 @@
 //! Provider seams and algorithms live in `tinychannels-runtime`; the root
 //! implementation crate preserves legacy module paths through re-exports.
 pub mod capabilities;
+#[allow(
+    deprecated,
+    reason = "v21 conversion implementations remain for one release"
+)]
 pub mod channel;
 pub mod config;
 pub mod context;
@@ -10,20 +14,29 @@ pub mod error;
 pub mod health;
 pub mod host;
 pub mod http;
+#[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_control;
 pub mod module_controller;
 pub mod module_delivery;
 pub mod module_email;
+#[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_inbound;
+#[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_interaction;
 pub mod module_progressive;
 pub mod module_relay;
+#[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_remote;
 pub mod module_routes;
+#[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_runtime;
 pub mod module_supervision;
 pub mod names;
 pub mod relay;
+#[allow(
+    deprecated,
+    reason = "v21 DTO definitions and adapters remain for one release"
+)]
 pub mod traits;
 pub mod version;
 pub use capabilities::{ChannelCapabilities, capabilities_for, provider_id};
@@ -49,6 +62,10 @@ pub use module_email::{
     EmailUploadHandle,
 };
 pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, methods};
+#[allow(
+    deprecated,
+    reason = "re-export the one-release v21 compatibility DTOs"
+)]
 pub use traits::{Channel, ChannelMessage, ChannelSendExt, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};
 

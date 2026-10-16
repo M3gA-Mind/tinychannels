@@ -6,18 +6,33 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+#[allow(
+    deprecated,
+    reason = "listener API remains a v21 adapter for one release"
+)]
 use crate::traits::ChannelMessage;
 use rand::RngExt as _;
 use tokio_util::sync::CancellationToken;
 
+#[allow(deprecated, reason = "legacy provider adapters migrate in issue #103")]
 mod cli;
+#[allow(deprecated, reason = "legacy listener adapters migrate in issue #103")]
 mod dispatch;
 mod health;
+#[allow(
+    deprecated,
+    reason = "legacy session projection remains during v22 migration"
+)]
 mod session;
 
 pub use cli::CliChannel;
+#[allow(
+    deprecated,
+    reason = "legacy listener API remains during v22 migration"
+)]
 pub use dispatch::{RuntimeChannelMessage, run_dispatch_loop};
 pub use health::{ChannelHealthState, check_channels_health, classify_health_result};
+#[allow(deprecated, reason = "legacy session API remains during v22 migration")]
 pub use session::{ChannelSession, run_in_session};
 
 /// Maximum reconnect jitter added to a listener retry.
@@ -121,6 +136,10 @@ pub fn select_acknowledgment_reaction(content: &str) -> &'static str {
 
 /// Spawn a reconnecting listener. Host-specific observability is delivered to
 /// `observer`; the retry policy remains identical for every host.
+#[allow(
+    deprecated,
+    reason = "legacy provider listener adapter migrates in issue #103"
+)]
 pub fn spawn_supervised_listener(
     channel: Arc<dyn Channel>,
     tx: tokio::sync::mpsc::Sender<ChannelMessage>,
@@ -205,12 +224,18 @@ mod runtime_extras_tests;
 mod tests;
 
 pub mod adapters;
+#[allow(deprecated, reason = "v21 conversion shims remain for one release")]
 pub mod channel;
+#[allow(
+    deprecated,
+    reason = "legacy host context consumes the v21 adapter during migration"
+)]
 pub mod context;
 pub mod delivery;
 pub mod relay;
 pub mod security;
 pub mod text;
+#[allow(deprecated, reason = "v21 send adapter remains for one release")]
 pub mod traits;
 pub use tinychannels_bus::{capabilities, error, names, version};
 pub use traits::{Channel, ChannelSendExt, SendMessageExt};
