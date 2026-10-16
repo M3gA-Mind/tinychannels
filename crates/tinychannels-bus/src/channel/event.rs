@@ -70,6 +70,8 @@ pub enum ChannelEventKind {
     /// A sent reaction's provider result.
     OutboundReaction {
         message_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        provider_message_id: Option<String>,
         reaction: ChannelReaction,
         success: bool,
     },

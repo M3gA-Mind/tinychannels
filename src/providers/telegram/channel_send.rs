@@ -122,7 +122,8 @@ impl TelegramChannel {
                     ..Default::default()
                 }),
                 event: tinychannels_bus::ChannelEventKind::OutboundReaction {
-                    message_id: message_id.to_string(),
+                    message_id: format!("telegram_{chat_id}_{message_id}"),
+                    provider_message_id: Some(message_id.to_string()),
                     reaction: tinychannels_bus::ChannelReaction {
                         value: emoji.trim().to_owned(),
                         custom_emoji_id: None,
@@ -222,10 +223,21 @@ impl TelegramChannel {
             }
 
             let markdown_status = markdown_resp.status();
-            let _ = markdown_resp.bytes().await;
+            let markdown_body = markdown_resp.bytes().await.unwrap_or_default();
+            if !is_markdown_parse_rejection(markdown_status, &markdown_body) {
+                return Err(partial_text_send_error(
+                    message_ids,
+                    format!(
+                        "Telegram sendMessage rejected with HTTP {}",
+                        markdown_status.as_u16()
+                    ),
+                    markdown_status.is_server_error() || markdown_status.as_u16() == 429,
+                    markdown_status.is_server_error(),
+                ));
+            }
             tracing::warn!(
                 status = ?markdown_status,
-                "Telegram sendMessage with Markdown failed; retrying without parse_mode"
+                "Telegram rejected Markdown formatting; retrying once without parse_mode"
             );
 
             let mut plain_body = serde_json::json!({
@@ -793,6 +805,25 @@ impl TelegramChannel {
         self.send_media_by_url("sendVoice", "voice", chat_id, thread_id, url, caption)
             .await
     }
+}
+
+fn is_markdown_parse_rejection(status: reqwest::StatusCode, body: &[u8]) -> bool {
+    if status != reqwest::StatusCode::BAD_REQUEST {
+        return false;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    let Some(description) = value
+        .get("description")
+        .and_then(serde_json::Value::as_str)
+    else {
+        return false;
+    };
+    let description = description.to_ascii_lowercase();
+    description.contains("can't parse entities")
+        || description.contains("can't find end of the entity")
+        || description.contains("entity beginning")
 }
 
 fn partial_text_send_error(
