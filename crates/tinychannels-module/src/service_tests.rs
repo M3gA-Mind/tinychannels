@@ -187,7 +187,15 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
             media_urls: vec!["https://example.test/image.png".into()],
         },
         tinychannels_bus::OutboundPayload::Voice {
-            media_url: "https://example.test/audio.ogg".into(),
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    url: Some("https://example.test/audio.ogg".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                codec: Some("audio/ogg".into()),
+                duration_ms: Some(1200),
+            },
         },
         tinychannels_bus::OutboundPayload::Files {
             file_urls: vec!["https://example.test/file.pdf".into()],

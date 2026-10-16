@@ -829,9 +829,9 @@ fn outbound_payload_variants_keep_legacy_and_relay_content() {
         ),
         (
             OutboundPayload::Voice {
-                media_url: "audio".into(),
+                voice: tinychannels_bus::OutboundVoice::Synthesize { text: "audio".into(), voice: None },
             },
-            json!({"voiceUrl":"audio"}),
+            json!({"voice":{"kind":"synthesize","text":"audio","voice":null}}),
             "audio",
         ),
         (

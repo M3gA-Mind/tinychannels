@@ -72,7 +72,7 @@ pub fn legacy_message_value_from_outbound_intent(intent: &ChannelOutboundIntent)
         OutboundPayload::Media { text, media_urls } => {
             serde_json::json!({ "text": text, "mediaUrls": media_urls })
         }
-        OutboundPayload::Voice { media_url } => serde_json::json!({ "voiceUrl": media_url }),
+        OutboundPayload::Voice { voice } => serde_json::json!({ "voice": voice }),
         OutboundPayload::Files { file_urls } => serde_json::json!({ "fileUrls": file_urls }),
         OutboundPayload::Poll { question, options } => {
             serde_json::json!({ "poll": { "question": question, "options": options } })
