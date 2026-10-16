@@ -446,6 +446,8 @@ impl Running {
                             .send_typed_with_receipt(&message)
                             .await
                             .map(|mut outcome| {
+                                outcome.receipt.idempotency_key =
+                                    Some(message.idempotency_key.clone());
                                 outcome.receipt.channel = Some(tinychannels_bus::ChannelRef {
                                     id: tinychannels_bus::provider_id(&configured_instance)
                                         .to_owned(),

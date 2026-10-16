@@ -894,6 +894,7 @@ async fn required_success_and_replay_return_same_actual_scoped_receipt_without_r
     let receipt = first.receipt.unwrap();
     assert_eq!(Some(receipt.clone()), second.receipt);
     assert_eq!(receipt.platform_message_ids, ["actual-id-9"]);
+    assert_eq!(receipt.idempotency_key.as_deref(), Some("receipt-replay"));
     assert_eq!(receipt.edit_token.as_deref(), Some("telegram:edit:9"));
     assert_eq!(receipt.delete_token.as_deref(), Some("telegram:delete:9"));
     assert_eq!(receipt.channel.as_ref().unwrap().id, "fixture");

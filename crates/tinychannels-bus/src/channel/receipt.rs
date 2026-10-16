@@ -73,6 +73,9 @@ impl Default for MessageReceiptPart {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MessageReceipt {
+    /// Idempotency context for replaying a logical outbound operation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idempotency_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub channel: Option<ChannelRef>,
     #[serde(skip_serializing_if = "Option::is_none")]
