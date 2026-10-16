@@ -1815,6 +1815,7 @@ async fn runtime_command_preparation_covers_supported_commands_and_limits() {
     };
 
     let service = inbound_preparation_service().await;
+    enable_remote_providers(&service).await;
     let request = |content: &str| PrepareRuntimeCommandRequest {
         channel: "telegram".into(),
         content: content.into(),
@@ -2199,8 +2200,22 @@ async fn host_control_facts_preserve_module_timeout_floor_and_overflow_classific
             })
             .await
             .unwrap(),
-        Response::Capabilities(Box::new(tinychannels_bus::ChannelCapabilities::unknown()))
+        Response::Capabilities(tinychannels_bus::LegacyChannelCapabilities {
+            remote_control: true,
+            ..Default::default()
+        })
     );
+    let Response::CapabilitiesV2(capabilities) = service
+        .prepare_channel_control(Request::CapabilitiesV2 {
+            channel: "tg:fixture".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected v2 capabilities")
+    };
+    assert!(capabilities.remote_control);
+    assert_eq!(capabilities.account.configured, Some(true));
     service.shutdown().await.unwrap();
     assert!(
         service
