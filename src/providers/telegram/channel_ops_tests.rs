@@ -407,7 +407,23 @@ async fn accepted_request_disconnect_remains_ambiguous() {
         .await
         .unwrap();
     let request = accepted.await.unwrap();
-    assert!(request.windows(3).any(|window| window == b"tok"));
+    let header_end = request
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .unwrap();
+    let headers = String::from_utf8_lossy(&request[..header_end]);
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>().ok())
+                .flatten()
+        })
+        .unwrap();
+    let body = &request[header_end + 4..];
+    assert_eq!(body.len(), content_length);
+    assert_eq!(serde_json::from_slice::<serde_json::Value>(body).unwrap()["text"], "hello");
     let error = outcome.error.expect("server accepted then disconnected");
     assert!(error.sent_before_error);
     assert!(outcome.receipt.platform_message_ids.is_empty());
