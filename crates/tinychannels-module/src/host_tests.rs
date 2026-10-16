@@ -548,6 +548,42 @@ async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
 }
 
 #[tokio::test]
+async fn module_event_enrichment_separates_accounts_and_overwrites_provider_authority() {
+    use tinychannels::host::EventSink;
+
+    let (host, callback, _server) = connected_host().await;
+    let source = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "telegram:update:44:reaction:added".into(),
+        source_event_id: Some("44".into()),
+        source_timestamp: Some(12),
+        channel: tinychannels_bus::ChannelRef {
+            id: "spoofed-channel".into(),
+            account_id: Some("caller-spoof".into()),
+        },
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Typing { active: true },
+    };
+    crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
+        .publish_channel_event(source.clone()).await.unwrap();
+    crate::provider::ModuleEvents(host.clone(), "telegram:account-b".into())
+        .publish_channel_event(source).await.unwrap();
+    host.flush().await.unwrap();
+
+    let events = callback.typed_events.lock().await;
+    assert_eq!(events.len(), 2);
+    assert_eq!(events[0].source_event_id.as_deref(), Some("44"));
+    assert_eq!(events[1].source_event_id.as_deref(), Some("44"));
+    assert_eq!(events[0].channel.id, "telegram");
+    assert_eq!(events[0].channel.account_id.as_deref(), Some("telegram:account-a"));
+    assert_eq!(events[1].channel.account_id.as_deref(), Some("telegram:account-b"));
+    assert_ne!(events[0].event_id, events[1].event_id);
+    assert_eq!(events[0].event_id, "telegram:account-a:reaction_added:telegram:update:44:reaction:added");
+    assert_eq!(events[1].event_id, "telegram:account-b:reaction_added:telegram:update:44:reaction:added");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn typed_event_callback_failure_is_reported_and_shutdown_closes_delivery() {
     let (host, callback, _server) = connected_host().await;
     callback.event_failures.store(1, Ordering::SeqCst);
