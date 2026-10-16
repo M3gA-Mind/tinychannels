@@ -688,7 +688,7 @@ async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
     loop {
         io.push(ConnectorToGatewayFrame::DescriptorV2 {
             platform: "discord".into(),
-            bot_id: "a".into(),
+            bot_id: "other".into(),
             capabilities: wrong_version.clone(),
         })
         .await;
@@ -710,6 +710,33 @@ async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
     assert!(
         start.elapsed() < Duration::from_millis(200),
         "unrelated traffic must not restart handshake timeout"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn relay_v2_rejects_an_unsupported_version_for_a_configured_identity() {
+    let io = Arc::new(MemoryRelayIo::default());
+    let transport = Arc::new(discord_transport(io.clone()));
+    transport.connect_v2().await.expect("connect v2");
+    let negotiation = {
+        let transport = transport.clone();
+        tokio::spawn(async move { transport.negotiate_v2().await })
+    };
+    io.wait_for_sent_len(1).await;
+    let mut unsupported = tinychannels_bus::ChannelCapabilities::unknown();
+    unsupported.version = 7;
+    io.push(ConnectorToGatewayFrame::DescriptorV2 {
+        platform: "discord".into(),
+        bot_id: "appShared".into(),
+        capabilities: unsupported,
+    })
+    .await;
+    assert_eq!(
+        negotiation.await.unwrap(),
+        Err(RelayTransportError::UnsupportedCapabilitiesVersion {
+            actual: 7,
+            expected: tinychannels_bus::ChannelCapabilities::VERSION,
+        })
     );
 }
 
