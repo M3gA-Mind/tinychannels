@@ -312,6 +312,11 @@ async fn v2_reconnect_waits_for_each_configured_identity_before_publishing_conne
     assert_eq!(initial.instances.len(), 2);
     release_initial.send(()).unwrap();
     partial_seen.await.unwrap();
+    assert_eq!(
+        manager.capabilities_v2(reservation.clone()).await.unwrap(),
+        None,
+        "a reconnect with only one of two configured descriptors must not expose cached facts"
+    );
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(
         manager.status(reservation.clone()).await.unwrap().state,
