@@ -1,8 +1,14 @@
 # TinyChannels Migration — Remaining-Work Plan
 
-Source-of-truth plan for **finishing** the OpenHuman channel migration into the
-`tinychannels` crate. Derived from a verified 2026-07-17 audit of both repos and
-CI. Supersedes the current-state claims in
+> **Superseded:** this audit and ranking are historical. The current channel
+> contract is [contract-v2.md](contract-v2.md), and the active migration epic
+> is [tinyhumansai/openhuman#7964](https://github.com/tinyhumansai/openhuman/issues/7964).
+> Do not use the prior G0–G7 status or sequencing as current.
+
+Historical source-of-truth plan for **finishing** the OpenHuman channel
+migration into the `tinychannels` crate, derived from a 2026-07-17 audit of
+both repos and CI. Its status and sequencing have been superseded by the active
+contract and epic above. The historical audit superseded the current-state claims in
 [`tinychannels-execution-plan.md`](tinychannels-execution-plan.md) and
 [`../porting.md`](../porting.md), both of which predate the
 `feat/host-boundary-provider-migration` work and understate progress. Rewriting
