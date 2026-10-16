@@ -81,6 +81,10 @@ pub enum OutboundVoice {
 }
 
 /// Typed outbound parts accepted by migrated provider adapters.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the v22 wire enum keeps content parts directly represented"
+)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(
     tag = "kind",
