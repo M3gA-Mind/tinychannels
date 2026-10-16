@@ -43,7 +43,9 @@ fn relay_send_content(payload: &OutboundPayload) -> String {
         OutboundPayload::Text { text } => text.clone(),
         OutboundPayload::Media { text, .. } => text.clone().unwrap_or_default(),
         OutboundPayload::Voice { voice } => match voice {
-            tinychannels_bus::OutboundVoice::Media { media, .. } => media.url.clone().unwrap_or_default(),
+            tinychannels_bus::OutboundVoice::Media { media, .. } => {
+                media.url.clone().unwrap_or_default()
+            }
             tinychannels_bus::OutboundVoice::Synthesize { text, .. } => text.clone(),
         },
         OutboundPayload::Files { file_urls } => file_urls.join("\n"),

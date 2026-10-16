@@ -26,7 +26,9 @@ pub enum OutboundPayload {
         text: Option<String>,
         media_urls: Vec<String>,
     },
-    Voice { voice: OutboundVoice },
+    Voice {
+        voice: OutboundVoice,
+    },
     Files {
         file_urls: Vec<String>,
     },
@@ -170,7 +172,10 @@ impl ChannelOutboundMessage {
 
     /// Convert a legacy message into the v22 typed envelope without inferring
     /// provider capabilities or parsing its text as structured data.
-    pub fn from_legacy_message(channel_id: impl Into<String>, message: &crate::traits::SendMessage) -> Self {
+    pub fn from_legacy_message(
+        channel_id: impl Into<String>,
+        message: &crate::traits::SendMessage,
+    ) -> Self {
         Self {
             channel_id: channel_id.into(),
             conversation_id: message.recipient.clone(),
@@ -178,7 +183,9 @@ impl ChannelOutboundMessage {
             thread_id: message.thread_ts.clone(),
             idempotency_key: message.idempotency_key.clone().unwrap_or_default(),
             parts: vec![OutboundContentPart::Content {
-                part: ContentPart::Text { text: message.content.clone() },
+                part: ContentPart::Text {
+                    text: message.content.clone(),
+                },
             }],
         }
     }
@@ -191,7 +198,8 @@ impl ChannelOutboundMessage {
             subject: None,
             thread_ts: self.thread_id.clone(),
             reply_to_id: self.reply_to_id.clone(),
-            idempotency_key: (!self.idempotency_key.is_empty()).then(|| self.idempotency_key.clone()),
+            idempotency_key: (!self.idempotency_key.is_empty())
+                .then(|| self.idempotency_key.clone()),
         })
     }
 }

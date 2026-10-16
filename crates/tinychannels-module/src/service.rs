@@ -1194,23 +1194,6 @@ async fn setup(connection: Connection) -> BusResult<()> {
     Ok(())
 }
 
-fn intent_to_legacy_message(
-    intent: &ChannelOutboundIntent,
-) -> Result<SendMessage, serde_json::Error> {
-    let typed = tinychannels_bus::ChannelOutboundMessage::from_intent(intent);
-    let content = typed
-        .legacy_text()
-        .map_err(|error| serde_json::Error::io(std::io::Error::other(error.to_string())))?;
-    Ok(SendMessage {
-        content,
-        recipient: intent.conversation_id.clone(),
-        subject: None,
-        thread_ts: intent.thread_id.clone(),
-        reply_to_id: intent.reply_to_id.clone(),
-        idempotency_key: Some(intent.idempotency_key.clone()),
-    })
-}
-
 fn intent_fingerprint(intent: &ChannelOutboundIntent) -> Result<String, serde_json::Error> {
     use sha2::Digest as _;
     let encoded = serde_json::to_vec(intent)?;
