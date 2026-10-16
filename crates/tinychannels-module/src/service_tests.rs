@@ -126,10 +126,16 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         delivery_admission: Arc::new(Mutex::new(())),
     };
     connection
-        .serve_at(tinychannels_bus::OBJECT_PATH.try_into().unwrap(), channels.clone())
+        .serve_at(
+            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+            channels.clone(),
+        )
         .await
         .unwrap();
-    connection.request_name(tinychannels_bus::BUS_NAME).await.unwrap();
+    connection
+        .request_name(tinychannels_bus::BUS_NAME)
+        .await
+        .unwrap();
     let client = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
@@ -151,7 +157,9 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
             tinychannels_bus::BUS_NAME.try_into().unwrap(),
             tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
             tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::methods::SEND_CHANNEL_INTENT.try_into().unwrap(),
+            tinychannels_bus::methods::SEND_CHANNEL_INTENT
+                .try_into()
+                .unwrap(),
             ("fixture", intent),
         )
         .await
@@ -195,13 +203,185 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         delivery_admission: Arc::new(Mutex::new(())),
     };
     connection
-        .serve_at(tinychannels_bus::OBJECT_PATH.try_into().unwrap(), channels.clone())
+        .serve_at(
+            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+            channels.clone(),
+        )
         .await
         .unwrap();
-    connection.request_name(tinychannels_bus::BUS_NAME).await.unwrap();
+    connection
+        .request_name(tinychannels_bus::BUS_NAME)
+        .await
+        .unwrap();
     let client = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
+    let rich_parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "ordered text".into(),
+                markdown_dialect: Some("telegram_markdown_v2".into()),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    url: Some("https://example.test/image.png".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: Some("image caption".into()),
+                alt_text: Some("image alt".into()),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Video {
+                media: tinychannels_bus::MediaReference {
+                    url: Some("https://example.test/video.mp4".into()),
+                    kind: tinychannels_bus::MediaKind::Video,
+                    ..Default::default()
+                },
+                caption: Some("video caption".into()),
+                duration_ms: Some(950),
+                thumbnail: Some(tinychannels_bus::MediaReference {
+                    url: Some("https://example.test/thumb.jpg".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                }),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Audio {
+                media: tinychannels_bus::MediaReference {
+                    url: Some("https://example.test/audio.mp3".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                codec: Some("audio/mpeg".into()),
+                duration_ms: Some(3300),
+                title: Some("audio title".into()),
+                transcript: Some("spoken words".into()),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::File {
+                media: tinychannels_bus::MediaReference {
+                    url: Some("https://example.test/file.pdf".into()),
+                    kind: tinychannels_bus::MediaKind::Document,
+                    file_name: Some("file.pdf".into()),
+                    size_bytes: Some(42),
+                    ..Default::default()
+                },
+                file_name: Some("file.pdf".into()),
+                caption: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Sticker {
+                media: tinychannels_bus::MediaReference {
+                    url: Some("https://example.test/sticker.webp".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                pack_id: Some("pack-opaque".into()),
+                sticker_id: Some("sticker-opaque".into()),
+                emoji: Some("✨".into()),
+                alt_text: Some("sparkles".into()),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Location {
+                latitude: 25.2,
+                longitude: 55.3,
+                label: Some("place".into()),
+                address: Some("address".into()),
+                accuracy_meters: Some(3.5),
+                live_until_unix_ms: Some(5000),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Contact {
+                display_name: "Ada".into(),
+                phone_numbers: vec![tinychannels_bus::ContactMethod {
+                    value: "+1".into(),
+                    label: Some("mobile".into()),
+                }],
+                emails: vec![tinychannels_bus::ContactMethod {
+                    value: "ada@example.test".into(),
+                    label: None,
+                }],
+                organization: Some("Analytical Engines".into()),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Buttons {
+                rows: vec![vec![tinychannels_bus::ButtonAction {
+                    id: "opaque-action".into(),
+                    label: "Continue".into(),
+                    style: Some(tinychannels_bus::ButtonStyle::Primary),
+                    disabled: false,
+                }]],
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Poll {
+                question: "Q?".into(),
+                options: vec!["A".into(), "B".into()],
+                multiple_choice: true,
+                closes_at_unix_ms: Some(8000),
+                provider_poll_id: Some("poll-opaque".into()),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Presentation {
+                blocks: serde_json::json!([{"kind":"text","text":"block"}]),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Native {
+                provider: "fixture".into(),
+                data: serde_json::json!({"opaque":"native"}),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    url: Some("https://example.test/voice.ogg".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                codec: Some("audio/ogg".into()),
+                duration_ms: Some(700),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Synthesize {
+                text: "speak this".into(),
+                voice: Some("voice-opaque".into()),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::VoiceNote {
+                voice_note: tinychannels_bus::VoiceNote {
+                    media: tinychannels_bus::MediaReference {
+                        url: Some("https://example.test/note.ogg".into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    codec: Some("audio/ogg".into()),
+                    duration_ms: Some(2000),
+                    waveform: Some(vec![0.0, 0.4, 1.0]),
+                    push_to_talk: true,
+                    transcript: Some(tinychannels_bus::VoiceTranscript {
+                        text: "note transcript".into(),
+                        language: Some("en".into()),
+                        state: tinychannels_bus::VoiceTranscriptState::Complete,
+                        source: tinychannels_bus::VoiceTranscriptSource::HostStt,
+                    }),
+                },
+            },
+        },
+    ];
     let payloads = vec![
         tinychannels_bus::OutboundPayload::Text {
             text: "hello".into(),
@@ -240,6 +420,9 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         tinychannels_bus::OutboundPayload::NativeChannelData {
             data: serde_json::json!({"opaque":true}),
         },
+        tinychannels_bus::OutboundPayload::Parts {
+            parts: rich_parts.clone(),
+        },
     ];
     for (index, payload) in payloads.into_iter().enumerate() {
         client
@@ -247,28 +430,30 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 tinychannels_bus::BUS_NAME.try_into().unwrap(),
                 tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
                 tinychannels_bus::BUS_NAME.try_into().unwrap(),
-                tinychannels_bus::methods::SEND_CHANNEL_INTENT.try_into().unwrap(),
+                tinychannels_bus::methods::SEND_CHANNEL_INTENT
+                    .try_into()
+                    .unwrap(),
                 (
                     "fixture",
                     ChannelOutboundIntent {
-                    idempotency_key: format!("key-{index}"),
-                    channel_id: "fixture".into(),
-                    conversation_id: "room".into(),
-                    channel_ref: Some(tinychannels_bus::channel::ChannelRef {
-                        id: "fixture".into(),
-                        account_id: Some("account-a".into()),
-                    }),
-                    conversation_ref: Some(tinychannels_bus::channel::ConversationRef {
-                        kind: tinychannels_bus::channel::ConversationKind::Thread,
-                        id: "room".into(),
-                        scope_id: Some("workspace-a".into()),
-                        parent_id: Some("parent-room".into()),
+                        idempotency_key: format!("key-{index}"),
+                        channel_id: "fixture".into(),
+                        conversation_id: "room".into(),
+                        channel_ref: Some(tinychannels_bus::channel::ChannelRef {
+                            id: "fixture".into(),
+                            account_id: Some("account-a".into()),
+                        }),
+                        conversation_ref: Some(tinychannels_bus::channel::ConversationRef {
+                            kind: tinychannels_bus::channel::ConversationKind::Thread,
+                            id: "room".into(),
+                            scope_id: Some("workspace-a".into()),
+                            parent_id: Some("parent-room".into()),
+                            thread_id: Some("thread".into()),
+                            topic_id: Some("topic".into()),
+                        }),
+                        reply_to_id: Some("source-message".into()),
                         thread_id: Some("thread".into()),
-                        topic_id: Some("topic".into()),
-                    }),
-                    reply_to_id: Some("source-message".into()),
-                    thread_id: Some("thread".into()),
-                    durability: tinychannels_bus::DeliveryDurability::BestEffort,
+                        durability: tinychannels_bus::DeliveryDurability::BestEffort,
                         payload,
                     },
                 ),
@@ -341,9 +526,33 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                     part: tinychannels_bus::ContentPart::Native { .. }
                 }
             )),
+            8 => assert_eq!(typed.parts, rich_parts),
             _ => unreachable!(),
         }
     }
+    let empty_parts = ChannelOutboundIntent {
+        idempotency_key: "empty-parts".into(),
+        channel_id: "fixture".into(),
+        conversation_id: "room".into(),
+        durability: tinychannels_bus::DeliveryDurability::BestEffort,
+        payload: tinychannels_bus::OutboundPayload::Parts { parts: Vec::new() },
+        ..Default::default()
+    };
+    let empty_result = client
+        .call::<tinychannels_bus::ChannelSendMessageResult>(
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::methods::SEND_CHANNEL_INTENT
+                .try_into()
+                .unwrap(),
+            ("fixture", empty_parts),
+        )
+        .await;
+    assert!(
+        empty_result.is_err(),
+        "an empty canonical parts list is invalid"
+    );
     channels.shutdown().await.unwrap();
     host.shutdown().await.unwrap();
 }

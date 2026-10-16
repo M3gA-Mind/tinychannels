@@ -223,10 +223,11 @@ impl ChannelOutboundMessage {
         for part in &self.parts {
             match part {
                 OutboundContentPart::Content {
-                part: ContentPart::Text {
-                    text: value,
-                    markdown_dialect: None,
-                },
+                    part:
+                        ContentPart::Text {
+                            text: value,
+                            markdown_dialect: None,
+                        },
                 } => text.push(value.as_str()),
                 _ => anyhow::bail!("provider does not support typed channel content"),
             }

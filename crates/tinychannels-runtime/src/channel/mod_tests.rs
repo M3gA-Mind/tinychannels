@@ -498,8 +498,14 @@ fn typed_text_parts_are_authoritative_over_stale_compatibility_text() {
     let envelope = ChannelInboundEnvelope {
         text: "stale projection".into(),
         parts: vec![
-            ContentPart::Text { text: "first".into(), markdown_dialect: None },
-            ContentPart::Text { text: "second".into(), markdown_dialect: None },
+            ContentPart::Text {
+                text: "first".into(),
+                markdown_dialect: None,
+            },
+            ContentPart::Text {
+                text: "second".into(),
+                markdown_dialect: None,
+            },
         ],
         ..Default::default()
     };
@@ -512,7 +518,10 @@ fn typed_text_parts_are_authoritative_over_stale_compatibility_text() {
 #[test]
 fn telegram_legacy_projection_keeps_simultaneous_thread_and_topic_ids() {
     let envelope = ChannelInboundEnvelope {
-        channel: ChannelRef { id: "telegram:account".into(), account_id: Some("account".into()) },
+        channel: ChannelRef {
+            id: "telegram:account".into(),
+            account_id: Some("account".into()),
+        },
         message_id: "message".into(),
         reply_to_id: Some("reply-parent".into()),
         conversation: ConversationRef {
@@ -528,8 +537,14 @@ fn telegram_legacy_projection_keeps_simultaneous_thread_and_topic_ids() {
     let roundtrip = inbound_envelope_from_legacy_message(&legacy);
 
     assert_eq!(roundtrip.reply_to_id.as_deref(), Some("reply-parent"));
-    assert_eq!(roundtrip.conversation.thread_id.as_deref(), Some("thread-opaque"));
-    assert_eq!(roundtrip.conversation.topic_id.as_deref(), Some("topic-opaque"));
+    assert_eq!(
+        roundtrip.conversation.thread_id.as_deref(),
+        Some("thread-opaque")
+    );
+    assert_eq!(
+        roundtrip.conversation.topic_id.as_deref(),
+        Some("topic-opaque")
+    );
 }
 
 #[test]
