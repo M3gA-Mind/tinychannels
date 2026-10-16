@@ -51,7 +51,8 @@ pub enum ChannelInteraction {
     },
 }
 
-/// Canonical instance-specific capability declaration.
+/// Frozen v21 interaction information returned by the existing `Describe`
+/// operation. New consumers should use `DescribeV2`.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ChannelInteractionInfo {
     pub capabilities: LegacyChannelCapabilities,

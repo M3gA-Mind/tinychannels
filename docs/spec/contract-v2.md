@@ -225,9 +225,13 @@ handshake may use an adapter for its frozen wire shape during the one-release
 compatibility window; v2 uses the shared descriptor directly.
 
 The bus DTO is `ChannelCapabilities` (version 2). It has typed groups for the
-following explicit fields; `Describe` resolves them from the configured
-provider instance and includes account/runtime state. Relay v2 transports the
-same DTO. The legacy relay v1 descriptor remains a frozen wire projection:
+following explicit fields. `DescribeV2` and `CapabilitiesV2` resolve the
+descriptor from the configured provider instance and include account/runtime
+state; relay v2 transports this same DTO. Existing `Describe` and
+`Capabilities` operations retain their v21 snake_case four-flag payloads and
+supplemental Describe fields as mechanical projections from the canonical
+descriptor. The legacy relay v1 descriptor also remains a frozen wire
+projection:
 
 | Field | Meaning |
 | --- | --- |
