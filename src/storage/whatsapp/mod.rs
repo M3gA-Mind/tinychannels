@@ -128,8 +128,10 @@ impl DocumentWhatsAppBackend {
 
     /// `Key::of([account, key])`, so an address holding `:` or `/` stays unambiguous.
     fn id(&self, key: &str) -> String {
-        Key::of([self.account.as_str(), key])
-            .map_or_else(|_| format!("{}/{key}", self.account), |k| k.as_str().to_owned())
+        Key::of([self.account.as_str(), key]).map_or_else(
+            |_| format!("{}/{key}", self.account),
+            |k| k.as_str().to_owned(),
+        )
     }
 
     /// Write one record: the document carries `account` and `key` beside `body`.
