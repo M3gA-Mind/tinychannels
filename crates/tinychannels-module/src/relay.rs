@@ -231,10 +231,42 @@ impl Relays {
         id: RelayReservation,
     ) -> Result<Option<RelayCapabilitiesV2>> {
         let slot = self.get(&id).await?;
-        Ok(match slot.state.borrow().clone() {
-            State::ConnectedV2(capabilities) => Some(capabilities),
-            _ => None,
-        })
+        let expected = match slot.state.borrow().clone() {
+            State::ConnectedV2(capabilities) => capabilities
+                .instances
+                .into_iter()
+                .map(|instance| RelayIdentity {
+                    platform: instance.platform,
+                    bot_id: instance.bot_id,
+                })
+                .collect::<Vec<_>>(),
+            _ => return Ok(None),
+        };
+        if self.terminal.load(Ordering::SeqCst) || *slot.cancel.borrow() {
+            return Ok(None);
+        }
+        let Some(transport) = slot.transport.lock().await.as_ref().cloned() else {
+            return Ok(None);
+        };
+        if transport.is_closed() {
+            return Ok(None);
+        }
+        let descriptors = transport.capabilities_v2().await;
+        if transport.is_closed() || !v2_capabilities_complete(&expected, &descriptors) {
+            return Ok(None);
+        }
+        let instances = descriptors
+            .into_iter()
+            .map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 {
+                platform: identity.platform,
+                bot_id: identity.bot_id,
+                capabilities,
+            })
+            .collect();
+        Ok(Some(RelayCapabilitiesV2 {
+            contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
+            instances,
+        }))
     }
     pub(crate) async fn send(
         &self,
