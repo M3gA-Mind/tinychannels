@@ -2117,7 +2117,7 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
     enable_remote_providers(&service).await;
     let message = serde_json::from_value(serde_json::json!({
         "id":"fixture", "sender":"sender", "reply_target":"chat",
-        "content":"/HELP@FixtureBot", "channel":"telegram", "timestamp":1
+        "content":"/HELP@FixtureBot", "channel":"tg:fixture", "timestamp":1
     }))
     .unwrap();
     let result = service

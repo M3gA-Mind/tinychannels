@@ -149,6 +149,27 @@ async fn interaction_dispatch_preserves_provider_draft_and_typing_behavior() {
 }
 
 #[tokio::test]
+async fn describe_preserves_the_pre_v2_wire_projection_for_existing_hosts() {
+    let result = dispatch(&DraftProvider::default(), ChannelInteraction::Describe)
+        .await
+        .unwrap();
+    let wire = serde_json::to_value(result).unwrap();
+    assert_eq!(wire["result"], "info");
+    assert_eq!(wire["value"]["proactive_target"], "configured-room");
+    assert_eq!(wire["value"]["supports_reactions"], true);
+    assert_eq!(wire["value"]["supports_draft_updates"], true);
+    assert_eq!(
+        wire["value"]["capabilities"],
+        serde_json::json!({
+            "remote_control": false,
+            "chat_approvals": false,
+            "progressive_edits": true,
+            "history_key_ignores_thread": false
+        })
+    );
+}
+
+#[tokio::test]
 async fn describe_reports_capabilities_for_each_configured_instance() {
     let draft = dispatch(&DraftProvider::default(), ChannelInteraction::Describe)
         .await
