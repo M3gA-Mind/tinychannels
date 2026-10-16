@@ -138,6 +138,9 @@ pub struct VoiceNote {
 pub enum ContentPart {
     Text {
         text: String,
+        /// Formatting dialect; formatting remains text, never HTML authority.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        markdown_dialect: Option<String>,
     },
     Image {
         media: MediaReference,
@@ -148,9 +151,13 @@ pub enum ContentPart {
         media: MediaReference,
         caption: Option<String>,
         duration_ms: Option<u64>,
+        thumbnail: Option<MediaReference>,
     },
     Audio {
         media: MediaReference,
+        codec: Option<String>,
+        duration_ms: Option<u64>,
+        title: Option<String>,
         transcript: Option<String>,
     },
     File {
@@ -163,6 +170,9 @@ pub enum ContentPart {
     },
     Sticker {
         media: MediaReference,
+        pack_id: Option<String>,
+        sticker_id: Option<String>,
+        emoji: Option<String>,
         alt_text: Option<String>,
     },
     Location {

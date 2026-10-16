@@ -525,7 +525,8 @@ impl Channels {
                 envelope,
                 timestamp,
             } => (
-                tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp),
+                tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp)
+                    .map_err(|error| BusError::failed(error.to_string()))?,
                 envelope,
             ),
         };

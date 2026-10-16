@@ -61,8 +61,10 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
         .map(str::to_owned);
 
     let provider = msg.channel.split(':').next().unwrap_or_default();
-    let (thread_id, topic_id) = if matches!(provider, "telegram" | "tg") {
-        (None, msg.topic_id.clone().or(thread_ts))
+    let (thread_id, topic_id) = if matches!(provider, "telegram" | "tg") && msg.topic_id.is_none() {
+        // v21 Telegram populated `thread_ts` for its topic. Preserve that
+        // historical interpretation only when the v22 topic field is absent.
+        (None, thread_ts)
     } else {
         (thread_ts, msg.topic_id.clone())
     };
@@ -89,6 +91,7 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
         text: msg.content.clone(),
         parts: vec![ContentPart::Text {
             text: msg.content.clone(),
+            markdown_dialect: None,
         }],
         ..Default::default()
     }
@@ -99,17 +102,29 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
 pub fn legacy_message_from_inbound_envelope(
     envelope: &ChannelInboundEnvelope,
     timestamp: u64,
-) -> ChannelMessage {
-    ChannelMessage {
+) -> anyhow::Result<ChannelMessage> {
+    let content = if envelope.parts.is_empty() {
+        envelope.text.clone()
+    } else {
+        let mut text = Vec::with_capacity(envelope.parts.len());
+        for part in &envelope.parts {
+            match part {
+                ContentPart::Text { text: value, .. } => text.push(value.as_str()),
+                _ => anyhow::bail!("legacy message cannot represent non-text inbound content"),
+            }
+        }
+        text.join("\n")
+    };
+    Ok(ChannelMessage {
         id: envelope.message_id.clone(),
         sender: envelope.sender.id.clone(),
         reply_target: envelope.conversation.id.clone(),
-        content: envelope.text.clone(),
+        content,
         channel: envelope.channel.id.clone(),
         timestamp,
         thread_ts: envelope.conversation.thread_id.clone(),
         topic_id: envelope.conversation.topic_id.clone(),
         reply_to_id: envelope.reply_to_id.clone(),
         sender_name: envelope.sender.name.clone(),
-    }
+    })
 }

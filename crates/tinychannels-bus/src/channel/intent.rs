@@ -117,12 +117,18 @@ impl ChannelOutboundMessage {
         let mut parts = Vec::new();
         match &intent.payload {
             OutboundPayload::Text { text } => parts.push(OutboundContentPart::Content {
-                part: ContentPart::Text { text: text.clone() },
+                part: ContentPart::Text {
+                    text: text.clone(),
+                    markdown_dialect: None,
+                },
             }),
             OutboundPayload::Media { text, media_urls } => {
                 if let Some(text) = text {
                     parts.push(OutboundContentPart::Content {
-                        part: ContentPart::Text { text: text.clone() },
+                        part: ContentPart::Text {
+                            text: text.clone(),
+                            markdown_dialect: None,
+                        },
                     });
                 }
                 parts.extend(media_urls.iter().map(|url| OutboundContentPart::Content {
@@ -217,7 +223,10 @@ impl ChannelOutboundMessage {
         for part in &self.parts {
             match part {
                 OutboundContentPart::Content {
-                    part: ContentPart::Text { text: value },
+                part: ContentPart::Text {
+                    text: value,
+                    markdown_dialect: None,
+                },
                 } => text.push(value.as_str()),
                 _ => anyhow::bail!("provider does not support typed channel content"),
             }
@@ -247,6 +256,7 @@ impl ChannelOutboundMessage {
             parts: vec![OutboundContentPart::Content {
                 part: ContentPart::Text {
                     text: message.content.clone(),
+                    markdown_dialect: None,
                 },
             }],
         }
