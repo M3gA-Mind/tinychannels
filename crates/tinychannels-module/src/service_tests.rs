@@ -146,8 +146,14 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
             text: "hello".to_owned(),
         },
     };
-    let result = channels
-        .send_channel_intent("fixture".to_owned(), intent)
+    let result = client
+        .call::<tinychannels_bus::ChannelSendMessageResult>(
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::methods::SEND_CHANNEL_INTENT.try_into().unwrap(),
+            ("fixture", intent),
+        )
         .await
         .unwrap();
     assert!(result.message_id.is_none());
@@ -169,7 +175,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let host = HostChannels::new(connection);
+    let host = HostChannels::new(connection.clone());
     let (sent, mut received) = tokio::sync::mpsc::channel(8);
     let channel = Arc::new(CaptureTypedChannel(sent));
     let mut running = HashMap::new();
@@ -188,6 +194,14 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         shutdown_task: Mutex::new(None),
         delivery_admission: Arc::new(Mutex::new(())),
     };
+    connection
+        .serve_at(tinychannels_bus::OBJECT_PATH.try_into().unwrap(), channels.clone())
+        .await
+        .unwrap();
+    connection.request_name(tinychannels_bus::BUS_NAME).await.unwrap();
+    let client = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
     let payloads = vec![
         tinychannels_bus::OutboundPayload::Text {
             text: "hello".into(),
