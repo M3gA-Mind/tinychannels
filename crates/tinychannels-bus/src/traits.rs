@@ -199,6 +199,9 @@ pub trait Channel: Send + Sync {
         };
         capabilities.actions.supported = vec!["send".into()];
         if capabilities.progressive_edits {
+            capabilities.actions.supported.push("draft-update".into());
+        }
+        if self.supports_edit() {
             capabilities.actions.supported.push("edit".into());
         }
         if capabilities.reactions {
@@ -229,6 +232,11 @@ pub trait Channel: Send + Sync {
 
     /// Whether progressive draft updates are supported.
     fn supports_draft_updates(&self) -> bool {
+        false
+    }
+
+    /// Whether an existing sent message can be edited independently of draft streaming.
+    fn supports_edit(&self) -> bool {
         false
     }
 
