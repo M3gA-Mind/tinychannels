@@ -516,6 +516,37 @@ fn typed_text_parts_are_authoritative_over_stale_compatibility_text() {
 }
 
 #[test]
+fn legacy_inbound_projection_rejects_rich_parts_instead_of_dropping_them() {
+    let envelope = ChannelInboundEnvelope {
+        text: "compat text".into(),
+        parts: vec![ContentPart::Image {
+            media: MediaReference {
+                url: Some("https://example.test/image.png".into()),
+                kind: MediaKind::Image,
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        }],
+        ..Default::default()
+    };
+
+    assert!(legacy_message_from_inbound_envelope(&envelope, 1).is_err());
+}
+
+#[test]
+fn missing_inbound_parts_fall_back_to_the_legacy_text_field() {
+    let envelope = ChannelInboundEnvelope {
+        text: "legacy text".into(),
+        ..Default::default()
+    };
+
+    let projected = legacy_message_from_inbound_envelope(&envelope, 1).unwrap();
+
+    assert_eq!(projected.content, "legacy text");
+}
+
+#[test]
 fn telegram_legacy_projection_keeps_simultaneous_thread_and_topic_ids() {
     let envelope = ChannelInboundEnvelope {
         channel: ChannelRef {

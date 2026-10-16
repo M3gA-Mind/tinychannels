@@ -46,9 +46,12 @@ cleanup after ten seconds while retaining the owner for a later stop retry.
 Contract version 22 carries `ChannelInboundEnvelope` content parts through
 `DeliverInbound` and `ProcessInbound`, and sends `ChannelOutboundMessage` values
 with ordered typed parts through `SendChannelIntent`. The legacy `ChannelMessage`
-and `SendMessage` conversions are one-release compatibility projections. Their
-outbound adapter accepts text parts only; rich payloads remain available to
-providers that implement `Channel::send_typed`.
+and `SendMessage` conversions are deprecated, one-release compatibility
+projections. Their outbound adapter accepts text parts only; rich payloads
+remain available to providers that implement `Channel::send_typed`. Binding is
+exact-version: a v21 host cannot bind a v22 module, so this shim is for source
+migration and same-version legacy provider adapters, not cross-version callback
+compatibility.
 
 This source contract still requires a compatible published native module before
 a downstream host can claim released composition.
