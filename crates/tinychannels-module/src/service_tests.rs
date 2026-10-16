@@ -126,10 +126,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         delivery_admission: Arc::new(Mutex::new(())),
     };
     connection
-        .serve_at(
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            channels.clone(),
-        )
+        .serve_at(tinychannels_bus::OBJECT_PATH.try_into().unwrap(), channels)
         .await
         .unwrap();
     connection
@@ -172,7 +169,16 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
     assert_eq!(sent.recipient, "room-7");
     assert_eq!(sent.thread_ts.as_deref(), Some("thread-9"));
     assert_eq!(sent.idempotency_key.as_deref(), Some("delivery-42"));
-    channels.shutdown().await.unwrap();
+    client
+        .call::<()>(
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::methods::SHUTDOWN.try_into().unwrap(),
+            (),
+        )
+        .await
+        .unwrap();
     host.shutdown().await.unwrap();
 }
 
@@ -203,10 +209,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         delivery_admission: Arc::new(Mutex::new(())),
     };
     connection
-        .serve_at(
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            channels.clone(),
-        )
+        .serve_at(tinychannels_bus::OBJECT_PATH.try_into().unwrap(), channels)
         .await
         .unwrap();
     connection
@@ -553,7 +556,16 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         empty_result.is_err(),
         "an empty canonical parts list is invalid"
     );
-    channels.shutdown().await.unwrap();
+    client
+        .call::<()>(
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::methods::SHUTDOWN.try_into().unwrap(),
+            (),
+        )
+        .await
+        .unwrap();
     host.shutdown().await.unwrap();
 }
 
