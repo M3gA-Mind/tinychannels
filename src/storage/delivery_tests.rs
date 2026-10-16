@@ -29,6 +29,7 @@ fn result(id: &str, completed_at: u64) -> DeliveryTerminalResult {
         id: id.into(),
         intent_fingerprint: "a".repeat(64),
         completed_at_unix_ms: completed_at,
+        receipt: None,
     }
 }
 
