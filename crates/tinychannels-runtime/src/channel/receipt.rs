@@ -87,7 +87,11 @@ pub fn create_message_receipt_from_outbound_results(
             .filter(|r| has_nested_receipt_data(r))
     });
 
-    let single_part = (parts.len() == 1).then(|| &parts[0]);
+    let (edit_token, delete_token) = if parts.len() == 1 {
+        (parts[0].edit_token.clone(), parts[0].delete_token.clone())
+    } else {
+        (None, None)
+    };
     MessageReceipt {
         primary_platform_message_id: platform_message_ids.first().cloned(),
         platform_message_ids,
@@ -99,8 +103,8 @@ pub fn create_message_receipt_from_outbound_results(
         } else {
             first_nested.map(|r| r.sent_at).unwrap_or_default()
         },
-        edit_token: single_part.and_then(|part| part.edit_token.clone()),
-        delete_token: single_part.and_then(|part| part.delete_token.clone()),
+        edit_token,
+        delete_token,
         raw: Some(results),
         ..Default::default()
     }
