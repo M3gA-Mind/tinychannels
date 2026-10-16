@@ -607,9 +607,9 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         5,
         updates(serde_json::json!([
             {
-                "update_id": 10,
+                "update_id": 15,
                 "message_reaction": {
-                    "chat": { "id": 100 }, "message_id": 4,
+                    "chat": { "id": 100 }, "message_id": 5, "message_thread_id": 88,
                     "user": { "id": 7, "username": "alice" },
                     "new_reaction": [{ "type": "emoji", "emoji": "❤" }]
                 }
@@ -624,8 +624,9 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
             {
                 "update_id": 12,
                 "message": {
-                    "message_id": 6, "chat": { "id": 100, "type": "private" },
-                    "from": { "id": 7, "username": "alice" }, "text": "hello bot"
+                    "message_id": 5, "message_thread_id": 88,
+                    "chat": { "id": 100, "type": "supergroup" },
+                    "from": { "id": 7, "username": "alice" }, "text": "original hello"
                 }
             },
             {
@@ -703,7 +704,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         .await
         .expect("message dispatched")
         .expect("channel open");
-    assert_eq!(first.content, "hello bot");
+    assert_eq!(first.content, "original hello");
     assert_eq!(first.sender, "alice");
     drop(rx);
 
@@ -715,22 +716,28 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
 
     let recorded = events.events.lock().unwrap().clone();
     assert_eq!(recorded.len(), 2);
-    assert_eq!(recorded[0].1, "reaction_added");
-    assert_eq!(recorded[0].2["type"], "reaction_added");
-    assert_eq!(
-        recorded[0].2["eventId"],
-        "telegram:update:10:reaction:added:100:4:❤"
-    );
+    assert_eq!(recorded[0].1, "message_updated");
+    assert_eq!(recorded[0].2["type"], "message_updated");
+    assert_eq!(recorded[0].2["sourceEventId"], "13");
     assert_eq!(recorded[0].2["conversation"]["id"], "100");
-    assert_eq!(recorded[0].2["messageId"], "4");
-    assert_eq!(recorded[0].2["actor"]["id"], "7");
-    assert_eq!(recorded[0].2["reaction"]["value"], "❤");
-    assert_eq!(recorded[1].1, "message_updated");
-    assert_eq!(recorded[1].2["type"], "message_updated");
-    assert_eq!(recorded[1].2["sourceEventId"], "13");
-    assert_eq!(recorded[1].2["conversation"]["kind"], "group");
-    assert_eq!(recorded[1].2["conversation"]["threadId"], "88");
-    assert_eq!(recorded[1].2["parts"][0]["text"], "edited hello");
+    assert_eq!(recorded[0].2["messageId"], "telegram_100_5");
+    assert_eq!(recorded[0].2["providerMessageId"], "5");
+    assert_eq!(recorded[0].2["conversation"]["kind"], "group");
+    assert_eq!(recorded[0].2["conversation"]["topicId"], "88");
+    assert_eq!(recorded[0].2["parts"][0]["text"], "edited hello");
+    assert_eq!(recorded[1].1, "reaction_added");
+    assert_eq!(recorded[1].2["type"], "reaction_added");
+    assert_eq!(recorded[1].2["sourceEventId"], "15");
+    assert_eq!(
+        recorded[1].2["eventId"],
+        "telegram:update:15:reaction:added:100:5:❤"
+    );
+    assert_eq!(recorded[1].2["messageId"], "telegram_100_5");
+    assert_eq!(recorded[1].2["providerMessageId"], "5");
+    assert_eq!(recorded[1].2["conversation"]["id"], "100");
+    assert_eq!(recorded[1].2["conversation"]["topicId"], "88");
+    assert_eq!(recorded[1].2["actor"]["id"], "7");
+    assert_eq!(recorded[1].2["reaction"]["value"], "❤");
     assert_eq!(json_bodies(&server, "deleteWebhook").await.len(), 1);
     // The unauthorized sender got the approval prompt.
     let prompts = sent_texts(&server).await;
