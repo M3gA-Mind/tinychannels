@@ -175,6 +175,14 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
     (HostChannels::new(client), callback, server)
 }
 
+fn inbound_envelope(text: &str) -> tinychannels_bus::ChannelInboundEnvelope {
+    tinychannels_bus::ChannelInboundEnvelope {
+        text: text.into(),
+        parts: vec![tinychannels_bus::ContentPart::Text { text: text.into() }],
+        ..Default::default()
+    }
+}
+
 #[tokio::test]
 async fn shutdown_fences_new_transcription_and_joins_accepted_callback() {
     let (host, callback, _server) = connected_host().await;
@@ -321,7 +329,7 @@ async fn transcription_admission_refuses_when_its_owned_task_limit_is_reached() 
 #[tokio::test]
 async fn callback_consumer_preserves_inbound_then_status_order() {
     let (host, callback, _server) = connected_host().await;
-    host.deliver_inbound("telegram", serde_json::json!({"text":"hello"}))
+    host.deliver_inbound("telegram", inbound_envelope("hello"))
         .await;
     host.report_status("telegram", "connected", None).await;
     host.flush().await.unwrap();
@@ -621,7 +629,7 @@ async fn durable_store_rejects_invalid_and_expired_records() {
 async fn canceled_flush_waiter_keeps_callback_work_and_can_retry() {
     let (host, callback, _server) = connected_host().await;
     callback.blocked.store(true, Ordering::SeqCst);
-    host.deliver_inbound("telegram", serde_json::json!({"text":"hello"}))
+    host.deliver_inbound("telegram", inbound_envelope("hello"))
         .await;
     let waiter = tokio::spawn({
         let host = host.clone();
@@ -650,7 +658,7 @@ async fn absent_optional_host_ignores_status_but_reports_inbound_failure() {
     let host = HostChannels::new(client);
     host.report_status("telegram", "connecting", None).await;
     host.flush().await.unwrap();
-    host.deliver_inbound("telegram", serde_json::json!({"text":"hello"}))
+    host.deliver_inbound("telegram", inbound_envelope("hello"))
         .await;
     assert!(host.flush().await.is_err());
     host.shutdown().await.unwrap();
@@ -668,7 +676,7 @@ async fn runtime_callbacks_do_not_follow_the_default_user() {
         .unwrap();
     let scoped = HostChannels::new_at(legacy.connection(), path);
     scoped
-        .deliver_inbound("telegram", serde_json::json!({"text":"private"}))
+        .deliver_inbound("telegram", inbound_envelope("private"))
         .await;
     scoped.report_status("telegram", "connected", None).await;
     scoped

@@ -431,7 +431,15 @@ impl HostChannels {
     }
 
     /// Enqueue one inbound message; a flush observes delivery failures.
-    pub async fn deliver_inbound(&self, channel: &str, message: serde_json::Value) {
+    pub async fn deliver_inbound(
+        &self,
+        channel: &str,
+        envelope: tinychannels_bus::ChannelInboundEnvelope,
+    ) {
+        let Ok(message) = serde_json::to_value(envelope) else {
+            record_failure(&self.owner.failure, "inbound envelope could not be encoded".into());
+            return;
+        };
         if serde_json::to_vec(&message).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
             record_failure(
                 &self.owner.failure,
