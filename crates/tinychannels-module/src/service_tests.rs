@@ -169,13 +169,6 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
     let client = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    let proxy = client
-        .proxy(
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
-            tinychannels_bus::BUS_NAME.try_into().unwrap(),
-        )
-        .unwrap();
     let intent = ChannelOutboundIntent {
         idempotency_key: "delivery-42".to_owned(),
         channel_id: "fixture".to_owned(),
@@ -2631,6 +2624,13 @@ async fn exported_tinybus_describe_and_control_use_each_running_instances_capabi
         .unwrap();
     let client = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
+        .unwrap();
+    let proxy = client
+        .proxy(
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+        )
         .unwrap();
     for (id, expected) in [("same-provider:a", true), ("same-provider:b", false)] {
         let request = tinychannels_bus::ChannelInteractionRequest {
