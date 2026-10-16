@@ -830,6 +830,7 @@ fn partial_text_send_error(
     retryable: bool,
     sent_before_error: bool,
 ) -> anyhow::Error {
+    let sent_before_error = sent_before_error || !message_ids.is_empty();
     anyhow::Error::new(PartialTextSendError {
         sent_before_error,
         error: tinychannels_bus::channel::ChannelSendError {
