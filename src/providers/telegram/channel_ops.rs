@@ -362,23 +362,33 @@ impl Channel for TelegramChannel {
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> anyhow::Result<tinychannels_bus::MessageReceipt> {
         let text = match message.parts.as_slice() {
-            [tinychannels_bus::OutboundContentPart::Content {
-                part: tinychannels_bus::ContentPart::Text { text, .. },
-            }] => text,
+            [
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { text, .. },
+                },
+            ] => text,
             _ => {
                 self.send_typed(message).await?;
                 return Ok(tinychannels_bus::MessageReceipt::default());
             }
         };
-        let conversation = message.conversation_ref.clone().unwrap_or_else(|| {
-            tinychannels_bus::ConversationRef {
-                id: message.conversation_id.clone(),
-                thread_id: message.thread_id.clone(),
-                ..Default::default()
-            }
-        });
-        let thread_id = conversation.thread_id.as_deref().or(message.thread_id.as_deref());
-        let reply_to_id = message.reply_to_id.as_deref().and_then(|id| id.parse::<i64>().ok());
+        let conversation =
+            message
+                .conversation_ref
+                .clone()
+                .unwrap_or_else(|| tinychannels_bus::ConversationRef {
+                    id: message.conversation_id.clone(),
+                    thread_id: message.thread_id.clone(),
+                    ..Default::default()
+                });
+        let thread_id = conversation
+            .thread_id
+            .as_deref()
+            .or(message.thread_id.as_deref());
+        let reply_to_id = message
+            .reply_to_id
+            .as_deref()
+            .and_then(|id| id.parse::<i64>().ok());
         let ids = self
             .send_text_chunks_with_ids(text, &conversation.id, thread_id, reply_to_id)
             .await?;
@@ -403,7 +413,12 @@ impl Channel for TelegramChannel {
             .collect::<Vec<_>>();
         let single_part = (parts.len() == 1).then(|| parts[0].platform_message_id.clone());
         Ok(tinychannels_bus::MessageReceipt {
-            channel: message.channel_ref.clone().or_else(|| Some(tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None })),
+            channel: message.channel_ref.clone().or_else(|| {
+                Some(tinychannels_bus::ChannelRef {
+                    id: "telegram".into(),
+                    account_id: None,
+                })
+            }),
             conversation: Some(conversation),
             primary_platform_message_id: parts.first().map(|part| part.platform_message_id.clone()),
             platform_message_ids: ids,
@@ -412,7 +427,10 @@ impl Channel for TelegramChannel {
             reply_to_id: message.reply_to_id.clone(),
             edit_token: single_part.clone(),
             delete_token: single_part,
-            sent_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64,
+            sent_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
             raw: None,
         })
     }

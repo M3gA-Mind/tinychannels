@@ -164,7 +164,9 @@ impl TelegramChannel {
                 .await?;
 
             if markdown_resp.status().is_success() {
-                if let Some(id) = Self::telegram_result_message_id(markdown_resp.json::<serde_json::Value>().await.ok()) {
+                if let Some(id) = Self::telegram_result_message_id(
+                    markdown_resp.json::<serde_json::Value>().await.ok(),
+                ) {
                     message_ids.push(id);
                 }
                 if index < chunks.len() - 1 {
@@ -213,7 +215,9 @@ impl TelegramChannel {
                 );
             }
 
-            if let Some(id) = Self::telegram_result_message_id(plain_resp.json::<serde_json::Value>().await.ok()) {
+            if let Some(id) =
+                Self::telegram_result_message_id(plain_resp.json::<serde_json::Value>().await.ok())
+            {
                 message_ids.push(id);
             }
 
@@ -226,7 +230,11 @@ impl TelegramChannel {
     }
 
     fn telegram_result_message_id(response: Option<serde_json::Value>) -> Option<String> {
-        response?.get("result")?.get("message_id")?.as_i64().map(|id| id.to_string())
+        response?
+            .get("result")?
+            .get("message_id")?
+            .as_i64()
+            .map(|id| id.to_string())
     }
 
     async fn send_media_by_url(

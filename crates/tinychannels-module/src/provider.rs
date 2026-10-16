@@ -432,7 +432,9 @@ impl Running {
     ) -> std::result::Result<tinychannels_bus::MessageReceipt, RunningSendError> {
         match self.submit(ProviderOperation::SendTyped(message)).await? {
             tinychannels_bus::ChannelInteractionResult::Sent(receipt) => Ok(receipt),
-            _ => Err(RunningSendError::AfterDispatch("typed send returned no receipt".into())),
+            _ => Err(RunningSendError::AfterDispatch(
+                "typed send returned no receipt".into(),
+            )),
         }
     }
 

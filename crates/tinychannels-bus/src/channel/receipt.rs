@@ -1,9 +1,9 @@
 //! Outbound message receipt normalization.
 
+use crate::channel::types::{ChannelRef, ConversationRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::channel::types::{ChannelRef, ConversationRef};
 
 /// Logical part kind for multi-part rendered messages.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

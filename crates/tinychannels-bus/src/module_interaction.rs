@@ -78,7 +78,9 @@ pub enum ChannelInteractionResult {
     Draft(Option<String>),
     Info(Box<ChannelInteractionInfo>),
     InfoV2(Box<ChannelInteractionInfoV2>),
-    TypingRefresh { handle: String },
+    TypingRefresh {
+        handle: String,
+    },
 }
 
 #[cfg(test)]
