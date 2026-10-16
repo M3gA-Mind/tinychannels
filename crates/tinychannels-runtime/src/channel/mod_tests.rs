@@ -1,5 +1,6 @@
 use super::*;
 use serde_json::json;
+use tinychannels_bus::ContentPart;
 
 #[test]
 fn durable_final_delivery_capabilities_match_openclaw_order() {
