@@ -83,7 +83,7 @@ fn channel_events_round_trip_with_discriminator_source_and_full_address() {
         },
     };
     let wire = serde_json::to_value(&event).unwrap();
-    assert_eq!(wire["type"], "reaction");
+    assert_eq!(wire["type"], "reaction_removed");
     assert_eq!(wire["conversation"]["scopeId"], "scope");
     assert_eq!(wire["conversation"]["parentId"], "parent");
     assert_eq!(wire["conversation"]["topicId"], "topic");

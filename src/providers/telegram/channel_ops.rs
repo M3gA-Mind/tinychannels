@@ -535,6 +535,7 @@ Ensure only one `openhuman` process is using this bot token."
                     }
 
                     let reactions = self.parse_update_reactions(update);
+                    if update.get("message_reaction").is_some() {
                     if !reactions.is_empty() {
                       for reaction in reactions {
                         tracing::info!(
@@ -595,6 +596,8 @@ Ensure only one `openhuman` process is using this bot token."
                         }
                       }
                       continue;
+                    }
+                    continue;
                     }
 
                     // Telegram edits arrive as a distinct update field. Keep
