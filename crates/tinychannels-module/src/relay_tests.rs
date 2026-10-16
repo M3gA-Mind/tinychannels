@@ -7,6 +7,21 @@ use tinychannels::relay::{ConnectorToGatewayFrame, GatewayToConnectorFrame};
 use tinychannels_bus::config::RelayRuntimeIdentityConfig;
 use tokio_tungstenite::tungstenite::Message;
 
+#[test]
+fn v2_reconnect_is_not_connected_until_every_configured_identity_replies() {
+    let identities = vec![
+        RelayIdentity { platform: "telegram".into(), bot_id: "first".into() },
+        RelayIdentity { platform: "telegram".into(), bot_id: "second".into() },
+    ];
+    let mut descriptors = std::collections::HashMap::new();
+    descriptors.insert(identities[1].clone(), tinychannels_bus::ChannelCapabilities::unknown());
+    assert!(!v2_capabilities_complete(&identities, &descriptors));
+    // Responses may arrive in either order; publishing connected requires the
+    // second identity's descriptor as well.
+    descriptors.insert(identities[0].clone(), tinychannels_bus::ChannelCapabilities::unknown());
+    assert!(v2_capabilities_complete(&identities, &descriptors));
+}
+
 #[derive(Clone)]
 struct Callback {
     events: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
