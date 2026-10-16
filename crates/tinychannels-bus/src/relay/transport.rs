@@ -70,4 +70,6 @@ pub enum RelayTransportError {
     Io(String),
     #[error("relay transport handler error: {0}")]
     Handler(String),
+    #[error("relay capabilities contract version {actual} is unsupported (expected {expected})")]
+    UnsupportedCapabilitiesVersion { actual: u32, expected: u32 },
 }

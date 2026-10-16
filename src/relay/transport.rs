@@ -154,6 +154,7 @@ impl RelayTransport {
         self.state.closed.store(false, Ordering::SeqCst);
         *self.state.descriptor.lock().await = None;
         self.state.capabilities_v2.lock().await.clear();
+        self.state.capability_errors.lock().await.clear();
     }
 
     async fn send_hellos(&self) -> Result<(), RelayTransportError> {
@@ -244,6 +245,9 @@ impl RelayTransport {
                 .cloned()
             {
                 return Ok(capabilities);
+            }
+            if let Some(error) = self.state.capability_errors.lock().await.get(identity).cloned() {
+                return Err(error);
             }
             tokio::time::timeout_at(deadline, notified)
                 .await
@@ -501,6 +505,7 @@ struct RelayTransportState {
     request_counter: AtomicU64,
     descriptor: Mutex<Option<CapabilityDescriptor>>,
     capabilities_v2: Mutex<HashMap<RelayIdentity, tinychannels_bus::ChannelCapabilities>>,
+    capability_errors: Mutex<HashMap<RelayIdentity, RelayTransportError>>,
     configured_identities: std::collections::HashSet<RelayIdentity>,
     descriptor_ready: Notify,
     closed_ready: Notify,
@@ -559,10 +564,18 @@ async fn handle_frame(
             capabilities,
         } => {
             let identity = RelayIdentity { platform, bot_id };
-            if capabilities.version != tinychannels_bus::ChannelCapabilities::VERSION {
+            if !state.configured_identities.contains(&identity) {
                 return Ok(());
             }
-            if !state.configured_identities.contains(&identity) {
+            if capabilities.version != tinychannels_bus::ChannelCapabilities::VERSION {
+                state.capability_errors.lock().await.insert(
+                    identity,
+                    RelayTransportError::UnsupportedCapabilitiesVersion {
+                        actual: capabilities.version,
+                        expected: tinychannels_bus::ChannelCapabilities::VERSION,
+                    },
+                );
+                state.descriptor_ready.notify_waiters();
                 return Ok(());
             }
             state
