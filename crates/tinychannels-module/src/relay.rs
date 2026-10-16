@@ -545,7 +545,7 @@ fn v2_capabilities_complete(
         .keys()
         .map(|identity| (identity.platform.as_str(), identity.bot_id.as_str()))
         .collect();
-    !expected.is_empty() && !actual.is_empty()
+    !expected.is_empty() && expected == actual
 }
 
 #[cfg(test)]
