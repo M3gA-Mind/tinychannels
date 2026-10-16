@@ -1,9 +1,8 @@
-use super::*;
-use serde_json::json;
+use serde_json::{Value, json};
 use tinystoragedrivers_core::schema::{MigrateOptions, Registry};
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, MemoryStorage, Precondition, Scope,
-    ScopedStorage, StorageBackend, WriteOptions,
+    CollectionSpec, MemoryStorage, Precondition, Scope, ScopedStorage, StorageBackend,
+    WriteOptions,
 };
 
 use crate::storage::schema::{self, storage_schema};
