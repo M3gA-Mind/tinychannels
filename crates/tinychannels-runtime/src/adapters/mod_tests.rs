@@ -1,8 +1,7 @@
 use crate::adapters::{LocalChannelAdapter, LocalOutboundSink};
 use crate::channel::{
     ChannelAdapter, ChannelDescriptor, ChannelInboundEnvelope, ChannelInboundSink,
-    ChannelOutboundIntent, ChannelSendError, ChannelStaticCapabilities, DeliveryDurability,
-    MessageReceipt, OutboundPayload,
+    ChannelOutboundIntent, ChannelSendError, DeliveryDurability, MessageReceipt, OutboundPayload,
 };
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};

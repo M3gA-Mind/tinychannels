@@ -6,7 +6,7 @@ fn cli_channel_name_and_capabilities() {
     assert_eq!(ch.name(), "cli");
     assert_eq!(
         ch.capabilities(),
-        tinychannels_bus::ChannelCapabilities::NONE
+        tinychannels_bus::ChannelCapabilities::unknown()
     );
 }
 
