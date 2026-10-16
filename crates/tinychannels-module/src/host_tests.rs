@@ -608,6 +608,10 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
 }
 
 #[tokio::test]
+#[allow(
+    deprecated,
+    reason = "this test covers the legacy inbound bridge ordering contract"
+)]
 async fn module_unified_ingress_acknowledges_message_before_following_event() {
     use tinychannels::host::EventSink;
 

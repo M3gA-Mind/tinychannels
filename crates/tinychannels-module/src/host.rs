@@ -85,7 +85,7 @@ enum Notification {
         reply: oneshot::Sender<Result<()>>,
     },
     DeliverEvent {
-        event: ChannelEvent,
+        event: Box<ChannelEvent>,
         reply: oneshot::Sender<Result<()>>,
     },
     Barrier {
@@ -251,7 +251,7 @@ impl HostChannels {
                             callback_path.as_ref(),
                             HOST_BUS_NAME,
                         )?;
-                        proxy.call::<()>(host_methods::DELIVER_EVENT, event).await
+                        proxy.call::<()>(host_methods::DELIVER_EVENT, *event).await
                     }
                     .await;
                     let _ = reply.send(result);
@@ -460,7 +460,10 @@ impl HostChannels {
             return Err(Error::failed("callback consumer is closed"));
         }
         self.outbox
-            .send(Notification::DeliverEvent { event, reply })
+            .send(Notification::DeliverEvent {
+                event: Box::new(event),
+                reply,
+            })
             .await
             .map_err(|_| Error::failed("callback consumer is closed"))?;
         drop(_publication);
