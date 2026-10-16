@@ -323,7 +323,7 @@ async fn typed_send_without_provider_message_id_is_ambiguous_and_not_retried() {
 }
 
 #[tokio::test]
-async fn typed_send_transport_failure_is_ambiguous_and_sanitized() {
+async fn typed_send_connection_refusal_is_definitely_not_sent_and_sanitized() {
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
     let address = listener.local_addr().unwrap();
     drop(listener);
@@ -336,13 +336,59 @@ async fn typed_send_transport_failure_is_ambiguous_and_sanitized() {
     let error = outcome
         .error
         .expect("transport failure must not become success");
-    assert!(
-        error.sent_before_error,
-        "remote delivery may have occurred before transport failure"
-    );
+    assert!(!error.sent_before_error, "connection refusal precedes dispatch");
     assert!(error.message.contains("request failed"));
     assert!(!error.message.contains(TOKEN));
     assert!(!serde_json::to_string(&error).unwrap().contains(TOKEN));
+}
+
+#[tokio::test]
+async fn accepted_request_disconnect_remains_ambiguous() {
+    use tokio::io::AsyncReadExt;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let accepted = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.unwrap();
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let count = socket.read(&mut buffer).await.unwrap();
+            if count == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buffer[..count]);
+            let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+                continue;
+            };
+            let headers = String::from_utf8_lossy(&bytes[..header_end]);
+            let content_length = headers
+                .lines()
+                .find_map(|line| {
+                    let (name, value) = line.split_once(':')?;
+                    name.eq_ignore_ascii_case("content-length")
+                        .then(|| value.trim().parse::<usize>().ok())
+                        .flatten()
+                })
+                .unwrap_or_default();
+            if bytes.len() >= header_end + 4 + content_length {
+                return bytes;
+            }
+        }
+        bytes
+    });
+    let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    ch.api_base = format!("http://{address}");
+
+    let outcome = ch
+        .send_typed_with_receipt(&typed_text("disconnected", "hello".into()))
+        .await
+        .unwrap();
+    let request = accepted.await.unwrap();
+    assert!(request.windows(3).any(|window| window == b"tok"));
+    let error = outcome.error.expect("server accepted then disconnected");
+    assert!(error.sent_before_error);
+    assert!(outcome.receipt.platform_message_ids.is_empty());
 }
 
 #[tokio::test]
