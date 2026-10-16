@@ -411,6 +411,7 @@ fn legacy_inbound_envelope_preserves_telegram_topics_separately_from_threads() {
     assert_eq!(envelope.conversation.topic_id.as_deref(), Some("topic-99"));
     assert_eq!(envelope.sender.id, "alice");
     assert_eq!(envelope.text, "hello");
+    assert_eq!(envelope.parts, vec![ContentPart::Text { text: "hello".into() }]);
 
     let keys = conversation_history_key_candidates(&msg);
     assert_eq!(keys.conversation_history_key, "telegram_alice_-100123");
@@ -455,8 +456,34 @@ fn legacy_inbound_envelope_projects_back_to_legacy_messages() {
     assert_eq!(projected.sender, "alice");
     assert_eq!(projected.content, "hello");
     assert_eq!(projected.reply_target, "-100123");
-    assert_eq!(projected.thread_ts.as_deref(), Some("topic-99"));
+    assert_eq!(projected.thread_ts, None);
+    assert_eq!(projected.topic_id.as_deref(), Some("topic-99"));
+    assert_eq!(projected.reply_to_id, msg.reply_to_id);
     assert_eq!(projected.timestamp, 456);
+}
+
+#[test]
+fn inbound_envelope_roundtrip_keeps_reply_thread_and_topic_distinct() {
+    let msg = ChannelMessage {
+        channel: "slack:account-1".into(),
+        id: "source".into(),
+        sender: "alice".into(),
+        reply_target: "room".into(),
+        content: "reply".into(),
+        timestamp: 123,
+        reply_to_id: Some("parent-message".into()),
+        thread_ts: Some("thread-a".into()),
+        topic_id: Some("topic-b".into()),
+        ..Default::default()
+    };
+    let envelope = inbound_envelope_from_legacy_message(&msg);
+    assert_eq!(envelope.reply_to_id.as_deref(), Some("parent-message"));
+    assert_eq!(envelope.conversation.thread_id.as_deref(), Some("thread-a"));
+    assert_eq!(envelope.conversation.topic_id.as_deref(), Some("topic-b"));
+    let projected = legacy_message_from_inbound_envelope(&envelope, 456);
+    assert_eq!(projected.reply_to_id, msg.reply_to_id);
+    assert_eq!(projected.thread_ts, msg.thread_ts);
+    assert_eq!(projected.topic_id, msg.topic_id);
 }
 
 #[test]
