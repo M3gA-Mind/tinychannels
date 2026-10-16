@@ -773,12 +773,12 @@ impl Channels {
         if intent.channel_id != name {
             return Err(BusError::failed("intent channel does not match provider"));
         }
-        if matches!(
-            &intent.payload,
-            tinychannels_bus::OutboundPayload::Parts { parts } if parts.is_empty()
-        ) {
+        if tinychannels_bus::ChannelOutboundMessage::from_intent(&intent)
+            .parts
+            .is_empty()
+        {
             return Err(BusError::failed(
-                "canonical outbound parts must not be empty",
+                "outbound intent must contain at least one content part",
             ));
         }
         if intent.durability == tinychannels::DeliveryDurability::Required {
