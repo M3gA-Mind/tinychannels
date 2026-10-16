@@ -367,9 +367,9 @@ impl Running {
                             .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
                             .map_err(|error| Error::failed(error.to_string())),
                         ProviderOperation::SendTyped(message) => send_channel
-                            .send_typed(&message)
+                            .send_typed_with_receipt(&message)
                             .await
-                            .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
+                            .map(tinychannels_bus::ChannelInteractionResult::Sent)
                             .map_err(|error| Error::failed(error.to_string())),
                         ProviderOperation::Interaction(interaction) => {
                             dispatch_interaction(send_channel.clone(), interaction, &mut typing)
@@ -429,10 +429,11 @@ impl Running {
     pub(crate) async fn send_typed(
         &self,
         message: tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<(), RunningSendError> {
-        self.submit(ProviderOperation::SendTyped(message))
-            .await
-            .map(|_| ())
+    ) -> std::result::Result<tinychannels_bus::MessageReceipt, RunningSendError> {
+        match self.submit(ProviderOperation::SendTyped(message)).await? {
+            tinychannels_bus::ChannelInteractionResult::Sent(receipt) => Ok(receipt),
+            _ => Err(RunningSendError::AfterDispatch("typed send returned no receipt".into())),
+        }
     }
 
     pub(crate) async fn interact(

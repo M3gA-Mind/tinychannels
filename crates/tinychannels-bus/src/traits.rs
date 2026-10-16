@@ -143,6 +143,17 @@ pub trait Channel: Send + Sync {
         self.send(&message.to_legacy_message()?).await
     }
 
+    /// Send canonical content and return the provider receipt when the actual
+    /// provider response supplies message IDs. Legacy adapters remain usable;
+    /// they return an empty receipt rather than guessing an ID.
+    async fn send_typed_with_receipt(
+        &self,
+        message: &crate::channel::ChannelOutboundMessage,
+    ) -> anyhow::Result<crate::channel::MessageReceipt> {
+        self.send_typed(message).await?;
+        Ok(crate::channel::MessageReceipt::default())
+    }
+
     /// Legacy listener seam used by isolated test doubles.
     #[deprecated(
         since = "0.1.34",

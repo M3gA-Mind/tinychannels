@@ -833,7 +833,7 @@ impl Channels {
                     message: format!("channel {name} is not running"),
                 })?
         };
-        entry
+        let receipt = entry
             .send_typed(tinychannels_bus::ChannelOutboundMessage::from_intent(
                 &intent,
             ))
@@ -842,7 +842,11 @@ impl Channels {
                 name: SEND_FAILED_ERROR.to_owned(),
                 message: error.to_string(),
             })?;
-        Ok(ChannelSendMessageResult::default())
+        Ok(ChannelSendMessageResult {
+            message_id: receipt.primary_platform_message_id.clone(),
+            receipt: Some(receipt),
+            raw: None,
+        })
     }
 
     async fn send_required_intent(
