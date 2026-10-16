@@ -322,7 +322,11 @@ async fn deliveries_are_written_as_snake_case_ms_bodies_under_key_ids() {
     store.save_pending(queued.clone()).await.unwrap();
     store.save_failed(queued.clone()).await.unwrap();
 
-    let stored = docs.get(PENDING_COLLECTION, "a%2Fb").await.unwrap().unwrap();
+    let stored = docs
+        .get(PENDING_COLLECTION, "a%2Fb")
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(stored.meta.schema, SCHEMA_VERSION);
     assert_eq!(
         stored.doc,
@@ -351,9 +355,14 @@ async fn a_delivery_stored_under_the_wrong_id_is_unreadable_not_returned() {
     let store = DocumentDeliveryStore::new(Arc::clone(&docs));
     store.save_pending(entry("real", 1)).await.unwrap();
     let stored = docs.get(PENDING_COLLECTION, "real").await.unwrap().unwrap();
-    docs.put(PENDING_COLLECTION, "other", stored.doc, Precondition::Absent)
-        .await
-        .unwrap();
+    docs.put(
+        PENDING_COLLECTION,
+        "other",
+        stored.doc,
+        Precondition::Absent,
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         store.load_pending("other").await,
@@ -382,5 +391,8 @@ async fn a_result_expires_through_record_metadata_and_keeps_no_time_but_completi
         Some((completed + DELIVERY_RESULT_TTL_SECONDS * 1000) as i64)
     );
     assert_eq!(stored.meta.schema, SCHEMA_VERSION);
-    assert_eq!(store.load_result("r").await.unwrap(), Some(result("r", completed)));
+    assert_eq!(
+        store.load_result("r").await.unwrap(),
+        Some(result("r", completed))
+    );
 }
