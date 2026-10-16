@@ -150,11 +150,12 @@ impl Hooks {
     pub(crate) fn host(
         self: &Arc<Self>,
         callbacks: HostChannels,
+        configured_instance: String,
     ) -> Arc<dyn tinychannels::host::ChannelHost> {
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
-            .events(Arc::new(ModuleEvents(callbacks.clone())))
+            .events(Arc::new(ModuleEvents(callbacks.clone(), configured_instance)))
             .storage(Arc::new(ModuleStorage(callbacks.clone())))
             .allowlist(Arc::new(ModuleAllowlist(callbacks)))
             .build()
@@ -221,7 +222,7 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
     }
 }
 
-struct ModuleEvents(HostChannels);
+struct ModuleEvents(HostChannels, String);
 
 #[async_trait::async_trait]
 impl tinychannels::host::EventSink for ModuleEvents {
@@ -243,8 +244,26 @@ impl tinychannels::host::EventSink for ModuleEvents {
 
     async fn publish_channel_event(
         &self,
-        event: tinychannels_bus::ChannelEvent,
+        mut event: tinychannels_bus::ChannelEvent,
     ) -> anyhow::Result<()> {
+        // The module start call is the authenticated source of instance scope;
+        // provider payloads cannot choose or spoof their account identity.
+        if event.channel.account_id.is_none() {
+            event.channel.account_id = Some(self.1.clone());
+        }
+        let kind = match &event.event {
+            tinychannels_bus::ChannelEventKind::Typing { .. } => "typing",
+            tinychannels_bus::ChannelEventKind::ReadReceipt { .. } => "read_receipt",
+            tinychannels_bus::ChannelEventKind::DeliveredReceipt { .. } => "delivered_receipt",
+            tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "reaction_added",
+            tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "reaction_removed",
+            tinychannels_bus::ChannelEventKind::OutboundReaction { .. } => "outbound_reaction",
+            tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "message_updated",
+            tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",
+            tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
+            tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
+        };
+        event.event_id = format!("{}:{}:{kind}", self.1, event.event_id);
         self.0
             .deliver_event(event)
             .await
@@ -429,7 +448,7 @@ impl Running {
     pub(crate) async fn send_typed(
         &self,
         message: tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<tinychannels_bus::MessageReceipt, RunningSendError> {
+    ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, RunningSendError> {
         match self.submit(ProviderOperation::SendTyped(message)).await? {
             tinychannels_bus::ChannelInteractionResult::Sent(receipt) => Ok(receipt),
             _ => Err(RunningSendError::AfterDispatch(

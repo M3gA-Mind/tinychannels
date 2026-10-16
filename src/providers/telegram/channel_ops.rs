@@ -360,7 +360,7 @@ impl Channel for TelegramChannel {
     async fn send_typed_with_receipt(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<tinychannels_bus::MessageReceipt> {
+    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
         let text = match message.parts.as_slice() {
             [
                 tinychannels_bus::OutboundContentPart::Content {
@@ -369,7 +369,7 @@ impl Channel for TelegramChannel {
             ] => text,
             _ => {
                 self.send_typed(message).await?;
-                return Ok(tinychannels_bus::MessageReceipt::default());
+                return Ok(tinychannels_bus::channel::MessageReceipt::default());
             }
         };
         let conversation =
@@ -395,15 +395,15 @@ impl Channel for TelegramChannel {
         let parts = ids
             .iter()
             .enumerate()
-            .map(|(index, id)| tinychannels_bus::MessageReceiptPart {
+            .map(|(index, id)| tinychannels_bus::channel::MessageReceiptPart {
                 platform_message_id: id.clone(),
-                kind: tinychannels_bus::MessageReceiptPartKind::Text,
+                kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
                 index,
                 thread_id: thread_id.map(str::to_owned),
                 reply_to_id: message.reply_to_id.clone(),
                 edit_token: Some(id.clone()),
                 delete_token: Some(id.clone()),
-                raw: Some(tinychannels_bus::MessageReceiptSourceResult {
+                raw: Some(tinychannels_bus::channel::MessageReceiptSourceResult {
                     channel: Some("telegram".into()),
                     message_id: Some(id.clone()),
                     chat_id: Some(conversation.id.clone()),
@@ -412,7 +412,7 @@ impl Channel for TelegramChannel {
             })
             .collect::<Vec<_>>();
         let single_part = (parts.len() == 1).then(|| parts[0].platform_message_id.clone());
-        Ok(tinychannels_bus::MessageReceipt {
+        Ok(tinychannels_bus::channel::MessageReceipt {
             channel: message.channel_ref.clone().or_else(|| {
                 Some(tinychannels_bus::ChannelRef {
                     id: "telegram".into(),

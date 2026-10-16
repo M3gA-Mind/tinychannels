@@ -163,7 +163,7 @@ impl Channels {
         }
 
         let hooks = Arc::new(Hooks::default());
-        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone());
+        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone(), name.clone());
         let built = build_channels(&config, &owner_host, http);
         let channel = built
             .into_iter()
