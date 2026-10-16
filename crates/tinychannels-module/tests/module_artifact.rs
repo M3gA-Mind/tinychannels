@@ -1208,6 +1208,7 @@ async fn relay_server_v2() -> (String, tokio::task::JoinHandle<()>) {
             if message.is_close() {
                 break;
             }
+            panic!("module sent an unexpected second v2 hello after the descriptor");
         }
     });
     (url, task)
