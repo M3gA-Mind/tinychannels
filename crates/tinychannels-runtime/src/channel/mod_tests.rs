@@ -425,6 +425,17 @@ fn legacy_inbound_envelope_preserves_telegram_topics_separately_from_threads() {
 }
 
 #[test]
+fn legacy_inbound_timestamp_seconds_are_normalized_to_unix_milliseconds() {
+    let seconds = 1_700_000_000;
+    let millis = 1_700_000_000_123;
+    let mut msg = ChannelMessage { timestamp: seconds, ..Default::default() };
+    assert_eq!(inbound_envelope_from_legacy_message(&msg).timestamp_unix_ms, Some(millis - 123));
+
+    msg.timestamp = millis;
+    assert_eq!(inbound_envelope_from_legacy_message(&msg).timestamp_unix_ms, Some(millis));
+}
+
+#[test]
 fn legacy_inbound_envelope_recognizes_qualified_telegram_channel_ids() {
     for channel in ["tg:123", "telegram:123"] {
         let msg = ChannelMessage {
