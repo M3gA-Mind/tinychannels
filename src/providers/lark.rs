@@ -475,6 +475,8 @@ impl LarkChannel {
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs(),
+                        topic_id: None,
+                        reply_to_id: None,
                         thread_ts: None,
                         sender_name: None,
                     };
@@ -638,6 +640,8 @@ impl LarkChannel {
             content: text,
             channel: "lark".to_string(),
             timestamp,
+            topic_id: None,
+            reply_to_id: None,
             thread_ts: None,
             sender_name: None,
         });

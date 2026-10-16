@@ -304,9 +304,7 @@ impl RelayInboundHandler for Inbound {
             envelope,
             delivered_via_authenticated_relay: event.delivered_via_authenticated_relay,
         };
-        let value = serde_json::to_value(delivery)
-            .map_err(|_| RelayTransportError::Handler("invalid inbound envelope".into()))?;
-        self.host.deliver_inbound(&channel, value).await;
+        self.host.deliver_relay_inbound(&channel, delivery).await;
         Ok(())
     }
 }

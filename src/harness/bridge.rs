@@ -97,13 +97,10 @@ pub fn translate_output_event(
         idempotency_key: format!("{}:{}", turn.id, intent_suffix(&payload)),
         channel_id: turn.envelope.channel.id.clone(),
         conversation_id: turn.envelope.conversation.id.clone(),
+        channel_ref: Some(turn.envelope.channel.clone()),
+        conversation_ref: Some(turn.envelope.conversation.clone()),
         reply_to_id: Some(turn.envelope.message_id.clone()).filter(|id| !id.is_empty()),
-        thread_id: turn
-            .envelope
-            .conversation
-            .topic_id
-            .clone()
-            .or_else(|| turn.envelope.conversation.thread_id.clone()),
+        thread_id: turn.envelope.conversation.thread_id.clone(),
         durability: options.durability,
         payload,
     }]
@@ -128,5 +125,6 @@ fn intent_suffix(payload: &OutboundPayload) -> &'static str {
         OutboundPayload::Poll { .. } => "poll",
         OutboundPayload::PresentationBlocks { .. } => "presentation",
         OutboundPayload::NativeChannelData { .. } => "native",
+        OutboundPayload::Parts { .. } => "parts",
     }
 }

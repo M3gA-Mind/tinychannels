@@ -107,7 +107,40 @@ fn media_event_projects_media_urls() {
         media_urls,
         &vec!["https://example.test/image.png".to_string()]
     );
-    assert_eq!(intents[0].thread_id.as_deref(), Some("topic-1"));
+    assert_eq!(intents[0].thread_id, None);
+    assert_eq!(
+        intents[0]
+            .conversation_ref
+            .as_ref()
+            .and_then(|reference| reference.topic_id.as_deref()),
+        Some("topic-1")
+    );
+}
+
+#[test]
+fn harness_outbound_intent_preserves_full_turn_address() {
+    let mut turn = turn();
+    turn.envelope.channel.account_id = Some("account-opaque".into());
+    turn.envelope.conversation.scope_id = Some("scope-opaque".into());
+    turn.envelope.conversation.parent_id = Some("parent-opaque".into());
+    turn.envelope.conversation.thread_id = Some("thread-opaque".into());
+    turn.envelope.conversation.topic_id = Some("topic-opaque".into());
+    let intents = translate_output_event(
+        &turn,
+        ChannelOutputEvent::FinalMessage {
+            text: "reply".into(),
+        },
+        &ChannelStaticCapabilities::default(),
+        &ChannelPresentationCapabilities::default(),
+        BridgeTranslationOptions::default(),
+    );
+    let intent = &intents[0];
+    assert_eq!(intent.channel_ref, Some(turn.envelope.channel.clone()));
+    assert_eq!(
+        intent.conversation_ref,
+        Some(turn.envelope.conversation.clone())
+    );
+    assert_eq!(intent.thread_id.as_deref(), Some("thread-opaque"));
 }
 
 #[test]

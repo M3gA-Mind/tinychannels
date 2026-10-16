@@ -215,14 +215,8 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
         };
         drop(running);
 
-        let Ok(message) = intent_to_legacy_message(&entry.intent) else {
-            return Err(DeliveryAttemptFailure {
-                error: "delivery payload could not be encoded".into(),
-                sent_before_error: false,
-                permanent: Some(true),
-            });
-        };
-        if let Err(error) = provider.send(message).await {
+        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&entry.intent);
+        if let Err(error) = provider.send_typed(message).await {
             return Err(DeliveryAttemptFailure {
                 error: "provider send failed".into(),
                 sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
@@ -531,7 +525,8 @@ impl Channels {
                 envelope,
                 timestamp,
             } => (
-                tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp),
+                tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp)
+                    .map_err(|error| BusError::failed(error.to_string()))?,
                 envelope,
             ),
         };
@@ -778,6 +773,14 @@ impl Channels {
         if intent.channel_id != name {
             return Err(BusError::failed("intent channel does not match provider"));
         }
+        if tinychannels_bus::ChannelOutboundMessage::from_intent(&intent)
+            .parts
+            .is_empty()
+        {
+            return Err(BusError::failed(
+                "outbound intent must contain at least one content part",
+            ));
+        }
         if intent.durability == tinychannels::DeliveryDurability::Required {
             return self.send_required_intent(intent).await;
         }
@@ -798,10 +801,9 @@ impl Channels {
                 })?
         };
         entry
-            .send(
-                intent_to_legacy_message(&intent)
-                    .map_err(|_| BusError::failed("could not encode channel intent"))?,
-            )
+            .send_typed(tinychannels_bus::ChannelOutboundMessage::from_intent(
+                &intent,
+            ))
             .await
             .map_err(|error| BusError::MethodFailed {
                 name: SEND_FAILED_ERROR.to_owned(),
@@ -1199,23 +1201,6 @@ async fn setup(connection: Connection) -> BusResult<()> {
         .await?;
     connection.request_name(BUS_NAME).await?;
     Ok(())
-}
-
-fn intent_to_legacy_message(
-    intent: &ChannelOutboundIntent,
-) -> Result<SendMessage, serde_json::Error> {
-    let value = tinychannels::legacy_message_value_from_outbound_intent(intent);
-    let content = match &intent.payload {
-        tinychannels::OutboundPayload::Text { text } => text.clone(),
-        _ => serde_json::to_string(&value)?,
-    };
-    Ok(SendMessage {
-        content,
-        recipient: intent.conversation_id.clone(),
-        subject: None,
-        thread_ts: intent.thread_id.clone(),
-        idempotency_key: Some(intent.idempotency_key.clone()),
-    })
 }
 
 fn intent_fingerprint(intent: &ChannelOutboundIntent) -> Result<String, serde_json::Error> {

@@ -30,11 +30,20 @@ pub fn outbound_intent_from_legacy_message(
         ],
     );
     let thread_id = first_string_field(&message, &["threadId", "thread_id", "thread_ts"]);
+    let topic_id = first_string_field(&message, &["topicId", "topic_id"]);
+    let conversation_ref = tinychannels_bus::ConversationRef {
+        id: conversation_id.clone(),
+        thread_id: thread_id.clone(),
+        topic_id,
+        ..Default::default()
+    };
 
     ChannelOutboundIntent {
         idempotency_key,
         channel_id,
         conversation_id,
+        channel_ref: None,
+        conversation_ref: Some(conversation_ref),
         reply_to_id,
         thread_id,
         durability: DeliveryDurability::BestEffort,
@@ -52,6 +61,8 @@ pub fn outbound_intent_from_send_message(
         "recipient": message.recipient,
         "subject": message.subject,
         "thread_ts": message.thread_ts,
+        "replyToId": message.reply_to_id,
+        "topicId": message.topic_id,
     });
     if let Some(idempotency_key) = message.idempotency_key.as_deref()
         && !idempotency_key.trim().is_empty()
@@ -72,7 +83,7 @@ pub fn legacy_message_value_from_outbound_intent(intent: &ChannelOutboundIntent)
         OutboundPayload::Media { text, media_urls } => {
             serde_json::json!({ "text": text, "mediaUrls": media_urls })
         }
-        OutboundPayload::Voice { media_url } => serde_json::json!({ "voiceUrl": media_url }),
+        OutboundPayload::Voice { voice } => serde_json::json!({ "voice": voice }),
         OutboundPayload::Files { file_urls } => serde_json::json!({ "fileUrls": file_urls }),
         OutboundPayload::Poll { question, options } => {
             serde_json::json!({ "poll": { "question": question, "options": options } })
@@ -81,6 +92,7 @@ pub fn legacy_message_value_from_outbound_intent(intent: &ChannelOutboundIntent)
             serde_json::json!({ "blocks": blocks })
         }
         OutboundPayload::NativeChannelData { data } => data.clone(),
+        OutboundPayload::Parts { parts } => serde_json::json!({ "parts": parts }),
     };
     with_idempotency_key(payload, &intent.idempotency_key)
 }

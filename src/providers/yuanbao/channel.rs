@@ -401,6 +401,8 @@ impl YuanbaoChannel {
                     },
                     channel: "yuanbao".into(),
                     timestamp: ctx.msg.msg_time as u64,
+                    topic_id: None,
+                    reply_to_id: None,
                     thread_ts: None,
                     sender_name: None,
                 };

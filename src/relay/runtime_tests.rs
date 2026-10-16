@@ -64,6 +64,8 @@ async fn relay_teardown_removes_only_its_own_transport() {
     let intent = ChannelOutboundIntent {
         channel_id: "discord".into(),
         conversation_id: "room".into(),
+        channel_ref: None,
+        conversation_ref: None,
         payload: tinychannels_bus::OutboundPayload::Text {
             text: "hello".into(),
         },

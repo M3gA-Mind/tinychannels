@@ -30,6 +30,8 @@ fn delivery_records_round_trip_without_losing_retry_or_intent_fields() {
             idempotency_key: "op-1".into(),
             channel_id: "telegram".into(),
             conversation_id: "room-2".into(),
+            channel_ref: None,
+            conversation_ref: None,
             thread_id: Some("thread-3".into()),
             durability: DeliveryDurability::Required,
             ..Default::default()

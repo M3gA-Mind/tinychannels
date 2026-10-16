@@ -213,8 +213,8 @@ fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
     }
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible(CONTRACT_VERSION + 1));
-    assert_eq!(CONTRACT_VERSION, 21);
-    assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 21));
+    assert_eq!(CONTRACT_VERSION, 22);
+    assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 22));
 }
 
 #[test]
@@ -401,4 +401,67 @@ fn runtime_and_remote_commands_have_a_stable_wire() {
             cmd
         );
     }
+}
+
+#[test]
+fn legacy_send_projection_roundtrips_reply_thread_and_topic_keys() {
+    let legacy = SendMessage {
+        content: "hello".into(),
+        recipient: "room".into(),
+        subject: None,
+        thread_ts: Some("thread-1".into()),
+        topic_id: Some("topic-2".into()),
+        reply_to_id: Some("message-3".into()),
+        idempotency_key: Some("key".into()),
+    };
+    let typed = ChannelOutboundMessage::from_legacy_message("slack", &legacy);
+    let roundtrip = typed.to_legacy_message().unwrap();
+    assert_eq!(roundtrip.reply_to_id.as_deref(), Some("message-3"));
+    assert_eq!(roundtrip.thread_ts.as_deref(), Some("thread-1"));
+    assert_eq!(roundtrip.topic_id.as_deref(), Some("topic-2"));
+    let wire = serde_json::to_value(roundtrip).unwrap();
+    assert_eq!(wire["replyToId"], "message-3");
+    assert_eq!(wire["topicId"], "topic-2");
+    assert_eq!(wire["thread_ts"], "thread-1");
+}
+
+#[test]
+fn inbound_voice_note_keeps_audio_transcript_source_and_waveform_typed() {
+    let envelope = ChannelInboundEnvelope {
+        reply_to_id: Some("reply-target".into()),
+        parts: vec![ContentPart::VoiceNote {
+            voice_note: VoiceNote {
+                media: MediaReference {
+                    url: Some("https://example.test/voice.ogg".into()),
+                    content_type: Some("audio/ogg".into()),
+                    kind: MediaKind::Audio,
+                    ..Default::default()
+                },
+                codec: Some("opus".into()),
+                duration_ms: Some(1500),
+                waveform: Some(vec![0.0, 0.5, 1.0]),
+                push_to_talk: true,
+                transcript: Some(VoiceTranscript {
+                    text: "hello".into(),
+                    language: Some("en".into()),
+                    state: VoiceTranscriptState::Complete,
+                    source: VoiceTranscriptSource::HostStt,
+                }),
+            },
+        }],
+        ..Default::default()
+    };
+    let wire = serde_json::to_value(&envelope).unwrap();
+    assert_eq!(wire["replyToId"], "reply-target");
+    assert_eq!(wire["parts"][0]["kind"], "voice_note");
+    assert_eq!(
+        wire["parts"][0]["voiceNote"]["waveform"],
+        json!([0.0, 0.5, 1.0])
+    );
+    assert_eq!(
+        wire["parts"][0]["voiceNote"]["transcript"]["source"],
+        "host_stt"
+    );
+    let decoded: ChannelInboundEnvelope = serde_json::from_value(wire).unwrap();
+    assert_eq!(decoded, envelope);
 }

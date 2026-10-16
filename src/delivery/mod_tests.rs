@@ -136,6 +136,8 @@ fn intent(payload: OutboundPayload) -> ChannelOutboundIntent {
         idempotency_key: "idem-1".into(),
         channel_id: "telegram".into(),
         conversation_id: "chat-1".into(),
+        channel_ref: None,
+        conversation_ref: None,
         reply_to_id: None,
         thread_id: None,
         durability: DeliveryDurability::Required,
@@ -623,7 +625,15 @@ fn payload_shape_maps_to_expected_durable_capability() {
         ),
         (
             OutboundPayload::Voice {
-                media_url: "https://example.test/v.ogg".into(),
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: tinychannels_bus::MediaReference {
+                        url: Some("https://example.test/v.ogg".into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    codec: None,
+                    duration_ms: None,
+                },
             },
             Media,
         ),

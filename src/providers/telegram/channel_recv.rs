@@ -910,6 +910,8 @@ impl TelegramChannel {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
+            topic_id: None,
+            reply_to_id: None,
             thread_ts: Some(ctx.message_id.to_string()),
             sender_name: ctx.sender_name,
         }

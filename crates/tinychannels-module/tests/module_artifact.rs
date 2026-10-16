@@ -1,3 +1,8 @@
+#![allow(
+    deprecated,
+    reason = "integration fixtures still exercise one-release v21 adapters"
+)]
+
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use std::collections::BTreeMap;
@@ -880,6 +885,8 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
                 ChannelOutboundIntent {
                     channel_id: "telegram".into(),
                     conversation_id: "chat-1".into(),
+                    channel_ref: None,
+                    conversation_ref: None,
                     payload: OutboundPayload::Text {
                         text: "artifact send".into(),
                     },
