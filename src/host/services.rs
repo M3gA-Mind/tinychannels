@@ -211,13 +211,10 @@ pub trait EventSink: Send + Sync {
     ) -> anyhow::Result<()> {
         let kind = match &event.event {
             tinychannels_bus::ChannelEventKind::Typing { .. } => "typing",
-            tinychannels_bus::ChannelEventKind::Receipt {
-                kind: tinychannels_bus::ChannelReceiptKind::Read,
-                ..
-            } => "read_receipt",
-            tinychannels_bus::ChannelEventKind::Receipt { .. } => "delivered_receipt",
-            tinychannels_bus::ChannelEventKind::Reaction { added: true, .. } => "reaction_added",
-            tinychannels_bus::ChannelEventKind::Reaction { .. } => "reaction_removed",
+            tinychannels_bus::ChannelEventKind::ReadReceipt { .. } => "read_receipt",
+            tinychannels_bus::ChannelEventKind::DeliveredReceipt { .. } => "delivered_receipt",
+            tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "reaction_added",
+            tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "reaction_removed",
             tinychannels_bus::ChannelEventKind::OutboundReaction { .. } => "outbound_reaction",
             tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "message_updated",
             tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",

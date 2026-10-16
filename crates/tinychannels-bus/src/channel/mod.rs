@@ -23,7 +23,7 @@ pub use envelope::{
     SenderDmDecision, VoiceNote, VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
 };
 pub use error::{ChannelSendError, SendErrorKind};
-pub use event::{ChannelEvent, ChannelEventKind, ChannelReaction, ChannelReceiptKind};
+pub use event::{ChannelEvent, ChannelEventKind, ChannelReaction};
 pub use intent::{ChannelOutboundIntent, DeliveryDurability, OutboundPayload};
 pub use intent::{ChannelOutboundMessage, OutboundContentPart, OutboundVoice};
 pub use receipt::{
