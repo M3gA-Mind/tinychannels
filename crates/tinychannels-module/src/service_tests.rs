@@ -76,6 +76,32 @@ impl tinychannels::Channel for CaptureChannel {
 
 struct CaptureTypedChannel(tokio::sync::mpsc::Sender<tinychannels_bus::ChannelOutboundMessage>);
 
+struct DescribeFixtureChannel {
+    draft_updates: bool,
+}
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for DescribeFixtureChannel {
+    fn name(&self) -> &str {
+        "same-provider"
+    }
+
+    fn supports_draft_updates(&self) -> bool {
+        self.draft_updates
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
 #[async_trait::async_trait]
 impl tinychannels::Channel for CaptureTypedChannel {
     fn name(&self) -> &str {
@@ -2567,6 +2593,68 @@ async fn legacy_send_and_interaction_route_to_live_provider_and_reject_unknown_c
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn exported_tinybus_describe_and_control_use_each_running_instances_capabilities() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection.clone());
+    let channels = Channels::new(host.clone(), None);
+    for (id, draft_updates) in [("same-provider:a", true), ("same-provider:b", false)] {
+        channels.running.lock().await.insert(
+            id.into(),
+            Running::start(
+                Arc::new(DescribeFixtureChannel { draft_updates }),
+                Arc::new(Hooks::default()),
+                host.clone(),
+            ),
+        );
+    }
+    connection
+        .serve_at(tinychannels_bus::OBJECT_PATH.try_into().unwrap(), channels)
+        .await
+        .unwrap();
+    connection
+        .request_name(tinychannels_bus::BUS_NAME)
+        .await
+        .unwrap();
+    let client = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    for (id, expected) in [("same-provider:a", true), ("same-provider:b", false)] {
+        let request = tinychannels_bus::ChannelInteractionRequest {
+            channel: id.into(),
+            interaction: tinychannels_bus::ChannelInteraction::Describe,
+        };
+        let described: tinychannels_bus::ChannelInteractionResult = client
+            .call_confidential(tinychannels_bus::methods::CHANNEL_INTERACTION, (request,))
+            .await
+            .unwrap();
+        let tinychannels_bus::ChannelInteractionResult::Info(info) = described else {
+            panic!("expected Describe info result")
+        };
+        assert_eq!(info.capabilities.progressive_edits, expected);
+        assert_eq!(info.capabilities.account.configured, Some(true));
+        let control: tinychannels_bus::module_control::ChannelControlResult = client
+            .call_confidential(
+                tinychannels_bus::methods::PREPARE_CHANNEL_CONTROL,
+                (
+                    tinychannels_bus::module_control::ChannelControlRequest::Capabilities {
+                        channel: id.into(),
+                    },
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            control,
+            tinychannels_bus::module_control::ChannelControlResult::Capabilities(info.capabilities)
+        );
+    }
 }
 
 #[tokio::test]
