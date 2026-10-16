@@ -246,7 +246,7 @@ impl HostChannels {
                 }
                 if let Notification::DeliverEvent { event, reply } = notification {
                     let result = async {
-                        let proxy = connection.proxy(HOST_BUS_NAME, object_path.as_ref(), HOST_BUS_NAME)?;
+                        let proxy = callback_connection.proxy(HOST_BUS_NAME, callback_path.as_ref(), HOST_BUS_NAME)?;
                         proxy.call::<()>(host_methods::DELIVER_EVENT, event).await
                     }.await;
                     let _ = reply.send(result);

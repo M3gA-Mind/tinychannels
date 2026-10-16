@@ -240,6 +240,10 @@ impl tinychannels::host::EventSink for ModuleEvents {
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))
     }
+
+    async fn publish_channel_event(&self, event: tinychannels_bus::ChannelEvent) -> anyhow::Result<()> {
+        self.0.deliver_event(event).await.map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
 }
 
 /// Reconnect execution stays in the module; raw provider errors never cross callbacks.
