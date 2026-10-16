@@ -44,6 +44,10 @@ pub struct MessageReceiptPart {
     pub index: usize,
     pub thread_id: Option<String>,
     pub reply_to_id: Option<String>,
+    /// Opaque provider token for editing this part, when supported.
+    pub edit_token: Option<String>,
+    /// Opaque provider token for deleting this part, when supported.
+    pub delete_token: Option<String>,
     pub raw: Option<MessageReceiptSourceResult>,
 }
 
@@ -55,6 +59,8 @@ impl Default for MessageReceiptPart {
             index: 0,
             thread_id: None,
             reply_to_id: None,
+            edit_token: None,
+            delete_token: None,
             raw: None,
         }
     }
