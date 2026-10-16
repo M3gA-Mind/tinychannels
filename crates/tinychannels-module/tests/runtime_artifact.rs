@@ -479,10 +479,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         legacy.proactive_target,
         described.capabilities.account.proactive_target
     );
-    assert_eq!(
-        legacy.supports_reactions,
-        described.capabilities.reactions
-    );
+    assert_eq!(legacy.supports_reactions, described.capabilities.reactions);
     assert_eq!(
         legacy.supports_draft_updates,
         described.capabilities.streaming_reply_pipeline
@@ -502,7 +499,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     assert_eq!(
         controlled,
         tinychannels_bus::module_control::ChannelControlResult::CapabilitiesV2(Box::new(
-            described.capabilities
+            described.capabilities.clone()
         ))
     );
     let legacy_control: serde_json::Value = first_client
