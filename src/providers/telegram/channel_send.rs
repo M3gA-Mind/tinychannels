@@ -196,13 +196,23 @@ impl TelegramChannel {
                 .await
                 .map_err(|_error| {
                     tracing::debug!("Telegram sendMessage transport failed");
-                    partial_text_send_error(message_ids.clone(), "Telegram sendMessage request failed".into(), true, true)
+                    partial_text_send_error(
+                        message_ids.clone(),
+                        "Telegram sendMessage request failed".into(),
+                        true,
+                        true,
+                    )
                 })?;
 
             if markdown_resp.status().is_success() {
                 let response = markdown_resp.json::<serde_json::Value>().await.ok();
                 let Some(id) = Self::telegram_result_message_id(response) else {
-                    return Err(partial_text_send_error(message_ids, "Telegram accepted send without a usable message ID".into(), false, true));
+                    return Err(partial_text_send_error(
+                        message_ids,
+                        "Telegram accepted send without a usable message ID".into(),
+                        false,
+                        true,
+                    ));
                 };
                 message_ids.push(id);
                 if index < chunks.len() - 1 {
@@ -240,7 +250,12 @@ impl TelegramChannel {
                 .await
                 .map_err(|_error| {
                     tracing::debug!("Telegram sendMessage fallback transport failed");
-                    partial_text_send_error(message_ids.clone(), "Telegram sendMessage request failed".into(), true, true)
+                    partial_text_send_error(
+                        message_ids.clone(),
+                        "Telegram sendMessage request failed".into(),
+                        true,
+                        true,
+                    )
                 })?;
 
             if !plain_resp.status().is_success() {
@@ -248,7 +263,10 @@ impl TelegramChannel {
                 let _ = plain_resp.bytes().await;
                 return Err(partial_text_send_error(
                     message_ids,
-                    format!("Telegram sendMessage rejected with HTTP {}", plain_status.as_u16()),
+                    format!(
+                        "Telegram sendMessage rejected with HTTP {}",
+                        plain_status.as_u16()
+                    ),
                     plain_status.is_server_error() || plain_status.as_u16() == 429,
                     plain_status.is_server_error(),
                 ));
@@ -256,7 +274,12 @@ impl TelegramChannel {
 
             let response = plain_resp.json::<serde_json::Value>().await.ok();
             let Some(id) = Self::telegram_result_message_id(response) else {
-                return Err(partial_text_send_error(message_ids, "Telegram accepted send without a usable message ID".into(), false, true));
+                return Err(partial_text_send_error(
+                    message_ids,
+                    "Telegram accepted send without a usable message ID".into(),
+                    false,
+                    true,
+                ));
             };
             message_ids.push(id);
 

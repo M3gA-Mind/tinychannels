@@ -169,6 +169,31 @@ async fn typed_send_keeps_delivered_chunk_ids_when_later_chunk_fails() {
         outcome.error.as_ref().unwrap().continuation_message_ids,
         ["321"]
     );
+    let public_error = serde_json::to_string(&outcome.error).unwrap();
+    assert!(
+        !public_error.contains(TOKEN),
+        "bot token must not enter structured errors"
+    );
+}
+
+#[tokio::test]
+async fn typed_send_without_provider_message_id_is_ambiguous_and_not_retried() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok_with(serde_json::json!({}))).await;
+    let ch = channel_for(&server, &["*"]);
+    let outcome = ch
+        .send_typed_with_receipt(&typed_text("missing-id", "hello".into()))
+        .await
+        .unwrap();
+    let error = outcome.error.expect("missing ID cannot report success");
+    assert!(
+        error.sent_before_error,
+        "Telegram accepted the request, so retry safety is unknown"
+    );
+    assert!(outcome.receipt.platform_message_ids.is_empty());
+    assert!(error.message.contains("usable message ID"));
+    assert!(!error.message.contains(TOKEN));
+    assert_eq!(json_bodies(&server, "sendMessage").await.len(), 1);
 }
 
 #[tokio::test]

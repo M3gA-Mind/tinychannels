@@ -248,7 +248,8 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
         if let Some(error) = outcome.error {
             return Err(DeliveryAttemptFailure {
                 error: error.message,
-                sent_before_error: !outcome.receipt.platform_message_ids.is_empty(),
+                sent_before_error: error.sent_before_error
+                    || !outcome.receipt.platform_message_ids.is_empty(),
                 permanent: Some(!error.retryable),
                 receipt: Some(outcome.receipt),
             });

@@ -475,13 +475,17 @@ impl Channel for TelegramChannel {
             })?),
             None => None,
         };
-        let (ids, error) = match self
+        let (ids, error, _sent_before_error) = match self
             .send_text_chunks_with_ids(text, &conversation.id, thread_id.as_deref(), reply_to_id)
             .await
         {
-            Ok(ids) => (ids, None),
+            Ok(ids) => (ids, None, false),
             Err(error) => match error.downcast_ref::<super::channel_send::PartialTextSendError>() {
-                Some(partial) => (partial.message_ids.clone(), Some(partial.error.clone()), partial.sent_before_error),
+                Some(partial) => (
+                    partial.message_ids.clone(),
+                    Some(partial.error.clone()),
+                    partial.sent_before_error,
+                ),
                 None => return Err(error),
             },
         };
