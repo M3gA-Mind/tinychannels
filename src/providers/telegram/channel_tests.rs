@@ -98,6 +98,22 @@ fn supports_draft_updates_respects_stream_mode() {
     let partial = TelegramChannel::new("fake-token".into(), vec!["*".into()], false)
         .with_streaming(StreamMode::Partial, 750, true);
     assert!(partial.supports_draft_updates());
+    assert!(
+        partial
+            .capabilities()
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "draft-update")
+    );
+    assert!(
+        !partial
+            .capabilities()
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "edit")
+    );
     assert_eq!(partial.draft_update_interval_ms, 750);
     assert!(partial.silent_streaming);
 }

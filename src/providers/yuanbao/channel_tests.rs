@@ -106,6 +106,20 @@ fn supports_draft_updates_is_true() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     assert!(ch.supports_draft_updates());
     assert!(ch.capabilities().progressive_edits);
+    assert!(
+        ch.capabilities()
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "draft-update")
+    );
+    assert!(
+        !ch.capabilities()
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "edit")
+    );
 }
 
 #[test]
