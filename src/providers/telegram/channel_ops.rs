@@ -750,77 +750,73 @@ Ensure only one `openhuman` process is using this bot token."
                     // them out of the inbound-new-message path even when no
                     // host event sink is installed.
                     if let Some(edited) = update.get("edited_message") {
-                        if let Some(message) = self.parse_update_message(update) {
-                            if let Some(events) = &self.events {
-                                let source_id = update
-                                    .get("update_id")
-                                    .and_then(serde_json::Value::as_i64)
-                                    .map(|id| id.to_string());
-                                let thread_id = edited
-                                    .get("message_thread_id")
-                                    .and_then(serde_json::Value::as_i64)
-                                    .map(|id| id.to_string());
-                                let event = tinychannels_bus::ChannelEvent {
-                                    version: 2,
-                                    event_id: source_id
-                                        .as_ref()
-                                        .map(|id| {
-                                            format!("telegram:update:{id}:edit:{}", message.id)
-                                        })
-                                        .unwrap_or_else(|| format!("telegram:edit:{}", message.id)),
-                                    source_event_id: source_id,
-                                    source_timestamp: edited
-                                        .get("edit_date")
-                                        .and_then(serde_json::Value::as_u64)
-                                        .map(|seconds| seconds.saturating_mul(1000)),
-                                    channel: tinychannels_bus::ChannelRef {
-                                        id: "telegram".into(),
-                                        account_id: None,
+                        if let Some(message) = self.parse_update_message(update)
+                            && let Some(events) = &self.events
+                        {
+                            let source_id = update
+                                .get("update_id")
+                                .and_then(serde_json::Value::as_i64)
+                                .map(|id| id.to_string());
+                            let thread_id = edited
+                                .get("message_thread_id")
+                                .and_then(serde_json::Value::as_i64)
+                                .map(|id| id.to_string());
+                            let event = tinychannels_bus::ChannelEvent {
+                                version: 2,
+                                event_id: source_id
+                                    .as_ref()
+                                    .map(|id| format!("telegram:update:{id}:edit:{}", message.id))
+                                    .unwrap_or_else(|| format!("telegram:edit:{}", message.id)),
+                                source_event_id: source_id,
+                                source_timestamp: edited
+                                    .get("edit_date")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .map(|seconds| seconds.saturating_mul(1000)),
+                                channel: tinychannels_bus::ChannelRef {
+                                    id: "telegram".into(),
+                                    account_id: None,
+                                },
+                                conversation: Some(tinychannels_bus::ConversationRef {
+                                    kind: match edited
+                                        .get("chat")
+                                        .and_then(|chat| chat.get("type"))
+                                        .and_then(serde_json::Value::as_str)
+                                    {
+                                        Some("private") => tinychannels_bus::ConversationKind::Dm,
+                                        Some("group" | "supergroup") => {
+                                            tinychannels_bus::ConversationKind::Group
+                                        }
+                                        Some("channel") => {
+                                            tinychannels_bus::ConversationKind::Channel
+                                        }
+                                        _ => tinychannels_bus::ConversationKind::Unknown,
                                     },
-                                    conversation: Some(tinychannels_bus::ConversationRef {
-                                        kind: match edited
-                                            .get("chat")
-                                            .and_then(|chat| chat.get("type"))
-                                            .and_then(serde_json::Value::as_str)
-                                        {
-                                            Some("private") => {
-                                                tinychannels_bus::ConversationKind::Dm
-                                            }
-                                            Some("group" | "supergroup") => {
-                                                tinychannels_bus::ConversationKind::Group
-                                            }
-                                            Some("channel") => {
-                                                tinychannels_bus::ConversationKind::Channel
-                                            }
-                                            _ => tinychannels_bus::ConversationKind::Unknown,
-                                        },
-                                        id: edited
-                                            .get("chat")
-                                            .and_then(|chat| chat.get("id"))
-                                            .and_then(serde_json::Value::as_i64)
-                                            .map(|id| id.to_string())
-                                            .unwrap_or_else(|| message.reply_target.clone()),
-                                        topic_id: thread_id,
-                                        ..Default::default()
-                                    }),
-                                    event: tinychannels_bus::ChannelEventKind::MessageUpdated {
-                                        message_id: message.id,
-                                        provider_message_id: edited
-                                            .get("message_id")
-                                            .and_then(serde_json::Value::as_i64)
-                                            .map(|id| id.to_string()),
-                                        parts: vec![tinychannels_bus::ContentPart::Text {
-                                            text: message.content,
-                                            markdown_dialect: None,
-                                        }],
-                                    },
-                                };
-                                if let Err(error) = events
-                                    .publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
-                                    .await
-                                {
-                                    tracing::debug!(%error, "failed to deliver Telegram edit event");
-                                }
+                                    id: edited
+                                        .get("chat")
+                                        .and_then(|chat| chat.get("id"))
+                                        .and_then(serde_json::Value::as_i64)
+                                        .map(|id| id.to_string())
+                                        .unwrap_or_else(|| message.reply_target.clone()),
+                                    topic_id: thread_id,
+                                    ..Default::default()
+                                }),
+                                event: tinychannels_bus::ChannelEventKind::MessageUpdated {
+                                    message_id: message.id,
+                                    provider_message_id: edited
+                                        .get("message_id")
+                                        .and_then(serde_json::Value::as_i64)
+                                        .map(|id| id.to_string()),
+                                    parts: vec![tinychannels_bus::ContentPart::Text {
+                                        text: message.content,
+                                        markdown_dialect: None,
+                                    }],
+                                },
+                            };
+                            if let Err(error) = events
+                                .publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
+                                .await
+                            {
+                                tracing::debug!(%error, "failed to deliver Telegram edit event");
                             }
                         }
                         continue;
