@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use tinybus::Connection;
 use tinychannels::storage::delivery::{PENDING_COLLECTION, RESULTS_COLLECTION};
+use tinychannels::storage::records::{StoredDelivery, StoredResult};
 use tinychannels_bus::{DeliveryQueueEntry, DeliveryTerminalResult};
 use tinystoragedrivers_busproxy::{PerCallerEndpoint, ServedStorage, serve};
 use tinystoragedrivers_client::StorageServer;
@@ -134,19 +135,29 @@ impl StorageHost {
             .collect()
     }
 
+    /// Entries are keyed by their idempotency key, as the wire type reports it.
+    async fn entries(&self, scope: &str, name: &str) -> BTreeMap<String, DeliveryQueueEntry> {
+        let raw: BTreeMap<String, StoredDelivery> = self.collection(scope, name).await;
+        raw.into_values()
+            .map(DeliveryQueueEntry::from)
+            .map(|entry| (entry.id.clone(), entry))
+            .collect()
+    }
+
     pub(crate) async fn pending(&self, scope: &str) -> BTreeMap<String, DeliveryQueueEntry> {
-        self.collection(scope, PENDING_COLLECTION).await
+        self.entries(scope, PENDING_COLLECTION).await
     }
 
     pub(crate) async fn failed(&self, scope: &str) -> BTreeMap<String, DeliveryQueueEntry> {
-        self.collection(scope, tinychannels::storage::delivery::FAILED_COLLECTION)
+        self.entries(scope, tinychannels::storage::delivery::FAILED_COLLECTION)
             .await
     }
 
     pub(crate) async fn results(&self, scope: &str) -> BTreeMap<String, DeliveryTerminalResult> {
-        let raw: BTreeMap<String, Value> = self.collection(scope, RESULTS_COLLECTION).await;
-        raw.into_iter()
-            .map(|(id, doc)| (id, serde_json::from_value(doc["result"].clone()).unwrap()))
+        let raw: BTreeMap<String, StoredResult> = self.collection(scope, RESULTS_COLLECTION).await;
+        raw.into_values()
+            .map(DeliveryTerminalResult::from)
+            .map(|result| (result.id.clone(), result))
             .collect()
     }
 

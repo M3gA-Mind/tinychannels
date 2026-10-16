@@ -26,7 +26,7 @@ pub(crate) fn from_stored_ms(ms: i64) -> u64 {
 /// The outbound intent as stored. The payload is already snake_case on the
 /// wire, so only the five camelCase fields differ.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct StoredIntent {
+pub struct StoredIntent {
     pub idempotency_key: String,
     pub channel_id: String,
     pub conversation_id: String,
@@ -67,7 +67,7 @@ impl From<StoredIntent> for ChannelOutboundIntent {
 /// A pending or failed delivery as stored. The entry id is the intent's
 /// idempotency key, so the body does not repeat it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct StoredDelivery {
+pub struct StoredDelivery {
     pub intent: StoredIntent,
     pub enqueued_ms: i64,
     #[serde(default)]
@@ -116,7 +116,7 @@ impl From<StoredDelivery> for QueuedDelivery {
 /// metadata, not a body field. The id is kept because a long idempotency key
 /// makes a hashed document id that cannot be turned back into it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub(crate) struct StoredResult {
+pub struct StoredResult {
     pub id: String,
     pub intent_fingerprint: String,
     pub completed_ms: i64,
