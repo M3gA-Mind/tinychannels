@@ -861,9 +861,12 @@ impl Channels {
                 name: SEND_FAILED_ERROR.to_owned(),
                 message: error.to_string(),
             })?;
+        let has_provider_receipt = outcome.receipt.primary_platform_message_id.is_some()
+            || !outcome.receipt.platform_message_ids.is_empty()
+            || !outcome.receipt.parts.is_empty();
         Ok(ChannelSendMessageResult {
             message_id: outcome.receipt.primary_platform_message_id.clone(),
-            receipt: Some(outcome.receipt),
+            receipt: has_provider_receipt.then_some(outcome.receipt),
             error: outcome.error,
             raw: None,
         })
