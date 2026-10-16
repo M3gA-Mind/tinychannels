@@ -605,6 +605,61 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
 }
 
 #[tokio::test]
+async fn module_unified_ingress_acknowledges_message_before_following_event() {
+    use tinychannels::host::EventSink;
+
+    let (host, callback, _server) = connected_host().await;
+    let events = crate::provider::ModuleEvents(host.clone(), "telegram:bot-a".into());
+    let handled = events
+        .publish_inbound(tinychannels_bus::ChannelMessage {
+            id: "telegram_100_5".into(),
+            sender: "7".into(),
+            reply_target: "100:88".into(),
+            content: "message first".into(),
+            channel: "telegram".into(),
+            timestamp: 10,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert!(handled);
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "update-6-edit".into(),
+        source_event_id: Some("6".into()),
+        source_timestamp: Some(11),
+        channel: Default::default(),
+        conversation: Some(tinychannels_bus::ConversationRef {
+            id: "100".into(),
+            topic_id: Some("88".into()),
+            ..Default::default()
+        }),
+        event: tinychannels_bus::ChannelEventKind::MessageUpdated {
+            message_id: "telegram_100_5".into(),
+            provider_message_id: Some("5".into()),
+            parts: vec![],
+        },
+    };
+    events
+        .publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
+        .await
+        .unwrap();
+    assert_eq!(
+        callback.events.lock().await.as_slice(),
+        [
+            "inbound:telegram:message first",
+            "typed_event:telegram:bot-a:update-6-edit"
+        ]
+    );
+    let envelope = callback.inbound.lock().await[0].clone();
+    assert_eq!(envelope["messageId"], "telegram_100_5");
+    assert_eq!(envelope["channel"]["accountId"], "telegram:bot-a");
+    assert_eq!(envelope["conversation"]["id"], "100");
+    assert_eq!(envelope["conversation"]["topicId"], "88");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn typed_event_callback_failure_is_reported_and_shutdown_closes_delivery() {
     let (host, callback, _server) = connected_host().await;
     callback.event_failures.store(1, Ordering::SeqCst);
