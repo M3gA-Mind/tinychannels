@@ -167,6 +167,33 @@ impl ChannelOutboundMessage {
         }
         Ok(text.join("\n"))
     }
+
+    /// Convert a legacy message into the v22 typed envelope without inferring
+    /// provider capabilities or parsing its text as structured data.
+    pub fn from_legacy_message(channel_id: impl Into<String>, message: &crate::traits::SendMessage) -> Self {
+        Self {
+            channel_id: channel_id.into(),
+            conversation_id: message.recipient.clone(),
+            reply_to_id: message.reply_to_id.clone(),
+            thread_id: message.thread_ts.clone(),
+            idempotency_key: message.idempotency_key.clone().unwrap_or_default(),
+            parts: vec![OutboundContentPart::Content {
+                part: ContentPart::Text { text: message.content.clone() },
+            }],
+        }
+    }
+
+    /// Convert to the explicit one-release legacy text-only send shape.
+    pub fn to_legacy_message(&self) -> anyhow::Result<crate::traits::SendMessage> {
+        Ok(crate::traits::SendMessage {
+            content: self.legacy_text()?,
+            recipient: self.conversation_id.clone(),
+            subject: None,
+            thread_ts: self.thread_id.clone(),
+            reply_to_id: self.reply_to_id.clone(),
+            idempotency_key: (!self.idempotency_key.is_empty()).then(|| self.idempotency_key.clone()),
+        })
+    }
 }
 
 /// Logical outbound send request.
