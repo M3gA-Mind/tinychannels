@@ -465,22 +465,31 @@ Ensure only one `openhuman` process is using this bot token."
                             "Telegram reaction received"
                         );
                         if let Some(events) = &self.events {
-                            events
-                                .publish(
-                                    "channel",
-                                    "reaction_received",
-                                    serde_json::json!({
-                                        "channel": "telegram",
-                                        "sender": reaction.sender,
-                                        "target_message_id": format!(
-                                            "telegram_{}_{}",
-                                            reaction.reply_target, reaction.target_message_id
-                                        ),
-                                        "emoji": reaction.emoji,
-                                    }),
-                                )
-                                .await
-                                .ok();
+                            let source_id = reaction.update_id.clone();
+                            let conversation = tinychannels_bus::ConversationRef {
+                                kind: tinychannels_bus::ConversationKind::Unknown,
+                                id: reaction.reply_target.clone(),
+                                thread_id: reaction.thread_id.clone(),
+                                ..Default::default()
+                            };
+                            let event = tinychannels_bus::ChannelEvent {
+                                version: 2,
+                                event_id: source_id.as_ref().map(|id| format!("telegram:update:{id}"))
+                                    .unwrap_or_else(|| format!("telegram:reaction:{}:{}:{}:{}", reaction.reply_target, reaction.target_message_id, reaction.sender_id, reaction.emoji)),
+                                source_event_id: source_id,
+                                source_timestamp: reaction.timestamp,
+                                channel: tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None },
+                                conversation: Some(conversation),
+                                event: tinychannels_bus::ChannelEventKind::Reaction {
+                                    added: reaction.added,
+                                    message_id: reaction.target_message_id.clone(),
+                                    actor: tinychannels_bus::SenderRef { id: reaction.sender_id, name: Some(reaction.sender), ..Default::default() },
+                                    reaction: tinychannels_bus::ChannelReaction { value: reaction.emoji, custom_emoji_id: None },
+                                },
+                            };
+                            if let Err(error) = events.publish_channel_event(event).await {
+                                tracing::debug!(%error, "failed to deliver Telegram reaction event");
+                            }
                         }
                         continue;
                     }

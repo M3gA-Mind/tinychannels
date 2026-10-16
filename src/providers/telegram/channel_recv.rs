@@ -1255,8 +1255,11 @@ impl TelegramChannel {
             return None;
         }
 
-        let emoji = reaction
-            .get("new_reaction")
+        let new_reactions = reaction.get("new_reaction").and_then(serde_json::Value::as_array);
+        let old_reactions = reaction.get("old_reaction").and_then(serde_json::Value::as_array);
+        let added = new_reactions.is_some_and(|items| !items.is_empty());
+        let selected = if added { new_reactions } else { old_reactions };
+        let emoji = selected
             .and_then(serde_json::Value::as_array)
             .and_then(|arr| {
                 arr.iter().find_map(|entry| {
@@ -1267,11 +1270,19 @@ impl TelegramChannel {
                 })
             })?;
 
+        let sender_id = user_id.clone().unwrap_or_else(|| actor.clone());
+        let thread_id = reaction.get("message_thread_id")
+            .and_then(serde_json::Value::as_i64).map(|id| id.to_string());
         Some(TelegramReactionEvent {
             sender: actor,
+            sender_id,
             reply_target: chat_id,
             target_message_id: message_id,
             emoji,
+            added,
+            update_id: update.get("update_id").and_then(serde_json::Value::as_i64).map(|id| id.to_string()),
+            timestamp: reaction.get("date").and_then(serde_json::Value::as_u64).map(|seconds| seconds.saturating_mul(1000)),
+            thread_id,
         })
     }
 }
