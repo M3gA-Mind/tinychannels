@@ -127,7 +127,9 @@ fn harness_outbound_intent_preserves_full_turn_address() {
     turn.envelope.conversation.topic_id = Some("topic-opaque".into());
     let intents = translate_output_event(
         &turn,
-        ChannelOutputEvent::FinalMessage { text: "reply".into() },
+        ChannelOutputEvent::FinalMessage {
+            text: "reply".into(),
+        },
         &ChannelStaticCapabilities::default(),
         &ChannelPresentationCapabilities::default(),
         BridgeTranslationOptions::default(),

@@ -64,21 +64,34 @@ pub enum OutboundPayload {
     rename_all_fields = "camelCase"
 )]
 enum OutboundPayloadWire {
-    Text { text: String },
+    Text {
+        text: String,
+    },
     Media {
         text: Option<String>,
         #[serde(alias = "media_urls")]
         media_urls: Vec<String>,
     },
-    Voice { voice: OutboundVoice },
+    Voice {
+        voice: OutboundVoice,
+    },
     Files {
         #[serde(alias = "file_urls")]
         file_urls: Vec<String>,
     },
-    Poll { question: String, options: Vec<String> },
-    PresentationBlocks { blocks: Value },
-    NativeChannelData { data: Value },
-    Parts { parts: Vec<OutboundContentPart> },
+    Poll {
+        question: String,
+        options: Vec<String>,
+    },
+    PresentationBlocks {
+        blocks: Value,
+    },
+    NativeChannelData {
+        data: Value,
+    },
+    Parts {
+        parts: Vec<OutboundContentPart>,
+    },
 }
 
 impl<'de> Deserialize<'de> for OutboundPayload {
@@ -108,7 +121,9 @@ impl<'de> Deserialize<'de> for OutboundPayload {
             OutboundPayloadWire::Voice { voice } => Self::Voice { voice },
             OutboundPayloadWire::Files { file_urls } => Self::Files { file_urls },
             OutboundPayloadWire::Poll { question, options } => Self::Poll { question, options },
-            OutboundPayloadWire::PresentationBlocks { blocks } => Self::PresentationBlocks { blocks },
+            OutboundPayloadWire::PresentationBlocks { blocks } => {
+                Self::PresentationBlocks { blocks }
+            }
             OutboundPayloadWire::NativeChannelData { data } => Self::NativeChannelData { data },
             OutboundPayloadWire::Parts { parts } => Self::Parts { parts },
         })
