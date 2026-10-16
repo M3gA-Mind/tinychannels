@@ -121,30 +121,64 @@ async fn local_adapter_preserves_identity_and_ack_policy_across_stop() {
 
 #[test]
 fn local_adapters_keep_per_instance_v2_facts_and_project_legacy_flags() {
-    let mut rich = tinychannels_bus::ChannelCapabilities::default();
-    rich.progressive_edits = true;
-    rich.reactions = true;
-    rich.text.text_limit = Some(8192);
-    rich.addressing.conversation_types = vec!["group".into()];
-    rich.addressing.thread_id = true;
-    rich.actions.supported = vec![
-        "send".into(),
-        "reply".into(),
-        "edit".into(),
-        "delete".into(),
-        "native-command".into(),
-    ];
-    rich.content.image.outbound = true;
-    rich.content.poll.outbound = true;
-    rich.content.buttons.max_count = Some(12);
-    rich.content.button_presentation.max_actions_per_row = Some(3);
-    rich.content.button_presentation.max_rows = Some(4);
-    rich.content.button_presentation.supports_styles = true;
+    let rich = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        reactions: true,
+        text: tinychannels_bus::TextCapabilities {
+            text_limit: Some(8192),
+            ..Default::default()
+        },
+        addressing: tinychannels_bus::AddressingCapabilities {
+            conversation_types: vec!["group".into()],
+            thread_id: true,
+            ..Default::default()
+        },
+        actions: tinychannels_bus::ActionCapabilities {
+            supported: vec![
+                "send".into(),
+                "reply".into(),
+                "edit".into(),
+                "delete".into(),
+                "native-command".into(),
+            ],
+            ..Default::default()
+        },
+        content: tinychannels_bus::ContentCapabilities {
+            image: tinychannels_bus::ContentCapability {
+                outbound: true,
+                ..Default::default()
+            },
+            poll: tinychannels_bus::ContentCapability {
+                outbound: true,
+                ..Default::default()
+            },
+            buttons: tinychannels_bus::ContentCapability {
+                max_count: Some(12),
+                ..Default::default()
+            },
+            button_presentation: tinychannels_bus::ButtonPresentationCapabilities {
+                max_actions_per_row: Some(3),
+                max_rows: Some(4),
+                supports_styles: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
-    let mut limited = tinychannels_bus::ChannelCapabilities::default();
-    limited.progressive_edits = true;
-    limited.text.text_limit = Some(512);
-    limited.actions.supported = vec!["send".into()];
+    let limited = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        text: tinychannels_bus::TextCapabilities {
+            text_limit: Some(512),
+            ..Default::default()
+        },
+        actions: tinychannels_bus::ActionCapabilities {
+            supported: vec!["send".into()],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
 
     let sink = Arc::new(RecordingOutboundSink::default());
     let first = LocalChannelAdapter::new(
