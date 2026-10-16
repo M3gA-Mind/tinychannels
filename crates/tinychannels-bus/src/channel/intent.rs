@@ -17,6 +17,10 @@ pub enum DeliveryDurability {
 }
 
 /// Provider-neutral outbound payload variants.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the v22 wire enum keeps ergonomic, unboxed payload variants"
+)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(
     tag = "kind",
@@ -50,6 +54,10 @@ pub enum OutboundPayload {
 }
 
 /// Explicit outbound voice operation. Synthesis is opt-in and keeps its text.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the v22 voice wire union keeps its media reference directly typed"
+)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(
     tag = "kind",

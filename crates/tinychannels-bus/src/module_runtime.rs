@@ -54,6 +54,10 @@ pub struct ConfiguredChannelInfo {
 }
 
 /// Legacy message vocabulary whose normalization and hashing stay in the module.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "message preparation variants retain their established serialized contract"
+)]
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", content = "message", rename_all = "snake_case")]
 pub enum ChannelMessagePreparation {

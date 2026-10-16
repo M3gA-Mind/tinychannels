@@ -35,6 +35,10 @@ pub struct NewRemoteThread {
     pub labels: Vec<String>,
 }
 /// Host-validated state root and one incoming command context.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "remote operation variants retain their established wire representation"
+)]
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
 pub enum RemoteOperation {
