@@ -7,6 +7,7 @@ use super::channel_types::TelegramChannel;
 #[derive(Debug)]
 pub(crate) struct PartialTextSendError {
     pub(crate) message_ids: Vec<String>,
+    pub(crate) sent_before_error: bool,
     pub(crate) error: tinychannels_bus::channel::ChannelSendError,
 }
 
@@ -194,15 +195,16 @@ impl TelegramChannel {
                 .send()
                 .await
                 .map_err(|error| {
-                    partial_text_send_error(message_ids.clone(), error.to_string(), true)
+                    tracing::debug!(%error, "Telegram sendMessage request failed");
+                    partial_text_send_error(message_ids.clone(), "Telegram sendMessage request failed".into(), true, true)
                 })?;
 
             if markdown_resp.status().is_success() {
-                if let Some(id) = Self::telegram_result_message_id(
-                    markdown_resp.json::<serde_json::Value>().await.ok(),
-                ) {
-                    message_ids.push(id);
-                }
+                let response = markdown_resp.json::<serde_json::Value>().await.ok();
+                let Some(id) = Self::telegram_result_message_id(response) else {
+                    return Err(partial_text_send_error(message_ids, "Telegram accepted send without a usable message ID".into(), false, true));
+                };
+                message_ids.push(id);
                 if index < chunks.len() - 1 {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
@@ -210,7 +212,7 @@ impl TelegramChannel {
             }
 
             let markdown_status = markdown_resp.status();
-            let markdown_err = markdown_resp.text().await.unwrap_or_default();
+            let _ = markdown_resp.bytes().await;
             tracing::warn!(
                 status = ?markdown_status,
                 "Telegram sendMessage with Markdown failed; retrying without parse_mode"
@@ -237,26 +239,26 @@ impl TelegramChannel {
                 .send()
                 .await
                 .map_err(|error| {
-                    partial_text_send_error(message_ids.clone(), error.to_string(), true)
+                    tracing::debug!(%error, "Telegram sendMessage fallback request failed");
+                    partial_text_send_error(message_ids.clone(), "Telegram sendMessage request failed".into(), true, true)
                 })?;
 
             if !plain_resp.status().is_success() {
                 let plain_status = plain_resp.status();
-                let plain_err = plain_resp.text().await.unwrap_or_default();
+                let _ = plain_resp.bytes().await;
                 return Err(partial_text_send_error(
                     message_ids,
-                    format!(
-                        "Telegram sendMessage failed (markdown {markdown_status}: {markdown_err}; plain {plain_status}: {plain_err})"
-                    ),
+                    format!("Telegram sendMessage rejected with HTTP {}", plain_status.as_u16()),
                     plain_status.is_server_error() || plain_status.as_u16() == 429,
+                    plain_status.is_server_error(),
                 ));
             }
 
-            if let Some(id) =
-                Self::telegram_result_message_id(plain_resp.json::<serde_json::Value>().await.ok())
-            {
-                message_ids.push(id);
-            }
+            let response = plain_resp.json::<serde_json::Value>().await.ok();
+            let Some(id) = Self::telegram_result_message_id(response) else {
+                return Err(partial_text_send_error(message_ids, "Telegram accepted send without a usable message ID".into(), false, true));
+            };
+            message_ids.push(id);
 
             if index < chunks.len() - 1 {
                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -774,6 +776,7 @@ fn partial_text_send_error(
     message_ids: Vec<String>,
     message: String,
     retryable: bool,
+    sent_before_error: bool,
 ) -> anyhow::Error {
     anyhow::Error::new(PartialTextSendError {
         error: tinychannels_bus::channel::ChannelSendError {
@@ -784,6 +787,7 @@ fn partial_text_send_error(
             },
             message,
             retryable,
+            sent_before_error,
             continuation_message_ids: message_ids.clone(),
             ..Default::default()
         },
