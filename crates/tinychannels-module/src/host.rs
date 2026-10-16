@@ -437,7 +437,10 @@ impl HostChannels {
         envelope: tinychannels_bus::ChannelInboundEnvelope,
     ) {
         let Ok(message) = serde_json::to_value(envelope) else {
-            record_failure(&self.owner.failure, "inbound envelope could not be encoded".into());
+            record_failure(
+                &self.owner.failure,
+                "inbound envelope could not be encoded".into(),
+            );
             return;
         };
         if serde_json::to_vec(&message).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
