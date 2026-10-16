@@ -544,7 +544,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                     panic!("file URL must remain a typed file part")
                 };
                 assert_eq!(media.url.as_deref(), Some("https://example.test/file.pdf"));
-                assert_eq!(file_name.as_deref(), Some("file.pdf"));
+                assert!(file_name.is_none(), "legacy file URL has no supplied name");
             }
             5 => {
                 let tinychannels_bus::OutboundContentPart::Content {
