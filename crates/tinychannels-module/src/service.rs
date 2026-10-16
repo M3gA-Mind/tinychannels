@@ -215,14 +215,8 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
         };
         drop(running);
 
-        let Ok(message) = intent_to_legacy_message(&entry.intent) else {
-            return Err(DeliveryAttemptFailure {
-                error: "delivery payload could not be encoded".into(),
-                sent_before_error: false,
-                permanent: Some(true),
-            });
-        };
-        if let Err(error) = provider.send(message).await {
+        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&entry.intent);
+        if let Err(error) = provider.send_typed(message).await {
             return Err(DeliveryAttemptFailure {
                 error: "provider send failed".into(),
                 sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
@@ -799,8 +793,7 @@ impl Channels {
         };
         entry
             .send(
-                intent_to_legacy_message(&intent)
-                    .map_err(|_| BusError::failed("could not encode channel intent"))?,
+                tinychannels_bus::ChannelOutboundMessage::from_intent(&intent),
             )
             .await
             .map_err(|error| BusError::MethodFailed {
@@ -1204,16 +1197,14 @@ async fn setup(connection: Connection) -> BusResult<()> {
 fn intent_to_legacy_message(
     intent: &ChannelOutboundIntent,
 ) -> Result<SendMessage, serde_json::Error> {
-    let value = tinychannels::legacy_message_value_from_outbound_intent(intent);
-    let content = match &intent.payload {
-        tinychannels::OutboundPayload::Text { text } => text.clone(),
-        _ => serde_json::to_string(&value)?,
-    };
+    let typed = tinychannels_bus::ChannelOutboundMessage::from_intent(intent);
+    let content = typed.legacy_text().map_err(|error| <serde_json::Error as serde::ser::Error>::custom(error.to_string()))?;
     Ok(SendMessage {
         content,
         recipient: intent.conversation_id.clone(),
         subject: None,
         thread_ts: intent.thread_id.clone(),
+        reply_to_id: intent.reply_to_id.clone(),
         idempotency_key: Some(intent.idempotency_key.clone()),
     })
 }

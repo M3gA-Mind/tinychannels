@@ -20,6 +20,7 @@ impl<T> Drop for AbortOnDrop<T> {
 
 enum ProviderOperation {
     Send(SendMessage),
+    SendTyped(tinychannels_bus::ChannelOutboundMessage),
     Interaction(tinychannels_bus::ChannelInteraction),
 }
 
@@ -356,6 +357,11 @@ impl Running {
                             .await
                             .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
                             .map_err(|error| Error::failed(error.to_string())),
+                        ProviderOperation::SendTyped(message) => send_channel
+                            .send_typed(&message)
+                            .await
+                            .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
+                            .map_err(|error| Error::failed(error.to_string())),
                         ProviderOperation::Interaction(interaction) => {
                             dispatch_interaction(send_channel.clone(), interaction, &mut typing)
                                 .await
@@ -409,6 +415,13 @@ impl Running {
         self.submit(ProviderOperation::Send(message))
             .await
             .map(|_| ())
+    }
+
+    pub(crate) async fn send_typed(
+        &self,
+        message: tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<(), RunningSendError> {
+        self.submit(ProviderOperation::SendTyped(message)).await.map(|_| ())
     }
 
     pub(crate) async fn interact(
