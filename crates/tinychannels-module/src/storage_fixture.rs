@@ -20,7 +20,7 @@ use tinystoragedrivers_core::{
 };
 
 /// One-shot faults and counters on the delivery records.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(crate) struct Faults {
     pub(crate) fail_pending_write: AtomicBool,
     pub(crate) fail_queue_read: AtomicBool,
@@ -201,12 +201,6 @@ impl ScopeSwitchDocs {
     fn inner(&self) -> Arc<dyn DocumentStore> {
         let scope = Scope::new(self.current.lock().unwrap().as_str()).unwrap();
         Arc::clone(self.backend.for_scope(&scope).unwrap().documents())
-    }
-}
-
-impl std::fmt::Debug for Faults {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Faults")
     }
 }
 
