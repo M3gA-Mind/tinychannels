@@ -391,6 +391,11 @@ async fn v2_capabilities_query_hides_cached_slot_after_immediate_transport_close
     *slot.transport.lock().await = Some(transport.clone());
     assert!(!transport.is_closed());
     assert_eq!(
+        manager.status(reservation.clone()).await.unwrap().state,
+        RelayPhase::Reconnecting,
+        "an open transport without its new descriptor snapshot is not connected"
+    );
+    assert_eq!(
         manager.capabilities_v2(reservation.clone()).await.unwrap(),
         None,
         "an open transport without its new descriptor snapshot must not expose cached facts"
