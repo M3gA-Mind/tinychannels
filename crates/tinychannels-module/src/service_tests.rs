@@ -153,7 +153,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         },
     };
     let result = client
-        .call::<tinychannels_bus::ChannelSendMessageResult>(
+        .call::<tinychannels_bus::controllers::ChannelSendMessageResult>(
             tinychannels_bus::BUS_NAME.try_into().unwrap(),
             tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
             tinychannels_bus::BUS_NAME.try_into().unwrap(),
@@ -426,7 +426,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
     ];
     for (index, payload) in payloads.into_iter().enumerate() {
         client
-            .call::<tinychannels_bus::ChannelSendMessageResult>(
+            .call::<tinychannels_bus::controllers::ChannelSendMessageResult>(
                 tinychannels_bus::BUS_NAME.try_into().unwrap(),
                 tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
                 tinychannels_bus::BUS_NAME.try_into().unwrap(),
@@ -539,7 +539,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         ..Default::default()
     };
     let empty_result = client
-        .call::<tinychannels_bus::ChannelSendMessageResult>(
+        .call::<tinychannels_bus::controllers::ChannelSendMessageResult>(
             tinychannels_bus::BUS_NAME.try_into().unwrap(),
             tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
             tinychannels_bus::BUS_NAME.try_into().unwrap(),

@@ -178,7 +178,10 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
 fn inbound_envelope(text: &str) -> tinychannels_bus::ChannelInboundEnvelope {
     tinychannels_bus::ChannelInboundEnvelope {
         text: text.into(),
-        parts: vec![tinychannels_bus::ContentPart::Text { text: text.into() }],
+        parts: vec![tinychannels_bus::ContentPart::Text {
+            text: text.into(),
+            markdown_dialect: None,
+        }],
         ..Default::default()
     }
 }
