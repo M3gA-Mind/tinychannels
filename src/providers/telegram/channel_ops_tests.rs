@@ -186,12 +186,23 @@ async fn typed_send_receipt_applies_tool_call_tag_sanitization() {
     let server = mock_api().await;
     mount_post(&server, "sendMessage", ok_with(serde_json::json!({ "message_id": 655 }))).await;
     let ch = channel_for(&server, &["*"]);
-    let message = typed_text("sanitize", "before<tool_call>hidden</tool_call>after".into());
+    let message = typed_text(
+        "sanitize",
+        "before<tool_call>hidden</tool_call>[REACTION:👍|321] [IMAGE:https://example.test/image.png]".into(),
+    );
 
     let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
 
     assert_eq!(outcome.error, None);
-    assert_eq!(json_bodies(&server, "sendMessage").await[0]["text"], "beforeafter");
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(
+        bodies[0]["text"],
+        "before[REACTION:👍|321] [IMAGE:https://example.test/image.png]"
+    );
+    assert_eq!(bodies[0]["message_id"], serde_json::Value::Null);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1, "typed markers remain text, not operations");
+    assert_eq!(outcome.receipt.platform_message_ids, ["655"]);
 }
 
 #[tokio::test]
