@@ -197,7 +197,7 @@ impl TelegramChannel {
                 .await
                 .map_err(|error| {
                     tracing::debug!("Telegram sendMessage transport failed");
-                    let definitely_not_sent = false;
+                    let definitely_not_sent = error.is_connect();
                     partial_text_send_error(
                         message_ids.clone(),
                         "Telegram sendMessage request failed".into(),
@@ -263,7 +263,7 @@ impl TelegramChannel {
                 .await
                 .map_err(|error| {
                     tracing::debug!("Telegram sendMessage fallback transport failed");
-                    let definitely_not_sent = error.is_connect();
+                    let definitely_not_sent = false;
                     partial_text_send_error(
                         message_ids.clone(),
                         "Telegram sendMessage request failed".into(),
