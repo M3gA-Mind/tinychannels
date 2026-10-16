@@ -2,6 +2,17 @@
 use tinychannels::Channel;
 use tinychannels_bus::{ChannelInteraction, ChannelInteractionInfo, ChannelInteractionResult};
 
+/// Canonical facts shared by Describe and every configured-instance consumer.
+pub(crate) fn configured_capabilities(
+    provider: &dyn Channel,
+) -> tinychannels_bus::ChannelCapabilities {
+    let mut capabilities = provider.capabilities();
+    capabilities.account.configured = Some(true);
+    capabilities.account.enabled = Some(true);
+    capabilities.account.proactive_target = provider.proactive_target();
+    capabilities
+}
+
 pub(crate) async fn dispatch(
     provider: &dyn Channel,
     interaction: ChannelInteraction,
@@ -9,10 +20,7 @@ pub(crate) async fn dispatch(
     use ChannelInteraction as Op;
     let result = match interaction {
         Op::Describe => {
-            let mut capabilities = provider.capabilities();
-            capabilities.account.configured = Some(true);
-            capabilities.account.enabled = Some(true);
-            capabilities.account.proactive_target = provider.proactive_target();
+            let capabilities = configured_capabilities(provider);
             return Ok(ChannelInteractionResult::Info(ChannelInteractionInfo {
                 capabilities,
             }));

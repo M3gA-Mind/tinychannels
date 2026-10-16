@@ -95,7 +95,7 @@ async fn configured_capabilities(
         .lock()
         .await
         .get(name)
-        .map(|provider| provider.channel.capabilities())
+        .map(|provider| crate::interaction::configured_capabilities(provider.channel.as_ref()))
         .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
 }
 
@@ -393,13 +393,7 @@ impl Channels {
                     ChannelIngressKind::Listener
                 },
                 interaction: tinychannels_bus::ChannelInteractionInfo {
-                    capabilities: {
-                        let mut capabilities = channel.capabilities();
-                        capabilities.account.configured = Some(true);
-                        capabilities.account.enabled = Some(true);
-                        capabilities.account.proactive_target = channel.proactive_target();
-                        capabilities
-                    },
+                    capabilities: crate::interaction::configured_capabilities(channel.as_ref()),
                 },
             })
             .collect())
