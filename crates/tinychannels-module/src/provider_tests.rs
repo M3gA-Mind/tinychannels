@@ -555,7 +555,7 @@ async fn host_adapters_propagate_callback_failures() {
             .is_err()
     );
     assert!(
-        ModuleEvents(host.clone())
+        ModuleEvents(host.clone(), "fixture".into())
             .publish("fixture", "event", serde_json::json!({}))
             .await
             .is_err()
