@@ -464,10 +464,16 @@ impl HostChannels {
             .await
             .map_err(|_| Error::failed("callback consumer is closed"))?;
         drop(_publication);
-        match wait.await.map_err(|_| Error::failed("event delivery was interrupted"))? {
+        match wait
+            .await
+            .map_err(|_| Error::failed("event delivery was interrupted"))?
+        {
             Err(error)
                 if error.wire_name() == "ai.tinyhumans.tinybus.Error.NameHasNoOwner"
-                    || error.wire_name() == "ai.tinyhumans.tinybus.Error.MemberNotFound" => Ok(()),
+                    || error.wire_name() == "ai.tinyhumans.tinybus.Error.MemberNotFound" =>
+            {
+                Ok(())
+            }
             result => result,
         }
     }

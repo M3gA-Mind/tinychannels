@@ -47,10 +47,10 @@ pub use capabilities::{
 };
 pub use channel::{
     ButtonAction, ButtonStyle, ChannelEvent, ChannelEventKind, ChannelInboundEnvelope,
-    ChannelOutboundIntent, ChannelOutboundMessage, ChannelReaction, ChannelRef,
-    ContactMethod, ContentPart, ConversationKind, ConversationRef, DeliveryDurability, MediaKind,
-    MediaReference, OutboundContentPart, OutboundPayload, OutboundVoice, SenderRef, VoiceNote,
-    VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
+    ChannelOutboundIntent, ChannelOutboundMessage, ChannelReaction, ChannelRef, ContactMethod,
+    ContentPart, ConversationKind, ConversationRef, DeliveryDurability, MediaKind, MediaReference,
+    OutboundContentPart, OutboundPayload, OutboundVoice, SenderRef, VoiceNote, VoiceTranscript,
+    VoiceTranscriptSource, VoiceTranscriptState,
 };
 pub use config::ChannelsConfig;
 pub use controllers::{ChannelAuthMode, ChannelDefinition};

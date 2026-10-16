@@ -239,7 +239,10 @@ fn parse_update_reactions_preserves_all_changes_and_custom_emoji_identity() {
     assert!(changes[1..].iter().all(|change| change.added));
     assert_eq!(changes[1].custom_emoji_id.as_deref(), Some("custom-2"));
     assert_eq!(changes[2].emoji, "B");
-    assert_eq!(changes[0].conversation_kind, tinychannels_bus::ConversationKind::Group);
+    assert_eq!(
+        changes[0].conversation_kind,
+        tinychannels_bus::ConversationKind::Group
+    );
     assert_eq!(changes[0].thread_id.as_deref(), Some("77"));
     let unchanged = serde_json::json!({"message_reaction": {
         "chat":{"id":-10,"type":"supergroup"},"message_id":12,"user":{"id":7},

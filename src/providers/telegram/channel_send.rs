@@ -176,7 +176,9 @@ impl TelegramChannel {
                 .json(&markdown_body)
                 .send()
                 .await
-                .map_err(|error| partial_text_send_error(message_ids.clone(), error.to_string(), true))?;
+                .map_err(|error| {
+                    partial_text_send_error(message_ids.clone(), error.to_string(), true)
+                })?;
 
             if markdown_resp.status().is_success() {
                 if let Some(id) = Self::telegram_result_message_id(
@@ -217,14 +219,18 @@ impl TelegramChannel {
                 .json(&plain_body)
                 .send()
                 .await
-                .map_err(|error| partial_text_send_error(message_ids.clone(), error.to_string(), true))?;
+                .map_err(|error| {
+                    partial_text_send_error(message_ids.clone(), error.to_string(), true)
+                })?;
 
             if !plain_resp.status().is_success() {
                 let plain_status = plain_resp.status();
                 let plain_err = plain_resp.text().await.unwrap_or_default();
                 return Err(partial_text_send_error(
                     message_ids,
-                    format!("Telegram sendMessage failed (markdown {markdown_status}: {markdown_err}; plain {plain_status}: {plain_err})"),
+                    format!(
+                        "Telegram sendMessage failed (markdown {markdown_status}: {markdown_err}; plain {plain_status}: {plain_err})"
+                    ),
                     plain_status.is_server_error() || plain_status.as_u16() == 429,
                 ));
             }
@@ -754,7 +760,11 @@ fn partial_text_send_error(
 ) -> anyhow::Error {
     anyhow::Error::new(PartialTextSendError {
         error: tinychannels_bus::channel::ChannelSendError {
-            kind: if retryable { tinychannels_bus::channel::SendErrorKind::Transient } else { tinychannels_bus::channel::SendErrorKind::Unknown },
+            kind: if retryable {
+                tinychannels_bus::channel::SendErrorKind::Transient
+            } else {
+                tinychannels_bus::channel::SendErrorKind::Unknown
+            },
             message,
             retryable,
             continuation_message_ids: message_ids.clone(),

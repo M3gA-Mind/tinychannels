@@ -81,14 +81,26 @@ fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessag
     tinychannels_bus::ChannelOutboundMessage {
         channel_id: "telegram".into(),
         conversation_id: "-10042".into(),
-        channel_ref: Some(tinychannels_bus::ChannelRef { id: "forged".into(), account_id: Some("untrusted-account".into()) }),
-        conversation_ref: Some(tinychannels_bus::ConversationRef {
-            kind: tinychannels_bus::ConversationKind::Group, id: "-10042".into(), scope_id: Some("scope".into()),
-            parent_id: Some("parent".into()), thread_id: Some("77".into()), topic_id: Some("topic".into()),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "forged".into(),
+            account_id: Some("untrusted-account".into()),
         }),
-        reply_to_id: Some("5".into()), thread_id: None, idempotency_key: id.into(),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Group,
+            id: "-10042".into(),
+            scope_id: Some("scope".into()),
+            parent_id: Some("parent".into()),
+            thread_id: Some("77".into()),
+            topic_id: Some("topic".into()),
+        }),
+        reply_to_id: Some("5".into()),
+        thread_id: None,
+        idempotency_key: id.into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Content {
-            part: tinychannels_bus::ContentPart::Text { text, markdown_dialect: None },
+            part: tinychannels_bus::ContentPart::Text {
+                text,
+                markdown_dialect: None,
+            },
         }],
     }
 }
@@ -96,14 +108,34 @@ fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessag
 #[tokio::test]
 async fn typed_send_receipt_uses_actual_telegram_ids_and_full_address() {
     let server = mock_api().await;
-    mount_post(&server, "sendMessage", ok_with(serde_json::json!({ "message_id": 321 }))).await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 321 })),
+    )
+    .await;
     let ch = channel_for(&server, &["*"]);
-    let outcome = ch.send_typed_with_receipt(&typed_text("idem", "hello".into())).await.unwrap();
+    let outcome = ch
+        .send_typed_with_receipt(&typed_text("idem", "hello".into()))
+        .await
+        .unwrap();
     assert_eq!(outcome.error, None);
     assert_eq!(outcome.receipt.platform_message_ids, ["321"]);
     assert_eq!(outcome.receipt.parts[0].edit_token.as_deref(), Some("321"));
-    assert_eq!(outcome.receipt.parts[0].delete_token.as_deref(), Some("321"));
-    assert_eq!(outcome.receipt.conversation.as_ref().unwrap().topic_id.as_deref(), Some("topic"));
+    assert_eq!(
+        outcome.receipt.parts[0].delete_token.as_deref(),
+        Some("321")
+    );
+    assert_eq!(
+        outcome
+            .receipt
+            .conversation
+            .as_ref()
+            .unwrap()
+            .topic_id
+            .as_deref(),
+        Some("topic")
+    );
     assert_eq!(outcome.receipt.parts[0].reply_to_id.as_deref(), Some("5"));
 }
 
@@ -114,14 +146,29 @@ async fn typed_send_keeps_delivered_chunk_ids_when_later_chunk_fails() {
         .and(path(api_path("sendMessage")))
         .respond_with(ok_with(serde_json::json!({ "message_id": 321 })))
         .up_to_n_times(1)
-        .mount(&server).await;
-    mount_post(&server, "sendMessage", ResponseTemplate::new(400).set_body_string("rejected")).await;
+        .mount(&server)
+        .await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ResponseTemplate::new(400).set_body_string("rejected"),
+    )
+    .await;
     let ch = channel_for(&server, &["*"]);
-    let outcome = ch.send_typed_with_receipt(&typed_text("idem", "x".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 50))).await.unwrap();
+    let outcome = ch
+        .send_typed_with_receipt(&typed_text(
+            "idem",
+            "x".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 50),
+        ))
+        .await
+        .unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["321"]);
     assert_eq!(outcome.receipt.parts.len(), 1);
     assert!(outcome.error.as_ref().is_some_and(|error| !error.retryable));
-    assert_eq!(outcome.error.as_ref().unwrap().continuation_message_ids, ["321"]);
+    assert_eq!(
+        outcome.error.as_ref().unwrap().continuation_message_ids,
+        ["321"]
+    );
 }
 
 #[tokio::test]
@@ -653,7 +700,10 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     assert_eq!(recorded.len(), 1);
     assert_eq!(recorded[0].1, "reaction_added");
     assert_eq!(recorded[0].2["type"], "reaction_added");
-    assert_eq!(recorded[0].2["eventId"], "telegram:update:10:reaction:added:100:4:❤");
+    assert_eq!(
+        recorded[0].2["eventId"],
+        "telegram:update:10:reaction:added:100:4:❤"
+    );
     assert_eq!(recorded[0].2["conversation"]["id"], "100");
     assert_eq!(recorded[0].2["messageId"], "4");
     assert_eq!(recorded[0].2["actor"]["id"], "7");

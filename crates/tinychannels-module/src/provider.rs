@@ -155,7 +155,10 @@ impl Hooks {
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
-            .events(Arc::new(ModuleEvents(callbacks.clone(), configured_instance)))
+            .events(Arc::new(ModuleEvents(
+                callbacks.clone(),
+                configured_instance,
+            )))
             .storage(Arc::new(ModuleStorage(callbacks.clone())))
             .allowlist(Arc::new(ModuleAllowlist(callbacks)))
             .build()

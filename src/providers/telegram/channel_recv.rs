@@ -1213,13 +1213,33 @@ impl TelegramChannel {
         self.parse_update_reactions(update).into_iter().next()
     }
 
-    pub(crate) fn parse_update_reactions(&self, update: &serde_json::Value) -> Vec<TelegramReactionEvent> {
-        let Some(reaction) = update.get("message_reaction") else { return Vec::new() };
-        let Some(chat_id) = reaction.get("chat").and_then(|chat| chat.get("id"))
-            .and_then(serde_json::Value::as_i64).map(|id| id.to_string()) else { return Vec::new() };
-        let Some(message_id) = reaction.get("message_id").and_then(serde_json::Value::as_i64)
-            .map(|id| id.to_string()) else { return Vec::new() };
-        let conversation_kind = match reaction.get("chat").and_then(|chat| chat.get("type")).and_then(serde_json::Value::as_str) {
+    pub(crate) fn parse_update_reactions(
+        &self,
+        update: &serde_json::Value,
+    ) -> Vec<TelegramReactionEvent> {
+        let Some(reaction) = update.get("message_reaction") else {
+            return Vec::new();
+        };
+        let Some(chat_id) = reaction
+            .get("chat")
+            .and_then(|chat| chat.get("id"))
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string())
+        else {
+            return Vec::new();
+        };
+        let Some(message_id) = reaction
+            .get("message_id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string())
+        else {
+            return Vec::new();
+        };
+        let conversation_kind = match reaction
+            .get("chat")
+            .and_then(|chat| chat.get("type"))
+            .and_then(serde_json::Value::as_str)
+        {
             Some("private") => tinychannels_bus::ConversationKind::Dm,
             Some("group" | "supergroup") => tinychannels_bus::ConversationKind::Group,
             Some("channel") => tinychannels_bus::ConversationKind::Channel,
@@ -1270,23 +1290,70 @@ impl TelegramChannel {
             .get("message_thread_id")
             .and_then(serde_json::Value::as_i64)
             .map(|id| id.to_string());
-        let identity = |entry: &serde_json::Value| (
-            entry.get("type").and_then(serde_json::Value::as_str).unwrap_or("").to_owned(),
-            entry.get("emoji").and_then(serde_json::Value::as_str).unwrap_or("").to_owned(),
-            entry.get("custom_emoji_id").and_then(serde_json::Value::as_str).unwrap_or("").to_owned(),
-        );
-        let old = old_reactions.into_iter().flatten().map(identity).collect::<std::collections::BTreeSet<_>>();
-        let new = new_reactions.into_iter().flatten().map(identity).collect::<std::collections::BTreeSet<_>>();
-        let update_id = update.get("update_id").and_then(serde_json::Value::as_i64).map(|id| id.to_string());
-        let timestamp = reaction.get("date").and_then(serde_json::Value::as_u64).map(|seconds| seconds.saturating_mul(1000));
+        let identity = |entry: &serde_json::Value| {
+            (
+                entry
+                    .get("type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                entry
+                    .get("emoji")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+                entry
+                    .get("custom_emoji_id")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("")
+                    .to_owned(),
+            )
+        };
+        let old = old_reactions
+            .into_iter()
+            .flatten()
+            .map(identity)
+            .collect::<std::collections::BTreeSet<_>>();
+        let new = new_reactions
+            .into_iter()
+            .flatten()
+            .map(identity)
+            .collect::<std::collections::BTreeSet<_>>();
+        let update_id = update
+            .get("update_id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
+        let timestamp = reaction
+            .get("date")
+            .and_then(serde_json::Value::as_u64)
+            .map(|seconds| seconds.saturating_mul(1000));
         let make = |(kind, emoji, custom): (String, String, String), added| TelegramReactionEvent {
-            sender: actor.clone(), sender_id: sender_id.clone(), reply_target: chat_id.clone(), target_message_id: message_id.clone(),
-            emoji: if emoji.is_empty() { format!("custom:{custom}") } else { emoji },
-            custom_emoji_id: (!custom.is_empty()).then_some(custom), added, update_id: update_id.clone(), timestamp, thread_id: thread_id.clone(),
+            sender: actor.clone(),
+            sender_id: sender_id.clone(),
+            reply_target: chat_id.clone(),
+            target_message_id: message_id.clone(),
+            emoji: if emoji.is_empty() {
+                format!("custom:{custom}")
+            } else {
+                emoji
+            },
+            custom_emoji_id: (!custom.is_empty()).then_some(custom),
+            added,
+            update_id: update_id.clone(),
+            timestamp,
+            thread_id: thread_id.clone(),
             conversation_kind,
         };
-        let mut events = old.difference(&new).cloned().map(|change| make(change, false)).collect::<Vec<_>>();
-        events.extend(new.difference(&old).cloned().map(|change| make(change, true)));
+        let mut events = old
+            .difference(&new)
+            .cloned()
+            .map(|change| make(change, false))
+            .collect::<Vec<_>>();
+        events.extend(
+            new.difference(&old)
+                .cloned()
+                .map(|change| make(change, true)),
+        );
         if reaction.get("old_reaction").is_none() {
             events = new.into_iter().map(|change| make(change, true)).collect();
         }
