@@ -80,6 +80,9 @@ pub enum ConnectorToGatewayFrame {
         descriptor: CapabilityDescriptor,
     },
     DescriptorV2 {
+        platform: String,
+        #[serde(rename = "botId")]
+        bot_id: String,
         capabilities: ChannelCapabilities,
     },
     Inbound {
