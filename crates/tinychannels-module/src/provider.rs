@@ -314,13 +314,14 @@ impl tinychannels::host::EventSink for ModuleEvents {
                 envelope.conversation.topic_id = Some(topic.to_owned());
                 envelope.conversation.thread_id = None;
             }
-            let raw_message_id = message
-                .id
-                .strip_prefix("telegram_")
-                .and_then(|id| id.rsplit_once('_').map(|(_, message_id)| message_id.to_owned()));
+            let raw_message_id = message.id.strip_prefix("telegram_").and_then(|id| {
+                id.rsplit_once('_')
+                    .map(|(_, message_id)| message_id.to_owned())
+            });
             envelope.raw = Some(serde_json::json!({"providerMessageId": raw_message_id}));
         }
-        self.publish_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope)).await
+        self.publish_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
     }
 }
 

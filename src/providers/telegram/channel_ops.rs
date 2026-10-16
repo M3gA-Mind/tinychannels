@@ -570,8 +570,13 @@ Ensure only one `openhuman` process is using this bot token."
                                     };
                                     let reaction_kind = if reaction.added {
                                         tinychannels_bus::ChannelEventKind::ReactionAdded {
-                                            message_id: format!("telegram_{}_{}", reaction.reply_target, reaction.target_message_id),
-                                            provider_message_id: Some(reaction.target_message_id.clone()),
+                                            message_id: format!(
+                                                "telegram_{}_{}",
+                                                reaction.reply_target, reaction.target_message_id
+                                            ),
+                                            provider_message_id: Some(
+                                                reaction.target_message_id.clone(),
+                                            ),
                                             actor: tinychannels_bus::SenderRef {
                                                 id: reaction.sender_id.clone(),
                                                 name: Some(reaction.sender.clone()),
@@ -584,8 +589,13 @@ Ensure only one `openhuman` process is using this bot token."
                                         }
                                     } else {
                                         tinychannels_bus::ChannelEventKind::ReactionRemoved {
-                                            message_id: format!("telegram_{}_{}", reaction.reply_target, reaction.target_message_id),
-                                            provider_message_id: Some(reaction.target_message_id.clone()),
+                                            message_id: format!(
+                                                "telegram_{}_{}",
+                                                reaction.reply_target, reaction.target_message_id
+                                            ),
+                                            provider_message_id: Some(
+                                                reaction.target_message_id.clone(),
+                                            ),
                                             actor: tinychannels_bus::SenderRef {
                                                 id: reaction.sender_id.clone(),
                                                 name: Some(reaction.sender.clone()),
@@ -637,7 +647,12 @@ Ensure only one `openhuman` process is using this bot token."
                                         conversation: Some(conversation),
                                         event: reaction_kind,
                                     };
-                                    if let Err(error) = events.publish_ingress(tinychannels_bus::ChannelIngress::Event(event)).await {
+                                    if let Err(error) = events
+                                        .publish_ingress(tinychannels_bus::ChannelIngress::Event(
+                                            event,
+                                        ))
+                                        .await
+                                    {
                                         tracing::debug!(%error, "failed to deliver Telegram reaction event");
                                     }
                                 }
@@ -701,14 +716,20 @@ Ensure only one `openhuman` process is using this bot token."
                                     }),
                                     event: tinychannels_bus::ChannelEventKind::MessageUpdated {
                                         message_id: message.id,
-                                        provider_message_id: edited.get("message_id").and_then(serde_json::Value::as_i64).map(|id| id.to_string()),
+                                        provider_message_id: edited
+                                            .get("message_id")
+                                            .and_then(serde_json::Value::as_i64)
+                                            .map(|id| id.to_string()),
                                         parts: vec![tinychannels_bus::ContentPart::Text {
                                             text: message.content,
                                             markdown_dialect: None,
                                         }],
                                     },
                                 };
-                                if let Err(error) = events.publish_ingress(tinychannels_bus::ChannelIngress::Event(event)).await {
+                                if let Err(error) = events
+                                    .publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
+                                    .await
+                                {
                                     tracing::debug!(%error, "failed to deliver Telegram edit event");
                                 }
                             }

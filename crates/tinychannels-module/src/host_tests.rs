@@ -25,6 +25,7 @@ fn consume_failure(counter: &AtomicUsize) -> bool {
 struct Callback {
     events: Arc<Mutex<Vec<String>>>,
     typed_events: Arc<Mutex<Vec<tinychannels_bus::ChannelEvent>>>,
+    inbound_payloads: Arc<Mutex<Vec<serde_json::Value>>>,
     blocked: Arc<AtomicBool>,
     gate: Arc<tokio::sync::Notify>,
     transcription_blocked: Arc<AtomicBool>,
@@ -122,6 +123,7 @@ impl Callback {
         while self.blocked.load(Ordering::SeqCst) {
             self.gate.notified().await;
         }
+        self.inbound_payloads.lock().await.push(message.clone());
         self.events.lock().await.push(format!(
             "inbound:{channel}:{}",
             message["text"].as_str().unwrap()
@@ -164,6 +166,7 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
     let callback = Callback {
         events: Arc::new(Mutex::new(Vec::new())),
         typed_events: Arc::new(Mutex::new(Vec::new())),
+        inbound_payloads: Arc::new(Mutex::new(Vec::new())),
         blocked: Arc::new(AtomicBool::new(false)),
         gate: Arc::new(tokio::sync::Notify::new()),
         transcription_blocked: Arc::new(AtomicBool::new(false)),
@@ -651,7 +654,7 @@ async fn module_unified_ingress_acknowledges_message_before_following_event() {
             "typed_event:telegram:bot-a:update-6-edit"
         ]
     );
-    let envelope = callback.inbound.lock().await[0].clone();
+    let envelope = callback.inbound_payloads.lock().await[0].clone();
     assert_eq!(envelope["messageId"], "telegram_100_5");
     assert_eq!(envelope["channel"]["accountId"], "telegram:bot-a");
     assert_eq!(envelope["conversation"]["id"], "100");
