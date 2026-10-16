@@ -194,8 +194,8 @@ impl TelegramChannel {
                 .json(&markdown_body)
                 .send()
                 .await
-                .map_err(|error| {
-                    tracing::debug!(%error, "Telegram sendMessage request failed");
+                .map_err(|_error| {
+                    tracing::debug!("Telegram sendMessage transport failed");
                     partial_text_send_error(message_ids.clone(), "Telegram sendMessage request failed".into(), true, true)
                 })?;
 
@@ -238,8 +238,8 @@ impl TelegramChannel {
                 .json(&plain_body)
                 .send()
                 .await
-                .map_err(|error| {
-                    tracing::debug!(%error, "Telegram sendMessage fallback request failed");
+                .map_err(|_error| {
+                    tracing::debug!("Telegram sendMessage fallback transport failed");
                     partial_text_send_error(message_ids.clone(), "Telegram sendMessage request failed".into(), true, true)
                 })?;
 

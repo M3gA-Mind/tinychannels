@@ -481,7 +481,7 @@ impl Channel for TelegramChannel {
         {
             Ok(ids) => (ids, None),
             Err(error) => match error.downcast_ref::<super::channel_send::PartialTextSendError>() {
-                Some(partial) => (partial.message_ids.clone(), Some(partial.error.clone())),
+                Some(partial) => (partial.message_ids.clone(), Some(partial.error.clone()), partial.sent_before_error),
                 None => return Err(error),
             },
         };
