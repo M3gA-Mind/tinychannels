@@ -291,7 +291,7 @@ impl tinychannels::host::EventSink for ModuleEvents {
                 envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
                 envelope.channel.account_id = Some(self.1.clone());
                 self.0
-                    .deliver_inbound(&self.1, serde_json::to_value(envelope)?)
+                    .deliver_inbound(&self.1, envelope)
                     .await
                     .map_err(|error| anyhow::anyhow!(error.to_string()))?;
                 Ok(true)
