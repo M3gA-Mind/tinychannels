@@ -245,7 +245,9 @@ async fn send_text_chunks_fails_when_markdown_fallback_is_rejected() {
     let server = mock_api().await;
     Mock::given(method("POST"))
         .and(path(api_path("sendMessage")))
-        .and(body_partial_json(serde_json::json!({"parse_mode":"Markdown"})))
+        .and(body_partial_json(
+            serde_json::json!({"parse_mode":"Markdown"}),
+        ))
         .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
             "ok": false,
             "description": "Bad Request: can't parse entities: can't find end of the entity"
