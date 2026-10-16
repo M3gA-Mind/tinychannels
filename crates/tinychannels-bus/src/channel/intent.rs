@@ -18,7 +18,11 @@ pub enum DeliveryDurability {
 
 /// Provider-neutral outbound payload variants.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum OutboundPayload {
     Text {
         text: String,
@@ -47,7 +51,11 @@ pub enum OutboundPayload {
 
 /// Explicit outbound voice operation. Synthesis is opt-in and keeps its text.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum OutboundVoice {
     Media {
         media: MediaReference,
@@ -62,7 +70,11 @@ pub enum OutboundVoice {
 
 /// Typed outbound parts accepted by migrated provider adapters.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum OutboundContentPart {
     Content { part: ContentPart },
     Voice { voice: OutboundVoice },

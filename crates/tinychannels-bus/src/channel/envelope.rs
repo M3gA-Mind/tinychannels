@@ -130,7 +130,11 @@ pub struct VoiceNote {
 
 /// Provider-neutral ordered inbound content.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(
+    tag = "kind",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ContentPart {
     Text {
         text: String,
