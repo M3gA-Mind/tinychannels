@@ -1246,6 +1246,10 @@ impl TelegramChannel {
             Some("channel") => tinychannels_bus::ConversationKind::Channel,
             _ => tinychannels_bus::ConversationKind::Unknown,
         };
+        let actor_chat = reaction.get("actor_chat");
+        let actor_chat_id = actor_chat
+            .and_then(|chat| chat.get("id"))
+            .and_then(|id| id.as_i64().map(|id| id.to_string()).or_else(|| id.as_str().map(ToString::to_string)));
         let actor = reaction
             .get("user")
             .and_then(|user| user.get("username"))
@@ -1258,13 +1262,17 @@ impl TelegramChannel {
                     .and_then(serde_json::Value::as_i64)
                     .map(|id| id.to_string())
             })
+            .or_else(|| actor_chat.and_then(|chat| chat.get("username")).and_then(serde_json::Value::as_str).map(ToString::to_string))
+            .or_else(|| actor_chat.and_then(|chat| chat.get("title")).and_then(serde_json::Value::as_str).map(ToString::to_string))
+            .or_else(|| actor_chat_id.clone())
             .unwrap_or_else(|| "unknown".to_string());
 
         let user_id = reaction
             .get("user")
             .and_then(|user| user.get("id"))
             .and_then(serde_json::Value::as_i64)
-            .map(|id| id.to_string());
+            .map(|id| id.to_string())
+            .or_else(|| actor_chat_id.clone());
 
         let actor_allowed = self.is_user_allowed(&actor);
         let user_id_allowed = user_id
@@ -1334,8 +1342,10 @@ impl TelegramChannel {
                 sender_id: sender_id.clone(),
                 reply_target: chat_id.clone(),
                 target_message_id: message_id.clone(),
-                emoji: if emoji.is_empty() {
+                emoji: if !custom.is_empty() {
                     format!("custom:{custom}")
+                } else if emoji.is_empty() {
+                    _kind
                 } else {
                     emoji
                 },
