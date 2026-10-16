@@ -440,17 +440,22 @@ impl Channel for TelegramChannel {
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
-        let text = match message.parts.as_slice() {
-            [
+        let text_parts = message
+            .parts
+            .iter()
+            .map(|part| match part {
                 tinychannels_bus::OutboundContentPart::Content {
                     part: tinychannels_bus::ContentPart::Text { text, .. },
-                },
-            ] => text,
-            _ => {
-                self.send_typed(message).await?;
-                return Ok(tinychannels_bus::channel::ChannelSendOutcome::default());
-            }
-        };
+                } => Ok(text.as_str()),
+                _ => anyhow::bail!("Telegram typed sends currently support text content only"),
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        if text_parts.is_empty() {
+            anyhow::bail!("Telegram typed sends require at least one text part");
+        }
+        // Match the v21 text projection's ordered newline join while keeping
+        // the provider's actual per-message IDs in the v22 receipt path.
+        let text = text_parts.join("\n");
         let mut conversation =
             message
                 .conversation_ref
@@ -476,7 +481,7 @@ impl Channel for TelegramChannel {
             None => None,
         };
         let (ids, error, _sent_before_error) = match self
-            .send_text_chunks_with_ids(text, &conversation.id, thread_id.as_deref(), reply_to_id)
+            .send_text_chunks_with_ids(&text, &conversation.id, thread_id.as_deref(), reply_to_id)
             .await
         {
             Ok(ids) => (ids, None, false),
@@ -836,7 +841,7 @@ Ensure only one `openhuman` process is using this bot token."
                             Ok(delivered) => delivered,
                             Err(error) => {
                                 tracing::debug!(%error, "failed to deliver Telegram inbound through module ingress");
-                                false
+                                return Err(error);
                             }
                         }
                     } else {

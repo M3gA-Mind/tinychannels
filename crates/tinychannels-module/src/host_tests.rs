@@ -552,6 +552,89 @@ async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
 }
 
 #[tokio::test]
+async fn typed_event_callback_failure_is_returned_without_poisoning_shutdown() {
+    let (host, callback, _server) = connected_host().await;
+    callback.event_failures.store(1, Ordering::SeqCst);
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "event-fails-once".into(),
+        source_event_id: None,
+        source_timestamp: None,
+        channel: Default::default(),
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: None,
+        },
+    };
+
+    assert!(host.deliver_event(event).await.is_err());
+    assert!(callback.typed_events.lock().await.is_empty());
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_event_callback_is_optional_when_host_has_no_event_object() {
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let client = Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(client);
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "legacy-host-event".into(),
+        source_event_id: None,
+        source_timestamp: None,
+        channel: Default::default(),
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: None,
+        },
+    };
+
+    host.deliver_event(event)
+        .await
+        .expect("older host callback surfaces may omit typed event delivery");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_event_payload_limit_and_closed_owner_are_reported() {
+    let (host, _callback, _server) = connected_host().await;
+    let oversized = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "large-event".into(),
+        source_event_id: None,
+        source_timestamp: None,
+        channel: Default::default(),
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: Some("x".repeat(super::MAX_CALLBACK_BYTES)),
+        },
+    };
+    assert!(host.deliver_event(oversized).await.is_err());
+    assert_eq!(format!("{host:?}"), "HostChannels { .. }");
+
+    host.shutdown().await.unwrap();
+    let closed = tinychannels_bus::ChannelEvent {
+        version: 2,
+        event_id: "closed-owner-event".into(),
+        source_event_id: None,
+        source_timestamp: None,
+        channel: Default::default(),
+        conversation: None,
+        event: tinychannels_bus::ChannelEventKind::Lifecycle {
+            state: "connected".into(),
+            reason: None,
+        },
+    };
+    assert!(host.deliver_event(closed).await.is_err());
+}
+
+#[tokio::test]
 async fn module_event_enrichment_separates_accounts_and_overwrites_provider_authority() {
     use tinychannels::host::EventSink;
 
