@@ -534,7 +534,9 @@ Ensure only one `openhuman` process is using this bot token."
                         offset = uid + 1;
                     }
 
-                    if let Some(reaction) = self.parse_update_reaction(update) {
+                    let reactions = self.parse_update_reactions(update);
+                    if !reactions.is_empty() {
+                      for reaction in reactions {
                         tracing::info!(
                             sender = reaction.sender,
                             reply_target = reaction.reply_target,
@@ -590,7 +592,8 @@ Ensure only one `openhuman` process is using this bot token."
                                 tracing::debug!(%error, "failed to deliver Telegram reaction event");
                             }
                         }
-                        continue;
+                      }
+                      continue;
                     }
 
                     // Telegram edits arrive as a distinct update field. Keep

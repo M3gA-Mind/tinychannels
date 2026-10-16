@@ -1219,6 +1219,12 @@ impl TelegramChannel {
             .and_then(serde_json::Value::as_i64).map(|id| id.to_string()) else { return Vec::new() };
         let Some(message_id) = reaction.get("message_id").and_then(serde_json::Value::as_i64)
             .map(|id| id.to_string()) else { return Vec::new() };
+        let conversation_kind = match reaction.get("chat").and_then(|chat| chat.get("type")).and_then(serde_json::Value::as_str) {
+            Some("private") => tinychannels_bus::ConversationKind::Dm,
+            Some("group" | "supergroup") => tinychannels_bus::ConversationKind::Group,
+            Some("channel") => tinychannels_bus::ConversationKind::Channel,
+            _ => tinychannels_bus::ConversationKind::Unknown,
+        };
         let actor = reaction
             .get("user")
             .and_then(|user| user.get("username"))
@@ -1277,6 +1283,7 @@ impl TelegramChannel {
             sender: actor.clone(), sender_id: sender_id.clone(), reply_target: chat_id.clone(), target_message_id: message_id.clone(),
             emoji: if emoji.is_empty() { format!("custom:{custom}") } else { emoji },
             custom_emoji_id: (!custom.is_empty()).then_some(custom), added, update_id: update_id.clone(), timestamp, thread_id: thread_id.clone(),
+            conversation_kind,
         };
         let mut events = old.difference(&new).cloned().map(|change| make(change, false)).collect::<Vec<_>>();
         events.extend(new.difference(&old).cloned().map(|change| make(change, true)));

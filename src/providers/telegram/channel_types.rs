@@ -48,6 +48,7 @@ pub(crate) struct TelegramReactionEvent {
     pub(crate) update_id: Option<String>,
     pub(crate) timestamp: Option<u64>,
     pub(crate) thread_id: Option<String>,
+    pub(crate) conversation_kind: tinychannels_bus::ConversationKind,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
