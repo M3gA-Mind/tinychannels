@@ -21,7 +21,7 @@ pub struct ChannelRuntimeReservation {
 }
 
 /// Opt-in turn dispatch for a reserved runtime. Legacy `StartRuntime` retains
-/// serial `DeliverInbound` notifications; this policy uses `ProcessInbound`
+/// serial `DeliverInbound` envelope notifications; this policy uses `ProcessInbound`
 /// callbacks with module-owned bounded concurrency and stop/drain ownership.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

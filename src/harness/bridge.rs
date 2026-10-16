@@ -97,8 +97,8 @@ pub fn translate_output_event(
         idempotency_key: format!("{}:{}", turn.id, intent_suffix(&payload)),
         channel_id: turn.envelope.channel.id.clone(),
         conversation_id: turn.envelope.conversation.id.clone(),
-            channel_ref: None,
-            conversation_ref: None,
+        channel_ref: None,
+        conversation_ref: None,
         reply_to_id: Some(turn.envelope.message_id.clone()).filter(|id| !id.is_empty()),
         thread_id: turn
             .envelope

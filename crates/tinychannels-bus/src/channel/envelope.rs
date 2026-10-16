@@ -203,6 +203,8 @@ pub struct ChannelInboundEnvelope {
     pub message_id: String,
     /// Provider source message referenced by this reply, when available.
     pub reply_to_id: Option<String>,
+    /// Source timestamp in Unix milliseconds when provided by the channel.
+    pub timestamp_unix_ms: Option<u64>,
     pub conversation: ConversationRef,
     pub sender: SenderRef,
     pub text: String,

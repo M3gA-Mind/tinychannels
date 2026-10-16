@@ -37,7 +37,7 @@
 //! It invokes `ProcessInbound` concurrently while the notification consumer
 //! still owns status/persistence/event ordering. Its barriers drain the accepted
 //! turn frontier and shutdown joins the dispatcher. Legacy callers retain the
-//! serial `DeliverInbound` contract described above.
+//! serial v22 `DeliverInbound` envelope contract described above.
 //!
 //! # Failures are logged, not retried
 //!

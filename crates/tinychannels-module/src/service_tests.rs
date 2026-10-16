@@ -129,8 +129,8 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         idempotency_key: "delivery-42".to_owned(),
         channel_id: "fixture".to_owned(),
         conversation_id: "room-7".to_owned(),
-            channel_ref: None,
-            conversation_ref: None,
+        channel_ref: None,
+        conversation_ref: None,
         reply_to_id: Some("message-3".to_owned()),
         thread_id: Some("thread-9".to_owned()),
         durability: tinychannels::DeliveryDurability::BestEffort,
@@ -250,7 +250,13 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         let typed = received.recv().await.unwrap();
         assert_eq!(typed.reply_to_id.as_deref(), Some("source-message"));
         assert_eq!(typed.thread_id.as_deref(), Some("thread"));
-        assert_eq!(typed.channel_ref.as_ref().and_then(|channel| channel.account_id.as_deref()), Some("account-a"));
+        assert_eq!(
+            typed
+                .channel_ref
+                .as_ref()
+                .and_then(|channel| channel.account_id.as_deref()),
+            Some("account-a")
+        );
         let address = typed.conversation_ref.as_ref().unwrap();
         assert_eq!(address.scope_id.as_deref(), Some("workspace-a"));
         assert_eq!(address.parent_id.as_deref(), Some("parent-room"));
@@ -296,8 +302,8 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
             ChannelOutboundIntent {
                 channel_id: "fixture".to_owned(),
                 conversation_id: "room-7".to_owned(),
-            channel_ref: None,
-            conversation_ref: None,
+                channel_ref: None,
+                conversation_ref: None,
                 idempotency_key: "delivery-required".to_owned(),
                 durability: tinychannels::DeliveryDurability::Required,
                 payload: tinychannels::OutboundPayload::Text {
@@ -445,8 +451,8 @@ fn required_intent(id: &str, text: &str) -> ChannelOutboundIntent {
         idempotency_key: id.into(),
         channel_id: "fixture".into(),
         conversation_id: "room-1".into(),
-            channel_ref: None,
-            conversation_ref: None,
+        channel_ref: None,
+        conversation_ref: None,
         durability: tinychannels::DeliveryDurability::Required,
         payload: tinychannels::OutboundPayload::Text { text: text.into() },
         ..Default::default()

@@ -94,10 +94,10 @@ pub mod methods {
 
 /// One constant per method name on [`HOST_BUS_NAME`].
 pub mod host_methods {
-    /// `DeliverInbound` — hand the host one authenticated inbound envelope.
+    /// `DeliverInbound` — hand the host one authenticated v22 inbound envelope.
     pub const DELIVER_INBOUND: &str = "DeliverInbound";
-    /// Complete one admitted turn. Opt-in runtimes invoke bounded concurrent
-    /// callbacks and retain each call until flush/stop has drained it.
+    /// Complete one admitted v22 inbound envelope turn. Opt-in runtimes invoke
+    /// bounded concurrent callbacks and retain each call until flush/stop has drained it.
     pub const PROCESS_INBOUND: &str = "ProcessInbound";
     /// `ReportStatus` — report a provider connection state transition.
     pub const REPORT_STATUS: &str = "ReportStatus";

@@ -326,7 +326,8 @@ impl Running {
             let forward_name = name.clone();
             let mut forwarder = AbortOnDrop(tokio::spawn(async move {
                 while let Some(message) = rx.recv().await {
-                    if let Ok(value) = serde_json::to_value(message) {
+                    let envelope = tinychannels::inbound_envelope_from_legacy_message(&message);
+                    if let Ok(value) = serde_json::to_value(envelope) {
                         forward_host.deliver_inbound(&forward_name, value).await;
                     }
                 }

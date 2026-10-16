@@ -880,8 +880,8 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
                 ChannelOutboundIntent {
                     channel_id: "telegram".into(),
                     conversation_id: "chat-1".into(),
-            channel_ref: None,
-            conversation_ref: None,
+                    channel_ref: None,
+                    conversation_ref: None,
                     payload: OutboundPayload::Text {
                         text: "artifact send".into(),
                     },

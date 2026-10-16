@@ -62,9 +62,9 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
 
     let provider = msg.channel.split(':').next().unwrap_or_default();
     let (thread_id, topic_id) = if matches!(provider, "telegram" | "tg") {
-        (None, thread_ts)
+        (None, msg.topic_id.clone().or(thread_ts))
     } else {
-        (thread_ts, None)
+        (thread_ts, msg.topic_id.clone())
     };
 
     ChannelInboundEnvelope {
@@ -73,6 +73,7 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
             account_id: None,
         },
         message_id: msg.id.clone(),
+        timestamp_unix_ms: Some(msg.timestamp),
         conversation: ConversationRef {
             id: msg.reply_target.clone(),
             thread_id,
@@ -85,6 +86,9 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
             ..Default::default()
         },
         text: msg.content.clone(),
+        parts: vec![ContentPart::Text {
+            text: msg.content.clone(),
+        }],
         ..Default::default()
     }
 }
@@ -102,11 +106,8 @@ pub fn legacy_message_from_inbound_envelope(
         content: envelope.text.clone(),
         channel: envelope.channel.id.clone(),
         timestamp,
-        thread_ts: envelope
-            .conversation
-            .topic_id
-            .clone()
-            .or_else(|| envelope.conversation.thread_id.clone()),
+        thread_ts: envelope.conversation.thread_id.clone(),
+        topic_id: envelope.conversation.topic_id.clone(),
         sender_name: envelope.sender.name.clone(),
     }
 }

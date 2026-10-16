@@ -521,8 +521,8 @@ async fn durable_store_round_trips_records_inside_the_active_host_scope() {
         idempotency_key: "op-scope-test".into(),
         channel_id: "telegram".into(),
         conversation_id: "room-1".into(),
-            channel_ref: None,
-            conversation_ref: None,
+        channel_ref: None,
+        conversation_ref: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         ..Default::default()
     };

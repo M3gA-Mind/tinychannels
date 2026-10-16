@@ -12,8 +12,8 @@ fn intent(id: &str, text: &str) -> ChannelOutboundIntent {
         idempotency_key: id.into(),
         channel_id: "telegram".into(),
         conversation_id: "room".into(),
-            channel_ref: None,
-            conversation_ref: None,
+        channel_ref: None,
+        conversation_ref: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         payload: crate::OutboundPayload::Text { text: text.into() },
         ..Default::default()
