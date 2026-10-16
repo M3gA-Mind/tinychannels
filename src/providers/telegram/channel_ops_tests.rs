@@ -622,6 +622,23 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
                 }
             },
             {
+                "update_id": 13,
+                "edited_message": {
+                    "message_id": 5, "edit_date": 1234,
+                    "message_thread_id": 88,
+                    "chat": { "id": 100, "type": "supergroup" },
+                    "from": { "id": 7, "username": "alice" }, "text": "edited hello"
+                }
+            },
+            {
+                "update_id": 14,
+                "edited_message": {
+                    "message_id": 5, "edit_date": 1235,
+                    "chat": { "id": 100, "type": "supergroup" },
+                    "from": { "id": 8, "username": "mallory" }, "text": "unauthorized edit"
+                }
+            },
+            {
                 "update_id": 12,
                 "message": {
                     "message_id": 6, "chat": { "id": 100, "type": "private" },
@@ -697,7 +714,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         .unwrap();
 
     let recorded = events.events.lock().unwrap().clone();
-    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded.len(), 2);
     assert_eq!(recorded[0].1, "reaction_added");
     assert_eq!(recorded[0].2["type"], "reaction_added");
     assert_eq!(
@@ -708,6 +725,12 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     assert_eq!(recorded[0].2["messageId"], "4");
     assert_eq!(recorded[0].2["actor"]["id"], "7");
     assert_eq!(recorded[0].2["reaction"]["value"], "❤");
+    assert_eq!(recorded[1].1, "message_updated");
+    assert_eq!(recorded[1].2["type"], "message_updated");
+    assert_eq!(recorded[1].2["sourceEventId"], "13");
+    assert_eq!(recorded[1].2["conversation"]["kind"], "group");
+    assert_eq!(recorded[1].2["conversation"]["threadId"], "88");
+    assert_eq!(recorded[1].2["parts"][0]["text"], "edited hello");
     assert_eq!(json_bodies(&server, "deleteWebhook").await.len(), 1);
     // The unauthorized sender got the approval prompt.
     let prompts = sent_texts(&server).await;
@@ -717,7 +740,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     let polls = json_bodies(&server, "getUpdates").await;
     assert!(polls.len() >= 6, "{polls:?}");
     assert_eq!(polls[0]["offset"], 0);
-    assert_eq!(polls[5]["offset"], 13);
+    assert!(polls.iter().any(|poll| poll["offset"] == 15));
 }
 
 #[tokio::test]
