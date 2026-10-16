@@ -770,8 +770,12 @@ struct AmbiguousNoIdChannel(Arc<std::sync::atomic::AtomicUsize>);
 
 #[async_trait::async_trait]
 impl tinychannels::Channel for AmbiguousNoIdChannel {
-    fn name(&self) -> &str { "fixture" }
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> { Ok(()) }
+    fn name(&self) -> &str {
+        "fixture"
+    }
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn send_typed_with_receipt(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
@@ -787,7 +791,10 @@ impl tinychannels::Channel for AmbiguousNoIdChannel {
             }),
         })
     }
-    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
         std::future::pending().await
     }
 }
@@ -795,16 +802,43 @@ impl tinychannels::Channel for AmbiguousNoIdChannel {
 #[tokio::test]
 async fn required_durable_ambiguous_send_without_ids_is_not_retried() {
     let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (channels, callbacks, _server) = channels_with_store(Arc::new(AmbiguousNoIdChannel(sends.clone()))).await;
+    let (channels, callbacks, _server) =
+        channels_with_store(Arc::new(AmbiguousNoIdChannel(sends.clone()))).await;
     let intent = required_intent("ambiguous-no-id", "body");
-    assert!(channels.send_channel_intent("fixture".into(), intent.clone()).await.is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent.clone())
+            .await
+            .is_err()
+    );
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     let pending = callbacks.storage.snapshot().await;
-    let entry = pending.get("scope-a").unwrap().pending.get("ambiguous-no-id").unwrap();
-    assert_eq!(entry.recovery_state, Some(tinychannels_bus::DeliveryRecoveryState::UnknownAfterSend));
-    assert_eq!(entry.partial_receipt.as_ref().unwrap().platform_message_ids.len(), 0);
+    let entry = pending
+        .get("scope-a")
+        .unwrap()
+        .pending
+        .get("ambiguous-no-id")
+        .unwrap();
+    assert_eq!(
+        entry.recovery_state,
+        Some(tinychannels_bus::DeliveryRecoveryState::UnknownAfterSend)
+    );
+    assert_eq!(
+        entry
+            .partial_receipt
+            .as_ref()
+            .unwrap()
+            .platform_message_ids
+            .len(),
+        0
+    );
     drop(pending);
-    assert!(channels.send_channel_intent("fixture".into(), intent).await.is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent)
+            .await
+            .is_err()
+    );
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     channels.shutdown().await.unwrap();
 }

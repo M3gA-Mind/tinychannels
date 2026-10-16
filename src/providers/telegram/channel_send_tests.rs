@@ -183,8 +183,14 @@ async fn send_text_chunks_fails_when_markdown_and_plain_both_rejected() {
         .await
         .unwrap_err()
         .to_string();
-    assert!(err.contains("Telegram sendMessage failed"), "{err}");
-    assert!(err.contains("bot was blocked"), "{err}");
+    assert!(
+        err.contains("Telegram sendMessage rejected with HTTP 403"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("bot was blocked"),
+        "provider body must remain private: {err}"
+    );
     assert_eq!(json_bodies(&server, "sendMessage").await.len(), 2);
 }
 
