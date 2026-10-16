@@ -411,7 +411,12 @@ fn legacy_inbound_envelope_preserves_telegram_topics_separately_from_threads() {
     assert_eq!(envelope.conversation.topic_id.as_deref(), Some("topic-99"));
     assert_eq!(envelope.sender.id, "alice");
     assert_eq!(envelope.text, "hello");
-    assert_eq!(envelope.parts, vec![ContentPart::Text { text: "hello".into() }]);
+    assert_eq!(
+        envelope.parts,
+        vec![ContentPart::Text {
+            text: "hello".into()
+        }]
+    );
 
     let keys = conversation_history_key_candidates(&msg);
     assert_eq!(keys.conversation_history_key, "telegram_alice_-100123");
