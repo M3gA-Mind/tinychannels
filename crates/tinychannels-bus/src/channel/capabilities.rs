@@ -51,7 +51,7 @@ mod legacy_length_unit {
 
     #[derive(JsonSchema)]
     #[allow(dead_code)]
-    enum LegacyLengthUnit {
+    pub enum LegacyLengthUnit {
         #[schemars(rename = "chars")]
         Characters,
         #[schemars(rename = "utf8-bytes")]
@@ -94,7 +94,7 @@ mod legacy_markdown_dialect {
     #[derive(JsonSchema)]
     #[allow(dead_code)]
     #[schemars(rename_all = "snake_case")]
-    enum LegacyMarkdownDialect {
+    pub enum LegacyMarkdownDialect {
         Plain,
         Markdown,
         Html,
