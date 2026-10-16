@@ -833,7 +833,7 @@ impl Channels {
                     message: format!("channel {name} is not running"),
                 })?
         };
-        let mut receipt = entry
+        let mut outcome = entry
             .send_typed(tinychannels_bus::ChannelOutboundMessage::from_intent(
                 &intent,
             ))
@@ -842,7 +842,6 @@ impl Channels {
                 name: SEND_FAILED_ERROR.to_owned(),
                 message: error.to_string(),
             })?;
-        let mut outcome = receipt;
         outcome.receipt.channel = Some(tinychannels_bus::channel::ChannelRef {
             id: tinychannels_bus::provider_id(&name).to_owned(),
             account_id: Some(name.clone()),

@@ -248,9 +248,8 @@ impl tinychannels::host::EventSink for ModuleEvents {
     ) -> anyhow::Result<()> {
         // The module start call is the authenticated source of instance scope;
         // provider payloads cannot choose or spoof their account identity.
-        if event.channel.account_id.is_none() {
-            event.channel.account_id = Some(self.1.clone());
-        }
+        event.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        event.channel.account_id = Some(self.1.clone());
         let kind = match &event.event {
             tinychannels_bus::ChannelEventKind::Typing { .. } => "typing",
             tinychannels_bus::ChannelEventKind::ReadReceipt { .. } => "read_receipt",
