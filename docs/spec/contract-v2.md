@@ -343,7 +343,9 @@ The harness exposes turn admission, inbound lifecycle stages, and output
 events. Provider voice paths may transcribe audio before legacy dispatch. The
 full ordered ContentPart model, first-class voice-note metadata, unified
 descriptor, normalized provider event family, and shared web event wire
-described above remain v2 requirements.
+described above remain v2 requirements. Wire revision 21 and module operation
+version 1.21 are current implementation facts; revision 22 and operation
+version 1.22 in this document are the proposed next contract increment.
 
 Track implementation status in code changes and release notes, not by editing
 this normative vocabulary to imply that a partially migrated producer has
