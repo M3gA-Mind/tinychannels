@@ -130,5 +130,8 @@ async fn failed_turns_do_not_stop_dispatch_and_flush_observes_accepted_frontier(
 }
 
 fn inbound(raw: serde_json::Value) -> tinychannels_bus::ChannelInboundEnvelope {
-    tinychannels_bus::ChannelInboundEnvelope { raw: Some(raw), ..Default::default() }
+    tinychannels_bus::ChannelInboundEnvelope {
+        raw: Some(raw),
+        ..Default::default()
+    }
 }

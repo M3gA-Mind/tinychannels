@@ -450,7 +450,7 @@ impl HostChannels {
     pub async fn deliver_relay_inbound(
         &self,
         channel: &str,
-        delivery: tinychannels_bus::RelayInboundDelivery,
+        delivery: tinychannels_bus::module_relay::RelayInboundDelivery,
     ) {
         let Ok(message) = serde_json::to_value(delivery) else {
             record_failure(
