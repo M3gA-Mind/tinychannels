@@ -21,9 +21,9 @@ pub(crate) async fn dispatch(
     let result = match interaction {
         Op::Describe => {
             let capabilities = configured_capabilities(provider);
-            return Ok(ChannelInteractionResult::Info(Box::new(ChannelInteractionInfo {
-                capabilities,
-            })));
+            return Ok(ChannelInteractionResult::Info(Box::new(
+                ChannelInteractionInfo { capabilities },
+            )));
         }
         Op::StartTyping { recipient } => provider.start_typing(&recipient).await,
         Op::StopTyping { recipient } => provider.stop_typing(&recipient).await,

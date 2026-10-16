@@ -352,7 +352,7 @@ async fn send_v2_descriptor(
     let frame = ConnectorToGatewayFrame::DescriptorV2 {
         platform: platform.into(),
         bot_id: bot_id.into(),
-        capabilities,
+        capabilities: Box::new(capabilities),
     };
     stream
         .send(Message::Text(

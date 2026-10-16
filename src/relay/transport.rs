@@ -589,7 +589,7 @@ async fn handle_frame(
                 .capabilities_v2
                 .lock()
                 .await
-                .insert(identity, capabilities);
+                .insert(identity, *capabilities);
             state.descriptor_ready.notify_waiters();
         }
         ConnectorToGatewayFrame::Inbound { event, buffer_id } => {

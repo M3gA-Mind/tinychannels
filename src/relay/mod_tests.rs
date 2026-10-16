@@ -623,7 +623,7 @@ async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
     io.push(ConnectorToGatewayFrame::DescriptorV2 {
         platform: "discord".into(),
         bot_id: "other".into(),
-        capabilities: unrelated,
+        capabilities: Box::new(unrelated),
     })
     .await;
     io.push(ConnectorToGatewayFrame::Descriptor {
@@ -635,13 +635,13 @@ async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
     io.push(ConnectorToGatewayFrame::DescriptorV2 {
         platform: "discord".into(),
         bot_id: "b".into(),
-        capabilities: second_capabilities.clone(),
+        capabilities: Box::new(second_capabilities.clone()),
     })
     .await;
     io.push(ConnectorToGatewayFrame::DescriptorV2 {
         platform: "discord".into(),
         bot_id: "a".into(),
-        capabilities: capabilities.clone(),
+        capabilities: Box::new(capabilities.clone()),
     })
     .await;
     let negotiated = negotiation.await.unwrap().unwrap();
@@ -689,7 +689,7 @@ async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
         io.push(ConnectorToGatewayFrame::DescriptorV2 {
             platform: "discord".into(),
             bot_id: "other".into(),
-            capabilities: wrong_version.clone(),
+            capabilities: Box::new(wrong_version.clone()),
         })
         .await;
         io.push(ConnectorToGatewayFrame::Descriptor {
@@ -728,7 +728,7 @@ async fn relay_v2_rejects_an_unsupported_version_for_a_configured_identity() {
     io.push(ConnectorToGatewayFrame::DescriptorV2 {
         platform: "discord".into(),
         bot_id: "appShared".into(),
-        capabilities: unsupported,
+        capabilities: Box::new(unsupported),
     })
     .await;
     assert_eq!(

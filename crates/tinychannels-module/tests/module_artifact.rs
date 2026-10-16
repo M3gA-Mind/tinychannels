@@ -1205,7 +1205,7 @@ async fn relay_server_v2() -> (String, tokio::task::JoinHandle<()>) {
                     serde_json::to_string(&ConnectorToGatewayFrame::DescriptorV2 {
                         platform,
                         bot_id,
-                        capabilities,
+                        capabilities: Box::new(capabilities),
                     })
                     .unwrap()
                 )

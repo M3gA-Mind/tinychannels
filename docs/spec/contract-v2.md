@@ -240,8 +240,8 @@ same DTO. The legacy relay v1 descriptor remains a frozen wire projection:
 | addressing | Support for accountId, scopeId, parentId, topicId, replyToId, and threadId, with provider restrictions represented per operation. |
 | actions | Supported send/reply/thread/edit/delete/reaction/read/typing/draft/poll/buttons/native-command actions. |
 | text | textLimit, lengthUnit (characters, utf8_bytes, utf16_units), markdown dialect, and chunk constraints. |
-| image, video, audio, file, sticker | Accepted/emitted codec or media types, maxSizeBytes, and applicable duration/dimension limits. |
-| location, contact, buttons, poll, presentation, native | Support flags plus typed size/count/action limits where applicable. |
+| content.image, content.video, content.audio, content.file, content.sticker | Accepted/emitted codec or media types, maxSizeBytes, and applicable duration/dimension limits. |
+| content.location, content.contact, content.buttons, content.poll, content.presentation, content.native | Support flags plus typed size/count/action limits where applicable. |
 | delivery | Durable-final support, idempotency, batch, partial result, and unknown-send reconciliation facts. |
 | account | linked/not_linked/configured/not_configured/enabled/disabled state, health and reconnect facts. |
 

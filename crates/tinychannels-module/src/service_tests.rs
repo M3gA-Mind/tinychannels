@@ -2199,7 +2199,7 @@ async fn host_control_facts_preserve_module_timeout_floor_and_overflow_classific
             })
             .await
             .unwrap(),
-        Response::Capabilities(tinychannels_bus::ChannelCapabilities::unknown())
+        Response::Capabilities(Box::new(tinychannels_bus::ChannelCapabilities::unknown()))
     );
     service.shutdown().await.unwrap();
     assert!(

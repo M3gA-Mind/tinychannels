@@ -428,9 +428,9 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         .unwrap();
     assert_eq!(
         controlled,
-        tinychannels_bus::module_control::ChannelControlResult::Capabilities(
+        tinychannels_bus::module_control::ChannelControlResult::Capabilities(Box::new(
             described.capabilities
-        )
+        ))
     );
     let prepared: PreparedChannelIntent = first_client
         .call_confidential(

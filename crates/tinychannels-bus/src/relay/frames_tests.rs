@@ -7,7 +7,7 @@ fn v2_descriptor_frame_round_trips_canonical_capabilities() {
     let frame = ConnectorToGatewayFrame::DescriptorV2 {
         platform: "discord".into(),
         bot_id: "bot".into(),
-        capabilities,
+        capabilities: Box::new(capabilities),
     };
     let json = frame.to_json().unwrap();
     assert!(json.contains("\"type\":\"descriptor_v2\""));
