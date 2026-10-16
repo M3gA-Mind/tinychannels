@@ -59,7 +59,13 @@ async fn fixture(block: bool) -> (Replies, Callback) {
         )
         .await
         .unwrap();
-    (Replies::new(HostChannels::new(connection)), callback)
+    (
+        Replies::new(
+            HostChannels::new(connection),
+            Arc::new(Mutex::new(HashMap::new())),
+        ),
+        callback,
+    )
 }
 
 async fn open(replies: &Replies) -> String {
@@ -171,8 +177,11 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
 #[tokio::test]
 async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     let (replies, _) = fixture(false).await;
-    let mut reply =
-        ProgressiveReply::new(Arc::new(Sender(replies.host.clone())), "discord:fixture");
+    let mut reply = ProgressiveReply::new(
+        Arc::new(Sender(replies.host.clone())),
+        "discord:fixture",
+        tinychannels_bus::ChannelCapabilities::unknown(),
+    );
     apply(
         &mut reply,
         vec![ProgressiveEvent::TextDelta("x".repeat(MAX_CONTENT))],
@@ -416,8 +425,11 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
 #[tokio::test]
 async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
     let (replies, _) = fixture(false).await;
-    let mut reply =
-        ProgressiveReply::new(Arc::new(Sender(replies.host.clone())), "discord:fixture");
+    let mut reply = ProgressiveReply::new(
+        Arc::new(Sender(replies.host.clone())),
+        "discord:fixture",
+        tinychannels_bus::ChannelCapabilities::unknown(),
+    );
     apply(
         &mut reply,
         vec![ProgressiveEvent::ThinkingDelta("x".repeat(MAX_CONTENT))],

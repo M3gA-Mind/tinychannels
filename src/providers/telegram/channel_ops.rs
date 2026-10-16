@@ -44,6 +44,18 @@ impl Channel for TelegramChannel {
         "telegram"
     }
 
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
+    fn history_key_ignores_thread(&self) -> bool {
+        true
+    }
+
     /// Recipient-less proactive sends (cron/heartbeat) deliver to the bot's
     /// configured default `chat_id`. `None` when unconfigured, so proactive
     /// routing skips Telegram rather than letting `send` POST to an empty

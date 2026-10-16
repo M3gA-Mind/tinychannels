@@ -185,7 +185,56 @@ pub trait Channel: Send + Sync {
 
     /// Instance-specific product interaction capabilities.
     fn capabilities(&self) -> crate::capabilities::ChannelCapabilities {
-        crate::capabilities::capabilities_for(self.name())
+        let mut capabilities = crate::capabilities::ChannelCapabilities::unknown();
+        capabilities.remote_control = self.supports_remote_control();
+        capabilities.chat_approvals = self.supports_chat_approvals();
+        capabilities.history_key_ignores_thread = self.history_key_ignores_thread();
+        capabilities.progressive_edits = self.supports_progressive_edits();
+        capabilities.streaming_reply_pipeline = self.supports_draft_updates();
+        capabilities.reactions = self.supports_reactions();
+        capabilities.addressing.reply_to_id = self.supports_reply_to_id();
+        capabilities.addressing.thread_id = self.supports_thread_id();
+        capabilities.content.parts = vec!["text".into()];
+        capabilities.content.text = crate::capabilities::ContentCapability {
+            inbound: true,
+            outbound: true,
+            ..Default::default()
+        };
+        capabilities.actions.supported = vec!["send".into()];
+        if capabilities.progressive_edits {
+            capabilities.actions.supported.push("draft-update".into());
+        }
+        if self.supports_edit() {
+            capabilities.actions.supported.push("edit".into());
+        }
+        if capabilities.addressing.reply_to_id || capabilities.addressing.thread_id {
+            capabilities.actions.supported.push("reply".into());
+        }
+        if capabilities.addressing.thread_id {
+            capabilities.actions.supported.push("thread-reply".into());
+        }
+        if capabilities.reactions {
+            capabilities
+                .actions
+                .supported
+                .extend(["react".into(), "reactions".into()]);
+        }
+        capabilities
+    }
+
+    /// Whether remote-control commands are supported by this configured instance.
+    fn supports_remote_control(&self) -> bool {
+        false
+    }
+
+    /// Whether approval prompts can be returned to this configured instance.
+    fn supports_chat_approvals(&self) -> bool {
+        false
+    }
+
+    /// Whether this provider treats a thread marker as a reply target only.
+    fn history_key_ignores_thread(&self) -> bool {
+        false
     }
 
     /// Whether native emoji reactions are supported.
@@ -193,8 +242,31 @@ pub trait Channel: Send + Sync {
         false
     }
 
-    /// Whether progressive draft updates are supported.
+    /// Whether progressive draft operations are needed for the provider's
+    /// streaming reply pipeline. This does not necessarily mean that the
+    /// provider displays those drafts to the user.
     fn supports_draft_updates(&self) -> bool {
+        false
+    }
+
+    /// Whether the provider can visibly update a progressive reply while a
+    /// turn is running. Defaults to the legacy draft-update declaration.
+    fn supports_progressive_edits(&self) -> bool {
+        self.supports_draft_updates()
+    }
+
+    /// Whether an existing sent message can be edited independently of draft streaming.
+    fn supports_edit(&self) -> bool {
+        false
+    }
+
+    /// Whether outbound messages may address a source message directly.
+    fn supports_reply_to_id(&self) -> bool {
+        false
+    }
+
+    /// Whether outbound messages may address a conversation thread.
+    fn supports_thread_id(&self) -> bool {
         false
     }
 

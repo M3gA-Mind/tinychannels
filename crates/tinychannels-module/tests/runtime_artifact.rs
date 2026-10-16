@@ -8,6 +8,34 @@ use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory::MemoryTransport};
 use tinychannels_bus::{BUS_NAME, ChannelRuntimeReservation, HOST_BUS_NAME, OBJECT_PATH, methods};
 
+#[derive(Debug, serde::Deserialize)]
+struct PreviousChannelCapabilities {
+    remote_control: bool,
+    chat_approvals: bool,
+    progressive_edits: bool,
+    history_key_ignores_thread: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PreviousInteractionInfo {
+    capabilities: PreviousChannelCapabilities,
+    proactive_target: Option<String>,
+    supports_reactions: bool,
+    supports_draft_updates: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "result", content = "value", rename_all = "snake_case")]
+enum PreviousInteractionResult {
+    Info(PreviousInteractionInfo),
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "result", content = "value", rename_all = "snake_case")]
+enum PreviousControlResult {
+    Capabilities(PreviousChannelCapabilities),
+}
+
 #[derive(Clone, Default)]
 struct Callback {
     sends: Arc<std::sync::atomic::AtomicUsize>,
@@ -257,7 +285,10 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         .call_confidential(methods::EXECUTE_REMOTE, request)
         .await
         .unwrap();
-    assert!(remote.reply.unwrap().contains("Remote control:"));
+    assert_eq!(
+        remote.reply, None,
+        "an unconfigured channel has no remote-control capability"
+    );
     let _: RemoteOperationResult = first_client
         .call_confidential(
             methods::EXECUTE_REMOTE,
@@ -333,6 +364,12 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             from_phone: "+15550000001".into(),
             allowed_senders: vec![],
         }),
+        yuanbao: Some(tinychannels_bus::config::YuanbaoConfig {
+            app_key: "fixture-key".into(),
+            token: "fixture-token".into(),
+            ws_domain: "wss://example.invalid".into(),
+            ..Default::default()
+        }),
         ..Default::default()
     };
     let ordinary_calls = [
@@ -374,9 +411,19 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         )
         .await
         .unwrap();
-    assert_eq!(catalog.len(), 1);
-    assert_eq!(catalog[0].name, "linq");
-    assert_eq!(catalog[0].ingress, ChannelIngressKind::ExternalWebhook);
+    assert_eq!(catalog.len(), 2);
+    let linq = catalog
+        .iter()
+        .find(|channel| channel.name == "linq")
+        .unwrap();
+    let yuanbao = catalog
+        .iter()
+        .find(|channel| channel.name == "yuanbao")
+        .unwrap();
+    assert_eq!(linq.ingress, ChannelIngressKind::ExternalWebhook);
+    assert!(!linq.interaction.capabilities.progressive_edits);
+    assert!(yuanbao.interaction.capabilities.streaming_reply_pipeline);
+    assert!(!yuanbao.interaction.capabilities.progressive_edits);
     first_client
         .call_confidential::<()>(
             methods::START_OUTBOUND_CHANNEL,
@@ -389,15 +436,101 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             methods::CHANNEL_INTERACTION,
             (tinychannels_bus::ChannelInteractionRequest {
                 channel: "linq".into(),
+                interaction: tinychannels_bus::ChannelInteraction::DescribeV2,
+            },),
+        )
+        .await
+        .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::InfoV2(described) = interaction else {
+        panic!("DescribeV2 should return its configured capabilities")
+    };
+
+    // The existing Describe operation keeps the previous four-flag payload
+    // and its supplemental fields decodable by a host built against v21.
+    let legacy_interaction: serde_json::Value = first_client
+        .call_confidential(
+            methods::CHANNEL_INTERACTION,
+            (tinychannels_bus::ChannelInteractionRequest {
+                channel: "linq".into(),
                 interaction: tinychannels_bus::ChannelInteraction::Describe,
             },),
         )
         .await
         .unwrap();
-    assert!(matches!(
-        interaction,
-        tinychannels_bus::ChannelInteractionResult::Info(_)
-    ));
+    let legacy: PreviousInteractionResult = serde_json::from_value(legacy_interaction).unwrap();
+    let PreviousInteractionResult::Info(legacy) = legacy;
+    assert_eq!(
+        legacy.capabilities.remote_control,
+        described.capabilities.remote_control
+    );
+    assert_eq!(
+        legacy.capabilities.chat_approvals,
+        described.capabilities.chat_approvals
+    );
+    assert_eq!(
+        legacy.capabilities.progressive_edits,
+        described.capabilities.progressive_edits
+    );
+    assert_eq!(
+        legacy.capabilities.history_key_ignores_thread,
+        described.capabilities.history_key_ignores_thread
+    );
+    assert_eq!(
+        legacy.proactive_target,
+        described.capabilities.account.proactive_target
+    );
+    assert_eq!(legacy.supports_reactions, described.capabilities.reactions);
+    assert_eq!(
+        legacy.supports_draft_updates,
+        described.capabilities.streaming_reply_pipeline
+    );
+
+    let controlled: tinychannels_bus::module_control::ChannelControlResult = first_client
+        .call_confidential(
+            methods::PREPARE_CHANNEL_CONTROL,
+            (
+                tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 {
+                    channel: "linq".into(),
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        controlled,
+        tinychannels_bus::module_control::ChannelControlResult::CapabilitiesV2(Box::new(
+            described.capabilities.clone()
+        ))
+    );
+    let legacy_control: serde_json::Value = first_client
+        .call_confidential(
+            methods::PREPARE_CHANNEL_CONTROL,
+            (
+                tinychannels_bus::module_control::ChannelControlRequest::Capabilities {
+                    channel: "linq".into(),
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    let PreviousControlResult::Capabilities(legacy_control) =
+        serde_json::from_value(legacy_control).unwrap();
+    assert_eq!(
+        legacy_control.remote_control,
+        described.capabilities.remote_control
+    );
+    assert_eq!(
+        legacy_control.chat_approvals,
+        described.capabilities.chat_approvals
+    );
+    assert_eq!(
+        legacy_control.progressive_edits,
+        described.capabilities.progressive_edits
+    );
+    assert_eq!(
+        legacy_control.history_key_ignores_thread,
+        described.capabilities.history_key_ignores_thread
+    );
     let prepared: PreparedChannelIntent = first_client
         .call_confidential(
             methods::PREPARE_OUTBOUND_INTENT,

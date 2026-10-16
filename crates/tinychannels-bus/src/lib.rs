@@ -39,7 +39,12 @@ pub mod relay;
 )]
 pub mod traits;
 pub mod version;
-pub use capabilities::{ChannelCapabilities, capabilities_for, provider_id};
+pub use capabilities::{
+    AccountCapabilities, ActionCapabilities, AddressingCapabilities,
+    ButtonPresentationCapabilities, ChannelCapabilities, ContentCapabilities, ContentCapability,
+    DeliveryCapabilities, EventCapabilities, LegacyChannelCapabilities, LengthUnit,
+    MarkdownDialect, TextCapabilities, VoiceCapabilities, provider_id,
+};
 pub use channel::{
     ButtonAction, ButtonStyle, ChannelInboundEnvelope, ChannelOutboundIntent,
     ChannelOutboundMessage, ChannelRef, ContactMethod, ContentPart, ConversationKind,
@@ -78,7 +83,8 @@ pub use version::{CONTRACT_VERSION, is_compatible};
 mod tests;
 
 pub use module_interaction::{
-    ChannelInteraction, ChannelInteractionInfo, ChannelInteractionRequest, ChannelInteractionResult,
+    ChannelInteraction, ChannelInteractionInfo, ChannelInteractionInfoV2,
+    ChannelInteractionRequest, ChannelInteractionResult,
 };
 
 pub use module_supervision::ChannelSupervisionPolicy;

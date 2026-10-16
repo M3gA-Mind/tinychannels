@@ -61,17 +61,35 @@ impl Channel for DraftProvider {
     }
 }
 
+struct NoDraftProvider;
+
+#[async_trait::async_trait]
+impl Channel for NoDraftProvider {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn listen(&self, _: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
 #[tokio::test]
 async fn interaction_dispatch_preserves_provider_draft_and_typing_behavior() {
     let provider = Arc::new(DraftProvider::default());
-    let info = dispatch(provider.as_ref(), ChannelInteraction::Describe)
+    let info = dispatch(provider.as_ref(), ChannelInteraction::DescribeV2)
         .await
         .unwrap();
-    let ChannelInteractionResult::Info(info) = info else {
+    let ChannelInteractionResult::InfoV2(info) = info else {
         panic!("missing provider facts")
     };
-    assert_eq!(info.proactive_target.as_deref(), Some("configured-room"));
-    assert!(info.supports_reactions && info.supports_draft_updates);
+    assert_eq!(
+        info.capabilities.account.proactive_target.as_deref(),
+        Some("configured-room")
+    );
+    assert!(info.capabilities.reactions && info.capabilities.progressive_edits);
     dispatch(
         provider.as_ref(),
         ChannelInteraction::StartTyping {
@@ -128,6 +146,47 @@ async fn interaction_dispatch_preserves_provider_draft_and_typing_behavior() {
             "stop:room"
         ]
     );
+}
+
+#[tokio::test]
+async fn describe_preserves_the_pre_v2_wire_projection_for_existing_hosts() {
+    let result = dispatch(&DraftProvider::default(), ChannelInteraction::Describe)
+        .await
+        .unwrap();
+    let wire = serde_json::to_value(result).unwrap();
+    assert_eq!(wire["result"], "info");
+    assert_eq!(wire["value"]["proactive_target"], "configured-room");
+    assert_eq!(wire["value"]["supports_reactions"], true);
+    assert_eq!(wire["value"]["supports_draft_updates"], true);
+    assert_eq!(
+        wire["value"]["capabilities"],
+        serde_json::json!({
+            "remote_control": false,
+            "chat_approvals": false,
+            "progressive_edits": true,
+            "history_key_ignores_thread": false
+        })
+    );
+}
+
+#[tokio::test]
+async fn describe_reports_capabilities_for_each_configured_instance() {
+    let draft = dispatch(&DraftProvider::default(), ChannelInteraction::DescribeV2)
+        .await
+        .unwrap();
+    let no_draft = dispatch(&NoDraftProvider, ChannelInteraction::DescribeV2)
+        .await
+        .unwrap();
+    let ChannelInteractionResult::InfoV2(draft) = draft else {
+        panic!("missing draft facts")
+    };
+    let ChannelInteractionResult::InfoV2(no_draft) = no_draft else {
+        panic!("missing no-draft facts")
+    };
+    assert!(draft.capabilities.progressive_edits);
+    assert!(!no_draft.capabilities.progressive_edits);
+    assert!(draft.capabilities.content.text.outbound);
+    assert!(no_draft.capabilities.content.text.outbound);
 }
 
 #[tokio::test]

@@ -661,6 +661,14 @@ impl Channel for WhatsAppWebChannel {
         "whatsapp"
     }
 
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
     async fn send(&self, message: &SendMessage) -> Result<()> {
         let client = self.connected_client()?;
 

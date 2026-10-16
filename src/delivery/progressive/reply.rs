@@ -7,6 +7,7 @@ use super::draft::flush_streaming_edit;
 use super::finalize::{finalize_channel_reply, send_channel_reply};
 use super::state::{StreamingState, TypingState};
 use super::{ProgressiveSender, channel_supports_progressive_ui};
+use tinychannels_bus::ChannelCapabilities;
 
 /// Progressive delivery of one agent turn to one channel.
 ///
@@ -25,9 +26,13 @@ pub struct ProgressiveReply {
 impl ProgressiveReply {
     /// Start a turn on `channel`. Progressive bubbles are enabled only when the
     /// channel's provider supports edit and delete.
-    pub fn new(sender: Arc<dyn ProgressiveSender>, channel: impl Into<String>) -> Self {
+    pub fn new(
+        sender: Arc<dyn ProgressiveSender>,
+        channel: impl Into<String>,
+        capabilities: ChannelCapabilities,
+    ) -> Self {
         let channel = channel.into();
-        let progressive_ui = channel_supports_progressive_ui(&channel);
+        let progressive_ui = channel_supports_progressive_ui(&capabilities);
         tracing::debug!(
             "[channel-inbound] progressive reply channel='{}' progressive_ui={}",
             channel,

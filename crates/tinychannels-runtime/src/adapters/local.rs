@@ -18,25 +18,29 @@ pub trait LocalOutboundSink: Send + Sync {
 /// Minimal generic adapter for local/API/webhook style host integrations.
 pub struct LocalChannelAdapter {
     descriptor: ChannelDescriptor,
-    static_capabilities: ChannelStaticCapabilities,
+    capabilities: tinychannels_bus::ChannelCapabilities,
     outbound: Arc<dyn LocalOutboundSink>,
 }
 
 impl LocalChannelAdapter {
     pub fn new(
         descriptor: ChannelDescriptor,
-        static_capabilities: ChannelStaticCapabilities,
+        capabilities: tinychannels_bus::ChannelCapabilities,
         outbound: Arc<dyn LocalOutboundSink>,
     ) -> Self {
         Self {
             descriptor,
-            static_capabilities,
+            capabilities,
             outbound,
         }
     }
 
-    pub fn static_capabilities(&self) -> &ChannelStaticCapabilities {
-        &self.static_capabilities
+    pub fn static_capabilities(&self) -> ChannelStaticCapabilities {
+        ChannelStaticCapabilities::from(&self.capabilities)
+    }
+
+    pub fn capabilities(&self) -> &tinychannels_bus::ChannelCapabilities {
+        &self.capabilities
     }
 }
 

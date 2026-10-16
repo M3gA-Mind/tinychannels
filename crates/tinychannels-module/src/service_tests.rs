@@ -57,6 +57,10 @@ impl tinychannels::Channel for CaptureChannel {
         "fixture"
     }
 
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         self.0.send(message.clone()).await?;
         Ok(())
@@ -115,7 +119,10 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
-        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+        progressive: Arc::new(crate::progressive::Replies::new(
+            host.clone(),
+            Arc::new(Mutex::new(running.clone())),
+        )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
         running: Arc::new(Mutex::new(running)),
@@ -198,7 +205,10 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         Running::start(channel, Arc::new(Hooks::default()), host.clone()),
     );
     let channels = Channels {
-        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+        progressive: Arc::new(crate::progressive::Replies::new(
+            host.clone(),
+            Arc::new(Mutex::new(running.clone())),
+        )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
         running: Arc::new(Mutex::new(running)),
@@ -654,7 +664,10 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
         Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
-        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+        progressive: Arc::new(crate::progressive::Replies::new(
+            host.clone(),
+            Arc::new(Mutex::new(running.clone())),
+        )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
         running: Arc::new(Mutex::new(running)),
@@ -801,7 +814,10 @@ async fn channels_with_store(
     )]);
     let relays = Arc::new(Relays::new(host.clone()));
     let channels = Channels {
-        progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+        progressive: Arc::new(crate::progressive::Replies::new(
+            host.clone(),
+            Arc::new(Mutex::new(running.clone())),
+        )),
         host,
         email: crate::email::EmailSender::new(),
         running: Arc::new(Mutex::new(running)),
@@ -1771,7 +1787,23 @@ async fn inbound_preparation_service() -> Channels {
     let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    Channels::new(HostChannels::new(connection), None)
+    let host = HostChannels::new(connection);
+    Channels::new(host, None)
+}
+
+async fn enable_remote_providers(channels: &Channels) {
+    let host = channels.host.clone();
+    for configured_name in ["telegram", "discord"] {
+        let (sender, _receiver) = tokio::sync::mpsc::channel(1);
+        channels.running.lock().await.insert(
+            configured_name.to_owned(),
+            Running::start(
+                Arc::new(CaptureChannel(sender)),
+                Arc::new(Hooks::default()),
+                host.clone(),
+            ),
+        );
+    }
 }
 
 #[tokio::test]
@@ -1783,6 +1815,7 @@ async fn runtime_command_preparation_covers_supported_commands_and_limits() {
     };
 
     let service = inbound_preparation_service().await;
+    enable_remote_providers(&service).await;
     let request = |content: &str| PrepareRuntimeCommandRequest {
         channel: "telegram".into(),
         content: content.into(),
@@ -2082,9 +2115,10 @@ async fn progressive_reply_is_opened_owned_and_closed_inside_the_module() {
 async fn remote_help_is_parsed_and_rendered_inside_the_module() {
     use tinychannels_bus::module_remote::{RemoteOperation, RemoteRoute};
     let service = inbound_preparation_service().await;
+    enable_remote_providers(&service).await;
     let message = serde_json::from_value(serde_json::json!({
         "id":"fixture", "sender":"sender", "reply_target":"chat",
-        "content":"/HELP@FixtureBot", "channel":"telegram", "timestamp":1
+        "content":"/HELP@FixtureBot", "channel":"tg:fixture", "timestamp":1
     }))
     .unwrap();
     let result = service
@@ -2103,6 +2137,32 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
         result.reply.as_deref(),
         Some(tinychannels::remote::build_remote_help_response().as_str())
     );
+    let route = service
+        .prepare_channel_control(
+            tinychannels_bus::module_control::ChannelControlRequest::Route {
+                workspace_dir: ".".into(),
+                message: serde_json::from_value(serde_json::json!({
+                    "id":"fixture", "sender":"sender", "reply_target":"chat",
+                    "content":"/help", "channel":"telegram:fixture", "timestamp":1
+                }))
+                .unwrap(),
+                route: RemoteRoute {
+                    provider: "fixture".into(),
+                    model: "fixture".into(),
+                },
+                history_len: 0,
+                providers: vec![],
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        route,
+        tinychannels_bus::module_control::ChannelControlResult::Route {
+            reply: Some(reply),
+            ..
+        } if reply == tinychannels::remote::build_remote_help_response()
+    ));
     service.shutdown().await.unwrap();
 }
 
@@ -2112,6 +2172,7 @@ async fn host_control_facts_preserve_module_timeout_floor_and_overflow_classific
         ChannelControlRequest as Request, ChannelControlResult as Response,
     };
     let service = inbound_preparation_service().await;
+    enable_remote_providers(&service).await;
     assert_eq!(
         service
             .prepare_channel_control(Request::RuntimeLimits {
@@ -2166,8 +2227,22 @@ async fn host_control_facts_preserve_module_timeout_floor_and_overflow_classific
             })
             .await
             .unwrap(),
-        Response::Capabilities(tinychannels::capabilities_for("tg:fixture"))
+        Response::Capabilities(tinychannels_bus::LegacyChannelCapabilities {
+            remote_control: true,
+            ..Default::default()
+        })
     );
+    let Response::CapabilitiesV2(capabilities) = service
+        .prepare_channel_control(Request::CapabilitiesV2 {
+            channel: "tg:fixture".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected v2 capabilities")
+    };
+    assert!(capabilities.remote_control);
+    assert_eq!(capabilities.account.configured, Some(true));
     service.shutdown().await.unwrap();
     assert!(
         service
@@ -2187,6 +2262,7 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
     };
     use tinychannels_bus::module_remote::RemoteRoute;
     let service = inbound_preparation_service().await;
+    enable_remote_providers(&service).await;
     let request = |content: &str, channel: &str| {
         Request::Route {
         workspace_dir: ".".into(),

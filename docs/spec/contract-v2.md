@@ -224,21 +224,30 @@ mean the current account is configured or available. A legacy relay v1
 handshake may use an adapter for its frozen wire shape during the one-release
 compatibility window; v2 uses the shared descriptor directly.
 
-The descriptor has explicit fields:
+The bus DTO is `ChannelCapabilities` (version 2). It has typed groups for the
+following explicit fields. `DescribeV2` and `CapabilitiesV2` resolve the
+descriptor from the configured provider instance and include account/runtime
+state; relay v2 transports this same DTO. Existing `Describe` and
+`Capabilities` operations retain their v21 snake_case four-flag payloads and
+supplemental Describe fields as mechanical projections from the canonical
+descriptor. The legacy relay v1 descriptor also remains a frozen wire
+projection:
 
 | Field | Meaning |
 | --- | --- |
-| contentParts | Supported ContentPart kinds: text, image, video, audio, file, voice_note, sticker, location, contact, buttons, poll, presentation, native. |
-| markdownDialects | Accepted/emitted markup dialects for text parts. |
+| content.parts | Supported ContentPart kinds: text, image, video, audio, file, voice_note, sticker, location, contact, buttons, poll, presentation, native. |
+| text.markdownDialects | Accepted/emitted markup dialects for text parts. |
 | voiceIn | Whether voice notes are accepted; acceptedCodecs, maxDurationMs, maxSizeBytes, normalizedWaveform, nativeWaveform, and transcriptSources (provider/host_stt). |
 | voiceOut | Whether Voice media and Voice synthesize are supported; acceptedCodecs, maxDurationMs, maxSizeBytes, normalizedWaveform, nativeWaveform, available voice identifiers, and synthesis support. |
 | events | Supported normalized event types: stream_open/delta/finalize, inbound message, edit/delete, inbound/outbound reaction, read/delivered receipt, presence, typing, lifecycle, delivery_status, approval, tool_progress, subagent, usage, artifact, queue, suggestion. |
-| conversationTypes | Supported dm, group, channel, and thread conversation kinds. |
+| addressing.conversationTypes | Supported dm, group, channel, and thread conversation kinds. |
 | addressing | Support for accountId, scopeId, parentId, topicId, replyToId, and threadId, with provider restrictions represented per operation. |
 | actions | Supported send/reply/thread/edit/delete/reaction/read/typing/draft/poll/buttons/native-command actions. |
+| progressiveEdits | Whether the configured instance can visibly update a draft while a reply is running. |
+| streamingReplyPipeline | Whether provider replies require the streaming parser, independently of visible draft editing. |
 | text | textLimit, lengthUnit (characters, utf8_bytes, utf16_units), markdown dialect, and chunk constraints. |
-| image, video, audio, file, sticker | Accepted/emitted codec or media types, maxSizeBytes, and applicable duration/dimension limits. |
-| location, contact, buttons, poll, presentation, native | Support flags plus typed size/count/action limits where applicable. |
+| content.image, content.video, content.audio, content.file, content.sticker | Accepted/emitted codec or media types, maxSizeBytes, and applicable duration/dimension limits. |
+| content.location, content.contact, content.buttons, content.poll, content.presentation, content.native | Support flags plus typed size/count/action limits where applicable. |
 | delivery | Durable-final support, idempotency, batch, partial result, and unknown-send reconciliation facts. |
 | account | linked/not_linked/configured/not_configured/enabled/disabled state, health and reconnect facts. |
 
@@ -285,9 +294,10 @@ account/conversation scope.
 ## Migration and compatibility window
 
 The v2 content model advances the current TinyBus wire contract revision 21 to
-revision 22 and the module operation version 1.21 to 1.22. v21 is the current
+revision 22 and the module operation version 1.21 to 1.23. v21 is the prior
 wire revision, not a Cargo semver major version. Keep existing member names,
-arities, and serialized meaning unchanged.
+arities, and serialized meaning unchanged; additive v2 relay operations use
+new names and preserve v1 relay frames.
 
 The migration has one full release compatibility window:
 
@@ -357,9 +367,9 @@ The harness exposes turn admission, inbound lifecycle stages, and output
 events. Provider voice paths may transcribe audio before legacy dispatch. The
 full ordered ContentPart model, first-class voice-note metadata, unified
 descriptor, normalized provider event family, and shared web event wire
-described above remain v2 requirements. Wire revision 21 and module operation
-version 1.21 are current implementation facts; revision 22 and operation
-version 1.22 in this document are the proposed next contract increment.
+described above remain v2 requirements. Wire revision 22 and module operation
+version 1.23 are current contract facts. Legacy provider rich-content support
+remains limited until the provider migration leaf completes.
 
 Track implementation status in code changes and release notes, not by editing
 this normative vocabulary to imply that a partially migrated producer has

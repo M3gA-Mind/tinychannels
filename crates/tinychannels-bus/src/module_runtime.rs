@@ -50,7 +50,7 @@ pub enum ChannelIngressKind {
 pub struct ConfiguredChannelInfo {
     pub name: String,
     pub ingress: ChannelIngressKind,
-    pub interaction: crate::ChannelInteractionInfo,
+    pub interaction: crate::ChannelInteractionInfoV2,
 }
 
 /// Legacy message vocabulary whose normalization and hashing stay in the module.

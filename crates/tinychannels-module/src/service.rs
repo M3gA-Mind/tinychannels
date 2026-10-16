@@ -87,6 +87,18 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
                 .is_some_and(|wa| wa.backend_type() == "cloud"))
 }
 
+async fn configured_capabilities(
+    running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    name: &str,
+) -> tinychannels_bus::ChannelCapabilities {
+    let running = running.lock().await;
+    running
+        .get(name)
+        .or_else(|| running.get(tinychannels_bus::provider_id(name)))
+        .map(|provider| crate::interaction::configured_capabilities(provider.channel.as_ref()))
+        .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
+}
+
 /// The served object.
 pub(crate) struct Channels {
     pub(crate) host: HostChannels,
@@ -108,12 +120,16 @@ struct ModuleDeliveryHandler {
 
 impl Channels {
     pub(crate) fn new(host: HostChannels, runtimes: Option<Arc<crate::runtime::Runtimes>>) -> Self {
+        let running = Arc::new(Mutex::new(HashMap::new()));
         Self {
-            progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+            progressive: Arc::new(crate::progressive::Replies::new(
+                host.clone(),
+                running.clone(),
+            )),
             relays: Arc::new(Relays::new(host.clone())),
             host,
             email: EmailSender::new(),
-            running: Arc::new(Mutex::new(HashMap::new())),
+            running,
             terminal: AtomicBool::new(false),
             runtimes,
             shutdown_task: Mutex::new(None),
@@ -376,11 +392,8 @@ impl Channels {
                 } else {
                     ChannelIngressKind::Listener
                 },
-                interaction: tinychannels_bus::ChannelInteractionInfo {
-                    capabilities: channel.capabilities(),
-                    proactive_target: channel.proactive_target(),
-                    supports_reactions: channel.supports_reactions(),
-                    supports_draft_updates: channel.supports_draft_updates(),
+                interaction: tinychannels_bus::ChannelInteractionInfoV2 {
+                    capabilities: crate::interaction::configured_capabilities(channel.as_ref()),
                 },
             })
             .collect())
@@ -410,7 +423,18 @@ impl Channels {
         if self.terminal.load(Ordering::Acquire) {
             return Err(BusError::failed("channel module is shutting down"));
         }
-        crate::control::prepare(&self.host, request).await
+        let name = match &request {
+            tinychannels_bus::module_control::ChannelControlRequest::Capabilities { channel }
+            | tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 { channel } => {
+                channel.as_str()
+            }
+            tinychannels_bus::module_control::ChannelControlRequest::Route { message, .. } => {
+                message.channel.as_str()
+            }
+            _ => "",
+        };
+        let capabilities = configured_capabilities(&self.running, name).await;
+        crate::control::prepare(&self.host, request, capabilities).await
     }
 
     /// Parse and execute remote chat commands inside the channel module.
@@ -423,7 +447,16 @@ impl Channels {
         if self.terminal.load(Ordering::Acquire) {
             return Err(BusError::failed("channel module is shutting down"));
         }
-        crate::remote::execute(&self.host, request).await
+        let name = match &request {
+            tinychannels_bus::module_remote::RemoteOperation::Execute { message, .. } => {
+                message.channel.as_str()
+            }
+            tinychannels_bus::module_remote::RemoteOperation::MarkTurn { channel, .. } => {
+                channel.as_str()
+            }
+        };
+        let capabilities = configured_capabilities(&self.running, name).await;
+        crate::remote::execute(&self.host, request, capabilities).await
     }
 
     /// Drive progressive delivery without exposing its state to the host.
@@ -1018,6 +1051,15 @@ impl Channels {
     ) -> BusResult<tinychannels::relay::CapabilityDescriptor> {
         self.relays.start(id, config).await
     }
+    /// Start a relay through the canonical v2 per-identity capability handshake.
+    #[tinybus(confidential)]
+    async fn start_relay_v2(
+        &self,
+        id: RelayReservation,
+        config: RelayRuntimeConfig,
+    ) -> BusResult<tinychannels_bus::module_relay::RelayCapabilitiesV2> {
+        self.relays.start_v2(id, config).await
+    }
     /// Cancel pending startup and join relay/reconnect/native callback work.
     async fn stop_relay(&self, id: RelayReservation) -> BusResult<()> {
         self.relays.stop(id).await
@@ -1025,6 +1067,14 @@ impl Channels {
     /// Report safe lifecycle facts without URL, identities or credentials.
     async fn relay_status(&self, id: RelayReservation) -> BusResult<RelayStatus> {
         self.relays.status(id).await
+    }
+    /// Return identity-correlated v2 capabilities negotiated for this reservation.
+    #[tinybus(confidential)]
+    async fn relay_capabilities_v2(
+        &self,
+        id: RelayReservation,
+    ) -> BusResult<Option<tinychannels_bus::module_relay::RelayCapabilitiesV2>> {
+        self.relays.capabilities_v2(id).await
     }
     /// Enqueue one bounded, ordered relay intent.
     async fn send_relay_intent(
@@ -1246,7 +1296,7 @@ pub(crate) mod exports {
             "SendMessage",
             "ListChannels",
             "ChannelStatus",
-            "ReserveRelay", "StartRelay", "StopRelay", "RelayStatus", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
+            "ReserveRelay", "StartRelay", "StartRelayV2", "StopRelay", "RelayStatus", "RelayCapabilitiesV2", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
             "BeginEmailUpload", "AppendEmailUploadChunk", "SendEmailUpload", "AbortEmailUpload",
             "StartChannelConfigured",
             "ChannelController",
