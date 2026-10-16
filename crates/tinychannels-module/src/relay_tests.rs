@@ -4,8 +4,8 @@ use tinybus::Connection;
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinychannels::relay::{ConnectorToGatewayFrame, GatewayToConnectorFrame};
-use tinychannels_bus::RelayReconnectPolicy;
 use tinychannels_bus::config::RelayRuntimeIdentityConfig;
+use tinychannels_bus::relay::RelayReconnectPolicy;
 use tokio_tungstenite::tungstenite::Message;
 
 #[test]
