@@ -111,9 +111,10 @@ pub(crate) async fn execute(
             channel,
             reply_target,
             busy,
+            capabilities,
         } => {
             let workspace = workspace(workspace_dir)?;
-            if tinychannels::capabilities_for(&channel).remote_control {
+            if capabilities.remote_control {
                 let store = sessions(callback, &workspace).await;
                 tinychannels::remote::mark_turn(&store, &channel, &reply_target, busy).await;
             }
@@ -124,9 +125,10 @@ pub(crate) async fn execute(
             message,
             route,
             history_len,
+            capabilities,
         } => {
             let workspace = workspace(workspace_dir)?;
-            let command = tinychannels::capabilities_for(&message.channel)
+            let command = capabilities
                 .remote_control
                 .then(|| tinychannels::remote::parse_remote_command(&message.content))
                 .flatten();

@@ -111,6 +111,14 @@ impl Channel for MattermostChannel {
         "mattermost"
     }
 
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
     async fn send(&self, message: &SendMessage) -> Result<()> {
         // Mattermost supports threading via 'root_id'.
         // We pack 'channel_id:root_id' into recipient if it's a thread.

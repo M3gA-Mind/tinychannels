@@ -109,9 +109,17 @@ async fn send_idempotent_defaults_to_send() {
 }
 
 #[test]
-fn capabilities_default_to_the_provider_table() {
-    assert_eq!(
-        DummyChannel.capabilities(),
-        crate::capabilities::capabilities_for("dummy")
+fn capabilities_default_to_configured_instance_facts() {
+    let capabilities = DummyChannel.capabilities();
+    assert_eq!(capabilities.version, ChannelCapabilities::VERSION);
+    assert!(capabilities.content.text.inbound);
+    assert!(capabilities.content.text.outbound);
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "send")
     );
+    assert!(!capabilities.progressive_edits);
 }

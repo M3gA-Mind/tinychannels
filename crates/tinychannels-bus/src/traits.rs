@@ -185,7 +185,9 @@ pub trait Channel: Send + Sync {
 
     /// Instance-specific product interaction capabilities.
     fn capabilities(&self) -> crate::capabilities::ChannelCapabilities {
-        let mut capabilities = crate::capabilities::capabilities_for(self.name());
+        let mut capabilities = crate::capabilities::ChannelCapabilities::unknown();
+        capabilities.remote_control = self.supports_remote_control();
+        capabilities.chat_approvals = self.supports_chat_approvals();
         capabilities.progressive_edits = self.supports_draft_updates();
         capabilities.reactions = self.supports_reactions();
         capabilities.content.parts = vec!["text".into()];
@@ -196,6 +198,16 @@ pub trait Channel: Send + Sync {
         };
         capabilities.actions.supported = vec!["send".into()];
         capabilities
+    }
+
+    /// Whether remote-control commands are supported by this configured instance.
+    fn supports_remote_control(&self) -> bool {
+        false
+    }
+
+    /// Whether approval prompts can be returned to this configured instance.
+    fn supports_chat_approvals(&self) -> bool {
+        false
     }
 
     /// Whether native emoji reactions are supported.

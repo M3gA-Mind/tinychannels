@@ -47,12 +47,14 @@ pub enum RemoteOperation {
         message: crate::ChannelMessage,
         route: RemoteRoute,
         history_len: usize,
+        capabilities: crate::ChannelCapabilities,
     },
     MarkTurn {
         workspace_dir: String,
         channel: String,
         reply_target: String,
         busy: bool,
+        capabilities: crate::ChannelCapabilities,
     },
 }
 /// The module identifies and renders commands; an ordinary message has no reply.

@@ -192,6 +192,14 @@ impl Channel for WhatsAppChannel {
         "whatsapp"
     }
 
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         // WhatsApp Cloud API: POST to /v18.0/{phone_number_id}/messages
         let url = format!(

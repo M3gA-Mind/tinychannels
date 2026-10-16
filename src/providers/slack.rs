@@ -78,6 +78,14 @@ impl Channel for SlackChannel {
         "slack"
     }
 
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let mut body = serde_json::json!({
             "channel": message.recipient,
