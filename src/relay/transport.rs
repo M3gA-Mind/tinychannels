@@ -151,10 +151,10 @@ impl RelayTransport {
     }
 
     async fn prepare_connect(&self) {
-        self.state.closed.store(false, Ordering::SeqCst);
         *self.state.descriptor.lock().await = None;
         self.state.capabilities_v2.lock().await.clear();
         self.state.capability_errors.lock().await.clear();
+        self.state.closed.store(false, Ordering::SeqCst);
     }
 
     async fn send_hellos(&self) -> Result<(), RelayTransportError> {

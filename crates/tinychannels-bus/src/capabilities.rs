@@ -166,6 +166,9 @@ pub struct ChannelCapabilities {
     pub remote_control: bool,
     pub chat_approvals: bool,
     pub progressive_edits: bool,
+    /// The provider requires the streaming reply parser, independent of whether
+    /// it can display incremental edits to the user.
+    pub streaming_reply_pipeline: bool,
     pub history_key_ignores_thread: bool,
     pub reactions: bool,
     pub content: ContentCapabilities,
@@ -196,6 +199,7 @@ impl Default for ChannelCapabilities {
             remote_control: false,
             chat_approvals: false,
             progressive_edits: false,
+            streaming_reply_pipeline: false,
             history_key_ignores_thread: false,
             reactions: false,
             content: ContentCapabilities::default(),

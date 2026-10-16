@@ -189,7 +189,8 @@ pub trait Channel: Send + Sync {
         capabilities.remote_control = self.supports_remote_control();
         capabilities.chat_approvals = self.supports_chat_approvals();
         capabilities.history_key_ignores_thread = self.history_key_ignores_thread();
-        capabilities.progressive_edits = self.supports_draft_updates();
+        capabilities.progressive_edits = self.supports_progressive_edits();
+        capabilities.streaming_reply_pipeline = self.supports_draft_updates();
         capabilities.reactions = self.supports_reactions();
         capabilities.content.parts = vec!["text".into()];
         capabilities.content.text = crate::capabilities::ContentCapability {
@@ -233,9 +234,17 @@ pub trait Channel: Send + Sync {
         false
     }
 
-    /// Whether progressive draft updates are supported.
+    /// Whether progressive draft operations are needed for the provider's
+    /// streaming reply pipeline. This does not necessarily mean that the
+    /// provider displays those drafts to the user.
     fn supports_draft_updates(&self) -> bool {
         false
+    }
+
+    /// Whether the provider can visibly update a progressive reply while a
+    /// turn is running. Defaults to the legacy draft-update declaration.
+    fn supports_progressive_edits(&self) -> bool {
+        self.supports_draft_updates()
     }
 
     /// Whether an existing sent message can be edited independently of draft streaming.

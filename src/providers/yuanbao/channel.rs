@@ -224,6 +224,10 @@ impl Channel for YuanbaoChannel {
         true
     }
 
+    fn supports_progressive_edits(&self) -> bool {
+        false
+    }
+
     async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
         // Marker id so dispatch spins up the progress consumer task;
         // nothing is sent to the user here. Real content goes out in

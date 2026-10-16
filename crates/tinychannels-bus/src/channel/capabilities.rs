@@ -27,7 +27,9 @@ pub struct ChannelStaticCapabilities {
 #[serde(default, rename_all = "camelCase")]
 pub struct ChannelPresentationCapabilities {
     pub text_limit: Option<usize>,
+    #[serde(with = "legacy_length_unit")]
     pub length_unit: LengthUnit,
+    #[serde(with = "legacy_markdown_dialect")]
     pub markdown_dialect: MarkdownDialect,
     pub supports_edit: bool,
     pub max_actions: Option<usize>,
@@ -38,6 +40,70 @@ pub struct ChannelPresentationCapabilities {
     pub supports_styles: bool,
     pub supports_disabled: bool,
     pub supports_layout_hints: bool,
+}
+
+mod legacy_length_unit {
+    use super::LengthUnit;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &LengthUnit, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(match value {
+            LengthUnit::Characters => "chars",
+            LengthUnit::Utf8Bytes => "utf8-bytes",
+            LengthUnit::Utf16Units => "utf16-units",
+        })
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<LengthUnit, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "chars" | "characters" => Ok(LengthUnit::Characters),
+            "utf8-bytes" | "utf8_bytes" => Ok(LengthUnit::Utf8Bytes),
+            "utf16-units" | "utf16_units" => Ok(LengthUnit::Utf16Units),
+            value => Err(serde::de::Error::custom(format!("unknown legacy length unit {value}"))),
+        }
+    }
+}
+
+mod legacy_markdown_dialect {
+    use super::MarkdownDialect;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &MarkdownDialect, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(match value {
+            MarkdownDialect::Plain => "plain",
+            MarkdownDialect::Markdown => "markdown",
+            MarkdownDialect::Html => "html",
+            MarkdownDialect::SlackMrkdwn => "slack-mrkdwn",
+            MarkdownDialect::DiscordMarkdown => "discord-markdown",
+            MarkdownDialect::TelegramMarkdownV2 => "telegram-markdown-v2",
+        })
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<MarkdownDialect, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        match String::deserialize(deserializer)?.as_str() {
+            "plain" => Ok(MarkdownDialect::Plain),
+            "markdown" => Ok(MarkdownDialect::Markdown),
+            "html" => Ok(MarkdownDialect::Html),
+            "slack-mrkdwn" | "slack_mrkdwn" => Ok(MarkdownDialect::SlackMrkdwn),
+            "discord-markdown" | "discord_markdown" => Ok(MarkdownDialect::DiscordMarkdown),
+            "telegram-markdown-v2" | "telegram_markdown_v2" => {
+                Ok(MarkdownDialect::TelegramMarkdownV2)
+            }
+            value => Err(serde::de::Error::custom(format!("unknown legacy markdown dialect {value}"))),
+        }
+    }
 }
 
 impl Default for ChannelPresentationCapabilities {
