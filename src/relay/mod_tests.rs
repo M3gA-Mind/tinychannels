@@ -565,7 +565,7 @@ async fn relay_transport_connect_sends_hello_and_handshake_reads_descriptor() {
     let io = Arc::new(MemoryRelayIo::default());
     let transport = discord_transport(io.clone());
 
-    transport.connect().await.expect("connect");
+    transport.connect_v2().await.expect("connect v2");
     assert_eq!(
         io.sent(),
         vec![GatewayToConnectorFrame::Hello {
@@ -606,7 +606,7 @@ async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
         let transport = transport.clone();
         tokio::spawn(async move { transport.negotiate_v2().await })
     };
-    io.wait_for_sent_len(4).await;
+    io.wait_for_sent_len(2).await;
     assert!(matches!(
         io.sent().last(),
         Some(GatewayToConnectorFrame::HelloV2 {
@@ -676,12 +676,12 @@ async fn relay_v2_ignores_unsupported_versions_and_times_out_at_one_deadline() {
             idle_ms: 500,
         },
     ));
-    transport.connect().await.expect("connect");
+    transport.connect_v2().await.expect("connect v2");
     let negotiation = {
         let transport = transport.clone();
         tokio::spawn(async move { transport.negotiate_v2().await })
     };
-    io.wait_for_sent_len(2).await;
+    io.wait_for_sent_len(1).await;
     let mut wrong_version = tinychannels_bus::ChannelCapabilities::unknown();
     wrong_version.version = 99;
     let start = tokio::time::Instant::now();

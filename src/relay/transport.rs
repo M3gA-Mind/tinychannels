@@ -57,6 +57,25 @@ impl RelayTransport {
         self.send_hellos().await
     }
 
+    /// Start the reader and send only v2 hellos, without requiring a v1 descriptor.
+    pub async fn connect_v2(&self) -> Result<(), RelayTransportError> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(RelayTransportError::Closed);
+        }
+        self.prepare_connect().await;
+        self.start_reader().await;
+        let io = self.current_io().await;
+        for identity in &self.identities {
+            io.send(GatewayToConnectorFrame::HelloV2 {
+                platform: identity.platform.clone(),
+                bot_id: identity.bot_id.clone(),
+                contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
+            })
+            .await?;
+        }
+        Ok(())
+    }
+
     pub async fn reconnect_with_io(
         &self,
         io: Arc<dyn RelayFrameIo>,
@@ -171,29 +190,7 @@ impl RelayTransport {
     ) -> Result<tinychannels_bus::ChannelCapabilities, RelayTransportError> {
         let deadline =
             tokio::time::Instant::now() + Duration::from_millis(self.timeouts.handshake_ms);
-        loop {
-            let notified = self.state.descriptor_ready.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if let Some(capabilities) = self
-                .state
-                .capabilities_v2
-                .lock()
-                .await
-                .get(identity)
-                .cloned()
-            {
-                return Ok(capabilities);
-            }
-            if self.state.closed.load(Ordering::SeqCst) {
-                return Err(RelayTransportError::Closed);
-            }
-            tokio::time::timeout_at(deadline, notified)
-                .await
-                .map_err(|_| RelayTransportError::Timeout {
-                    operation: "handshake_v2",
-                })?;
-        }
+        self.handshake_v2_until(identity, deadline).await
     }
 
     /// Negotiate canonical v2 capabilities with every configured relay identity.
@@ -202,21 +199,41 @@ impl RelayTransport {
         &self,
     ) -> Result<HashMap<RelayIdentity, tinychannels_bus::ChannelCapabilities>, RelayTransportError>
     {
-        let io = self.current_io().await;
-        for identity in &self.identities {
-            io.send(GatewayToConnectorFrame::HelloV2 {
-                platform: identity.platform.clone(),
-                bot_id: identity.bot_id.clone(),
-                contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
-            })
-            .await?;
+        if self.terminal.load(Ordering::SeqCst)
+            || self.state.closed.load(Ordering::SeqCst)
+            || !self.state.reader_started.load(Ordering::SeqCst)
+        {
+            return Err(RelayTransportError::Closed);
         }
+        let deadline = tokio::time::Instant::now()
+            + Duration::from_millis(self.timeouts.handshake_ms);
         let mut negotiated = HashMap::new();
         for identity in &self.identities {
-            let capabilities = self.handshake_v2(identity).await?;
+            let capabilities = self.handshake_v2_until(identity, deadline).await?;
             negotiated.insert(identity.clone(), capabilities);
         }
         Ok(negotiated)
+    }
+
+    async fn handshake_v2_until(
+        &self,
+        identity: &RelayIdentity,
+        deadline: tokio::time::Instant,
+    ) -> Result<tinychannels_bus::ChannelCapabilities, RelayTransportError> {
+        loop {
+            let notified = self.state.descriptor_ready.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.terminal.load(Ordering::SeqCst) || self.state.closed.load(Ordering::SeqCst) {
+                return Err(RelayTransportError::Closed);
+            }
+            if let Some(capabilities) = self.state.capabilities_v2.lock().await.get(identity).cloned() {
+                return Ok(capabilities);
+            }
+            tokio::time::timeout_at(deadline, notified)
+                .await
+                .map_err(|_| RelayTransportError::Timeout { operation: "handshake_v2" })?;
+        }
     }
 
     pub async fn send_outbound(
