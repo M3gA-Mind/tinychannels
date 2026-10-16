@@ -847,7 +847,7 @@ impl Channels {
                     message: format!("channel {name} is not running"),
                 })?
         };
-        let mut outcome = entry
+        let outcome = entry
             .send_typed(tinychannels_bus::ChannelOutboundMessage::from_intent(
                 &intent,
             ))

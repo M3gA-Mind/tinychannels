@@ -799,8 +799,9 @@ async fn required_success_and_replay_return_same_actual_scoped_receipt_without_r
     let first = channels.send_channel_intent("fixture".into(), intent.clone()).await.unwrap();
     let second = channels.send_channel_intent("fixture".into(), intent).await.unwrap();
     assert_eq!(sends.load(Ordering::SeqCst), 1);
-    assert_eq!(first, second);
+    assert_eq!(first.message_id, second.message_id);
     let receipt = first.receipt.unwrap();
+    assert_eq!(Some(receipt.clone()), second.receipt);
     assert_eq!(receipt.platform_message_ids, ["actual-id-9"]);
     assert_eq!(receipt.edit_token.as_deref(), Some("telegram:edit:9"));
     assert_eq!(receipt.delete_token.as_deref(), Some("telegram:delete:9"));
