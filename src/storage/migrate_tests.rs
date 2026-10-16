@@ -336,3 +336,64 @@ async fn migrating_twice_leaves_the_v2_data_alone() {
         .unwrap();
     registry.check_ready(schema::DELIVERY_PENDING).unwrap();
 }
+
+#[tokio::test]
+async fn unreadable_v1_rows_are_dropped_and_the_rest_still_migrate() {
+    let storage = migrated(&[
+        ("channels_delivery_pending", "junk", json!({ "id": 5 })),
+        ("channels_delivery_results", "junk", json!({ "nope": true })),
+        (
+            "channels_delivery_results",
+            "ok",
+            json!({
+                "result": { "id": "ok", "intentFingerprint": "f", "completedAtUnixMs": 1 },
+                "expiresAtUnixMs": 4_102_444_800_000_u64,
+            }),
+        ),
+        (
+            "channel_remote_bindings",
+            "telegram:junk",
+            json!({ "thread_id": 1 }),
+        ),
+        ("channel_remote_busy", "no-colon", json!({ "busy": true })),
+        ("whatsapp_session", "nocolon", json!({ "value": "AQID" })),
+        // Account and key are recovered from the id when the body lacks them.
+        ("whatsapp_session", "acct:k1", json!({ "value": "AQID" })),
+    ])
+    .await;
+
+    assert!(
+        body(&storage, schema::DELIVERY_PENDING, "junk")
+            .await
+            .is_none()
+    );
+    assert!(
+        body(&storage, schema::DELIVERY_RESULTS, "junk")
+            .await
+            .is_none()
+    );
+    assert!(
+        body(&storage, schema::DELIVERY_RESULTS, "ok")
+            .await
+            .is_some()
+    );
+    assert!(
+        body(&storage, schema::REMOTE_BINDINGS, "telegram/junk")
+            .await
+            .is_none()
+    );
+    assert!(
+        body(&storage, schema::REMOTE_BUSY, "no-colon")
+            .await
+            .is_none()
+    );
+    assert!(
+        body(&storage, schema::WHATSAPP_SESSION, "nocolon")
+            .await
+            .is_none()
+    );
+    assert_eq!(
+        body(&storage, schema::WHATSAPP_SESSION, "acct/k1").await,
+        Some(json!({ "data_b64": "AQID" }))
+    );
+}
