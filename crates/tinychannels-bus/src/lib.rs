@@ -71,7 +71,7 @@ pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH,
     deprecated,
     reason = "re-export the one-release v21 compatibility DTOs"
 )]
-pub use traits::{Channel, ChannelMessage, ChannelSendExt, SendMessage};
+pub use traits::{Channel, ChannelIngress, ChannelMessage, ChannelSendExt, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};
 
 #[cfg(test)]

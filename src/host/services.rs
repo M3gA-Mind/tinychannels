@@ -224,6 +224,21 @@ pub trait EventSink: Send + Sync {
         self.publish("channel", kind, serde_json::to_value(event)?)
             .await
     }
+
+    /// Submit an inbound message or event on one ordered provider path.
+    /// `false` asks the legacy listener adapter to use its message channel.
+    async fn publish_ingress(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> anyhow::Result<bool> {
+        match ingress {
+            tinychannels_bus::ChannelIngress::Event(event) => {
+                self.publish_channel_event(event).await?;
+                Ok(true)
+            }
+            tinychannels_bus::ChannelIngress::Inbound(_) => Ok(false),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

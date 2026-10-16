@@ -37,6 +37,15 @@ pub struct ChannelMessage {
     pub sender_name: Option<String>,
 }
 
+/// One ordered provider ingress item. Providers submit messages and lifecycle
+/// events through the same sink when the module host supplies it.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", content = "item", rename_all = "snake_case")]
+pub enum ChannelIngress {
+    Inbound(ChannelInboundEnvelope),
+    Event(crate::ChannelEvent),
+}
+
 /// Legacy v21 text-only send projection retained for one release.
 /// Canonical sends use [`crate::ChannelOutboundMessage`] through
 /// `SendChannelIntent`.
