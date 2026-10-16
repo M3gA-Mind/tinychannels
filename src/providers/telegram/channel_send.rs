@@ -802,6 +802,7 @@ fn partial_text_send_error(
     sent_before_error: bool,
 ) -> anyhow::Error {
     anyhow::Error::new(PartialTextSendError {
+        sent_before_error,
         error: tinychannels_bus::channel::ChannelSendError {
             kind: if retryable {
                 tinychannels_bus::channel::SendErrorKind::Transient
