@@ -1206,6 +1206,7 @@ impl TelegramChannel {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn parse_update_reaction(
         &self,
         update: &serde_json::Value,
