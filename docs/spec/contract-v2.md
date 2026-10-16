@@ -3,8 +3,8 @@
 **Status: proposed contract.** This document defines the target portable channel
 boundary for TinyChannels and OpenHuman. It is a specification, not a claim
 that every field or behavior is implemented. Existing Rust types and wire
-surfaces are inventoried in Current implementation. The owning implementations
-and adapters may land in later changes.
+surfaces are inventoried in [Current implementation](#current-implementation).
+The owning implementations and adapters may land in later changes.
 
 ## Goals and boundaries
 
@@ -13,16 +13,20 @@ inbound messages, outbound content, identity, delivery results, and runtime
 capabilities. It preserves provider facts that affect routing or security and
 allows hosts to adapt richer content to less capable providers.
 
-TinyChannels owns portable DTOs, provider adapters, normalization and provider
-wire behavior. The host owns credentials and secret storage, authorization
-policy, agent execution, durable storage, and product event-bus wiring. The web
-provider and web UI remain host consumers. Provider-specific data may cross the
-contract as opaque native data, but must not replace portable fields when
-portable fields apply.
+TinyChannels owns portable DTOs, provider adapters, normalization, provider
+wire behavior, and the web-surface event adapter in the TinyChannels runtime.
+The host owns credentials and secret storage, authorization policy, agent
+execution, durable storage, UI rendering, and application event-bus wiring.
+Provider-specific data may cross the contract as opaque native data, but must
+not replace portable fields when portable fields apply.
 
 ## Wire conventions
 
 - JSON object fields use camelCase; enum values use snake_case.
+- Addressing fields retain the established wire spellings reply_to_id and
+  thread_id in every v21 compatibility shape and in every adapter projection.
+  They are stable exceptions to camelCase and must never be renamed to
+  replyToId/threadId during migration.
 - Discriminated unions use a stable kind or type field. Unknown additive
   object fields are ignored when safe. Unknown enum variants must fail closed
   where they affect authorization or delivery; otherwise adapters preserve them
@@ -40,48 +44,57 @@ portable fields apply.
 ## Content model
 
 Messages contain ordered ContentPart values. Preserve order and part
-boundaries through normalization and delivery. An empty parts list is invalid;
-plain text is represented by a text part. A message may contain more than one
-text, media, or attachment part.
+boundaries through normalization and delivery. An empty parts list is invalid.
+Each variant has a kind discriminator and typed fields:
 
-Illustrative JSON shapes:
+| Kind | Required data | Optional data and behavior |
+| --- | --- | --- |
+| text | text | markdown dialect (plain, CommonMark, or provider-markup tag); formatting remains text, never HTML authority. |
+| image | media reference | caption, alt text, width, height. |
+| video | media reference | caption, duration, width, height, thumbnail reference. |
+| audio | media reference | codec, duration, title, transcript; ordinary audio is distinct from a voice note. |
+| file | media reference | file name, byte size, caption. |
+| voice_note | VoiceNote (below) | Transcript and waveform may be absent. |
+| sticker | media reference | pack/id, emoji, alt text. |
+| location | latitude, longitude | label, address, accuracy, live-update expiry. |
+| contact | display name | phone numbers, emails, organization; each contact method is typed. |
+| buttons | ordered rows of typed actions | labels, styles, disabled state; action IDs are opaque and scoped to the conversation. |
+| poll | question, ordered options | multiple-choice flag, close time, provider poll ID. |
+| presentation | typed blocks | provider-neutral blocks or an explicitly identified native block set. |
+| native | provider and opaque data | Used only when no portable kind can represent the provider feature. |
 
-    { "kind": "text", "text": "Hello" }
-    { "kind": "media", "media": { "url": "https://…", "mediaType": "image/png" }, "caption": "Chart" }
-    { "kind": "file", "file": { "url": "https://…", "name": "report.pdf", "mediaType": "application/pdf", "sizeBytes": 1234 } }
-    { "kind": "voice_note", "audio": { "url": "https://…", "mediaType": "audio/ogg", "codec": "opus", "durationMs": 2400 }, "waveform": [0, 18, 42], "pushToTalk": true, "transcript": { "text": "Turn left", "language": "en", "state": "complete" } }
-    { "kind": "poll", "question": "Lunch?", "options": ["A", "B"], "allowsMultiple": false }
-    { "kind": "presentation", "format": "provider-neutral-or-native", "data": {} }
-    { "kind": "native", "provider": "telegram", "data": {} }
+All media references can carry a URL, host-local path, media type, codec where
+applicable, file name, byte size, duration, and provider message identifier.
+Absent fields are omitted. A provider must not turn an opaque remote URL into a
+trusted local path. An adapter must preserve media identity and order.
 
-The schema above is illustrative; Rust types and JSON Schema are authoritative
-when implemented. Every part has a stable discriminator and typed payload.
-Media references can carry a URL, host-local path, media type, file name, byte
-size, and provider message identifier where known. A provider must not turn an
-opaque remote URL into a trusted local path.
+Text parts may declare their markdown dialect: plain, CommonMark, HTML,
+Slack mrkdwn, Discord markdown, Telegram MarkdownV2, or an open provider tag.
+The declared dialect describes formatting and does not grant permission to
+execute markup. When converting dialects, preserve text and report unsupported
+formatting rather than silently stripping meaningful content.
 
-voice_note is a first-class part, not merely an audio attachment or a string
-transcript. It carries audio reference and media type, with optional codec and
-duration in milliseconds; optional normalized waveform samples (ordered,
-bounded amplitude values, not provider-specific binary encoding); pushToTalk,
-distinguishing voice-note capture from ordinary audio; and optional transcript
-with text, optional language, and state pending, complete, or unavailable.
-
+VoiceNote contains an audio media reference; optional codec and durationMs;
+optional normalized waveform samples; pushToTalk; and an optional transcript.
+Waveform is a bounded ordered list of normalized amplitude samples, not a
+provider-specific binary encoding. Transcript contains text, optional language,
+state (pending, complete, unavailable), and source (provider or host_stt).
 Transcription is enrichment, not a replacement for audio. Keep the audio even
-when a transcript exists. Missing waveform, codec, duration, or transcript is
-valid. Invalid or unavailable optional metadata is omitted. Outbound voice
-delivery can either send supplied audio or synthesize audio from text when the
-host/provider advertises the relevant capability. Synthesis must be explicit in
-the send request or selected by host policy; a provider must not silently
-replace requested text with generated speech. Receipts identify the actual
-delivered voice/media parts.
+when a transcript exists.
 
-If a destination cannot deliver a part, the adapter reports a typed
-unsupported-content failure or applies an explicit host-selected fallback.
-It must not silently discard content. Text-only legacy providers receive text
-parts joined in order using the compatibility projection described below;
-non-text content is surfaced as unsupported unless the caller explicitly
-permits a textual fallback.
+Outbound Voice is a tagged union with exactly two forms: media, which carries
+an existing audio media reference and its metadata, or synthesize, which carries
+text and an optional requested voice identifier. Synthesis occurs only when
+explicitly requested and supported by host policy and the provider. A provider
+must not silently replace requested text with generated speech. Receipts
+identify the actual delivered voice part and whether it was media or synthesis.
+
+Rust types and JSON Schema become authoritative when implemented. If a
+destination cannot deliver a part, the adapter returns a typed
+unsupported-content failure or applies an explicit caller-selected fallback.
+It must not silently discard content. A v21 text-only adapter joins text parts
+in order and rejects non-text parts unless the caller explicitly permits a
+textual fallback.
 
 ## Addresses and message envelopes
 
@@ -102,6 +115,8 @@ ChannelInboundEnvelope contains:
 | conversation | Lossless conversation and scope address. |
 | sender | Sender identity facts as provided by the channel. |
 | parts | Ordered content parts; text is retained as a compatibility projection during migration. |
+| reply_to_id | Optional source message being replied to. Preserve the exact provider ID. |
+| thread_id | Optional provider thread identifier. Preserve separately from topic_id. |
 | access | Ingress facts and upstream authorization result; not host policy. |
 | raw | Optional provider payload for diagnostics/adaptation; private data must be redacted before logging. |
 | timestamp | Optional source timestamp in Unix milliseconds. |
@@ -120,7 +135,7 @@ is authenticated transport provenance held out-of-band and is never accepted
 from serialized input. Authorization decisions remain host owned.
 
 Outbound requests address channel/account, conversation, optional
-replyToId/threadId, ordered parts, idempotency key, and durability policy
+reply_to_id and thread_id, ordered parts, idempotency key, and durability policy
 (required, best_effort, disabled). Retries for a given idempotency key must not
 intentionally create a second logical delivery. required means the host's
 durable queue must accept the request before provider send; providers must not
@@ -134,18 +149,31 @@ inventing timestamps.
 
 ## Events and delivery receipts
 
-The provider-neutral event stream is ordered per runtime and includes these
-event families:
+The provider-neutral event stream is ordered per runtime and uses a tagged
+type discriminator. It includes:
 
-| Event | Required data | Purpose |
+| type | Required data | Purpose |
 | --- | --- | --- |
+| stream_open | turnId, conversation, optional messageId | Starts one agent-output stream. |
+| stream_delta | turnId, delta text, optional sequence | Incremental text; never a committed message. |
+| stream_finalize | turnId, final ordered parts, receipt | Commits the final agent output. |
 | message_received | Full inbound envelope | New inbound message. |
 | message_updated | Address, message ID, updated parts, source timestamp | Provider edit/update. |
 | message_deleted | Address, message ID, source timestamp | Provider deletion. |
-| reaction | Address, message ID, actor, reaction, add/remove | Reaction change. |
-| typing | Address, actor, active state | Ephemeral typing state. |
+| reaction_added / reaction_removed | Address, message ID, actor, typed reaction | Inbound reaction change. |
+| outbound_reaction | Address, message ID, reaction, result | Host requested reaction and provider result. |
+| read_receipt / delivered_receipt | Address, message ID, actor, timestamp | Provider read/delivered acknowledgment. |
+| presence | Account/sender, state, optional expiry | Online, offline, away, or provider-defined presence. |
+| typing | Address, actor, active state, optional expiry | Ephemeral typing state. |
 | lifecycle | Provider/account, state, timestamp, optional sanitized reason | Connect, disconnect, health, restart. |
 | delivery_status | Idempotency key, status, optional receipt/error | Outbound progress/result. |
+| approval | turnId, requestId, prompt, typed choices, state | Approval request and resolution. |
+| tool_progress | turnId, toolId, state, optional content-free summary | Tool execution progress. |
+| subagent | turnId, agentId, state, optional content-free summary | Child-agent lifecycle. |
+| usage | turnId, input/output/cached token counts when known | Turn usage facts. |
+| artifact | turnId, artifact reference and operation | Artifact created/updated. |
+| queue | item reference, state, optional position | Delivery/turn queue changes. |
+| suggestion | typed suggestion and state | User-facing follow-up suggestion. |
 
 Each event carries a stable event ID when the provider supplies one; otherwise
 the adapter creates a deterministic ID scoped to the source event where
@@ -156,59 +184,80 @@ unsanitized exception text.
 A send returns MessageReceipt: the idempotency key, sent time, primary
 platform message ID when available, and ordered parts. Each receipt part
 identifies the platform message ID, logical content kind, zero-based part
-index, optional thread/reply IDs, and optional opaque raw source result.
+index, optional thread_id/reply_to_id, optional edit_token and delete_token,
+and optional opaque raw source result.
 Multi-message sends return every emitted platform message. A partial send must
 report the parts already delivered and a typed failure for the remainder; it
 must never fabricate all-or-nothing success.
 
-Edit/delete tokens, when required by a provider, are opaque and scoped to the
-receipt part. Receipt raw data is for round-tripping only; callers use the
-normalized fields.
+edit_token and delete_token, when required by a provider, are opaque and scoped
+to the receipt part. Receipt raw data is for round-tripping only; callers use
+the normalized fields. Receipt part thread_id and reply_to_id retain those
+exact spellings.
 
 ## Unified capabilities
 
-Expose one ChannelCapabilities descriptor assembled for a configured
-provider/account. It combines the currently separate static features,
-presentation limits, action support, outbound content support, delivery
+Relay and local providers reuse the same ChannelCapabilities type and schema.
+It is assembled for a configured provider/account and combines static
+features, presentation limits, action support, content/event support, delivery
 semantics, and runtime state. Static catalog facts and per-account/runtime
-facts are distinguishable within the same descriptor; consumers must not
-assume a provider-level true means the current account is configured or
-available.
+facts are distinguished within the descriptor; a provider-level true does not
+mean the current account is configured or available. A legacy relay v1
+handshake may use an adapter for its frozen wire shape during the one-release
+compatibility window; v2 uses the shared descriptor directly.
 
-The descriptor includes supported conversation types and content kinds
-(including voice note, voice synthesis, files, polls, and presentation/native
-content); supported actions such as reply, thread, edit, delete/unsend,
-reactions, typing, draft update, and native commands; text limit and length
-unit (characters, utf8_bytes, utf16_units), markup dialect, and
-presentation/action limits; durable-final delivery support keyed by the stable
-capability set below; and current account state (linked, not_linked,
-configured, not_configured, enabled, disabled), health, and reconnect facts.
+The descriptor has explicit fields:
 
-The durable-final keys are text, media, poll, payload, silent, replyTo, thread,
+| Field | Meaning |
+| --- | --- |
+| content_parts | Supported ContentPart kinds: text, image, video, audio, file, voice_note, sticker, location, contact, buttons, poll, presentation, native. |
+| markdown_dialects | Accepted/emitted markup dialects for text parts. |
+| voice_in | Whether voice notes are accepted; accepted codecs, max_duration_ms, max_size_bytes, waveform support, and transcript sources (provider/host_stt). |
+| voice_out | Whether Voice media and Voice synthesize are supported; accepted codecs, max_duration_ms, max_size_bytes, available voice identifiers, and synthesis support. |
+| events | Supported normalized event types: stream_open/delta/finalize, inbound message, edit/delete, inbound/outbound reaction, read/delivered receipt, presence, typing, lifecycle, delivery_status, approval, tool_progress, subagent, usage, artifact, queue, suggestion. |
+| actions | Supported send/reply/thread/edit/delete/reaction/read/typing/draft/poll/buttons/native-command actions. |
+| text | text_limit, length_unit (characters, utf8_bytes, utf16_units), markdown dialect, and chunk constraints. |
+| image, video, audio, file, sticker | Accepted/emitted codec or media types, maximum size, and applicable duration/dimension limits. |
+| location, contact, buttons, poll, presentation, native | Support flags plus typed size/count/action limits where applicable. |
+| delivery | Durable-final support, idempotency, batch, partial result, and unknown-send reconciliation facts. |
+| account | linked/not_linked/configured/not_configured/enabled/disabled state, health and reconnect facts. |
+
+An absent kind or event means unsupported. Omitted codec/media-type lists mean
+the adapter does not advertise a restricted list, not that arbitrary values
+are guaranteed. Unknown additive fields are ignored. The supported durable
+final-delivery keys are text, media, poll, payload, silent, replyTo, thread,
 nativeQuote, messageSendingHooks, batch, reconcileUnknownSend,
-afterSendSuccess, and afterCommit. Unknown additive capability keys are
-ignored. An omitted capability means unsupported. false is not inferred from
-missing runtime state. A relay descriptor is a projection of this unified
-descriptor, not a competing capability vocabulary. The existing relay
-handshake version 1 remains frozen and additive-only; projection must preserve
-its current field names/defaults until a separately versioned relay wire change
-is approved.
+afterSendSuccess, and afterCommit.
+
+The existing relay handshake version 1 remains frozen and additive-only until
+the versioned v2 relay handshake is negotiated.
 
 ## Web surface events
 
-The OpenHuman web surface consumes the same envelopes, parts, receipts, and
-capabilities as other providers. Its application event adapter emits typed
-events with a versioned type and payload; the event stream is scoped to the
-authenticated conversation/runtime and carries a monotonically increasing
-sequence number for reconnect replay.
+The TinyChannels web adapter consumes the same envelopes, parts, receipts, and
+ChannelCapabilities as other transports. It emits a versioned tagged union:
 
-The web event set maps to message_received, message_updated, message_deleted,
-reaction, typing, lifecycle, and delivery_status. Outbound user messages and
-agent replies use the same ordered ContentPart array. Text-delta streaming
-remains an ephemeral harness event and is not mistaken for a committed message
-or receipt. Finalization produces the normal message and receipt events. The
-host authenticates and authorizes subscriptions and commands; event payloads
-never establish authority by themselves.
+| type | Payload |
+| --- | --- |
+| message | Full inbound or committed outbound envelope. |
+| stream_open, stream_delta, stream_finalize | Turn identifier, ordered deltas/final parts, and final receipt. |
+| tool, subagent | Typed identifiers, state, and bounded progress data. |
+| usage | Input, output, and cached token counts when known. |
+| approval | Request identifier, prompt, typed choices, and pending/resolved state. |
+| artifact | Artifact reference and create/update/delete operation. |
+| queue | Queue item reference, state, and optional position. |
+| suggestion | Typed suggestion and state. |
+| receipt, reaction, presence, typing, lifecycle | The corresponding normalized channel event payload. |
+
+Every event carries schemaVersion, conversation/runtime scope, and a
+monotonically increasing sequence number for replay. Text deltas are ephemeral
+and are not committed messages or receipts. Finalization carries the committed
+parts and receipt. Outbound user messages and agent replies use the same
+ContentPart array. The host authenticates subscriptions and authorizes
+commands; event payloads never establish authority. The web adapter preserves
+unknown native content as opaque data; rendering requires an explicit safe
+renderer. Attachment URLs must be host-authorized, and replay cannot cross
+account/conversation scope.
 
 Provider-independent web payloads preserve unknown native content as opaque
 data but render it only through an explicit safe renderer. Attachment URLs
@@ -217,31 +266,31 @@ conversation.
 
 ## Migration and compatibility window
 
-The v2 content model is introduced additively on the current TinyBus wire
-contract revision 21. The existing ChannelMessage, SendMessage, Channel trait,
-legacy top-level text/media projections, and current TinyBus members remain
-supported for one full release after v2 consumers and producers are available.
-This is the v21 compatibility window:
+The v2 content model advances the current TinyBus wire contract revision 21 to
+revision 22 and the module operation version 1.21 to 1.22. v21 is the current
+wire revision, not a Cargo semver major version. Keep existing member names,
+arities, and serialized meaning unchanged.
 
-1. Add v2 content parts and envelopes without changing legacy field meaning.
-2. Dual-write representable fields. Legacy consumers continue receiving
-   ChannelMessage; v2 consumers read parts when present.
-3. Add adapters between Channel and v2. send maps text-only requests to a
-   text part; listen maps legacy messages to envelopes while preserving
-   provider IDs and address facts that exist. Rich content cannot be fabricated
-   from a legacy text message.
-4. During the next release, hosts may opt into v2 and report compatibility
-   use. Keep both directions tested.
-5. After one full released compatibility window, remove the old trait and
-   projections only in a separately announced breaking release and contract
-   revision. Never silently change the meaning or serialization of an existing
-   TinyBus member.
+The migration has one full release compatibility window:
 
-Here v21 is the current TinyBus contract revision, not a Cargo semver major
-version. The current module operation version is 1.21. Implementation must
-assign the additive revision and operation-version increments before changing
-the wire. The compatibility window begins only when a released host and module
-both support v2.
+1. Revision 22 adds ContentPart, Voice, normalized event, and shared capability
+   DTOs. It retains ChannelMessage, SendMessage, the Channel trait and all
+   existing TinyBus members.
+2. Ship a single v21 compatibility shim at the boundary. It maps legacy text
+   to one text part and back, preserves reply_to_id/thread_id exactly, and
+   passes through address fields when available. It rejects or explicitly
+   degrades rich parts according to caller policy; it never fabricates them.
+3. During the first released revision-22 host/module pair, the shim is
+   supported and covered in both directions. New v22 paths use parts and the
+   unified descriptor directly. Do not dual-write two competing content
+   representations indefinitely.
+4. After that one full release, remove the shim and legacy trait/projections
+   only in a separately announced breaking revision. No revision may silently
+   change the meaning or serialization of an existing TinyBus member.
+
+The compatibility window begins when a released host and module both support
+revision 22. A v21 consumer continues using v21 unchanged; it does not infer
+v22 support from an unknown field.
 
 ## Feature and provider matrix
 
@@ -264,9 +313,21 @@ every capability; query the configured descriptor.
 | Web surface | host-owned, no TinyChannels provider feature | All portable content/events, subject to host authorization | Remains an OpenHuman consumer, not a TinyChannels provider. |
 | Relay connector | relay-websocket for WebSocket I/O | Projection of portable events, content and capability facts | Existing descriptor wire v1 remains frozen. |
 
-The exact provider-to-feature assignments are the crate's Cargo feature
-definitions. This table is a capability planning matrix; do not infer feature
-availability from it when building a host.
+Contract feature coverage is summarized separately from build features:
+
+| Contract feature | Part family | Event family | Capability fields |
+| --- | --- | --- | --- |
+| Rich text | text, markdown dialect | stream_open/delta/finalize | text, markdown_dialects, length_unit, text_limit |
+| Attachments | image, video, audio, file, sticker | message, delivery_status | per-kind media types/codecs, max_size_bytes, duration/dimensions |
+| Voice | voice_note; Voice media/synthesize | message, stream_finalize | voice_in, voice_out, accepted codecs, max duration/size, waveform, transcript source |
+| Structured interaction | buttons, poll, presentation, native | outbound_reaction, approval, artifact, suggestion | actions, per-kind support and limits |
+| Identity and addressing | sender, channel, conversation, scope, reply_to_id, thread_id | message, reaction, receipts, presence, typing | conversation types, address features |
+| Delivery | ordered parts and idempotency key | delivery_status, read_receipt, delivered_receipt | durability, partial results, reconcileUnknownSend |
+| Runtime and harness | all applicable parts | lifecycle, tools, subagent, usage, queue | events, account state, health, reconnect facts |
+
+The provider-to-Cargo-feature assignments remain those in Cargo.toml. This
+provider matrix is a capability planning guide; query the configured
+descriptor at runtime rather than inferring account support from build flags.
 
 ## Current implementation
 
