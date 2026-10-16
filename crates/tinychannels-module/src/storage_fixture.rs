@@ -16,7 +16,7 @@ use tinystoragedrivers_client::StorageServer;
 use tinystoragedrivers_core::{
     Capabilities, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, MemoryStorage,
     Precondition, Query, ReadCheck, Result, Scope, ScopedStorage, SearchHit, StorageBackend,
-    StorageError, Version, Versioned, WriteOp, WriteResult,
+    StorageError, Version, Versioned, WriteOp, WriteOptions, WriteResult,
 };
 
 /// One-shot faults and counters on the delivery records.
@@ -231,12 +231,27 @@ impl DocumentStore for ScopeSwitchDocs {
         doc: Value,
         precondition: Precondition,
     ) -> Result<Version> {
+        self.put_with(collection, id, doc, precondition, WriteOptions::new())
+            .await
+    }
+
+    async fn put_with(
+        &self,
+        collection: &str,
+        id: &str,
+        doc: Value,
+        precondition: Precondition,
+        options: WriteOptions,
+    ) -> Result<Version> {
         if collection == PENDING_COLLECTION
             && self.faults.fail_pending_write.swap(false, Ordering::SeqCst)
         {
             return Err(StorageError::backend("fixture pending write failed"));
         }
-        let version = self.inner().put(collection, id, doc, precondition).await?;
+        let version = self
+            .inner()
+            .put_with(collection, id, doc, precondition, options)
+            .await?;
         if collection == RESULTS_COLLECTION
             && self.faults.lose_result_reply.swap(false, Ordering::SeqCst)
         {
