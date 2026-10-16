@@ -91,10 +91,10 @@ async fn configured_capabilities(
     running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
     name: &str,
 ) -> tinychannels_bus::ChannelCapabilities {
+    let running = running.lock().await;
     running
-        .lock()
-        .await
         .get(name)
+        .or_else(|| running.get(tinychannels_bus::provider_id(name)))
         .map(|provider| crate::interaction::configured_capabilities(provider.channel.as_ref()))
         .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
 }
@@ -424,7 +424,10 @@ impl Channels {
             return Err(BusError::failed("channel module is shutting down"));
         }
         let name = match &request {
-            tinychannels_bus::module_control::ChannelControlRequest::Capabilities { channel } => {
+            tinychannels_bus::module_control::ChannelControlRequest::Capabilities { channel }
+            | tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 {
+                channel,
+            } => {
                 channel.as_str()
             }
             tinychannels_bus::module_control::ChannelControlRequest::Route { message, .. } => {

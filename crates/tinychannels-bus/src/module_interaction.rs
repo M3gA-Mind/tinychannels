@@ -1,5 +1,5 @@
 //! Provider interaction vocabulary for running module-owned channels.
-use crate::{ChannelCapabilities, SendMessage};
+use crate::{ChannelCapabilities, LegacyChannelCapabilities, SendMessage};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +15,9 @@ pub struct ChannelInteractionRequest {
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
 pub enum ChannelInteraction {
     Describe,
+    /// Return the canonical v2 descriptor. `Describe` keeps its v1 payload
+    /// during the compatibility window.
+    DescribeV2,
     StartTyping {
         recipient: String,
     },
@@ -51,7 +54,10 @@ pub enum ChannelInteraction {
 /// Canonical instance-specific capability declaration.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ChannelInteractionInfo {
-    pub capabilities: ChannelCapabilities,
+    pub capabilities: LegacyChannelCapabilities,
+    pub proactive_target: Option<String>,
+    pub supports_reactions: bool,
+    pub supports_draft_updates: bool,
 }
 
 /// Result of a provider interaction.
@@ -61,6 +67,7 @@ pub enum ChannelInteractionResult {
     Completed,
     Draft(Option<String>),
     Info(Box<ChannelInteractionInfo>),
+    InfoV2(Box<ChannelCapabilities>),
     TypingRefresh { handle: String },
 }
 

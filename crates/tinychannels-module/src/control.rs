@@ -39,7 +39,10 @@ pub(crate) async fn prepare(
             tinychannels::context::is_context_window_overflow_message(&message),
         ),
         Request::Capabilities { .. } => {
-            Response::Capabilities(Box::new(instance_capabilities.clone()))
+            Response::Capabilities((&instance_capabilities).into())
+        }
+        Request::CapabilitiesV2 { .. } => {
+            Response::CapabilitiesV2(Box::new(instance_capabilities.clone()))
         }
         Request::Acknowledgment { content } => Response::Acknowledgment(
             tinychannels::runtime::select_acknowledgment_reaction(&content).to_owned(),
