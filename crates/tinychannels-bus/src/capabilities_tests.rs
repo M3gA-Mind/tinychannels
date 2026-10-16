@@ -12,8 +12,13 @@ fn v2_capabilities_round_trip_with_voice_and_typed_limits() {
     };
     capabilities.content.parts.push("voice_note".into());
     capabilities.content.image.max_size_bytes = Some(10_000);
+    capabilities.text.length_unit = LengthUnit::Utf8Bytes;
+    capabilities.text.markdown_dialects = vec![MarkdownDialect::SlackMrkdwn];
 
     let json = serde_json::to_vec(&capabilities).unwrap();
+    let value: serde_json::Value = serde_json::from_slice(&json).unwrap();
+    assert_eq!(value["text"]["lengthUnit"], "utf8_bytes");
+    assert_eq!(value["text"]["markdownDialects"][0], "slack_mrkdwn");
     let decoded: ChannelCapabilities = serde_json::from_slice(&json).unwrap();
     assert_eq!(decoded, capabilities);
     assert_eq!(ChannelCapabilities::VERSION, 2);
