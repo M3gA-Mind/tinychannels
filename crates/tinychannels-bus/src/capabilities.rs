@@ -216,6 +216,28 @@ impl Default for ChannelCapabilities {
     }
 }
 
+/// Frozen pre-v2 four-flag payload used by the existing `Describe` and
+/// `Capabilities` operations. New consumers should request `ChannelCapabilities`
+/// through the additive v2 operations.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LegacyChannelCapabilities {
+    pub remote_control: bool,
+    pub chat_approvals: bool,
+    pub progressive_edits: bool,
+    pub history_key_ignores_thread: bool,
+}
+
+impl From<&ChannelCapabilities> for LegacyChannelCapabilities {
+    fn from(capabilities: &ChannelCapabilities) -> Self {
+        Self {
+            remote_control: capabilities.remote_control,
+            chat_approvals: capabilities.chat_approvals,
+            progressive_edits: capabilities.progressive_edits,
+            history_key_ignores_thread: capabilities.history_key_ignores_thread,
+        }
+    }
+}
+
 /// Map a channel id (optionally provider-prefixed) to its provider id.
 pub fn provider_id(channel: &str) -> &str {
     match channel.split(':').next().unwrap_or(channel) {
