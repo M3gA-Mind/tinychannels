@@ -271,13 +271,18 @@ fn anonymous_chat_reactions_keep_actor_identity_and_native_paid_reaction() {
     assert_eq!(changes[0].custom_emoji_id, None);
 
     let denied = TelegramChannel::new("tok".into(), vec!["alice".into()], false);
-    assert!(denied.parse_update_reactions(&serde_json::json!({
-        "message_reaction": {
-            "chat": {"id": -10}, "message_id": 8,
-            "actor_chat": {"id": -100, "title": "moderators"},
-            "old_reaction": [], "new_reaction": [{"type": "paid"}]
-        }
-    })).is_empty(), "anonymous actors still obey the configured allowlist");
+    assert!(
+        denied
+            .parse_update_reactions(&serde_json::json!({
+                "message_reaction": {
+                    "chat": {"id": -10}, "message_id": 8,
+                    "actor_chat": {"id": -100, "title": "moderators"},
+                    "old_reaction": [], "new_reaction": [{"type": "paid"}]
+                }
+            }))
+            .is_empty(),
+        "anonymous actors still obey the configured allowlist"
+    );
 }
 
 #[test]

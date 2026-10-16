@@ -236,12 +236,14 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&entry.intent);
         let outcome = match provider.send_typed(message).await {
             Ok(outcome) => outcome,
-            Err(error) => return Err(DeliveryAttemptFailure {
-                error: "provider send failed".into(),
-                sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
-                permanent: None,
-                receipt: None,
-            }),
+            Err(error) => {
+                return Err(DeliveryAttemptFailure {
+                    error: "provider send failed".into(),
+                    sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
+                    permanent: None,
+                    receipt: None,
+                });
+            }
         };
         if let Some(error) = outcome.error {
             return Err(DeliveryAttemptFailure {
@@ -265,7 +267,9 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 receipt: Some(outcome.receipt),
             });
         }
-        Ok(DeliveryAttemptSuccess { receipt: Some(outcome.receipt) })
+        Ok(DeliveryAttemptSuccess {
+            receipt: Some(outcome.receipt),
+        })
     }
 
     async fn reconcile_unknown_send(
@@ -1283,7 +1287,9 @@ fn intent_fingerprint(intent: &ChannelOutboundIntent) -> Result<String, serde_js
     Ok(hex::encode(sha2::Sha256::digest(encoded)))
 }
 
-fn required_delivery_result(receipt: Option<tinychannels_bus::channel::MessageReceipt>) -> ChannelSendMessageResult {
+fn required_delivery_result(
+    receipt: Option<tinychannels_bus::channel::MessageReceipt>,
+) -> ChannelSendMessageResult {
     let receipt = receipt.unwrap_or_default();
     ChannelSendMessageResult {
         message_id: receipt.primary_platform_message_id.clone(),

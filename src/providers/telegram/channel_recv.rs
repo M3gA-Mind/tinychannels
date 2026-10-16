@@ -1247,9 +1247,11 @@ impl TelegramChannel {
             _ => tinychannels_bus::ConversationKind::Unknown,
         };
         let actor_chat = reaction.get("actor_chat");
-        let actor_chat_id = actor_chat
-            .and_then(|chat| chat.get("id"))
-            .and_then(|id| id.as_i64().map(|id| id.to_string()).or_else(|| id.as_str().map(ToString::to_string)));
+        let actor_chat_id = actor_chat.and_then(|chat| chat.get("id")).and_then(|id| {
+            id.as_i64()
+                .map(|id| id.to_string())
+                .or_else(|| id.as_str().map(ToString::to_string))
+        });
         let actor = reaction
             .get("user")
             .and_then(|user| user.get("username"))
@@ -1262,8 +1264,18 @@ impl TelegramChannel {
                     .and_then(serde_json::Value::as_i64)
                     .map(|id| id.to_string())
             })
-            .or_else(|| actor_chat.and_then(|chat| chat.get("username")).and_then(serde_json::Value::as_str).map(ToString::to_string))
-            .or_else(|| actor_chat.and_then(|chat| chat.get("title")).and_then(serde_json::Value::as_str).map(ToString::to_string))
+            .or_else(|| {
+                actor_chat
+                    .and_then(|chat| chat.get("username"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string)
+            })
+            .or_else(|| {
+                actor_chat
+                    .and_then(|chat| chat.get("title"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string)
+            })
             .or_else(|| actor_chat_id.clone())
             .unwrap_or_else(|| "unknown".to_string());
 

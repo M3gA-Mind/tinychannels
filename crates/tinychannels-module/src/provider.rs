@@ -146,7 +146,10 @@ pub(crate) struct Hooks {
 }
 impl LifecycleRegistry for Hooks {
     fn register_shutdown(&self, _name: &str, hook: ShutdownHook) {
-        self.hooks.lock().unwrap_or_else(|e| e.into_inner()).push(hook);
+        self.hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(hook);
     }
 }
 impl Hooks {
@@ -155,7 +158,10 @@ impl Hooks {
         callbacks: HostChannels,
         configured_instance: String,
     ) -> Arc<dyn tinychannels::host::ChannelHost> {
-        *self.configured_instance.lock().unwrap_or_else(|e| e.into_inner()) = Some(configured_instance.clone());
+        *self
+            .configured_instance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(configured_instance.clone());
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
@@ -402,24 +408,27 @@ impl Running {
                             .await
                             .map(|mut outcome| {
                                 outcome.receipt.channel = Some(tinychannels_bus::ChannelRef {
-                                    id: tinychannels_bus::provider_id(&configured_instance).to_owned(),
+                                    id: tinychannels_bus::provider_id(&configured_instance)
+                                        .to_owned(),
                                     account_id: Some(configured_instance.clone()),
                                 });
                                 if outcome.receipt.conversation.is_none() {
-                                    outcome.receipt.conversation = Some(
-                                        message.conversation_ref.clone().unwrap_or_else(|| {
-                                            tinychannels_bus::ConversationRef {
+                                    outcome.receipt.conversation =
+                                        Some(message.conversation_ref.clone().unwrap_or_else(
+                                            || tinychannels_bus::ConversationRef {
                                                 id: message.conversation_id.clone(),
                                                 ..Default::default()
-                                            }
-                                        }),
-                                    );
+                                            },
+                                        ));
                                 }
                                 if outcome.receipt.thread_id.is_none() {
-                                    outcome.receipt.thread_id = message
-                                        .thread_id
-                                        .clone()
-                                        .or_else(|| message.conversation_ref.as_ref().and_then(|r| r.thread_id.clone()));
+                                    outcome.receipt.thread_id =
+                                        message.thread_id.clone().or_else(|| {
+                                            message
+                                                .conversation_ref
+                                                .as_ref()
+                                                .and_then(|r| r.thread_id.clone())
+                                        });
                                 }
                                 tinychannels_bus::ChannelInteractionResult::Sent(outcome)
                             })

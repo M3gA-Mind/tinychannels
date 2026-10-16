@@ -768,8 +768,12 @@ struct SuccessfulReceiptChannel(Arc<std::sync::atomic::AtomicUsize>);
 
 #[async_trait::async_trait]
 impl tinychannels::Channel for SuccessfulReceiptChannel {
-    fn name(&self) -> &str { "fixture" }
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> { Ok(()) }
+    fn name(&self) -> &str {
+        "fixture"
+    }
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
     async fn send_typed_with_receipt(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
@@ -786,7 +790,10 @@ impl tinychannels::Channel for SuccessfulReceiptChannel {
             error: None,
         })
     }
-    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
         std::future::pending().await
     }
 }
@@ -794,10 +801,17 @@ impl tinychannels::Channel for SuccessfulReceiptChannel {
 #[tokio::test]
 async fn required_success_and_replay_return_same_actual_scoped_receipt_without_resending() {
     let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (channels, _callbacks, _server) = channels_with_store(Arc::new(SuccessfulReceiptChannel(sends.clone()))).await;
+    let (channels, _callbacks, _server) =
+        channels_with_store(Arc::new(SuccessfulReceiptChannel(sends.clone()))).await;
     let intent = required_intent("receipt-replay", "receipt body");
-    let first = channels.send_channel_intent("fixture".into(), intent.clone()).await.unwrap();
-    let second = channels.send_channel_intent("fixture".into(), intent).await.unwrap();
+    let first = channels
+        .send_channel_intent("fixture".into(), intent.clone())
+        .await
+        .unwrap();
+    let second = channels
+        .send_channel_intent("fixture".into(), intent)
+        .await
+        .unwrap();
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     assert_eq!(first.message_id, second.message_id);
     let receipt = first.receipt.unwrap();
@@ -806,16 +820,23 @@ async fn required_success_and_replay_return_same_actual_scoped_receipt_without_r
     assert_eq!(receipt.edit_token.as_deref(), Some("telegram:edit:9"));
     assert_eq!(receipt.delete_token.as_deref(), Some("telegram:delete:9"));
     assert_eq!(receipt.channel.as_ref().unwrap().id, "fixture");
-    assert_eq!(receipt.channel.as_ref().unwrap().account_id.as_deref(), Some("fixture"));
+    assert_eq!(
+        receipt.channel.as_ref().unwrap().account_id.as_deref(),
+        Some("fixture")
+    );
     assert_eq!(receipt.conversation.as_ref().unwrap().id, "room-1");
     channels.shutdown().await.unwrap();
 }
 
 #[async_trait::async_trait]
 impl tinychannels::Channel for PartialReceiptChannel {
-    fn name(&self) -> &str { "fixture" }
+    fn name(&self) -> &str {
+        "fixture"
+    }
 
-    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> { Ok(()) }
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
 
     async fn send_typed_with_receipt(
         &self,
@@ -824,7 +845,10 @@ impl tinychannels::Channel for PartialReceiptChannel {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(tinychannels_bus::channel::ChannelSendOutcome {
             receipt: tinychannels_bus::channel::MessageReceipt {
-                platform_message_ids: vec!["actual-provider-id-1".into(), "actual-provider-id-2".into()],
+                platform_message_ids: vec![
+                    "actual-provider-id-1".into(),
+                    "actual-provider-id-2".into(),
+                ],
                 ..Default::default()
             },
             error: Some(tinychannels_bus::channel::ChannelSendError {
@@ -838,26 +862,55 @@ impl tinychannels::Channel for PartialReceiptChannel {
     async fn listen(
         &self,
         _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
-    ) -> anyhow::Result<()> { std::future::pending().await }
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
 }
 
 #[tokio::test]
 async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retried_blindly() {
     let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let (channels, callbacks, _server) = channels_with_store(Arc::new(PartialReceiptChannel(sends.clone()))).await;
+    let (channels, callbacks, _server) =
+        channels_with_store(Arc::new(PartialReceiptChannel(sends.clone()))).await;
     let intent = required_intent("partial-required", "multipart body");
-    assert!(channels.send_channel_intent("fixture".into(), intent.clone()).await.is_err());
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent.clone())
+            .await
+            .is_err()
+    );
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     let scopes = callbacks.storage.snapshot().await;
     let queue = scopes.get("scope-a").unwrap();
-    let pending = queue.pending.get("partial-required").expect("partial send remains pending for reconciliation");
-    assert_eq!(pending.recovery_state, Some(tinychannels_bus::DeliveryRecoveryState::UnknownAfterSend));
-    let receipt = pending.partial_receipt.as_ref().expect("actual partial provider receipt is durable");
-    assert_eq!(receipt.platform_message_ids, ["actual-provider-id-1", "actual-provider-id-2"]);
+    let pending = queue
+        .pending
+        .get("partial-required")
+        .expect("partial send remains pending for reconciliation");
+    assert_eq!(
+        pending.recovery_state,
+        Some(tinychannels_bus::DeliveryRecoveryState::UnknownAfterSend)
+    );
+    let receipt = pending
+        .partial_receipt
+        .as_ref()
+        .expect("actual partial provider receipt is durable");
+    assert_eq!(
+        receipt.platform_message_ids,
+        ["actual-provider-id-1", "actual-provider-id-2"]
+    );
     drop(scopes);
 
-    assert!(channels.send_channel_intent("fixture".into(), intent).await.is_err());
-    assert_eq!(sends.load(Ordering::SeqCst), 1, "unknown partial sends must never be replayed as untouched sends");
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "unknown partial sends must never be replayed as untouched sends"
+    );
     channels.shutdown().await.unwrap();
 }
 
@@ -1278,7 +1331,7 @@ async fn changed_intent_cannot_reuse_a_terminal_result_key() {
                 id: "result-conflict".into(),
                 intent_fingerprint: "a".repeat(64),
                 completed_at_unix_ms: now_unix_ms(),
-            receipt: None,
+                receipt: None,
             },
         )
         .await;

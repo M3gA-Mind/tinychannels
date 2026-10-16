@@ -569,9 +569,13 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
         },
     };
     crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
-        .publish_channel_event(source.clone()).await.unwrap();
+        .publish_channel_event(source.clone())
+        .await
+        .unwrap();
     crate::provider::ModuleEvents(host.clone(), "telegram:account-b".into())
-        .publish_channel_event(source).await.unwrap();
+        .publish_channel_event(source)
+        .await
+        .unwrap();
     host.flush().await.unwrap();
 
     let events = callback.typed_events.lock().await;
@@ -579,11 +583,23 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
     assert_eq!(events[0].source_event_id.as_deref(), Some("44"));
     assert_eq!(events[1].source_event_id.as_deref(), Some("44"));
     assert_eq!(events[0].channel.id, "telegram");
-    assert_eq!(events[0].channel.account_id.as_deref(), Some("telegram:account-a"));
-    assert_eq!(events[1].channel.account_id.as_deref(), Some("telegram:account-b"));
+    assert_eq!(
+        events[0].channel.account_id.as_deref(),
+        Some("telegram:account-a")
+    );
+    assert_eq!(
+        events[1].channel.account_id.as_deref(),
+        Some("telegram:account-b")
+    );
     assert_ne!(events[0].event_id, events[1].event_id);
-    assert_eq!(events[0].event_id, "telegram:account-a:telegram:update:44:reaction:added:typing");
-    assert_eq!(events[1].event_id, "telegram:account-b:telegram:update:44:reaction:added:typing");
+    assert_eq!(
+        events[0].event_id,
+        "telegram:account-a:telegram:update:44:reaction:added:typing"
+    );
+    assert_eq!(
+        events[1].event_id,
+        "telegram:account-b:telegram:update:44:reaction:added:typing"
+    );
     host.shutdown().await.unwrap();
 }
 
@@ -746,7 +762,7 @@ async fn durable_store_rejects_invalid_and_expired_records() {
         id: "op-validate".into(),
         intent_fingerprint: "a".repeat(64),
         completed_at_unix_ms: 1,
-            receipt: None,
+        receipt: None,
     };
     store.save_result(expired).await.unwrap();
     assert!(store.load_result("op-validate").await.unwrap().is_none());
