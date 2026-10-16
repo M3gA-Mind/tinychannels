@@ -629,7 +629,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
                 }
             },
             {
-                "update_id": 15,
+                "update_id": 13,
                 "edited_message": {
                     "message_id": 5, "edit_date": 1234,
                     "message_thread_id": 88,
@@ -638,7 +638,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
                 }
             },
             {
-                "update_id": 16,
+                "update_id": 14,
                 "edited_message": {
                     "message_id": 5, "edit_date": 1235,
                     "chat": { "id": 100, "type": "supergroup" },
@@ -662,7 +662,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
                 }
             },
             {
-                "update_id": 13,
+                "update_id": 15,
                 "message": {
                     "message_id": 9, "chat": { "id": 100, "type": "private" },
                     "from": { "id": 7, "username": "alice" }, "text": "second"
@@ -677,7 +677,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
         .and(path(api_path("getUpdates")))
         .respond_with(updates(serde_json::json!([
             {
-                "update_id": 14,
+                "update_id": 16,
                 "message": {
                     "message_id": 10, "chat": { "id": 100, "type": "private" },
                     "from": { "id": 7, "username": "alice" }, "text": "third"
