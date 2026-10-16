@@ -169,6 +169,13 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
     let client = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
+    let proxy = client
+        .proxy(
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+            tinychannels_bus::OBJECT_PATH.try_into().unwrap(),
+            tinychannels_bus::BUS_NAME.try_into().unwrap(),
+        )
+        .unwrap();
     let intent = ChannelOutboundIntent {
         idempotency_key: "delivery-42".to_owned(),
         channel_id: "fixture".to_owned(),
@@ -2630,7 +2637,7 @@ async fn exported_tinybus_describe_and_control_use_each_running_instances_capabi
             channel: id.into(),
             interaction: tinychannels_bus::ChannelInteraction::Describe,
         };
-        let described: tinychannels_bus::ChannelInteractionResult = client
+        let described: tinychannels_bus::ChannelInteractionResult = proxy
             .call_confidential(tinychannels_bus::methods::CHANNEL_INTERACTION, (request,))
             .await
             .unwrap();
@@ -2639,7 +2646,7 @@ async fn exported_tinybus_describe_and_control_use_each_running_instances_capabi
         };
         assert_eq!(info.capabilities.progressive_edits, expected);
         assert_eq!(info.capabilities.account.configured, Some(true));
-        let control: tinychannels_bus::module_control::ChannelControlResult = client
+        let control: tinychannels_bus::module_control::ChannelControlResult = proxy
             .call_confidential(
                 tinychannels_bus::methods::PREPARE_CHANNEL_CONTROL,
                 (
