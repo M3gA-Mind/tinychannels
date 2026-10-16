@@ -23,26 +23,30 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use tinystoragedrivers_core::{CollectionSpec, DocumentStore, DocumentStoreExt, Precondition};
+use tinystoragedrivers_core::{
+    CollectionSpec, DocumentStore, DocumentStoreExt, Key, Precondition, WriteOptions,
+};
+
+use crate::storage::schema::{self, SCHEMA_VERSION};
 
 const LEGACY_STORE_FILE: &str = "state/channel_remote_sessions.json";
 const LEGACY_TELEGRAM_STORE_FILE: &str = "state/telegram_remote_sessions.json";
 const LOG_PREFIX: &str = "[channel-remote]";
 
 /// Collection of chat → thread bindings.
-pub const BINDINGS_COLLECTION: &str = "channel_remote_bindings";
+pub const BINDINGS_COLLECTION: &str = schema::REMOTE_BINDINGS;
 /// Collection of chats with a turn in flight.
-pub const BUSY_COLLECTION: &str = "channel_remote_busy";
+pub const BUSY_COLLECTION: &str = schema::REMOTE_BUSY;
 /// Collection holding the one-time legacy import marker.
-pub const META_COLLECTION: &str = "channel_remote_meta";
+pub const META_COLLECTION: &str = schema::REMOTE_META;
 const LEGACY_MARKER_ID: &str = "legacy-import";
 
-/// A chat's binding to a host conversation thread.
+/// A chat's binding to a host conversation thread. When it was last bound is
+/// the record's own `updated_ms` metadata, not a field here.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChatBinding {
     pub thread_id: String,
     pub sender_key: String,
-    pub updated_at: String,
     /// Title captured at `/new` time so `/status` can show it without listing
     /// every thread.
     #[serde(default)]
