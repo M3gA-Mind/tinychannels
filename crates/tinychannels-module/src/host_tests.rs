@@ -534,13 +534,29 @@ async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
             },
         },
     };
+    host.deliver_inbound("telegram", inbound_envelope("before")).await;
     host.deliver_event(event.clone()).await.unwrap();
-    assert_eq!(
-        callback.events.lock().await.as_slice(),
-        ["typed_event:telegram:update:44"]
-    );
+    host.flush().await.unwrap();
+    assert_eq!(callback.events.lock().await.as_slice(), [
+        "inbound:telegram:before",
+        "typed_event:telegram:update:44",
+    ]);
     assert_eq!(callback.typed_events.lock().await.as_slice(), &[event]);
     host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_event_callback_failure_is_reported_and_shutdown_closes_delivery() {
+    let (host, callback, _server) = connected_host().await;
+    callback.event_failures.store(1, Ordering::SeqCst);
+    let event = tinychannels_bus::ChannelEvent {
+        version: 2, event_id: "fixture:event".into(), source_event_id: Some("source".into()),
+        source_timestamp: None, channel: tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None },
+        conversation: None, event: tinychannels_bus::ChannelEventKind::Lifecycle { state: "connected".into(), reason: None },
+    };
+    assert!(host.deliver_event(event.clone()).await.is_err());
+    host.shutdown().await.unwrap();
+    assert!(host.deliver_event(event).await.is_err());
 }
 
 #[tokio::test]
