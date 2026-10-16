@@ -228,6 +228,7 @@ async fn v2_reconnect_waits_for_each_configured_identity_before_publishing_conne
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("ws://{}", listener.local_addr().unwrap());
     let (partial_sent, partial_seen) = oneshot::channel();
+    let (release_initial, initial_released) = oneshot::channel();
     let (release_final, final_released) = oneshot::channel();
     let peer = tokio::spawn(async move {
         // Initial connection declares both accounts and becomes connected.
@@ -242,6 +243,7 @@ async fn v2_reconnect_waits_for_each_configured_identity_before_publishing_conne
         }
         send_v2_descriptor(&mut first, "telegram", "first", "initial").await;
         send_v2_descriptor(&mut first, "telegram", "second", "initial").await;
+        let _ = initial_released.await;
         drop(first);
 
         // On reconnect, return only the second identity first. The transport
@@ -287,6 +289,7 @@ async fn v2_reconnect_waits_for_each_configured_identity_before_publishing_conne
     };
     let initial = manager.start_v2(reservation.clone(), config).await.unwrap();
     assert_eq!(initial.instances.len(), 2);
+    release_initial.send(()).unwrap();
     partial_seen.await.unwrap();
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(
