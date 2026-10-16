@@ -43,6 +43,7 @@ pub(crate) struct TelegramReactionEvent {
     pub(crate) reply_target: String,
     pub(crate) target_message_id: String,
     pub(crate) emoji: String,
+    pub(crate) custom_emoji_id: Option<String>,
     pub(crate) added: bool,
     pub(crate) update_id: Option<String>,
     pub(crate) timestamp: Option<u64>,
