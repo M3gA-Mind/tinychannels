@@ -49,15 +49,17 @@ impl EventSink for LegacyIngressSink {
 async fn legacy_event_sink_declines_v22_inbound_for_message_channel_fallback() {
     let sink = LegacyIngressSink;
     assert!(
-        !sink.publish_inbound(tinychannels_bus::ChannelMessage::default())
+        !sink
+            .publish_inbound(tinychannels_bus::ChannelMessage::default())
             .await
             .unwrap()
     );
     assert!(
-        !sink.publish_ingress(tinychannels_bus::ChannelIngress::Inbound(
-            tinychannels_bus::ChannelInboundEnvelope::default()
-        ))
-        .await
-        .unwrap()
+        !sink
+            .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(
+                tinychannels_bus::ChannelInboundEnvelope::default()
+            ))
+            .await
+            .unwrap()
     );
 }

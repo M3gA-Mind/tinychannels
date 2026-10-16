@@ -1,6 +1,7 @@
 use super::*;
 use crate::providers::telegram::fixtures::*;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -140,6 +141,40 @@ async fn typed_send_receipt_uses_actual_telegram_ids_and_full_address() {
 }
 
 #[tokio::test]
+async fn typed_send_receipt_keeps_ordered_multiple_text_parts() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 654 })),
+    )
+    .await;
+    let ch = channel_for(&server, &["*"]);
+    let mut message = typed_text("multi-text", "first".into());
+    message
+        .parts
+        .push(tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "second".into(),
+                markdown_dialect: None,
+            },
+        });
+
+    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await[0]["text"],
+        "first\nsecond"
+    );
+    assert_eq!(outcome.receipt.platform_message_ids, ["654"]);
+    assert_eq!(
+        outcome.receipt.idempotency_key.as_deref(),
+        Some("multi-text")
+    );
+    assert_eq!(outcome.receipt.parts[0].edit_token.as_deref(), Some("654"));
+}
+
+#[tokio::test]
 async fn typed_send_keeps_delivered_chunk_ids_when_later_chunk_fails() {
     let server = mock_api().await;
     Mock::given(method("POST"))
@@ -155,13 +190,16 @@ async fn typed_send_keeps_delivered_chunk_ids_when_later_chunk_fails() {
     )
     .await;
     let ch = channel_for(&server, &["*"]);
-    let outcome = ch
-        .send_typed_with_receipt(&typed_text(
-            "idem",
-            "x".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 50),
-        ))
-        .await
-        .unwrap();
+    let mut message = typed_text("idem", "x".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 50));
+    message
+        .parts
+        .push(tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "tail".into(),
+                markdown_dialect: None,
+            },
+        });
+    let outcome = ch.send_typed_with_receipt(&message).await.unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["321"]);
     assert_eq!(outcome.receipt.parts.len(), 1);
     assert!(outcome.error.as_ref().is_some_and(|error| !error.retryable));
@@ -836,6 +874,74 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     assert!(polls.len() >= 6, "{polls:?}");
     assert_eq!(polls[0]["offset"], 0);
     assert!(polls.iter().any(|poll| poll["offset"] == 16));
+}
+
+#[derive(Default)]
+struct RejectingInboundEvents(AtomicUsize);
+
+#[async_trait::async_trait]
+impl crate::host::EventSink for RejectingInboundEvents {
+    async fn publish(
+        &self,
+        _domain: &str,
+        _kind: &str,
+        _payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn publish_ingress(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> anyhow::Result<bool> {
+        if matches!(ingress, tinychannels_bus::ChannelIngress::Inbound(_)) {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("fixture ingress delivery failed");
+        }
+        Ok(true)
+    }
+}
+
+#[tokio::test]
+async fn listen_does_not_duplicate_inbound_after_ordered_sink_failure() {
+    let server = mock_api().await;
+    mount_get_updates_once(
+        &server,
+        1,
+        updates(serde_json::json!([{
+            "update_id": 21,
+            "message": {
+                "message_id": 7,
+                "chat": {"id": 100, "type": "private"},
+                "from": {"id": 8, "username": "alice"},
+                "text": "one delivery attempt"
+            }
+        }])),
+    )
+    .await;
+    let events = Arc::new(RejectingInboundEvents::default());
+    let channel = Arc::new(fast_backoff(
+        channel_for(&server, &["alice"]).with_events(events.clone()),
+    ));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let listener = tokio::spawn({
+        let channel = channel.clone();
+        async move { channel.listen(tx).await }
+    });
+
+    let delivered_on_legacy_path = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("listener must finish after the ingress callback fails");
+    assert!(
+        delivered_on_legacy_path.is_none(),
+        "an ambiguous callback failure must not submit the same update through the legacy queue"
+    );
+    let result = tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("listener must return after callback failure")
+        .unwrap();
+    assert!(result.is_err());
+    assert_eq!(events.0.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
