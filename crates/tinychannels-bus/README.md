@@ -73,8 +73,9 @@ Telegram topic IDs remain separate from chat IDs in `ConversationRef`.
 Typed send outcomes may carry multiple provider message IDs and per-part edit
 or delete tokens. Tokens are opaque operation inputs and are only populated
 when the provider's actual response returns the corresponding message IDs.
-Required delivery persists partial receipts before marking the send outcome
-unknown, and includes terminal receipts in idempotent replays.
+Required delivery first persists the unknown-send state, then attaches any
+partial receipt in a follow-up save; both writes preserve the pre-I/O crash
+marker. Terminal receipts are included in idempotent replays.
 
 The controller vocabulary includes complete Discord guild, text-channel and
 permission DTOs. Provider APIs re-export these types at their existing paths;

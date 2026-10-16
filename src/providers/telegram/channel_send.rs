@@ -814,10 +814,7 @@ fn is_markdown_parse_rejection(status: reqwest::StatusCode, body: &[u8]) -> bool
     let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
         return false;
     };
-    let Some(description) = value
-        .get("description")
-        .and_then(serde_json::Value::as_str)
-    else {
+    let Some(description) = value.get("description").and_then(serde_json::Value::as_str) else {
         return false;
     };
     let description = description.to_ascii_lowercase();

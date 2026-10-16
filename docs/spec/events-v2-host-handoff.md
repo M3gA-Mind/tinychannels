@@ -18,7 +18,10 @@ conversation kind and full topic/thread/parent address, stable adapter event
 ID, provider source event ID and source timestamp where available. Telegram's
 real listener now reports edits and reaction-set changes as typed events;
 message IDs correlate with inbound messages while `providerMessageId` retains
-the raw platform identifier.
+the raw platform identifier. Outbound Telegram reactions use the same canonical
+message reference and preserve the raw ID; the legacy reaction operation only
+receives chat/message IDs, so its event cannot claim a topic/thread address.
+Native operation migration in #105 can add that address when the caller has it.
 
 Receipts include their idempotency key, provider message IDs, full address and
 per-part `editToken`/`deleteToken` only where the provider returned an ID and

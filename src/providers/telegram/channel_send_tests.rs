@@ -128,11 +128,16 @@ async fn send_text_chunks_does_not_retry_unknown_or_non_format_rejections() {
         )
         .await;
         let ch = channel_for(&server, &["*"]);
-        let error = ch.send_text_chunks_with_ids("hello", "1", None, None)
+        let error = ch
+            .send_text_chunks_with_ids("hello", "1", None, None)
             .await
             .unwrap_err();
         assert!(error.downcast_ref::<PartialTextSendError>().is_some());
-        assert_eq!(json_bodies(&server, "sendMessage").await.len(), 1, "status {status}");
+        assert_eq!(
+            json_bodies(&server, "sendMessage").await.len(),
+            1,
+            "status {status}"
+        );
         let error = error.downcast_ref::<PartialTextSendError>().unwrap();
         assert_eq!(error.sent_before_error, status >= 500, "status {status}");
     }
@@ -147,21 +152,30 @@ async fn send_text_chunks_retries_only_explicit_markdown_parse_rejection() {
     }));
     Mock::given(method("POST"))
         .and(path(api_path("sendMessage")))
-        .and(body_partial_json(serde_json::json!({"parse_mode":"Markdown"})))
+        .and(body_partial_json(
+            serde_json::json!({"parse_mode":"Markdown"}),
+        ))
         .respond_with(markdown_failure)
         .with_priority(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
         .and(path(api_path("sendMessage")))
-        .and(body_partial_json(serde_json::json!({"chat_id":"1","text":"hello"})))
+        .and(body_partial_json(
+            serde_json::json!({"chat_id":"1","text":"hello"}),
+        ))
         .respond_with(ok_with(serde_json::json!({"message_id": 9})))
         .with_priority(2)
         .mount(&server)
         .await;
     let ch = channel_for(&server, &["*"]);
 
-    assert_eq!(ch.send_text_chunks_with_ids("hello", "1", None, None).await.unwrap(), ["9"]);
+    assert_eq!(
+        ch.send_text_chunks_with_ids("hello", "1", None, None)
+            .await
+            .unwrap(),
+        ["9"]
+    );
     let bodies = json_bodies(&server, "sendMessage").await;
     assert_eq!(bodies.len(), 2);
     assert_eq!(bodies[0]["parse_mode"], "Markdown");
