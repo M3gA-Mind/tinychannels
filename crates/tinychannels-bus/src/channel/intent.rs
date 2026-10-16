@@ -51,6 +51,10 @@ pub enum OutboundPayload {
     NativeChannelData {
         data: Value,
     },
+    /// Canonical ordered v22 content. This route carries every content kind.
+    Parts {
+        parts: Vec<OutboundContentPart>,
+    },
 }
 
 /// Explicit outbound voice operation. Synthesis is opt-in and keeps its text.
@@ -175,6 +179,7 @@ impl ChannelOutboundMessage {
                     },
                 })
             }
+            OutboundPayload::Parts { parts: supplied } => parts.extend(supplied.iter().cloned()),
         }
         Self {
             channel_id: intent
