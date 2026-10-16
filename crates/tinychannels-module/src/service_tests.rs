@@ -125,6 +125,26 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
 }
 
 #[tokio::test]
+async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "key".into(),
+        channel_id: "fixture".into(),
+        conversation_id: "room".into(),
+        reply_to_id: Some("source-message".into()),
+        thread_id: Some("thread".into()),
+        durability: tinychannels_bus::DeliveryDurability::BestEffort,
+        payload: tinychannels_bus::OutboundPayload::Media {
+            text: Some("caption".into()),
+            media_urls: vec!["https://example.test/image.png".into()],
+        },
+    };
+
+    let sent = intent_to_legacy_message(&intent).unwrap();
+    assert_eq!(sent.content, "caption");
+    assert_eq!(sent.thread_ts.as_deref(), Some("thread"));
+}
+
+#[tokio::test]
 async fn required_durability_is_refused_before_provider_send_without_host_queue() {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
