@@ -1,4 +1,18 @@
 use super::*;
+async fn execute(
+    callback: &HostChannels,
+    request: RemoteOperation,
+) -> tinybus::Result<RemoteOperationResult> {
+    super::execute(
+        callback,
+        request,
+        tinychannels_bus::ChannelCapabilities {
+            remote_control: true,
+            ..Default::default()
+        },
+    )
+    .await
+}
 use std::sync::Arc;
 use tinybus::{broker::Broker, transport::memory::MemoryBus};
 use tokio::sync::Mutex;

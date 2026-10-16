@@ -413,7 +413,17 @@ impl Channels {
         if self.terminal.load(Ordering::Acquire) {
             return Err(BusError::failed("channel module is shutting down"));
         }
-        crate::control::prepare(&self.host, request).await
+        let name = match &request {
+            tinychannels_bus::module_control::ChannelControlRequest::Capabilities { channel } => {
+                channel.as_str()
+            }
+            tinychannels_bus::module_control::ChannelControlRequest::Route { message, .. } => {
+                message.channel.as_str()
+            }
+            _ => "",
+        };
+        let capabilities = self.configured_capabilities(name).await;
+        crate::control::prepare(&self.host, request, capabilities).await
     }
 
     /// Parse and execute remote chat commands inside the channel module.
@@ -426,7 +436,25 @@ impl Channels {
         if self.terminal.load(Ordering::Acquire) {
             return Err(BusError::failed("channel module is shutting down"));
         }
-        crate::remote::execute(&self.host, request).await
+        let name = match &request {
+            tinychannels_bus::module_remote::RemoteOperation::Execute { message, .. } => {
+                message.channel.as_str()
+            }
+            tinychannels_bus::module_remote::RemoteOperation::MarkTurn { channel, .. } => {
+                channel.as_str()
+            }
+        };
+        let capabilities = self.configured_capabilities(name).await;
+        crate::remote::execute(&self.host, request, capabilities).await
+    }
+
+    async fn configured_capabilities(&self, name: &str) -> tinychannels_bus::ChannelCapabilities {
+        self.running
+            .lock()
+            .await
+            .get(name)
+            .map(|running| running.channel.capabilities())
+            .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
     }
 
     /// Drive progressive delivery without exposing its state to the host.
