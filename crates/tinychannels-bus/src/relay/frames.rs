@@ -75,7 +75,6 @@ impl GatewayToConnectorFrame {
 /// Frames sent by a connector over the relay socket.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
-#[allow(clippy::large_enum_variant)] // V2 carries the canonical descriptor in its frozen JSON envelope.
 pub enum ConnectorToGatewayFrame {
     Descriptor {
         descriptor: CapabilityDescriptor,
@@ -84,7 +83,7 @@ pub enum ConnectorToGatewayFrame {
         platform: String,
         #[serde(rename = "botId")]
         bot_id: String,
-        capabilities: ChannelCapabilities,
+        capabilities: Box<ChannelCapabilities>,
     },
     Inbound {
         event: Value,

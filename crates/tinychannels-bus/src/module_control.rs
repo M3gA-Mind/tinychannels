@@ -48,7 +48,6 @@ pub enum ChannelControlRequest {
 /// Product policy applies returned facts; the module never selects approval policy.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
-#[allow(clippy::large_enum_variant)] // Keep the canonical descriptor directly in the result wire type.
 pub enum ChannelControlResult {
     Route {
         reply: Option<String>,
@@ -61,7 +60,7 @@ pub enum ChannelControlResult {
     },
     Connected(bool),
     Overflow(bool),
-    Capabilities(ChannelCapabilities),
+    Capabilities(Box<ChannelCapabilities>),
     Approval(String),
     Acknowledgment(String),
 }
