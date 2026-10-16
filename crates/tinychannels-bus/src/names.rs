@@ -54,10 +54,14 @@ pub mod methods {
     pub const RESERVE_RELAY: &str = "ReserveRelay";
     /// Start a reserved relay using confidential hydrated configuration.
     pub const START_RELAY: &str = "StartRelay";
+    /// Start a relay using the canonical v2 identity-scoped capability handshake.
+    pub const START_RELAY_V2: &str = "StartRelayV2";
     /// Stop and join one reserved relay, including pending startup.
     pub const STOP_RELAY: &str = "StopRelay";
     /// Return safe lifecycle facts for one relay reservation.
     pub const RELAY_STATUS: &str = "RelayStatus";
+    /// Query negotiated canonical v2 relay capabilities by reservation.
+    pub const RELAY_CAPABILITIES_V2: &str = "RelayCapabilitiesV2";
     /// Submit an ordered relay outbound intent.
     pub const SEND_RELAY_INTENT: &str = "SendRelayIntent";
     /// Freeze publication and drain every owned provider, relay and callback.
@@ -121,8 +125,10 @@ pub const METHODS: [&str; 35] = [
     methods::CHANNEL_STATUS,
     methods::RESERVE_RELAY,
     methods::START_RELAY,
+    methods::START_RELAY_V2,
     methods::STOP_RELAY,
     methods::RELAY_STATUS,
+    methods::RELAY_CAPABILITIES_V2,
     methods::SEND_RELAY_INTENT,
     methods::SHUTDOWN,
     methods::SEND_CHANNEL_INTENT,

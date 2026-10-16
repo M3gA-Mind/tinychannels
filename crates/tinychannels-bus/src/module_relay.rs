@@ -1,5 +1,5 @@
 //! Additive module-owned relay lifecycle vocabulary; no transport or crypto.
-use crate::ChannelInboundEnvelope;
+use crate::{ChannelCapabilities, ChannelInboundEnvelope};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +24,23 @@ pub struct RelayStatus {
     pub contract_version: (u32, u32),
     /// Current resource lifecycle phase.
     pub state: RelayPhase,
+}
+
+/// One identity-scoped canonical v2 relay capability declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayInstanceCapabilitiesV2 {
+    pub platform: String,
+    pub bot_id: String,
+    pub capabilities: ChannelCapabilities,
+}
+
+/// Result of negotiating canonical capabilities for all configured relay identities.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RelayCapabilitiesV2 {
+    pub contract_version: u32,
+    pub instances: Vec<RelayInstanceCapabilitiesV2>,
 }
 /// Relay lifecycle phase.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
