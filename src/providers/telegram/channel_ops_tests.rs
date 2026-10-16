@@ -566,6 +566,40 @@ fn updates(result: serde_json::Value) -> ResponseTemplate {
     ResponseTemplate::new(200).set_body_json(serde_json::json!({ "ok": true, "result": result }))
 }
 
+#[test]
+fn telegram_v2_ingress_preserves_plain_and_forum_addresses_without_legacy_topic_guessing() {
+    let legacy = ChannelMessage {
+        id: "telegram_100_5".into(),
+        sender: "alice".into(),
+        reply_target: "100:88".into(),
+        content: "message".into(),
+        channel: "telegram".into(),
+        timestamp: 12,
+        thread_ts: Some("5".into()),
+        ..Default::default()
+    };
+    let plain = TelegramChannel::inbound_envelope_from_update(
+        &serde_json::json!({"message":{"message_id":5,"date":12,"chat":{"id":100,"type":"private"},"from":{"id":7}}}),
+        &legacy,
+    );
+    assert_eq!(plain.message_id, "telegram_100_5");
+    assert_eq!(plain.conversation.kind, tinychannels_bus::ConversationKind::Dm);
+    assert_eq!(plain.conversation.id, "100");
+    assert_eq!(plain.conversation.topic_id, None);
+    assert_eq!(plain.conversation.thread_id, None);
+    assert_eq!(plain.sender.id, "7");
+    assert_eq!(plain.raw.as_ref().unwrap()["providerMessageId"], "5");
+
+    let forum = TelegramChannel::inbound_envelope_from_update(
+        &serde_json::json!({"message":{"message_id":5,"date":12,"message_thread_id":88,"chat":{"id":100,"type":"supergroup"},"from":{"id":7}}}),
+        &legacy,
+    );
+    assert_eq!(forum.conversation.kind, tinychannels_bus::ConversationKind::Group);
+    assert_eq!(forum.conversation.id, "100");
+    assert_eq!(forum.conversation.topic_id.as_deref(), Some("88"));
+    assert_eq!(forum.conversation.thread_id, None);
+}
+
 #[tokio::test]
 async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
     let server = mock_api().await;
@@ -641,7 +675,7 @@ async fn listen_recovers_from_poll_errors_and_dispatches_updates() {
             {
                 "update_id": 15,
                 "message_reaction": {
-                    "chat": { "id": 100 }, "message_id": 5, "message_thread_id": 88,
+                    "chat": { "id": 100, "type": "supergroup" }, "message_id": 5, "message_thread_id": 88,
                     "user": { "id": 7, "username": "alice" },
                     "new_reaction": [{ "type": "emoji", "emoji": "❤" }]
                 }
