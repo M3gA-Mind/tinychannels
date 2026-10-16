@@ -149,9 +149,9 @@ pub trait Channel: Send + Sync {
     async fn send_typed_with_receipt(
         &self,
         message: &crate::channel::ChannelOutboundMessage,
-    ) -> anyhow::Result<crate::channel::MessageReceipt> {
+    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
         self.send_typed(message).await?;
-        Ok(crate::channel::MessageReceipt::default())
+        Ok(crate::channel::ChannelSendOutcome::default())
     }
 
     /// Legacy listener seam used by isolated test doubles.

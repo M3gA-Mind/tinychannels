@@ -27,7 +27,8 @@ pub use event::{ChannelEvent, ChannelEventKind, ChannelReaction};
 pub use intent::{ChannelOutboundIntent, DeliveryDurability, OutboundPayload};
 pub use intent::{ChannelOutboundMessage, OutboundContentPart, OutboundVoice};
 pub use receipt::{
-    MessageReceipt, MessageReceiptPart, MessageReceiptPartKind, MessageReceiptSourceResult,
+    ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind,
+    MessageReceiptSourceResult,
 };
 pub use session::{LegacySessionKeys, SessionKeyPolicy};
 pub use types::{

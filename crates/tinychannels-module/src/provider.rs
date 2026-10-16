@@ -448,7 +448,7 @@ impl Running {
     pub(crate) async fn send_typed(
         &self,
         message: tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, RunningSendError> {
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, RunningSendError> {
         match self.submit(ProviderOperation::SendTyped(message)).await? {
             tinychannels_bus::ChannelInteractionResult::Sent(receipt) => Ok(receipt),
             _ => Err(RunningSendError::AfterDispatch(

@@ -74,7 +74,7 @@ pub struct ChannelInteractionInfoV2 {
 pub enum ChannelInteractionResult {
     Completed,
     /// A typed provider send completed with its actual provider receipt.
-    Sent(crate::channel::MessageReceipt),
+    Sent(crate::channel::ChannelSendOutcome),
     Draft(Option<String>),
     Info(Box<ChannelInteractionInfo>),
     InfoV2(Box<ChannelInteractionInfoV2>),

@@ -87,3 +87,11 @@ pub struct MessageReceipt {
     pub sent_at: u64,
     pub raw: Option<Vec<MessageReceiptSourceResult>>,
 }
+
+/// Actual provider send receipt plus a typed failure for any undelivered tail.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ChannelSendOutcome {
+    pub receipt: MessageReceipt,
+    pub error: Option<super::error::ChannelSendError>,
+}

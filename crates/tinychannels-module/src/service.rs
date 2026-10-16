@@ -842,13 +842,15 @@ impl Channels {
                 name: SEND_FAILED_ERROR.to_owned(),
                 message: error.to_string(),
             })?;
-        receipt.channel = Some(tinychannels_bus::channel::ChannelRef {
+        let mut outcome = receipt;
+        outcome.receipt.channel = Some(tinychannels_bus::channel::ChannelRef {
             id: tinychannels_bus::provider_id(&name).to_owned(),
             account_id: Some(name.clone()),
         });
         Ok(ChannelSendMessageResult {
-            message_id: receipt.primary_platform_message_id.clone(),
-            receipt: Some(receipt),
+            message_id: outcome.receipt.primary_platform_message_id.clone(),
+            receipt: Some(outcome.receipt),
+            error: outcome.error,
             raw: None,
         })
     }

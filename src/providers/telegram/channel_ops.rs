@@ -372,7 +372,7 @@ impl Channel for TelegramChannel {
                 return Ok(tinychannels_bus::channel::MessageReceipt::default());
             }
         };
-        let conversation =
+        let mut conversation =
             message
                 .conversation_ref
                 .clone()
@@ -381,14 +381,17 @@ impl Channel for TelegramChannel {
                     thread_id: message.thread_id.clone(),
                     ..Default::default()
                 });
+        if conversation.thread_id.is_none() {
+            conversation.thread_id = message.thread_id.clone();
+        }
         let thread_id = conversation
             .thread_id
             .as_deref()
             .or(message.thread_id.as_deref());
-        let reply_to_id = message
-            .reply_to_id
-            .as_deref()
-            .and_then(|id| id.parse::<i64>().ok());
+        let reply_to_id = match message.reply_to_id.as_deref() {
+            Some(id) => Some(id.parse::<i64>().map_err(|_| anyhow::anyhow!("Telegram reply_to_id must be a numeric message ID"))?),
+            None => None,
+        };
         let ids = self
             .send_text_chunks_with_ids(text, &conversation.id, thread_id, reply_to_id)
             .await?;
@@ -413,11 +416,9 @@ impl Channel for TelegramChannel {
             .collect::<Vec<_>>();
         let single_part = (parts.len() == 1).then(|| parts[0].platform_message_id.clone());
         Ok(tinychannels_bus::channel::MessageReceipt {
-            channel: message.channel_ref.clone().or_else(|| {
-                Some(tinychannels_bus::ChannelRef {
-                    id: "telegram".into(),
-                    account_id: None,
-                })
+            channel: Some(tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: None,
             }),
             conversation: Some(conversation),
             primary_platform_message_id: parts.first().map(|part| part.platform_message_id.clone()),
