@@ -10,6 +10,7 @@ use serde_json::Value;
 
 /// Gateway-to-connector frame names.
 pub const FRAME_HELLO: &str = "hello";
+pub const FRAME_HELLO_V2: &str = "hello_v2";
 pub const FRAME_OUTBOUND: &str = "outbound";
 pub const FRAME_INTERRUPT: &str = "interrupt";
 pub const FRAME_GOING_IDLE: &str = "going_idle";
@@ -33,6 +34,12 @@ pub enum GatewayToConnectorFrame {
         platform: String,
         #[serde(rename = "botId")]
         bot_id: String,
+    },
+    HelloV2 {
+        platform: String,
+        #[serde(rename = "botId")]
+        bot_id: String,
+        contract_version: u32,
     },
     Outbound {
         #[serde(rename = "requestId")]

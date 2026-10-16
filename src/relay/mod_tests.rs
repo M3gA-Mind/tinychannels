@@ -585,6 +585,33 @@ async fn relay_transport_connect_sends_hello_and_handshake_reads_descriptor() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
+    let io = Arc::new(MemoryRelayIo::default());
+    let transport = Arc::new(discord_transport(io.clone()));
+    transport.connect().await.expect("connect");
+    let negotiation = {
+        let transport = transport.clone();
+        tokio::spawn(async move { transport.negotiate_v2().await })
+    };
+    io.wait_for_sent_len(2).await;
+    assert!(matches!(
+        io.sent().last(),
+        Some(GatewayToConnectorFrame::HelloV2 {
+            contract_version: 2,
+            ..
+        })
+    ));
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    capabilities.progressive_edits = true;
+    capabilities.text.text_limit = Some(4096);
+    io.push(ConnectorToGatewayFrame::DescriptorV2 {
+        capabilities: capabilities.clone(),
+    })
+    .await;
+    assert_eq!(negotiation.await.unwrap().unwrap(), capabilities);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn relay_transport_outbound_waits_for_matching_result() {
     let io = Arc::new(MemoryRelayIo::default());
     let transport = Arc::new(discord_transport(io.clone()));

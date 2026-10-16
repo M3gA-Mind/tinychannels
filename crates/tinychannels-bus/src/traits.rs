@@ -188,6 +188,13 @@ pub trait Channel: Send + Sync {
         let mut capabilities = crate::capabilities::capabilities_for(self.name());
         capabilities.progressive_edits = self.supports_draft_updates();
         capabilities.reactions = self.supports_reactions();
+        capabilities.content.parts = vec!["text".into()];
+        capabilities.content.text = crate::capabilities::ContentCapability {
+            inbound: true,
+            outbound: true,
+            ..Default::default()
+        };
+        capabilities.actions.supported = vec!["send".into()];
         capabilities
     }
 

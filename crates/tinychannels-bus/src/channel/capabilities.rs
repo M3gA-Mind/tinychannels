@@ -157,6 +157,7 @@ pub const CHANNEL_MESSAGE_ACTION_NAMES: &[&str] = &[
     "timeout",
     "kick",
     "ban",
+    "set-profile",
     "set-presence",
     "download-file",
     "upload-file",

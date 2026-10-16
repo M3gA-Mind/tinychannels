@@ -4,7 +4,7 @@
 //! Empty lists mean that the adapter does not advertise a restriction; a
 //! missing content kind or event means it is unsupported.
 
-use crate::channel::{ContentPart, OutboundVoice, VoiceTranscriptSource};
+use crate::channel::VoiceTranscriptSource;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -117,6 +117,7 @@ pub struct TextCapabilities {
 pub struct ContentCapabilities {
     pub parts: Vec<String>,
     pub markdown_dialects: Vec<MarkdownDialect>,
+    pub text: ContentCapability,
     pub image: ContentCapability,
     pub video: ContentCapability,
     pub audio: ContentCapability,
@@ -241,11 +242,6 @@ pub fn capabilities_for(channel: &str) -> ChannelCapabilities {
         _ => ChannelCapabilities::unknown(),
     }
 }
-
-// Keep compile-time references to the canonical vocabulary types.
-const _: Option<ContentPart> = None;
-const _: Option<OutboundVoice> = None;
-const _: Option<VoiceTranscriptSource> = None;
 
 #[cfg(test)]
 #[path = "capabilities_tests.rs"]

@@ -379,6 +379,8 @@ impl Channels {
                 interaction: tinychannels_bus::ChannelInteractionInfo {
                     capabilities: {
                         let mut capabilities = channel.capabilities();
+                        capabilities.account.configured = Some(true);
+                        capabilities.account.enabled = Some(true);
                         capabilities.account.proactive_target = channel.proactive_target();
                         capabilities
                     },

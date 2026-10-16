@@ -94,6 +94,11 @@ impl RelayTransport {
         self.state.descriptor.lock().await.clone()
     }
 
+    /// Wait for the negotiated v2 handshake descriptor.
+    pub async fn capabilities_v2(&self) -> Option<tinychannels_bus::ChannelCapabilities> {
+        self.state.capabilities_v2.lock().await.clone()
+    }
+
     /// Whether the reader has ended or terminal shutdown was requested.
     pub fn is_closed(&self) -> bool {
         self.terminal.load(Ordering::SeqCst) || self.state.closed.load(Ordering::SeqCst)
@@ -102,6 +107,7 @@ impl RelayTransport {
     async fn prepare_connect(&self) {
         self.state.closed.store(false, Ordering::SeqCst);
         *self.state.descriptor.lock().await = None;
+        *self.state.capabilities_v2.lock().await = None;
     }
 
     async fn send_hellos(&self) -> Result<(), RelayTransportError> {
@@ -137,6 +143,45 @@ impl RelayTransport {
                     operation: "handshake",
                 })?;
         }
+    }
+
+    /// Wait until the relay peer supplies its canonical v2 capabilities.
+    pub async fn handshake_v2(
+        &self,
+    ) -> Result<tinychannels_bus::ChannelCapabilities, RelayTransportError> {
+        loop {
+            let notified = self.state.descriptor_ready.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(capabilities) = self.state.capabilities_v2.lock().await.clone() {
+                return Ok(capabilities);
+            }
+            if self.state.closed.load(Ordering::SeqCst) {
+                return Err(RelayTransportError::Closed);
+            }
+            timeout(Duration::from_millis(self.timeouts.handshake_ms), notified)
+                .await
+                .map_err(|_| RelayTransportError::Timeout {
+                    operation: "handshake_v2",
+                })?;
+        }
+    }
+
+    /// Negotiate canonical v2 capabilities with every configured relay identity.
+    /// The v1 hello and descriptor path remains available to older peers.
+    pub async fn negotiate_v2(
+        &self,
+    ) -> Result<tinychannels_bus::ChannelCapabilities, RelayTransportError> {
+        let io = self.current_io().await;
+        for identity in &self.identities {
+            io.send(GatewayToConnectorFrame::HelloV2 {
+                platform: identity.platform.clone(),
+                bot_id: identity.bot_id.clone(),
+                contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
+            })
+            .await?;
+        }
+        self.handshake_v2().await
     }
 
     pub async fn send_outbound(
@@ -386,6 +431,7 @@ struct RelayTransportState {
     closed: AtomicBool,
     request_counter: AtomicU64,
     descriptor: Mutex<Option<CapabilityDescriptor>>,
+    capabilities_v2: Mutex<Option<tinychannels_bus::ChannelCapabilities>>,
     descriptor_ready: Notify,
     closed_ready: Notify,
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,
@@ -437,7 +483,10 @@ async fn handle_frame(
             *state.descriptor.lock().await = Some(descriptor);
             state.descriptor_ready.notify_waiters();
         }
-        ConnectorToGatewayFrame::DescriptorV2 { .. } => {}
+        ConnectorToGatewayFrame::DescriptorV2 { capabilities } => {
+            *state.capabilities_v2.lock().await = Some(capabilities);
+            state.descriptor_ready.notify_waiters();
+        }
         ConnectorToGatewayFrame::Inbound { event, buffer_id } => {
             let frame = ConnectorToGatewayFrame::Inbound { event, buffer_id };
             let Some(inbound) = frame.authenticated_inbound_event() else {
