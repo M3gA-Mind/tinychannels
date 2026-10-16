@@ -856,10 +856,6 @@ impl Channels {
                 name: SEND_FAILED_ERROR.to_owned(),
                 message: error.to_string(),
             })?;
-        outcome.receipt.channel = Some(tinychannels_bus::channel::ChannelRef {
-            id: tinychannels_bus::provider_id(&name).to_owned(),
-            account_id: Some(name.clone()),
-        });
         Ok(ChannelSendMessageResult {
             message_id: outcome.receipt.primary_platform_message_id.clone(),
             receipt: Some(outcome.receipt),
@@ -910,7 +906,7 @@ impl Channels {
                     .await
                     .map_err(delivery_store_error)?;
             }
-            return Ok(ChannelSendMessageResult::default());
+            return Ok(required_delivery_result(result.receipt));
         }
         if let Some(failed) = store.load_failed(&id).await.map_err(delivery_store_error)? {
             return if failed.intent == intent {
@@ -964,7 +960,7 @@ impl Channels {
                     .await
                     .map_err(delivery_store_error)?;
             }
-            return Ok(ChannelSendMessageResult::default());
+            return Ok(required_delivery_result(result.receipt));
         }
         let still_pending = store
             .load_pending(&id)
@@ -982,7 +978,12 @@ impl Channels {
                 "required delivery remains pending or failed",
             ));
         }
-        Ok(ChannelSendMessageResult::default())
+        let result = store
+            .load_result(&id)
+            .await
+            .map_err(delivery_store_error)?
+            .ok_or_else(|| BusError::failed("required delivery result was not persisted"))?;
+        Ok(required_delivery_result(result.receipt))
     }
 
     /// Send SMTP mail without requiring an active IMAP listener.
@@ -1280,6 +1281,16 @@ fn intent_fingerprint(intent: &ChannelOutboundIntent) -> Result<String, serde_js
     use sha2::Digest as _;
     let encoded = serde_json::to_vec(intent)?;
     Ok(hex::encode(sha2::Sha256::digest(encoded)))
+}
+
+fn required_delivery_result(receipt: Option<tinychannels_bus::channel::MessageReceipt>) -> ChannelSendMessageResult {
+    let receipt = receipt.unwrap_or_default();
+    ChannelSendMessageResult {
+        message_id: receipt.primary_platform_message_id.clone(),
+        receipt: Some(receipt),
+        error: None,
+        raw: None,
+    }
 }
 
 fn now_unix_ms() -> u64 {

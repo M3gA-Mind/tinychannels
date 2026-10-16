@@ -390,7 +390,29 @@ impl Running {
                         ProviderOperation::SendTyped(message) => send_channel
                             .send_typed_with_receipt(&message)
                             .await
-                            .map(tinychannels_bus::ChannelInteractionResult::Sent)
+                            .map(|mut outcome| {
+                                outcome.receipt.channel = Some(tinychannels_bus::ChannelRef {
+                                    id: tinychannels_bus::provider_id(&name).to_owned(),
+                                    account_id: Some(name.clone()),
+                                });
+                                if outcome.receipt.conversation.is_none() {
+                                    outcome.receipt.conversation = Some(
+                                        message.conversation_ref.clone().unwrap_or_else(|| {
+                                            tinychannels_bus::ConversationRef {
+                                                id: message.conversation_id.clone(),
+                                                ..Default::default()
+                                            }
+                                        }),
+                                    );
+                                }
+                                if outcome.receipt.thread_id.is_none() {
+                                    outcome.receipt.thread_id = message
+                                        .thread_id
+                                        .clone()
+                                        .or_else(|| message.conversation_ref.as_ref().and_then(|r| r.thread_id.clone()));
+                                }
+                                tinychannels_bus::ChannelInteractionResult::Sent(outcome)
+                            })
                             .map_err(|error| Error::failed(error.to_string())),
                         ProviderOperation::Interaction(interaction) => {
                             dispatch_interaction(send_channel.clone(), interaction, &mut typing)
