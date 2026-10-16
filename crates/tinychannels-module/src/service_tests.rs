@@ -1182,7 +1182,7 @@ async fn stop_channel_keeps_provider_running_when_queue_recovery_fails() {
 }
 
 #[tokio::test]
-async fn best_effort_structured_payload_is_encoded_for_legacy_provider_send() {
+async fn best_effort_rich_payload_is_rejected_by_the_legacy_text_only_provider() {
     let (sent, mut received) = tokio::sync::mpsc::channel(1);
     let (channels, _callbacks, _server) = channels_with_store(Arc::new(CaptureChannel(sent))).await;
     let intent = ChannelOutboundIntent {
@@ -1195,14 +1195,17 @@ async fn best_effort_structured_payload_is_encoded_for_legacy_provider_send() {
         ..Default::default()
     };
 
-    channels
+    let error = channels
         .send_channel_intent("fixture".into(), intent)
         .await
-        .unwrap();
-    let message = received.recv().await.unwrap();
-    assert_eq!(
-        serde_json::from_str::<serde_json::Value>(&message.content).unwrap()["kind"],
-        "card"
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        BusError::MethodFailed { name, .. } if name == SEND_FAILED_ERROR
+    ));
+    assert!(
+        received.try_recv().is_err(),
+        "rich content never reaches SendMessage"
     );
     channels.shutdown().await.unwrap();
 }
