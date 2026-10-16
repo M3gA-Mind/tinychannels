@@ -402,3 +402,25 @@ fn runtime_and_remote_commands_have_a_stable_wire() {
         );
     }
 }
+
+#[test]
+fn legacy_send_projection_roundtrips_reply_thread_and_topic_keys() {
+    let legacy = SendMessage {
+        content: "hello".into(),
+        recipient: "room".into(),
+        subject: None,
+        thread_ts: Some("thread-1".into()),
+        topic_id: Some("topic-2".into()),
+        reply_to_id: Some("message-3".into()),
+        idempotency_key: Some("key".into()),
+    };
+    let typed = ChannelOutboundMessage::from_legacy_message("slack", &legacy);
+    let roundtrip = typed.to_legacy_message().unwrap();
+    assert_eq!(roundtrip.reply_to_id.as_deref(), Some("message-3"));
+    assert_eq!(roundtrip.thread_ts.as_deref(), Some("thread-1"));
+    assert_eq!(roundtrip.topic_id.as_deref(), Some("topic-2"));
+    let wire = serde_json::to_value(roundtrip).unwrap();
+    assert_eq!(wire["replyToId"], "message-3");
+    assert_eq!(wire["topicId"], "topic-2");
+    assert_eq!(wire["thread_ts"], "thread-1");
+}
