@@ -773,14 +773,14 @@ impl tinychannels::Channel for PartialReceiptChannel {
     async fn send_typed_with_receipt(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<tinychannels::channel::ChannelSendOutcome> {
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(tinychannels::channel::ChannelSendOutcome {
-            receipt: tinychannels::channel::MessageReceipt {
+        Ok(tinychannels_bus::channel::ChannelSendOutcome {
+            receipt: tinychannels_bus::channel::MessageReceipt {
                 platform_message_ids: vec!["actual-provider-id-1".into(), "actual-provider-id-2".into()],
                 ..Default::default()
             },
-            error: Some(tinychannels::channel::ChannelSendError {
+            error: Some(tinychannels_bus::channel::ChannelSendError {
                 message: "third part rejected".into(),
                 retryable: true,
                 ..Default::default()

@@ -631,6 +631,7 @@ async fn durable_store_round_trips_records_inside_the_active_host_scope() {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_millis() as u64,
+        receipt: None,
     };
     store.save_result(result.clone()).await.unwrap();
     assert_eq!(store.load_result(&result.id).await.unwrap(), Some(result));
