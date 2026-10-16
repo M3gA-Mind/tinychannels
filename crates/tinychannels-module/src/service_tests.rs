@@ -773,14 +773,14 @@ impl tinychannels::Channel for PartialReceiptChannel {
     async fn send_typed_with_receipt(
         &self,
         _message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<tinychannels_bus::ChannelSendOutcome> {
+    ) -> anyhow::Result<tinychannels::channel::ChannelSendOutcome> {
         self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(tinychannels_bus::ChannelSendOutcome {
-            receipt: tinychannels_bus::MessageReceipt {
+        Ok(tinychannels::channel::ChannelSendOutcome {
+            receipt: tinychannels::channel::MessageReceipt {
                 platform_message_ids: vec!["actual-provider-id-1".into(), "actual-provider-id-2".into()],
                 ..Default::default()
             },
-            error: Some(tinychannels_bus::ChannelSendError {
+            error: Some(tinychannels::channel::ChannelSendError {
                 message: "third part rejected".into(),
                 retryable: true,
                 ..Default::default()
@@ -801,11 +801,7 @@ async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retr
     let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let (channels, callbacks, _server) = channels_with_store(Arc::new(PartialReceiptChannel(sends.clone()))).await;
     let intent = required_intent("partial-required", "multipart body");
-    let store = crate::delivery::HostDeliveryStore::from_host(&channels.host);
-    store.save_pending(QueuedDelivery::new("partial-required", intent, now_unix_ms())).await.unwrap();
-
-    let summary = channels.drain_pending_deliveries().await.unwrap();
-    assert_eq!(summary.failed, 1);
+    assert!(channels.send_channel_intent("fixture".into(), intent.clone()).await.is_err());
     assert_eq!(sends.load(Ordering::SeqCst), 1);
     let scopes = callbacks.storage.snapshot().await;
     let queue = scopes.get("scope-a").unwrap();
@@ -815,8 +811,7 @@ async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retr
     assert_eq!(receipt.platform_message_ids, ["actual-provider-id-1", "actual-provider-id-2"]);
     drop(scopes);
 
-    let summary = channels.drain_pending_deliveries().await.unwrap();
-    assert_eq!(summary.failed, 1);
+    assert!(channels.send_channel_intent("fixture".into(), intent).await.is_err());
     assert_eq!(sends.load(Ordering::SeqCst), 1, "unknown partial sends must never be replayed as untouched sends");
     channels.shutdown().await.unwrap();
 }
