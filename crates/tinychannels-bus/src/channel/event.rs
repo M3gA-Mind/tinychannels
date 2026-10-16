@@ -27,7 +27,11 @@ pub struct ChannelEvent {
 
 /// Channel event vocabulary. The discriminator is the `type` field on the wire.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(
+    tag = "type",
+    rename_all = "snake_case",
+    rename_all_fields = "camelCase"
+)]
 pub enum ChannelEventKind {
     /// A provider reports a user's typing state.
     Typing {
@@ -36,15 +40,25 @@ pub enum ChannelEventKind {
         expires_at: Option<u64>,
     },
     /// A provider confirms that a message was delivered or read.
-    Receipt {
-        kind: ChannelReceiptKind,
+    ReadReceipt {
         message_id: String,
         actor: Option<SenderRef>,
         timestamp: Option<u64>,
     },
-    /// A user added or removed a reaction.
-    Reaction {
-        added: bool,
+    /// A provider confirms delivery of a message.
+    DeliveredReceipt {
+        message_id: String,
+        actor: Option<SenderRef>,
+        timestamp: Option<u64>,
+    },
+    /// A user added a reaction.
+    ReactionAdded {
+        message_id: String,
+        actor: SenderRef,
+        reaction: ChannelReaction,
+    },
+    /// A user removed a reaction.
+    ReactionRemoved {
         message_id: String,
         actor: SenderRef,
         reaction: ChannelReaction,
@@ -73,14 +87,6 @@ pub enum ChannelEventKind {
         state: String,
         reason: Option<String>,
     },
-}
-
-/// Read versus delivered acknowledgement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ChannelReceiptKind {
-    Read,
-    Delivered,
 }
 
 /// Provider reaction identity, including optional custom emoji identity.
