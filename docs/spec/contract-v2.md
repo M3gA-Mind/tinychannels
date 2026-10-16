@@ -292,4 +292,3 @@ This contract supersedes the earlier channel-model and migration claims in
 [porting.md](../porting.md). Those documents remain historical research and
 migration context; their proposed shapes and status statements are not
 authoritative where they conflict with this contract.
-
