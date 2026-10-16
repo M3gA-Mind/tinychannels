@@ -7,7 +7,13 @@ fn cli_channel_name_and_capabilities() {
     let capabilities = ch.capabilities();
     assert!(capabilities.content.text.inbound);
     assert!(capabilities.content.text.outbound);
-    assert!(capabilities.actions.supported.iter().any(|action| action == "send"));
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "send")
+    );
 }
 
 #[tokio::test]
