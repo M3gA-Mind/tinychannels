@@ -312,8 +312,12 @@ impl Channel for SignalChannel {
         "signal"
     }
 
-    fn supports_remote_control(&self) -> bool { true }
-    fn supports_chat_approvals(&self) -> bool { true }
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let params = match Self::parse_recipient_target(&message.recipient) {

@@ -21,7 +21,7 @@ fn v2_capabilities_round_trip_with_voice_and_typed_limits() {
 
 #[test]
 fn provider_identifier_strips_instance_address() {
-    assert_eq!(provider_id("tg:1"), "tg");
+    assert_eq!(provider_id("tg:1"), "telegram");
     assert_eq!(provider_id("slack:C1"), "slack");
     assert_eq!(provider_id("email"), "email");
 }
@@ -31,10 +31,4 @@ fn channel_message_action_names_are_unique() {
     let names = crate::channel::CHANNEL_MESSAGE_ACTION_NAMES;
     let unique: std::collections::BTreeSet<_> = names.iter().copied().collect();
     assert_eq!(unique.len(), names.len());
-}
-
-#[test]
-fn yuanbao_legacy_projection_includes_draft_updates() {
-    let capabilities = capabilities_for("yuanbao");
-    assert!(capabilities.progressive_edits);
 }

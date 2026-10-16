@@ -59,6 +59,66 @@ impl Default for ChannelPresentationCapabilities {
     }
 }
 
+/// Mechanical v1 projection of canonical v2 capabilities for legacy adapters.
+impl From<&crate::ChannelCapabilities> for ChannelStaticCapabilities {
+    fn from(capabilities: &crate::ChannelCapabilities) -> Self {
+        let has_action = |name: &str| {
+            capabilities
+                .actions
+                .supported
+                .iter()
+                .any(|item| item == name)
+        };
+        Self {
+            chat_types: capabilities.addressing.conversation_types.clone(),
+            polls: capabilities.content.poll.outbound,
+            reactions: capabilities.reactions,
+            edit: capabilities.progressive_edits,
+            unsend: has_action("delete") || has_action("unsend"),
+            reply: has_action("reply"),
+            threads: capabilities.addressing.thread_id,
+            media: capabilities.content.image.outbound
+                || capabilities.content.video.outbound
+                || capabilities.content.audio.outbound
+                || capabilities.content.file.outbound,
+            native_commands: has_action("native-command"),
+            block_streaming: capabilities.progressive_edits,
+        }
+    }
+}
+
+/// Mechanical v1 projection of canonical v2 presentation facts.
+impl From<&crate::ChannelCapabilities> for ChannelPresentationCapabilities {
+    fn from(capabilities: &crate::ChannelCapabilities) -> Self {
+        Self {
+            text_limit: capabilities
+                .text
+                .text_limit
+                .and_then(|limit| usize::try_from(limit).ok()),
+            length_unit: capabilities.text.length_unit,
+            markdown_dialect: capabilities
+                .text
+                .markdown_dialects
+                .first()
+                .copied()
+                .unwrap_or_default(),
+            supports_edit: capabilities.progressive_edits,
+            max_actions: capabilities
+                .content
+                .buttons
+                .max_count
+                .and_then(|count| usize::try_from(count).ok()),
+            max_actions_per_row: None,
+            max_rows: None,
+            max_label_length: None,
+            max_value_bytes: None,
+            supports_styles: false,
+            supports_disabled: false,
+            supports_layout_hints: false,
+        }
+    }
+}
+
 /// Durable-final delivery capability key understood by message adapters.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,

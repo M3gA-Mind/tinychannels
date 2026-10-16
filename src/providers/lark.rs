@@ -656,8 +656,12 @@ impl Channel for LarkChannel {
         "lark"
     }
 
-    fn supports_remote_control(&self) -> bool { true }
-    fn supports_chat_approvals(&self) -> bool { true }
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         let token = self.get_tenant_access_token().await?;

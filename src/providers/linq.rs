@@ -244,8 +244,12 @@ impl Channel for LinqChannel {
         "linq"
     }
 
-    fn supports_remote_control(&self) -> bool { true }
-    fn supports_chat_approvals(&self) -> bool { true }
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         // If reply_target looks like a chat_id, send to existing chat.

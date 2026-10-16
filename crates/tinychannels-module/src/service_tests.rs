@@ -2178,7 +2178,7 @@ async fn host_control_facts_preserve_module_timeout_floor_and_overflow_classific
             })
             .await
             .unwrap(),
-        Response::Capabilities(tinychannels::capabilities_for("tg:fixture"))
+        Response::Capabilities(tinychannels_bus::ChannelCapabilities::unknown())
     );
     service.shutdown().await.unwrap();
     assert!(

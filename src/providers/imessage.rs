@@ -130,8 +130,12 @@ impl Channel for IMessageChannel {
         "imessage"
     }
 
-    fn supports_remote_control(&self) -> bool { true }
-    fn supports_chat_approvals(&self) -> bool { true }
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
         // Defense-in-depth: validate target format before any interpolation

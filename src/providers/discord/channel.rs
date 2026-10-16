@@ -247,8 +247,12 @@ impl Channel for DiscordChannel {
         "discord"
     }
 
-    fn supports_remote_control(&self) -> bool { true }
-    fn supports_chat_approvals(&self) -> bool { true }
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
 
     /// Recipient-less proactive sends (cron/heartbeat) deliver to the bot's
     /// configured default `channel_id`. `None` when unconfigured, so proactive

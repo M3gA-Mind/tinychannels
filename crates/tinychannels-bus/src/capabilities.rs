@@ -209,37 +209,9 @@ impl Default for ChannelCapabilities {
 
 /// Map a channel id (optionally provider-prefixed) to its provider id.
 pub fn provider_id(channel: &str) -> &str {
-    channel.split(':').next().unwrap_or(channel)
-}
-
-/// Legacy policy projection retained while callers migrate to configured
-/// instance Describe. New code must use Channel::capabilities.
-#[deprecated(note = "query Channel::capabilities on the configured instance")]
-pub fn capabilities_for(channel: &str) -> ChannelCapabilities {
-    match provider_id(channel) {
-        "yuanbao" => ChannelCapabilities {
-            remote_control: true,
-            chat_approvals: true,
-            progressive_edits: true,
-            version: ChannelCapabilities::VERSION,
-            ..ChannelCapabilities::default()
-        },
-        "telegram" => ChannelCapabilities {
-            remote_control: true,
-            chat_approvals: true,
-            progressive_edits: true,
-            history_key_ignores_thread: true,
-            version: ChannelCapabilities::VERSION,
-            ..ChannelCapabilities::default()
-        },
-        "discord" | "slack" | "mattermost" | "imessage" | "signal" | "whatsapp"
-        | "whatsapp_web" | "irc" | "dingtalk" | "qq" | "lark" | "linq" => ChannelCapabilities {
-            version: ChannelCapabilities::VERSION,
-            remote_control: true,
-            chat_approvals: true,
-            ..ChannelCapabilities::default()
-        },
-        _ => ChannelCapabilities::unknown(),
+    match channel.split(':').next().unwrap_or(channel) {
+        "tg" => "telegram",
+        provider => provider,
     }
 }
 

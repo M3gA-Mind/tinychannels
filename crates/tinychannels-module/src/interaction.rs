@@ -10,6 +10,8 @@ pub(crate) async fn dispatch(
     let result = match interaction {
         Op::Describe => {
             let mut capabilities = provider.capabilities();
+            capabilities.account.configured = Some(true);
+            capabilities.account.enabled = Some(true);
             capabilities.account.proactive_target = provider.proactive_target();
             return Ok(ChannelInteractionResult::Info(ChannelInteractionInfo {
                 capabilities,

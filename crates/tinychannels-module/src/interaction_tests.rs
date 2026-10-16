@@ -61,6 +61,21 @@ impl Channel for DraftProvider {
     }
 }
 
+struct NoDraftProvider;
+
+#[async_trait::async_trait]
+impl Channel for NoDraftProvider {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn listen(&self, _: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
 #[tokio::test]
 async fn interaction_dispatch_preserves_provider_draft_and_typing_behavior() {
     let provider = Arc::new(DraftProvider::default());
@@ -131,6 +146,26 @@ async fn interaction_dispatch_preserves_provider_draft_and_typing_behavior() {
             "stop:room"
         ]
     );
+}
+
+#[tokio::test]
+async fn describe_reports_capabilities_for_each_configured_instance() {
+    let draft = dispatch(&DraftProvider::default(), ChannelInteraction::Describe)
+        .await
+        .unwrap();
+    let no_draft = dispatch(&NoDraftProvider, ChannelInteraction::Describe)
+        .await
+        .unwrap();
+    let ChannelInteractionResult::Info(draft) = draft else {
+        panic!("missing draft facts")
+    };
+    let ChannelInteractionResult::Info(no_draft) = no_draft else {
+        panic!("missing no-draft facts")
+    };
+    assert!(draft.capabilities.progressive_edits);
+    assert!(!no_draft.capabilities.progressive_edits);
+    assert!(draft.capabilities.content.text.outbound);
+    assert!(no_draft.capabilities.content.text.outbound);
 }
 
 #[tokio::test]
