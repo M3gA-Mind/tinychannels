@@ -62,16 +62,6 @@ pub struct VoiceCapabilities {
     pub voices: Vec<String>,
 }
 
-/// Direction-specific voice support.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(default, rename_all = "camelCase")]
-pub struct VoiceSupport {
-    pub voice_in: VoiceCapabilities,
-    pub voice_out: VoiceCapabilities,
-    /// Supported OutboundVoice operation names.
-    pub outbound_modes: Vec<String>,
-}
-
 /// Normalized channel events supported by an account.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
@@ -116,7 +106,6 @@ pub struct TextCapabilities {
 #[serde(default, rename_all = "camelCase")]
 pub struct ContentCapabilities {
     pub parts: Vec<String>,
-    pub markdown_dialects: Vec<MarkdownDialect>,
     pub text: ContentCapability,
     pub image: ContentCapability,
     pub video: ContentCapability,
@@ -166,7 +155,8 @@ pub struct ChannelCapabilities {
     pub history_key_ignores_thread: bool,
     pub reactions: bool,
     pub content: ContentCapabilities,
-    pub voice: VoiceSupport,
+    pub voice_in: VoiceCapabilities,
+    pub voice_out: VoiceCapabilities,
     pub events: EventCapabilities,
     pub addressing: AddressingCapabilities,
     pub actions: ActionCapabilities,
@@ -195,7 +185,8 @@ impl Default for ChannelCapabilities {
             history_key_ignores_thread: false,
             reactions: false,
             content: ContentCapabilities::default(),
-            voice: VoiceSupport::default(),
+            voice_in: VoiceCapabilities::default(),
+            voice_out: VoiceCapabilities::default(),
             events: EventCapabilities::default(),
             addressing: AddressingCapabilities::default(),
             actions: ActionCapabilities::default(),

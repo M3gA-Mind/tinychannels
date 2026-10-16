@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn v2_capabilities_round_trip_with_voice_and_typed_limits() {
     let mut capabilities = ChannelCapabilities::unknown();
-    capabilities.voice.voice_in = VoiceCapabilities {
+    capabilities.voice_in = VoiceCapabilities {
         supported: true,
         accepted_codecs: vec!["ogg/opus".into()],
         max_duration_ms: Some(60_000),

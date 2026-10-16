@@ -48,8 +48,11 @@ fn local_adapter(sink: Arc<RecordingOutboundSink>) -> LocalChannelAdapter {
             account_id: Some("host".into()),
             ..Default::default()
         },
-        ChannelStaticCapabilities {
-            reply: true,
+        tinychannels_bus::ChannelCapabilities {
+            actions: tinychannels_bus::ActionCapabilities {
+                supported: vec!["reply".into()],
+                ..Default::default()
+            },
             ..Default::default()
         },
         sink,

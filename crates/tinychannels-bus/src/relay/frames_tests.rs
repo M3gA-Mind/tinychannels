@@ -3,8 +3,7 @@ use super::*;
 #[test]
 fn v2_descriptor_frame_round_trips_canonical_capabilities() {
     let mut capabilities = ChannelCapabilities::unknown();
-    capabilities.voice.voice_out.synthesis = true;
-    capabilities.voice.outbound_modes.push("synthesize".into());
+    capabilities.voice_out.synthesis = true;
     let frame = ConnectorToGatewayFrame::DescriptorV2 { capabilities };
     let json = frame.to_json().unwrap();
     assert!(json.contains("\"type\":\"descriptor_v2\""));
