@@ -459,13 +459,34 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         .unwrap();
     let legacy: PreviousInteractionResult = serde_json::from_value(legacy_interaction).unwrap();
     let PreviousInteractionResult::Info(legacy) = legacy;
-    assert!(!legacy.capabilities.remote_control);
-    assert!(!legacy.capabilities.chat_approvals);
-    assert!(!legacy.capabilities.progressive_edits);
-    assert!(!legacy.capabilities.history_key_ignores_thread);
-    assert!(legacy.proactive_target.is_none());
-    assert!(!legacy.supports_reactions);
-    assert!(!legacy.supports_draft_updates);
+    assert_eq!(
+        legacy.capabilities.remote_control,
+        described.capabilities.remote_control
+    );
+    assert_eq!(
+        legacy.capabilities.chat_approvals,
+        described.capabilities.chat_approvals
+    );
+    assert_eq!(
+        legacy.capabilities.progressive_edits,
+        described.capabilities.progressive_edits
+    );
+    assert_eq!(
+        legacy.capabilities.history_key_ignores_thread,
+        described.capabilities.history_key_ignores_thread
+    );
+    assert_eq!(
+        legacy.proactive_target,
+        described.capabilities.account.proactive_target
+    );
+    assert_eq!(
+        legacy.supports_reactions,
+        described.capabilities.reactions
+    );
+    assert_eq!(
+        legacy.supports_draft_updates,
+        described.capabilities.streaming_reply_pipeline
+    );
 
     let controlled: tinychannels_bus::module_control::ChannelControlResult = first_client
         .call_confidential(
@@ -497,10 +518,22 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         .unwrap();
     let PreviousControlResult::Capabilities(legacy_control) =
         serde_json::from_value(legacy_control).unwrap();
-    assert!(!legacy_control.remote_control);
-    assert!(!legacy_control.chat_approvals);
-    assert!(!legacy_control.progressive_edits);
-    assert!(!legacy_control.history_key_ignores_thread);
+    assert_eq!(
+        legacy_control.remote_control,
+        described.capabilities.remote_control
+    );
+    assert_eq!(
+        legacy_control.chat_approvals,
+        described.capabilities.chat_approvals
+    );
+    assert_eq!(
+        legacy_control.progressive_edits,
+        described.capabilities.progressive_edits
+    );
+    assert_eq!(
+        legacy_control.history_key_ignores_thread,
+        described.capabilities.history_key_ignores_thread
+    );
     let prepared: PreparedChannelIntent = first_client
         .call_confidential(
             methods::PREPARE_OUTBOUND_INTENT,
