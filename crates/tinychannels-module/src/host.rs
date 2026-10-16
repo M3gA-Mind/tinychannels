@@ -443,6 +443,26 @@ impl HostChannels {
             );
             return;
         };
+        self.deliver_inbound_value(channel, message).await;
+    }
+
+    /// Enqueue authenticated relay provenance with its normalized envelope.
+    pub async fn deliver_relay_inbound(
+        &self,
+        channel: &str,
+        delivery: tinychannels_bus::RelayInboundDelivery,
+    ) {
+        let Ok(message) = serde_json::to_value(delivery) else {
+            record_failure(
+                &self.owner.failure,
+                "relay envelope could not be encoded".into(),
+            );
+            return;
+        };
+        self.deliver_inbound_value(channel, message).await;
+    }
+
+    async fn deliver_inbound_value(&self, channel: &str, message: serde_json::Value) {
         if serde_json::to_vec(&message).map_or(true, |bytes| bytes.len() > MAX_CALLBACK_BYTES) {
             record_failure(
                 &self.owner.failure,

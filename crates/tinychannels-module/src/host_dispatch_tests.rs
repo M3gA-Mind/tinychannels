@@ -14,7 +14,7 @@ impl TurnCallback {
     async fn process_inbound(&self, _channel: String, message: serde_json::Value) -> Result<()> {
         self.started.fetch_add(1, Ordering::SeqCst);
         self.changed.notify_one();
-        if message["fail"].as_bool() == Some(true) {
+        if message["raw"]["fail"].as_bool() == Some(true) {
             return Err(Error::failed("fixture rejected turn"));
         }
         self.release.acquire().await.unwrap().forget();
@@ -65,7 +65,7 @@ async fn started(host: &HostChannels, callback: &TurnCallback, count: usize) {
 async fn bounded_dispatch_admits_other_turns_while_the_first_is_held() {
     let (host, callback, _server) = fixture(2).await;
     for id in 0..3 {
-        host.deliver_inbound("telegram", serde_json::json!({"id":id}))
+        host.deliver_inbound("telegram", inbound(serde_json::json!({"id":id})))
             .await;
     }
     started(&host, &callback, 2).await;
@@ -80,7 +80,7 @@ async fn bounded_dispatch_admits_other_turns_while_the_first_is_held() {
 #[tokio::test]
 async fn stopped_dispatch_drains_accepted_turns_even_when_the_waiter_is_canceled() {
     let (host, callback, _server) = fixture(2).await;
-    host.deliver_inbound("discord", serde_json::json!({"id":1}))
+    host.deliver_inbound("discord", inbound(serde_json::json!({"id":1})))
         .await;
     started(&host, &callback, 1).await;
     let closing = host.clone();
@@ -96,7 +96,7 @@ async fn stopped_dispatch_drains_accepted_turns_even_when_the_waiter_is_canceled
     let _ = waiter.await;
     callback.release.add_permits(1);
     host.shutdown().await.unwrap();
-    host.deliver_inbound("discord", serde_json::json!({"id":2}))
+    host.deliver_inbound("discord", inbound(serde_json::json!({"id":2})))
         .await;
     assert_eq!(callback.started.load(Ordering::SeqCst), 1);
     assert!(host.flush().await.is_err());
@@ -105,7 +105,7 @@ async fn stopped_dispatch_drains_accepted_turns_even_when_the_waiter_is_canceled
 #[tokio::test]
 async fn failed_turns_do_not_stop_dispatch_and_flush_observes_accepted_frontier() {
     let (host, callback, _server) = fixture(2).await;
-    host.deliver_inbound("telegram", serde_json::json!({"fail":true}))
+    host.deliver_inbound("telegram", inbound(serde_json::json!({"fail":true})))
         .await;
     host.deliver_inbound("telegram", serde_json::json!({"id":2}))
         .await;
@@ -122,9 +122,13 @@ async fn failed_turns_do_not_stop_dispatch_and_flush_observes_accepted_frontier(
         waiter.await.unwrap().is_err(),
         "flush reports observed turn failure"
     );
-    host.deliver_inbound("telegram", serde_json::json!({"id":3}))
+    host.deliver_inbound("telegram", inbound(serde_json::json!({"id":3})))
         .await;
     started(&host, &callback, 3).await;
     callback.release.add_permits(1);
     host.shutdown().await.unwrap();
+}
+
+fn inbound(raw: serde_json::Value) -> tinychannels_bus::ChannelInboundEnvelope {
+    tinychannels_bus::ChannelInboundEnvelope { raw: Some(raw), ..Default::default() }
 }
