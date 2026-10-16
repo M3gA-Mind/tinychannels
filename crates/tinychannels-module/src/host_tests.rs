@@ -582,8 +582,8 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
     assert_eq!(events[0].channel.account_id.as_deref(), Some("telegram:account-a"));
     assert_eq!(events[1].channel.account_id.as_deref(), Some("telegram:account-b"));
     assert_ne!(events[0].event_id, events[1].event_id);
-    assert_eq!(events[0].event_id, "telegram:account-a:reaction_added:telegram:update:44:reaction:added");
-    assert_eq!(events[1].event_id, "telegram:account-b:reaction_added:telegram:update:44:reaction:added");
+    assert_eq!(events[0].event_id, "telegram:account-a:telegram:update:44:reaction:added:typing");
+    assert_eq!(events[1].event_id, "telegram:account-b:telegram:update:44:reaction:added:typing");
     host.shutdown().await.unwrap();
 }
 
