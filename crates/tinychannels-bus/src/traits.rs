@@ -128,6 +128,10 @@ pub trait Channel: Send + Sync {
     }
 
     /// Deliver one message through the configured provider.
+    #[deprecated(
+        since = "0.1.34",
+        note = "v21 text-only provider adapter; implement send_typed for canonical v22 content"
+    )]
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()>;
 
     /// Deliver canonical typed content. Migrated providers override this; the
@@ -140,6 +144,10 @@ pub trait Channel: Send + Sync {
     }
 
     /// Legacy listener seam used by isolated test doubles.
+    #[deprecated(
+        since = "0.1.34",
+        note = "v21 listener adapter; use typed DeliverInbound callbacks in v22 modules"
+    )]
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()>;
 
     /// Whether the configured provider is currently healthy.
