@@ -131,7 +131,9 @@ impl Relays {
     ) -> Result<CapabilityDescriptor> {
         match self.start_mode(id, config, false).await? {
             State::Connected(descriptor) => Ok(descriptor),
-            _ => Err(Error::failed("relay v1 handshake returned the wrong result")),
+            _ => Err(Error::failed(
+                "relay v1 handshake returned the wrong result",
+            )),
         }
     }
 
@@ -142,7 +144,9 @@ impl Relays {
     ) -> Result<RelayCapabilitiesV2> {
         match self.start_mode(id, config, true).await? {
             State::ConnectedV2(capabilities) => Ok(capabilities),
-            _ => Err(Error::failed("relay v2 handshake returned the wrong result")),
+            _ => Err(Error::failed(
+                "relay v2 handshake returned the wrong result",
+            )),
         }
     }
 
@@ -159,7 +163,8 @@ impl Relays {
         let slot = self.get(&id).await?;
         let bytes = serde_json::to_string(&config)
             .map_err(|_| Error::failed("invalid relay configuration"))?;
-        let hash = tinychannels::security::hash_token(&format!("{bytes}:v{}", if v2 { 2 } else { 1 }));
+        let hash =
+            tinychannels::security::hash_token(&format!("{bytes}:v{}", if v2 { 2 } else { 1 }));
         let mut worker = slot.worker.lock().await;
         if self.terminal.load(Ordering::SeqCst) || *slot.cancel.borrow() {
             return Err(closed());
@@ -188,8 +193,12 @@ impl Relays {
         loop {
             match state.borrow().clone() {
                 State::Connected(descriptor) if !v2 => return Ok(State::Connected(descriptor)),
-                State::ConnectedV2(capabilities) if v2 => return Ok(State::ConnectedV2(capabilities)),
-                State::Connected(_) | State::ConnectedV2(_) => return Err(Error::failed("relay handshake mode mismatch")),
+                State::ConnectedV2(capabilities) if v2 => {
+                    return Ok(State::ConnectedV2(capabilities));
+                }
+                State::Connected(_) | State::ConnectedV2(_) => {
+                    return Err(Error::failed("relay handshake mode mismatch"));
+                }
                 State::Stopped | State::Stopping => return Err(closed()),
                 State::Failed => return Err(Error::failed("relay startup failed")),
                 State::Reserved | State::Starting | State::Reconnecting => {}
@@ -241,7 +250,10 @@ impl Relays {
         if self.terminal.load(Ordering::SeqCst) || *slot.cancel.borrow() {
             return Err(closed());
         }
-        if !matches!(*slot.state.borrow(), State::Connected(_) | State::ConnectedV2(_)) {
+        if !matches!(
+            *slot.state.borrow(),
+            State::Connected(_) | State::ConnectedV2(_)
+        ) {
             return Err(Error::failed("relay is not connected"));
         }
         let bytes =
@@ -416,8 +428,23 @@ async fn run(slot: Arc<Slot>, config: RelayRuntimeConfig, host: HostChannels, v2
                 let (next, state) = if observed_native.is_closed() {
                     (RelayPhase::Reconnecting, State::Reconnecting)
                 } else if v2 && !observed_native.capabilities_v2().await.is_empty() {
-                    let instances = observed_native.capabilities_v2().await.into_iter().map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 { platform: identity.platform, bot_id: identity.bot_id, capabilities }).collect();
-                    (RelayPhase::Connected, State::ConnectedV2(RelayCapabilitiesV2 { contract_version: tinychannels_bus::ChannelCapabilities::VERSION, instances }))
+                    let instances = observed_native
+                        .capabilities_v2()
+                        .await
+                        .into_iter()
+                        .map(|(identity, capabilities)| RelayInstanceCapabilitiesV2 {
+                            platform: identity.platform,
+                            bot_id: identity.bot_id,
+                            capabilities,
+                        })
+                        .collect();
+                    (
+                        RelayPhase::Connected,
+                        State::ConnectedV2(RelayCapabilitiesV2 {
+                            contract_version: tinychannels_bus::ChannelCapabilities::VERSION,
+                            instances,
+                        }),
+                    )
                 } else if !v2 && let Some(descriptor) = observed_native.descriptor().await {
                     (RelayPhase::Connected, State::Connected(descriptor))
                 } else {

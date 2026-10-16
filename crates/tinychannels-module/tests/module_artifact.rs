@@ -898,6 +898,39 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         .unwrap();
     assert_eq!(result.message_id.as_deref(), Some("artifact-message"));
     proxy.call::<()>("StopRelay", (reservation,)).await.unwrap();
+
+    // A v2-only peer responds to `hello_v2` without ever sending a v1
+    // descriptor. The loaded module must expose the same canonical descriptor
+    // over its TinyBus operation, correlated to the configured identity.
+    let (v2_url, v2_peer) = relay_server_v2().await;
+    let v2_reservation: RelayReservation = proxy.call("ReserveRelay", ()).await.unwrap();
+    let v2_config = tinychannels_bus::config::RelayRuntimeConfig {
+        url: v2_url,
+        identities: vec![tinychannels_bus::config::RelayRuntimeIdentityConfig {
+            platform: "telegram".into(),
+            bot_id: "v2-fixture".into(),
+        }],
+        ..Default::default()
+    };
+    let v2: tinychannels_bus::module_relay::RelayCapabilitiesV2 = proxy
+        .call_confidential("StartRelayV2", (v2_reservation.clone(), v2_config))
+        .await
+        .unwrap();
+    assert_eq!(v2.contract_version, 2);
+    assert_eq!(v2.instances.len(), 1);
+    assert_eq!(v2.instances[0].platform, "telegram");
+    assert_eq!(v2.instances[0].bot_id, "v2-fixture");
+    assert!(v2.instances[0].capabilities.progressive_edits);
+    let queried: Option<tinychannels_bus::module_relay::RelayCapabilitiesV2> = proxy
+        .call("RelayCapabilitiesV2", (v2_reservation.clone(),))
+        .await
+        .unwrap();
+    assert_eq!(queried, Some(v2));
+    proxy
+        .call::<()>("StopRelay", (v2_reservation,))
+        .await
+        .unwrap();
+    v2_peer.await.unwrap();
     let (smtp_port, smtp_started, smtp_release, smtp_server) = smtp_server().await;
     let shutdown_upload: tinychannels_bus::EmailUploadHandle = proxy
         .call_confidential(
@@ -1131,6 +1164,51 @@ async fn relay_server() -> (String, tokio::task::JoinHandle<Vec<serde_json::Valu
             seen.push(serde_json::to_value(frame).unwrap());
         }
         seen
+    });
+    (url, task)
+}
+
+async fn relay_server_v2() -> (String, tokio::task::JoinHandle<()>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("ws://{}", listener.local_addr().unwrap());
+    let task = tokio::spawn(async move {
+        let (stream, _) = listener.accept().await.unwrap();
+        let mut stream = tokio_tungstenite::accept_async(stream).await.unwrap();
+        let hello = stream.next().await.unwrap().unwrap();
+        let GatewayToConnectorFrame::HelloV2 {
+            platform,
+            bot_id,
+            contract_version,
+        } = serde_json::from_str(hello.to_text().unwrap()).unwrap()
+        else {
+            panic!("v2 relay must start with hello_v2")
+        };
+        assert_eq!(
+            (platform.as_str(), bot_id.as_str(), contract_version),
+            ("telegram", "v2-fixture", 2)
+        );
+        let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+        capabilities.progressive_edits = true;
+        stream
+            .send(Message::Text(
+                format!(
+                    "{}\n",
+                    serde_json::to_string(&ConnectorToGatewayFrame::DescriptorV2 {
+                        platform,
+                        bot_id,
+                        capabilities,
+                    })
+                    .unwrap()
+                )
+                .into(),
+            ))
+            .await
+            .unwrap();
+        while let Some(Ok(message)) = stream.next().await {
+            if message.is_close() {
+                break;
+            }
+        }
     });
     (url, task)
 }

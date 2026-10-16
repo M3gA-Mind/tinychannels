@@ -213,8 +213,8 @@ impl RelayTransport {
         {
             return Err(RelayTransportError::Closed);
         }
-        let deadline = tokio::time::Instant::now()
-            + Duration::from_millis(self.timeouts.handshake_ms);
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_millis(self.timeouts.handshake_ms);
         let mut negotiated = HashMap::new();
         for identity in &self.identities {
             let capabilities = self.handshake_v2_until(identity, deadline).await?;
@@ -235,12 +235,21 @@ impl RelayTransport {
             if self.terminal.load(Ordering::SeqCst) || self.state.closed.load(Ordering::SeqCst) {
                 return Err(RelayTransportError::Closed);
             }
-            if let Some(capabilities) = self.state.capabilities_v2.lock().await.get(identity).cloned() {
+            if let Some(capabilities) = self
+                .state
+                .capabilities_v2
+                .lock()
+                .await
+                .get(identity)
+                .cloned()
+            {
                 return Ok(capabilities);
             }
             tokio::time::timeout_at(deadline, notified)
                 .await
-                .map_err(|_| RelayTransportError::Timeout { operation: "handshake_v2" })?;
+                .map_err(|_| RelayTransportError::Timeout {
+                    operation: "handshake_v2",
+                })?;
         }
     }
 
