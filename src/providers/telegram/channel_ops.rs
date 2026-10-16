@@ -22,7 +22,14 @@ impl TelegramChannel {
             .get("id")
             .and_then(serde_json::Value::as_i64)
             .map(|id| id.to_string())
-            .unwrap_or_else(|| message.reply_target.split(':').next().unwrap_or_default().to_owned());
+            .unwrap_or_else(|| {
+                message
+                    .reply_target
+                    .split(':')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            });
         let topic_id = source
             .get("message_thread_id")
             .and_then(serde_json::Value::as_i64)
@@ -821,7 +828,10 @@ Ensure only one `openhuman` process is using this bot token."
 
                     let ingress = Self::inbound_envelope_from_update(update, &msg);
                     let delivered_by_event_sink = if let Some(events) = &self.events {
-                        match events.publish_ingress(tinychannels_bus::ChannelIngress::Inbound(ingress)).await {
+                        match events
+                            .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(ingress))
+                            .await
+                        {
                             Ok(delivered) => delivered,
                             Err(error) => {
                                 tracing::debug!(%error, "failed to deliver Telegram inbound through module ingress");

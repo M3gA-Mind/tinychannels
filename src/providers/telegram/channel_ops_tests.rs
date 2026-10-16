@@ -583,7 +583,10 @@ fn telegram_v2_ingress_preserves_plain_and_forum_addresses_without_legacy_topic_
         &legacy,
     );
     assert_eq!(plain.message_id, "telegram_100_5");
-    assert_eq!(plain.conversation.kind, tinychannels_bus::ConversationKind::Dm);
+    assert_eq!(
+        plain.conversation.kind,
+        tinychannels_bus::ConversationKind::Dm
+    );
     assert_eq!(plain.conversation.id, "100");
     assert_eq!(plain.conversation.topic_id, None);
     assert_eq!(plain.conversation.thread_id, None);
@@ -594,7 +597,10 @@ fn telegram_v2_ingress_preserves_plain_and_forum_addresses_without_legacy_topic_
         &serde_json::json!({"message":{"message_id":5,"date":12,"message_thread_id":88,"chat":{"id":100,"type":"supergroup"},"from":{"id":7}}}),
         &legacy,
     );
-    assert_eq!(forum.conversation.kind, tinychannels_bus::ConversationKind::Group);
+    assert_eq!(
+        forum.conversation.kind,
+        tinychannels_bus::ConversationKind::Group
+    );
     assert_eq!(forum.conversation.id, "100");
     assert_eq!(forum.conversation.topic_id.as_deref(), Some("88"));
     assert_eq!(forum.conversation.thread_id, None);
