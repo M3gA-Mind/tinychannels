@@ -72,6 +72,7 @@ fn channel_events_round_trip_with_discriminator_source_and_full_address() {
         }),
         event: ChannelEventKind::ReactionRemoved {
             message_id: "message".into(),
+            provider_message_id: Some("42".into()),
             actor: SenderRef {
                 id: "actor".into(),
                 ..Default::default()

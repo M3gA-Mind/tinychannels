@@ -525,6 +525,7 @@ async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
         }),
         event: tinychannels_bus::ChannelEventKind::ReactionAdded {
             message_id: "msg-22".into(),
+            provider_message_id: None,
             actor: tinychannels_bus::SenderRef {
                 id: "actor-3".into(),
                 ..Default::default()
