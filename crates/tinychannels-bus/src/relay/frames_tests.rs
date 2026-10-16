@@ -4,7 +4,11 @@ use super::*;
 fn v2_descriptor_frame_round_trips_canonical_capabilities() {
     let mut capabilities = ChannelCapabilities::unknown();
     capabilities.voice_out.synthesis = true;
-    let frame = ConnectorToGatewayFrame::DescriptorV2 { capabilities };
+    let frame = ConnectorToGatewayFrame::DescriptorV2 {
+        platform: "discord".into(),
+        bot_id: "bot".into(),
+        capabilities,
+    };
     let json = frame.to_json().unwrap();
     assert!(json.contains("\"type\":\"descriptor_v2\""));
     assert_eq!(ConnectorToGatewayFrame::from_json(&json).unwrap(), frame);

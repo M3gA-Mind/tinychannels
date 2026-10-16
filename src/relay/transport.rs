@@ -38,7 +38,10 @@ impl RelayTransport {
             identities,
             io: RwLock::new(io),
             timeouts,
-            state: Arc::new(RelayTransportState::default()),
+            state: Arc::new(RelayTransportState {
+                configured_identities: identities.iter().cloned().collect(),
+                ..RelayTransportState::default()
+            }),
             reader: Mutex::new(None),
             terminal: AtomicBool::new(false),
         }
@@ -448,6 +451,7 @@ struct RelayTransportState {
     request_counter: AtomicU64,
     descriptor: Mutex<Option<CapabilityDescriptor>>,
     capabilities_v2: Mutex<HashMap<RelayIdentity, tinychannels_bus::ChannelCapabilities>>,
+    configured_identities: std::collections::HashSet<RelayIdentity>,
     descriptor_ready: Notify,
     closed_ready: Notify,
     pending: Mutex<HashMap<String, oneshot::Sender<Value>>>,

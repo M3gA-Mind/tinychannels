@@ -605,10 +605,12 @@ async fn relay_transport_negotiates_v2_and_returns_the_canonical_descriptor() {
     capabilities.progressive_edits = true;
     capabilities.text.text_limit = Some(4096);
     io.push(ConnectorToGatewayFrame::DescriptorV2 {
+        platform: "discord".into(),
+        bot_id: "appShared".into(),
         capabilities: capabilities.clone(),
     })
     .await;
-    assert_eq!(negotiation.await.unwrap().unwrap(), capabilities);
+    assert_eq!(negotiation.await.unwrap().unwrap().get(&RelayIdentity { platform: "discord".into(), bot_id: "appShared".into() }), Some(&capabilities));
 }
 
 #[tokio::test(flavor = "current_thread")]
