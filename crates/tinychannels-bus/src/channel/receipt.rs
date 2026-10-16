@@ -3,6 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use crate::channel::types::{ChannelRef, ConversationRef};
 
 /// Logical part kind for multi-part rendered messages.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -72,6 +73,10 @@ impl Default for MessageReceiptPart {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MessageReceipt {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel: Option<ChannelRef>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<ConversationRef>,
     pub primary_platform_message_id: Option<String>,
     pub platform_message_ids: Vec<String>,
     pub parts: Vec<MessageReceiptPart>,
