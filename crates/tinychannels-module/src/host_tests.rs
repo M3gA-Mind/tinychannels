@@ -650,8 +650,8 @@ async fn module_unified_ingress_acknowledges_message_before_following_event() {
     assert_eq!(
         callback.events.lock().await.as_slice(),
         [
-            "inbound:telegram:message first",
-            "typed_event:telegram:bot-a:update-6-edit"
+            "inbound:telegram:bot-a:message first",
+            "typed_event:telegram:bot-a:update-6-edit:message_updated"
         ]
     );
     let envelope = callback.inbound_payloads.lock().await[0].clone();
