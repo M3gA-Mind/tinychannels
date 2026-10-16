@@ -1,10 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-/// A message received from or sent to a channel
+/// Legacy v21 message projection retained for one release during v22 migration.
+/// New `DeliverInbound` callbacks carry [`crate::ChannelInboundEnvelope`].
 ///
-/// Serde-derived because this type crosses the bus: the module forwards it to
-/// the host's `DeliverInbound` callback. Field names are the wire contract —
-/// renaming one is a decode failure at the far end, not a compile error.
+/// Serde field names remain the v21 wire contract for compatibility shims.
+#[deprecated(
+    since = "0.1.34",
+    note = "v21 compatibility shim; use ChannelInboundEnvelope for canonical v22 inbound content"
+)]
 ///
 /// `Default` is derived so a caller that fills only some fields can spread
 /// `..Default::default()` and keep compiling when an optional field is added.
@@ -34,10 +37,13 @@ pub struct ChannelMessage {
     pub sender_name: Option<String>,
 }
 
-/// Message to send through a channel
-///
-/// Serde-derived for the same reason as [`ChannelMessage`]: it is the payload
-/// of the module's `SendMessage` member.
+/// Legacy v21 text-only send projection retained for one release.
+/// Canonical sends use [`crate::ChannelOutboundMessage`] through
+/// `SendChannelIntent`.
+#[deprecated(
+    since = "0.1.34",
+    note = "v21 compatibility shim; use ChannelOutboundMessage for canonical v22 sends"
+)]
 #[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SendMessage {
     pub content: String,
