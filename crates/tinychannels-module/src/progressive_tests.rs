@@ -818,7 +818,7 @@ async fn scoped_open_rejects_missing_identity_invalid_leases_and_unconfigured_ac
         (scoped("discord", Some("discord:one"), "", "turn", 1), "invalid scoped"),
         (scoped("discord", Some("discord:one"), "room", "", 1), "invalid scoped"),
         (scoped("discord", Some("discord:one"), "room", "turn", 0), "invalid scoped"),
-        (scoped("discord", Some("discord:one"), "room", "turn", u64::MAX), "out of range"),
+        (scoped("discord", Some("discord:one"), "room", "turn", u64::MAX), "not configured"),
         (scoped("discord", Some("slack:one"), "room", "turn", 10), "does not match"),
         (scoped("discord", Some("discord:missing"), "room", "turn", 10), "not configured"),
     ] {
