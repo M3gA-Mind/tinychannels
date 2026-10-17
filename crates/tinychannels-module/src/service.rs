@@ -109,12 +109,18 @@ pub(crate) struct Channels {
     progressive: Arc<crate::progressive::Replies>,
     /// Shared with each listener task so it can retire its own entry.
     pub(crate) running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
-    provider_activations: Mutex<HashMap<String, String>>,
+    provider_activations: Mutex<HashMap<String, ProviderActivation>>,
     relays: Arc<Relays>,
     pub(crate) terminal: AtomicBool,
     runtimes: Option<Arc<crate::runtime::Runtimes>>,
     shutdown_task: Mutex<Option<JoinHandle<BusResult<()>>>>,
     delivery_admission: Arc<Mutex<()>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProviderActivation {
+    generation: String,
+    media_account_scope: Option<String>,
 }
 
 struct ModuleDeliveryHandler {
@@ -144,7 +150,7 @@ impl Channels {
         }
     }
 
-    async fn media_activation(&self, instance: &str) -> BusResult<String> {
+    async fn media_activation(&self, instance: &str) -> BusResult<ProviderActivation> {
         if self
             .running
             .lock()
@@ -188,7 +194,9 @@ impl Channels {
         }
 
         let hooks = Arc::new(Hooks::default());
-        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone(), name.clone());
+        let media_account_scope = crate::provider::configured_media_account_scope(&name, &config);
+        let owner_host: Arc<dyn ChannelHost> =
+            hooks.host(self.host.clone(), name.clone(), media_account_scope.clone());
         let built = build_channels(&config, &owner_host, http);
         let channel = built
             .into_iter()
@@ -223,7 +231,13 @@ impl Channels {
         self.provider_activations
             .lock()
             .await
-            .insert(name.clone(), uuid::Uuid::new_v4().simple().to_string());
+            .insert(
+                name.clone(),
+                ProviderActivation {
+                    generation: uuid::Uuid::new_v4().simple().to_string(),
+                    media_account_scope,
+                },
+            );
         drop(running);
         finish_start_admission(
             &self.host,
