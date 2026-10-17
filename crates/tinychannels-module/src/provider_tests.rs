@@ -1231,7 +1231,11 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     let instance = "telegram:account-a".to_owned();
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
-    let _provider_host = hooks.host(host.clone(), instance.clone());
+    let _provider_host = hooks.host(
+        host.clone(),
+        instance.clone(),
+        Some("telegram:media-v1:test".into()),
+    );
     let running = Running::start_outbound(channel, hooks, host);
     let handle = running.adapter_handle();
     let fixture = RunningTelegramConformance {
@@ -1290,7 +1294,11 @@ async fn configured_running_telegram_adapter_uploads_media_from_host_storage() {
     let (host, _callbacks, _bus_server, _storage) = ingress_fixture().await;
     let instance = "telegram:media-account".to_owned();
     let hooks = Arc::new(Hooks::default());
-    let provider_host = hooks.host(host.clone(), instance.clone());
+    let provider_host = hooks.host(
+        host.clone(),
+        instance.clone(),
+        Some("telegram:media-v1:test".into()),
+    );
     let repository = provider_host.media_repository().unwrap();
     let conversation = ConversationRef {
         kind: ConversationKind::Group,
@@ -1411,7 +1419,11 @@ async fn configured_adapter_marks_first_unknown_media_upload_non_retryable() {
     let (host, _callbacks, _bus_server, _storage) = ingress_fixture().await;
     let instance = "telegram:media-account".to_owned();
     let hooks = Arc::new(Hooks::default());
-    let provider_host = hooks.host(host.clone(), instance.clone());
+    let provider_host = hooks.host(
+        host.clone(),
+        instance.clone(),
+        Some("telegram:media-v1:test".into()),
+    );
     let repository = provider_host.media_repository().unwrap();
     let conversation = ConversationRef {
         kind: ConversationKind::Group,
