@@ -670,14 +670,14 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
     let error = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
-            events: vec![ChannelOutputEvent::ThinkingDelta {
-                text: "x".repeat(MAX_REQUEST + 1),
-                iteration: None,
+            events: vec![ChannelOutputEvent::Native {
+                data: serde_json::json!({"payload": "x".repeat(MAX_REQUEST + 1)}),
             }],
         })
         .await
         .unwrap_err();
     assert!(error.to_string().contains("progressive request exceeds its limit"));
+    assert!(callback.requests.lock().await.is_empty());
 
     let error = replies
         .execute(ProgressiveCommand::Finish {
