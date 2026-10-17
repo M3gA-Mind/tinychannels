@@ -1354,11 +1354,12 @@ async fn unsupported_native_video_and_image_formats_fall_back_to_documents() {
     let server = mock_api().await;
     Mock::given(method("POST"))
         .and(path("/bottest-token/sendDocument"))
-        .expect(1)
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
             "result": {"message_id": 61}
         })))
+        .up_to_n_times(1)
+        .expect(1)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
