@@ -1765,3 +1765,86 @@ fn unrelated_legacy_response_objects_do_not_become_normalized_receipts() {
         assert!(super::state::extract_message_receipt(&response).is_none());
     }
 }
+
+#[tokio::test]
+async fn segmented_projection_retains_later_receipt_address_tokens_and_raw_provider_facts() {
+    let (sender, mut reply) = typed_turn(Some((2, tinychannels_bus::LengthUnit::Characters)));
+    let first = ChannelSendOutcome {
+        receipt: MessageReceipt {
+            parts: vec![MessageReceiptPart {
+                platform_message_id: "first".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let second = ChannelSendOutcome {
+        receipt: MessageReceipt {
+            primary_platform_message_id: Some("second".into()),
+            platform_message_ids: vec!["second".into()],
+            channel: Some(tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some("bot".into()),
+            }),
+            conversation: Some(tinychannels_bus::ConversationRef {
+                id: "chat".into(),
+                ..Default::default()
+            }),
+            idempotency_key: Some("second-key".into()),
+            thread_id: Some("thread".into()),
+            reply_to_id: Some("reply".into()),
+            edit_token: Some("second-edit".into()),
+            delete_token: Some("second-delete".into()),
+            sent_at: 9,
+            raw: Some(vec![
+                tinychannels_bus::channel::MessageReceiptSourceResult {
+                    message_id: Some("second".into()),
+                    meta: Some(json!({"accepted": true})),
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    sender
+        .outcomes
+        .lock()
+        .unwrap()
+        .extend([Ok(first.clone()), Ok(second.clone())]);
+    let outcome = reply.send_parts(&[], "abcd").await.unwrap();
+    assert!(outcome.error.is_none());
+    assert_eq!(outcome.receipt.channel, second.receipt.channel);
+    assert_eq!(outcome.receipt.conversation, second.receipt.conversation);
+    assert_eq!(
+        outcome.receipt.idempotency_key,
+        second.receipt.idempotency_key
+    );
+    assert_eq!(outcome.receipt.thread_id, second.receipt.thread_id);
+    assert_eq!(outcome.receipt.reply_to_id, second.receipt.reply_to_id);
+    assert_eq!(outcome.receipt.edit_token, second.receipt.edit_token);
+    assert_eq!(outcome.receipt.delete_token, second.receipt.delete_token);
+    assert_eq!(outcome.receipt.raw, second.receipt.raw);
+    assert_eq!(outcome.receipt.sent_at, 9);
+    assert_eq!(outcome.receipt.parts[0], first.receipt.parts[0]);
+    assert_eq!(outcome.receipt.parts[1].platform_message_id, "second");
+    let sent = sender.sent.lock().unwrap();
+    assert_eq!(
+        sent.iter()
+            .map(|call| call.text.as_str())
+            .collect::<Vec<_>>(),
+        ["ab", "cd"]
+    );
+    for (call, text) in sent.iter().zip(["ab", "cd"]) {
+        assert_eq!(
+            call.parts,
+            vec![OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: text.into(),
+                    markdown_dialect: None
+                }
+            }]
+        );
+    }
+}
