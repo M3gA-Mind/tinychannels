@@ -1,10 +1,10 @@
 use super::*;
+use base64::Engine as _;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinychannels_bus::module_progressive::SubagentOutput;
 use tokio::sync::Notify;
-use base64::Engine as _;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct ConfiguredChannel(&'static str);
 struct ConfiguredChannelWithCapabilities {
@@ -3576,4 +3576,206 @@ async fn typed_provider_callback_with_wrong_result_family_is_unknown_not_success
     );
     assert!(error.sent_before_error);
     replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires the separately built TinyVoice module; run with TINYVOICE_MODULE_ARTIFACT"]
+async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
+    use tinybus::module::ModuleHost;
+
+    let path = std::env::var("TINYVOICE_MODULE_ARTIFACT").expect("TinyVoice artifact path");
+    let bytes = std::fs::read(&path).expect("read TinyVoice module");
+    let expected = std::env::var("TINYVOICE_MODULE_SHA256").expect("artifact SHA");
+    assert_eq!(hex::encode(sha2::Sha256::digest(&bytes)), expected);
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let _broker_task = broker.spawn(bus.clone());
+    let module_host = ModuleHost::new(broker);
+    assert_eq!(
+        module_host.load_file(&path).unwrap().name,
+        "tinyvoice-module"
+    );
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    connection
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    let callback = Callback::default();
+    connection
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            callback.clone(),
+        )
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    let context = ProgressiveOutputContext {
+        turn_id: "turn-voice-1".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:bot-1".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "chat-1".into(),
+            topic_id: Some("topic-2".into()),
+            ..Default::default()
+        },
+    };
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.voice_out.supported = true;
+    capabilities.voice_out.synthesis = true;
+    capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
+    capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
+    capabilities.voice_out.max_duration_ms = Some(2_000);
+    let cases = [
+        (
+            tinychannels_bus::HostVoiceReplyMode::Mirror,
+            true,
+            false,
+            true,
+        ),
+        (
+            tinychannels_bus::HostVoiceReplyMode::Mirror,
+            false,
+            false,
+            false,
+        ),
+        (
+            tinychannels_bus::HostVoiceReplyMode::Always,
+            false,
+            false,
+            true,
+        ),
+        (
+            tinychannels_bus::HostVoiceReplyMode::Never,
+            true,
+            true,
+            false,
+        ),
+        (
+            tinychannels_bus::HostVoiceReplyMode::SpeakReply,
+            false,
+            true,
+            true,
+        ),
+        (
+            tinychannels_bus::HostVoiceReplyMode::SpeakReply,
+            true,
+            false,
+            false,
+        ),
+    ];
+    for (index, (mode, inbound, explicit, expected_voice)) in cases.into_iter().enumerate() {
+        *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+            mode,
+            inbound_has_voice: inbound,
+            explicitly_requested: explicit,
+        });
+        let sender = Arc::new(Sender {
+            host: host.clone(),
+            context: Some(context.clone()),
+            capabilities: capabilities.clone(),
+            channel: "telegram:bot-1".into(),
+            send_sequence: std::sync::atomic::AtomicU64::new(0),
+        });
+        let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+            sender,
+            "telegram:bot-1",
+            capabilities.clone(),
+            context.clone(),
+        );
+        reply
+            .send_parts(
+                &[tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: "spoken words".into(),
+                        markdown_dialect: None,
+                    },
+                }],
+                "spoken words",
+            )
+            .await
+            .expect("progressive final sends successfully");
+        let requests = callback.requests.lock().await;
+        let request = requests
+            .iter()
+            .rev()
+            .find_map(|request| match request {
+                ProgressiveTransportRequest::SendTyped { parts, text, .. } => Some((parts, text)),
+                _ => None,
+            })
+            .expect("final typed provider call");
+        let has_media = request.0.iter().any(|part| {
+            matches!(part,
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media { media, .. }
+                } if media.opaque_id.as_deref() == Some("durable-host-voice")
+            )
+        });
+        assert_eq!(has_media, expected_voice, "policy case {index}: {mode:?}");
+        if expected_voice {
+            assert!(request.1.contains("https://media.example/authorized/voice"));
+        }
+        drop(requests);
+    }
+
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    let sender = Arc::new(Sender {
+        host,
+        context: Some(context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let prompt = [tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Text {
+            text: "approval prompt".into(),
+            markdown_dialect: None,
+        },
+    }];
+    let before = callback.synthesis_calls.load(Ordering::SeqCst);
+    sender
+        .send_parts_with_segment(
+            "telegram:bot-1",
+            &prompt,
+            "approval prompt",
+            Some(&context),
+            100,
+            0,
+        )
+        .await
+        .expect("mid-turn approval delivery");
+    assert_eq!(callback.synthesis_calls.load(Ordering::SeqCst), before);
+}
+
+fn progressive_test_wav() -> Vec<u8> {
+    let rate = 16_000u32;
+    let count = rate as usize;
+    let data_len = count * 2;
+    let mut wav = Vec::with_capacity(44 + data_len);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36u32 + data_len as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&rate.to_le_bytes());
+    wav.extend_from_slice(&(rate * 2).to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data_len as u32).to_le_bytes());
+    for index in 0..count {
+        let sample =
+            ((index as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 12_000.0) as i16;
+        wav.extend_from_slice(&sample.to_le_bytes());
+    }
+    wav
 }

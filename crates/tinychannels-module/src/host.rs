@@ -482,7 +482,9 @@ impl HostChannels {
         )
         .map_err(|_| Error::failed("host returned invalid base64 voice media"))?;
         if decoded.len() > maximum {
-            return Err(Error::failed("host returned voice media above requested limit"));
+            return Err(Error::failed(
+                "host returned voice media above requested limit",
+            ));
         }
         Ok(result)
     }
