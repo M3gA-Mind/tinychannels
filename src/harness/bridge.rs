@@ -5,8 +5,8 @@ use crate::channel::{
     DeliveryDurability, OutboundPayload,
 };
 use crate::harness::types::{ChannelOutputEvent, ChannelTurn};
-use sha2::{Digest, Sha256};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 /// Translation knobs for harness output delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,11 +54,19 @@ pub fn translate_output_event(
                 OutboundPayload::Text { text }
             }
         }
-        ChannelOutputEvent::FinalMessage { text, mut parts, .. } => {
+        ChannelOutputEvent::FinalMessage {
+            text, mut parts, ..
+        } => {
             if !text.is_empty() {
-                parts.insert(0, crate::channel::OutboundContentPart::Content {
-                    part: crate::channel::ContentPart::Text { text, markdown_dialect: None },
-                });
+                parts.insert(
+                    0,
+                    tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Text {
+                            text,
+                            markdown_dialect: None,
+                        },
+                    },
+                );
             }
             OutboundPayload::Parts { parts }
         }
@@ -92,22 +100,37 @@ pub fn translate_output_event(
         ChannelOutputEvent::Media { text, parts } => {
             let mut content = Vec::new();
             if let Some(text) = text.filter(|text| !text.is_empty()) {
-                content.push(crate::channel::OutboundContentPart::Content {
-                    part: crate::channel::ContentPart::Text { text, markdown_dialect: None },
+                content.push(tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text,
+                        markdown_dialect: None,
+                    },
                 });
             }
-            content.extend(parts.into_iter().map(|part| crate::channel::OutboundContentPart::Content { part }));
+            content.extend(
+                parts
+                    .into_iter()
+                    .map(|part| tinychannels_bus::OutboundContentPart::Content { part }),
+            );
             OutboundPayload::Parts { parts: content }
         }
         ChannelOutputEvent::VoiceNote { text, voice } => {
             let mut parts = Vec::new();
-            if let Some(text) = text.or_else(|| voice.transcript.as_ref().map(|transcript| transcript.text.clone())) {
-                parts.push(crate::channel::OutboundContentPart::Content {
-                    part: crate::channel::ContentPart::Text { text, markdown_dialect: None },
+            if let Some(text) = text.or_else(|| {
+                voice
+                    .transcript
+                    .as_ref()
+                    .map(|transcript| transcript.text.clone())
+            }) {
+                parts.push(tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text,
+                        markdown_dialect: None,
+                    },
                 });
             }
-            parts.push(crate::channel::OutboundContentPart::Voice {
-                voice: crate::channel::OutboundVoice::Media {
+            parts.push(tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
                     media: voice.media,
                     codec: voice.codec,
                     duration_ms: voice.duration_ms,
@@ -161,4 +184,3 @@ fn supports_native_approval(
         .is_some_and(|max| max >= choice_count)
         && presentation.max_actions_per_row.unwrap_or(1) > 0
 }
-
