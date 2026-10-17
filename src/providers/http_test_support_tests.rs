@@ -17,6 +17,8 @@ pub(super) struct Request {
 pub(super) struct HttpsServer {
     pub client: reqwest::Client,
     pub requests: Arc<Mutex<Vec<Request>>>,
+    /// Loopback address used by provider fixtures that resolve fixed hosts.
+    pub address: std::net::SocketAddr,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -110,6 +112,7 @@ impl HttpsServer {
         Self {
             client,
             requests,
+            address,
             task,
         }
     }
