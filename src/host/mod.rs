@@ -38,6 +38,7 @@
 mod dispatch;
 mod noop;
 mod services;
+mod voice;
 
 pub use dispatch::{DispatchOptions, DispatchRequest, TurnDispatcher, TurnHandle};
 pub use noop::{ChannelHostBuilder, NoopHost};
@@ -48,6 +49,7 @@ pub use services::{
     SpeechSynthesizer, StorageProvider, Transcriber, TranscriptionRequest, TranscriptionResult,
     VoiceMediaRequest, VoiceMediaStore,
 };
+pub use voice::{VoiceEnrichmentStatus, VoiceReplyMode, enrich_voice_note, should_synthesize_reply};
 
 use crate::config::ChannelsConfig;
 use crate::context::Memory;
