@@ -39,6 +39,7 @@ enum PreviousControlResult {
 #[derive(Clone, Default)]
 struct Callback {
     sends: Arc<std::sync::atomic::AtomicUsize>,
+    output_events: Arc<std::sync::Mutex<Vec<tinychannels_bus::module_progressive::ChannelOutputEvent>>>,
 }
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
@@ -53,8 +54,14 @@ impl Callback {
         let tinychannels_bus::ChannelBackendRequest::ProgressiveTransport(request) = request else {
             return Err(tinybus::Error::failed("unexpected backend callback"));
         };
-        if matches!(request, ProgressiveTransportRequest::Send { .. }) {
-            self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match request {
+            ProgressiveTransportRequest::Send { .. } => {
+                self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            ProgressiveTransportRequest::OutputEvent { event, .. } => {
+                self.output_events.lock().unwrap().push(event);
+            }
+            _ => {}
         }
         Ok(
             tinychannels_bus::ChannelBackendResult::ProgressiveTransport(
@@ -212,6 +219,20 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
                 handle: handle.clone(),
                 events: vec![ChannelOutputEvent::TextDelta {
                     text: "artifact draft".into(),
+                    iteration: Some(1),
+                }, ChannelOutputEvent::ToolCallCompleted {
+                    call_id: "artifact-call".into(),
+                    tool_name: "lookup".into(),
+                    success: true,
+                    output_chars: 5,
+                    output: "found".into(),
+                    arguments: Some(serde_json::json!({"query": "artifact"})),
+                    elapsed_ms: 4,
+                    iteration: 1,
+                    failure: None,
+                    display_label: Some("Lookup".into()),
+                    display_detail: None,
+                    structured: Some(serde_json::json!({"kind": "lookup", "count": 1})),
                 }],
             },
         )
@@ -232,6 +253,10 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         assert_eq!(result, ProgressiveResult::Closed);
     }
     assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let output_events = callback.output_events.lock().unwrap();
+    assert!(matches!(output_events.get(1), Some(ChannelOutputEvent::ToolCallCompleted {
+        call_id, arguments: Some(arguments), structured: Some(structured), ..
+    }) if call_id == "artifact-call" && arguments["query"] == "artifact" && structured["count"] == 1));
     use tinychannels_bus::module_remote::{RemoteOperation, RemoteOperationResult, RemoteRoute};
     let remote_workspace = tempfile::tempdir().unwrap();
     use tinychannels_bus::module_control::{ChannelControlRequest, ChannelControlResult};

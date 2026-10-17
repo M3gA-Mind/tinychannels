@@ -448,11 +448,21 @@ async fn run(
         tokio::select! {
             command = inbox.recv() => match command {
                 Some(Command::Feed(events, forward, response)) => {
+                    let cancellation = events.iter().find_map(|event| match event {
+                        ChannelOutputEvent::Cancellation { reason } => Some(
+                            reason.clone().unwrap_or_else(|| "Cancelled.".into()),
+                        ),
+                        _ => None,
+                    });
                     let result = apply(&mut reply, events, forward).await;
                     let failed = result.is_err();
                     let _ = response.send(result);
                     if failed {
                         reply.finalize("Sorry, the response could not be delivered.").await;
+                        break;
+                    }
+                    if let Some(reason) = cancellation {
+                        reply.finalize(&reason).await;
                         break;
                     }
                 }
