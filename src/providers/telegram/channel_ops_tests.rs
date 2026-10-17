@@ -838,8 +838,8 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
         ok_with(serde_json::json!({"message_id": 22})),
     )
     .await;
-    let channel = channel_for(&server, &["*"])
-        .with_media_repository(Arc::new(TypedMediaReadFixture));
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
     let mut message = typed_text("ordered-image", "before".into());
     message.channel_ref = Some(tinychannels_bus::ChannelRef {
         id: "telegram".into(),
@@ -882,14 +882,20 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
 
     assert_eq!(outcome.receipt.platform_message_ids, ["11", "22", "11"]);
     assert_eq!(outcome.receipt.parts.len(), 3);
-    assert_eq!(outcome.receipt.parts[1].kind, tinychannels_bus::channel::MessageReceiptPartKind::Media);
-    assert_eq!(outcome.receipt.parts[1].thread_id.as_deref(), Some("topic-77"));
+    assert_eq!(
+        outcome.receipt.parts[1].kind,
+        tinychannels_bus::channel::MessageReceiptPartKind::Media
+    );
+    assert_eq!(
+        outcome.receipt.parts[1].thread_id.as_deref(),
+        Some("topic-77")
+    );
     assert_eq!(outcome.receipt.parts[1].reply_to_id.as_deref(), Some("5"));
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 3);
-    assert_eq!(requests[0].url.path(), "/botTEST_TOKEN/sendMessage");
-    assert_eq!(requests[1].url.path(), "/botTEST_TOKEN/sendPhoto");
-    assert_eq!(requests[2].url.path(), "/botTEST_TOKEN/sendMessage");
+    assert_eq!(requests[0].url.path(), "/bottest-token/sendMessage");
+    assert_eq!(requests[1].url.path(), "/bottest-token/sendPhoto");
+    assert_eq!(requests[2].url.path(), "/bottest-token/sendMessage");
     let multipart = String::from_utf8_lossy(&requests[1].body);
     assert!(multipart.contains("photo caption"));
     assert!(multipart.contains("reply_parameters"));
