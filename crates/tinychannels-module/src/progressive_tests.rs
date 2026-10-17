@@ -3640,6 +3640,75 @@ async fn typed_callback_acknowledgement_and_unavailability_keep_distinct_failure
 }
 
 #[tokio::test]
+async fn ambiguous_voice_receipt_is_retained_and_identical_final_is_not_retried() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open_scoped_provider(
+        &replies,
+        "discord",
+        "discord:ambiguous-voice",
+        "ambiguous-voice-turn",
+        tinychannels_bus::ChannelCapabilities::default(),
+    ).await;
+    callback.send_queue.lock().await.push_back(ProgressiveTransportResult::Outcome(
+        Box::new(tinychannels_bus::channel::ChannelSendOutcome {
+            receipt: tinychannels_bus::channel::MessageReceipt {
+                platform_message_ids: vec!["accepted-voice-message".into()],
+                ..Default::default()
+            },
+            error: Some(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                message: "voice request may have been accepted".into(),
+                sent_before_error: true,
+                ..Default::default()
+            }),
+        }),
+    ));
+    let events = vec![ChannelOutputEvent::FinalMessage {
+        text: "voice transcript".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("durable-host-voice".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1200),
+                audio_base64: None,
+            },
+        }],
+        receipt: None,
+    }];
+    let first = replies.execute(ProgressiveCommand::FeedOutput {
+        handle: handle.clone(),
+        events: events.clone(),
+    }).await.unwrap();
+    assert!(matches!(first, ProgressiveResult::DeliveryBatch { outcomes, .. }
+        if outcomes.len() == 1
+            && outcomes[0].receipt.platform_message_ids == ["accepted-voice-message"]
+            && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
+    ), "unknown voice delivery must preserve accepted receipt and uncertainty");
+    let before = callback.requests.lock().await.iter()
+        .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+        .count();
+    assert_eq!(before, 1);
+    let replay = replies.execute(ProgressiveCommand::FeedOutput {
+        handle,
+        events,
+    }).await.unwrap();
+    assert!(matches!(replay, ProgressiveResult::DeliveryBatch { outcomes, .. }
+        if outcomes.len() == 1
+            && outcomes[0].receipt.platform_message_ids == ["accepted-voice-message"]
+            && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
+    ), "terminal replay returns the retained ambiguous outcome");
+    let after = callback.requests.lock().await.iter()
+        .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+        .count();
+    assert_eq!(after, before, "unknown voice receipt must not be retried");
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn typed_provider_callback_with_wrong_result_family_is_unknown_not_success() {
     let (replies, callback) = fixture(false).await;
     *callback.unexpected_typed_response.lock().await = true;
