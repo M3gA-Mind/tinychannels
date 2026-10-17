@@ -226,7 +226,7 @@ fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> Chann
 #[tokio::test]
 async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
     let (host, callback, _server, _storage) = ingress_fixture().await;
-    let events = ModuleEvents(host.clone(), "telegram:bot-a".into());
+    let events = ModuleEvents(host.clone(), "telegram:bot-a".into(), None);
     assert!(
         events
             .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(
@@ -283,7 +283,7 @@ async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
 #[tokio::test]
 async fn completed_provider_transcript_skips_media_read_and_host_stt() {
     let (host, callback, _server, _storage) = ingress_fixture().await;
-    let events = ModuleEvents(host.clone(), "telegram:bot-a".into());
+    let events = ModuleEvents(host.clone(), "telegram:bot-a".into(), None);
     let provider_transcript = tinychannels_bus::VoiceTranscript {
         text: "provider words".into(),
         language: Some("en".into()),
@@ -958,7 +958,7 @@ async fn host_adapters_propagate_callback_failures() {
             .is_err()
     );
     assert!(
-        ModuleEvents(host.clone(), "fixture".into())
+        ModuleEvents(host.clone(), "fixture".into(), None)
             .publish("fixture", "event", serde_json::json!({}))
             .await
             .is_err()
