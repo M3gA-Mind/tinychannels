@@ -22,9 +22,19 @@ opaque IDs and link expiry/revocation.
 Providers resolve opaque IDs through a scoped `ReadVoiceMedia` call for native
 uploads. Telegram emits native voice for Ogg Opus and native audio for its
 advertised M4A/MP3 formats. Transcript text accompanies native voice as a
-caption, with reply/thread addressing carried in the upload request and receipt.
-Other providers advertise no voice synthesis unless their own native transport
-and host ports support it.
+caption; transcripts above Telegram's caption limit are delivered as follow-up
+text chunks, and each accepted message ID is retained in order if a later chunk
+has an uncertain outcome. Reply/thread addressing is carried in the upload and
+text requests and receipts. Other providers advertise no voice synthesis unless
+their own native transport and host ports support it.
+
+`ChannelOutboundIntent.turnId` and `ChannelOutboundMessage.turnId` preserve the
+originating host turn independently from their per-send `idempotencyKey`. A host
+mapping `ProgressiveTransportRequest::SendTyped` into a provider message must
+copy that request's `turnId`, channel/account reference, and full conversation
+reference. Telegram uses those exact address fields for `ReadVoiceMedia`; it
+never substitutes the send idempotency hash for the turn authority. Durable
+replay preserves the intent's originating turn as well as its idempotency key.
 
 The inline and callback limits are deliberately separate:
 
@@ -37,8 +47,9 @@ The inline and callback limits are deliberately separate:
 | Telegram media | 8 MiB decoded bytes | Local native upload/download cap |
 
 The module applies 60-second timeouts and bounds active host callbacks. A
-cancelled waiter does not cancel an already dispatched callback; the tracked
-operation remains owned until completion or runtime shutdown. Provider sends
-are not retried after an unknown receipt. Persisted send intents contain only
+scoped progressive feed is also bounded by its host turn lease; expiry aborts
+in-flight voice preparation and memoizes the terminal result so an identical
+feed cannot trigger a second synthesis. Once a provider send callback has been
+dispatched, receipt uncertainty remains terminal and must not cause a retry. Persisted send intents contain only
 compact references and metadata, so normal voice media does not exceed the
 existing 128 KiB durable intent/receipt boundary.
