@@ -60,6 +60,27 @@ exact-version: a v21 host cannot bind a v22 module, so this shim is for source
 migration and same-version legacy provider adapters, not cross-version callback
 compatibility.
 
+Contract version 23 adds confidential `BeginMediaUpload`,
+`AppendMediaUploadChunk`, `FinishMediaUpload`, and `AbortMediaUpload` calls for
+host-to-module media. An upload is accepted only on its owning runtime object
+while the named configured provider instance is active. The caller supplies
+the complete conversation and originating-turn scope; the module replaces
+caller-selected provider/account identity with the active configured instance
+before storing through its scoped media repository. A successful finalize
+returns the existing opaque `MediaReference` DTO, which can be passed directly
+to typed provider sends.
+
+Each runtime accepts at most two active uploads. Each upload is at most 20 MiB,
+split into ordered chunks of at most 512 KiB (40 chunks maximum); serialized
+begin metadata is limited to 64 KiB. Incomplete uploads expire after one
+minute. Finalization has a one-minute persistence deadline, retains its
+reservation while storage is pending, and retries use the same deterministic
+storage key. At most 128 terminal handle results are retained for five minutes.
+Chunk retries are idempotent only when bytes match; conflicting retries fail.
+The implementation validates media kind, MIME type, body and size through
+`ScopedMediaStore` before returning a reference. This contract adds no host
+implementation-library dependency or host-side media metadata schema.
+
 This source contract still requires a compatible published native module before
 a downstream host can claim released composition.
 
