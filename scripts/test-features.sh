@@ -2,6 +2,10 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 python3 scripts/test-e2e-version.py
+# Keep the contract boundary enforced in every CI feature lane, including the
+# default and all-features dependency closures.
+python3 scripts/check-bus-purity.py
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/__tests__/check_bus_purity_tests.py
 # Invoke nested shell scripts with the Bash executable that launched this
 # harness. A competing `bash` earlier on PATH must not replace it.
 feature_test_shell="$BASH"
