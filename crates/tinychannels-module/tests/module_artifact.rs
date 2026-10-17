@@ -1275,6 +1275,83 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     assert!(reference.path.is_none());
     assert!(reference.url.is_none());
     assert!(reference.local_cache_path.is_none());
+
+    // Positive control: the other configured Telegram account can create and
+    // resolve its own reference for the same conversation and turn.
+    let other_handle: MediaUploadHandle = other_runtime_proxy
+        .call_confidential(
+            "BeginMediaUpload",
+            MediaUploadBegin {
+                instance: "telegram".into(),
+                scope: scope.clone(),
+                kind: MediaKind::Image,
+                content_type: "image/png".into(),
+                file_name: Some("other-account.png".into()),
+                duration_ms: None,
+                codec: None,
+                byte_count: png_for_wire_check.len() as u64,
+            },
+        )
+        .await
+        .unwrap();
+    other_runtime_proxy
+        .call_confidential::<u32>(
+            "AppendMediaUploadChunk",
+            MediaUploadChunk {
+                handle: other_handle.clone(),
+                sequence: 0,
+                bytes: png_for_wire_check.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let other_reference: MediaUploadResult = other_runtime_proxy
+        .call_confidential("FinishMediaUpload", MediaUploadFinish(other_handle))
+        .await
+        .unwrap();
+    let other_read = other_runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadInfo>(
+            "BeginMediaRead",
+            MediaReadBegin {
+                instance: "telegram".into(),
+                scope: scope.clone(),
+                media: other_reference.clone(),
+                max_bytes: 1024,
+            },
+        )
+        .await
+        .unwrap();
+    let other_bytes = other_runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadChunkResult>(
+            "ReadMediaChunk",
+            MediaReadChunk {
+                handle: other_read.handle.clone(),
+                offset: 0,
+                max_bytes: 1024,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(other_bytes.bytes, png_for_wire_check);
+    other_runtime_proxy
+        .call_confidential::<()>("AbortMediaRead", MediaReadFinish(other_read.handle))
+        .await
+        .unwrap();
+    assert!(
+        runtime_proxy
+            .call_confidential::<tinychannels_bus::MediaReadInfo>(
+                "BeginMediaRead",
+                MediaReadBegin {
+                    instance: "telegram".into(),
+                    scope: scope.clone(),
+                    media: other_reference,
+                    max_bytes: 1024,
+                },
+            )
+            .await
+            .is_err()
+    );
+
     let replay: MediaUploadResult = runtime_proxy
         .call_confidential("FinishMediaUpload", finish.clone())
         .await
