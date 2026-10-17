@@ -49,7 +49,8 @@ pub use noop::{ChannelHostBuilder, NoopHost};
 pub use services::{
     AllowlistStore, ApprovalAsk, ApprovalDecision, ApprovalGate, ConversationMessage,
     ConversationStore, EventSink, LifecycleRegistry, ReactionDecision, ReactionGate, ReactionQuery,
-    RunEventAppend, RunLedger, RunTelemetry, RunUpsert, ShutdownHook, SpeechRequest, SpeechResult,
+    MediaRepository, RunEventAppend, RunLedger, RunTelemetry, RunUpsert, ShutdownHook,
+    SpeechRequest, SpeechResult,
     SpeechSynthesizer, StorageProvider, Transcriber, TranscriptionRequest, TranscriptionResult,
     VoiceCodec, VoiceCodecRequest, VoiceCodecResult, VoiceMediaRequest, VoiceMediaStore,
 };

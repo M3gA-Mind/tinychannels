@@ -445,6 +445,25 @@ impl ScopedMediaStore {
     }
 }
 
+#[async_trait::async_trait]
+impl super::MediaRepository for ScopedMediaStore {
+    async fn store_media(
+        &self,
+        request: MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        self.store(request).await
+    }
+
+    async fn read_media(
+        &self,
+        scope: MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<StoredMedia> {
+        self.read(scope, &opaque_id, max_bytes).await
+    }
+}
+
 fn validate_scope(scope: &MediaScope) -> anyhow::Result<()> {
     if scope.configured_instance.trim().is_empty()
         || scope.channel.id.trim().is_empty()
