@@ -764,10 +764,10 @@ impl TelegramChannel {
             })
             .await?;
         let mut media = result.media;
-        if !media
+        if media
             .opaque_id
             .as_deref()
-            .is_some_and(|id| !id.trim().is_empty())
+            .is_none_or(|id| id.trim().is_empty())
         {
             anyhow::bail!("host voice media storage returned no durable opaque reference");
         }
