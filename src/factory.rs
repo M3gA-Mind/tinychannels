@@ -279,10 +279,10 @@ pub fn build_channels(
 ) -> Vec<Arc<dyn Channel>> {
     let mut channels: Vec<Arc<dyn Channel>> = Vec::new();
 
-    if config.telegram.is_some() {
-        if let Some(telegram) = build_telegram_channel(config, host, http) {
-            channels.push(telegram);
-        }
+    if config.telegram.is_some()
+        && let Some(telegram) = build_telegram_channel(config, host, http)
+    {
+        channels.push(telegram);
     }
 
     if let Some(dc) = config.discord.as_ref() {
