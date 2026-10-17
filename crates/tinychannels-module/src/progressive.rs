@@ -41,12 +41,16 @@ impl Sender {
             .await
             .map_err(|_| ProgressiveSendError::Unavailable)?;
         match result {
-            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Success(value)) => {
-                if value.get("error").is_some()
+            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Success(
+                value,
+            )) => {
+                if value.get("error").is_some_and(|error| !error.is_null())
                     || value.get("success").and_then(Value::as_bool) == Some(false)
                     || value.get("status").and_then(Value::as_str) == Some("unknown_after_send")
                 {
-                    Err(ProgressiveSendError::Other(anyhow::anyhow!("progressive delivery failed")))
+                    Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                        "progressive delivery failed"
+                    )))
                 } else {
                     Ok(value)
                 }
@@ -184,7 +188,9 @@ impl Replies {
                 let events = events.into_iter().map(compat_event).collect();
                 self.feed(handle, events, false).await
             }
-            ProgressiveCommand::FeedOutput { handle, events } => self.feed(handle, events, true).await,
+            ProgressiveCommand::FeedOutput { handle, events } => {
+                self.feed(handle, events, true).await
+            }
             ProgressiveCommand::Finish { handle, text } => {
                 if text.len() > MAX_CONTENT {
                     return Err(Error::failed("progressive content exceeds its limit"));
@@ -465,7 +471,11 @@ async fn run(
     }
 }
 
-async fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>, forward: bool) -> Result<()> {
+async fn apply(
+    reply: &mut ProgressiveReply,
+    events: Vec<ChannelOutputEvent>,
+    forward: bool,
+) -> Result<()> {
     let text = events
         .iter()
         .filter_map(|event| match event {
@@ -492,7 +502,9 @@ async fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>, fo
     }
     for event in events {
         if forward {
-            reply.on_output_event(&event).await
+            reply
+                .on_output_event(&event)
+                .await
                 .map_err(|_| Error::failed("host output event callback failed"))?;
         }
         match event {
@@ -521,6 +533,7 @@ async fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>, fo
             | ChannelOutputEvent::VoiceNote { .. }
             | ChannelOutputEvent::Subagent { .. }
             | ChannelOutputEvent::Usage { .. }
+            | ChannelOutputEvent::ModelUsage { .. }
             | ChannelOutputEvent::Artifact { .. }
             | ChannelOutputEvent::Cancellation { .. }
             | ChannelOutputEvent::Lifecycle { .. }

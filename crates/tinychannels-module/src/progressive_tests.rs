@@ -388,7 +388,10 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
             && arguments.as_ref().is_some_and(|value| value["q"] == "safe test")
             && structured.as_ref().is_some_and(|value| value["count"] == 1))
     });
-    assert!(forwarded, "the bounded worker forwards canonical events to the host bus");
+    assert!(
+        forwarded,
+        "the bounded worker forwards canonical events to the host bus"
+    );
     replies
         .execute(ProgressiveCommand::Finish {
             handle: handle.clone(),
