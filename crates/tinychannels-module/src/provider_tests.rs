@@ -427,14 +427,10 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
         feature: tinychannels_conformance::ConformanceFeature,
     ) -> tinychannels_conformance::ExpectedScope {
         let mut scope = self.scope.clone();
-        if matches!(feature,
-            tinychannels_conformance::ConformanceFeature::InboundReactions
-                | tinychannels_conformance::ConformanceFeature::Reactions
-                | tinychannels_conformance::ConformanceFeature::Edit
-                | tinychannels_conformance::ConformanceFeature::Delete
-        ) {
-            // MessageReactionUpdated and message-targeted mutation methods do
-            // not carry a topic/thread field in their Bot API request/event.
+        if feature == tinychannels_conformance::ConformanceFeature::InboundReactions {
+            // MessageReactionUpdated does not carry a topic/thread field. The
+            // outbound mutation cases below resolve their actual target ID
+            // through the mock's recorded message context.
             scope.conversation.thread_id = None;
             scope.conversation.topic_id = None;
             scope.thread_id = None;
