@@ -56,7 +56,10 @@ async fn send_message_reaction_rejection_is_not_an_error_and_reports_failure() {
     mount_post(
         &server,
         "setMessageReaction",
-        ResponseTemplate::new(400).set_body_string("REACTION_INVALID"),
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": false,
+            "description": "REACTION_INVALID"
+        })),
     )
     .await;
     let events = Arc::new(RecordingEvents::default());
