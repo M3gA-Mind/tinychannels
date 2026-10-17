@@ -600,7 +600,7 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         .unwrap();
     assert_eq!(publication["direction"], "inbound");
     assert_eq!(publication["codec"], "wav_pcm16");
-    assert_eq!(publication["mediaReference"]["opaque_id"], opaque_id);
+    assert_eq!(publication["mediaReference"]["opaqueId"], opaque_id);
     assert!(
         voice_requests
             .iter()
