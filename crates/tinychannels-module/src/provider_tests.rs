@@ -11,29 +11,86 @@ async fn codec_adapter_calls_loaded_tinyvoice_module() {
 
     let path = std::env::var("TINYVOICE_MODULE_ARTIFACT").expect("module artifact env");
     let bytes = std::fs::read(&path).expect("read TinyVoice artifact");
-    assert_eq!(hex::encode(sha2::Sha256::digest(&bytes)), "0f3075a34d223a88048a8c959a80e9c4cd51047851d10212d805353743433ed8");
+    let expected_sha = std::env::var("TINYVOICE_MODULE_SHA256").expect("expected artifact SHA env");
+    assert_eq!(hex::encode(sha2::Sha256::digest(&bytes)), expected_sha);
     let bus = tinybus::transport::memory::MemoryBus::new();
     let broker = Broker::new();
     let _broker_task = broker.spawn(bus.clone());
     let host = ModuleHost::new(broker);
-    host.load_file(&path).expect("load compiled TinyVoice module");
-    let connection = tinybus::Connection::connect(bus.connect().await.unwrap()).await.unwrap();
-    let client = ModuleVoiceCodec(HostChannels::new(connection));
-    let wav = include_bytes!("../../../../tinyvoice/crates/tinyvoice/tests/fixtures/voice-envelope.wav");
-    let wav_b64 = base64::engine::general_purpose::STANDARD.encode(wav);
-    let opus = client.transcode(tinychannels::host::VoiceCodecRequest {
-        audio_base64: wav_b64,
-        from: "wav_pcm16".into(),
-        target: "ogg_opus".into(),
-    }).await.expect("compiled TinyVoice WAV→Opus transcode");
-    let round_trip = client.transcode(tinychannels::host::VoiceCodecRequest {
-        audio_base64: opus.audio_base64,
-        from: "ogg_opus".into(),
-        target: "wav_pcm16".into(),
-    }).await.expect("compiled TinyVoice Opus→WAV transcode");
-    let decoded = base64::engine::general_purpose::STANDARD.decode(round_trip.audio_base64).unwrap();
+    let info = host
+        .load_file(&path)
+        .expect("load compiled TinyVoice module");
+    assert_eq!(info.name, "tinyvoice-module");
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let client = ModuleVoiceCodec(HostChannels::new(connection.clone()));
+    let wav = sine_wave_wav();
+    let wav_b64 = base64::engine::general_purpose::STANDARD.encode(&wav);
+    let probe_proxy = connection
+        .proxy(
+            tinyvoice_bus::BUS_NAME,
+            tinyvoice_bus::OBJECT_PATH,
+            tinyvoice_bus::BUS_NAME,
+        )
+        .unwrap();
+    let info: tinyvoice_bus::codec::CodecInfo = probe_proxy
+        .call(
+            tinyvoice_bus::names::methods::CODEC_PROBE,
+            (tinyvoice_bus::codec::CodecInput {
+                audio_base64: wav_b64.clone(),
+            },),
+        )
+        .await
+        .unwrap();
+    assert_eq!(info.codec, AudioCodec::WavPcm16);
+    assert!(info.duration_ms > 0);
+    let opus = client
+        .transcode(tinychannels::host::VoiceCodecRequest {
+            audio_base64: wav_b64,
+            from: "wav_pcm16".into(),
+            target: "ogg_opus".into(),
+        })
+        .await
+        .expect("compiled TinyVoice WAV→Opus transcode");
+    let round_trip = client
+        .transcode(tinychannels::host::VoiceCodecRequest {
+            audio_base64: opus.audio_base64,
+            from: "ogg_opus".into(),
+            target: "wav_pcm16".into(),
+        })
+        .await
+        .expect("compiled TinyVoice Opus→WAV transcode");
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(round_trip.audio_base64)
+        .unwrap();
     assert!(decoded.starts_with(b"RIFF"));
-    assert_ne!(AudioCodec::WavPcm16, AudioCodec::OggOpus);
+    assert!(decoded.iter().any(|byte| *byte != 0));
+}
+
+fn sine_wave_wav() -> Vec<u8> {
+    let sample_rate = 16_000u32;
+    let sample_count = sample_rate as usize;
+    let data_len = sample_count * 2;
+    let mut wav = Vec::with_capacity(44 + data_len);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36u32 + data_len as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data_len as u32).to_le_bytes());
+    for index in 0..sample_count {
+        let phase = (index as f32 * 440.0 * std::f32::consts::TAU) / sample_rate as f32;
+        let sample = (phase.sin() * 12_000.0) as i16;
+        wav.extend_from_slice(&sample.to_le_bytes());
+    }
+    wav
 }
 
 struct SlowChannel {
