@@ -623,6 +623,8 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             } else {
                 endpoint_kind
             };
+            let multipart_fields = ["photo", "video", "audio", "voice", "document", "sticker", "latitude", "phone_number", "question"]
+                .into_iter().filter(|name| raw_body.contains(&format!("name=\"{name}\""))).collect::<Vec<_>>();
             let request_summary = serde_json::json!({
                 "endpoint": endpoint,
                 "chat_id": chat,
@@ -632,8 +634,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 "message_id": field("message_id"),
                 "text": body.get("text"),
                 "reply_markup": body.get("reply_markup"),
-                "multipart_fields": ["photo", "video", "audio", "voice", "document", "sticker", "latitude", "phone_number", "question"]
-                    .into_iter().filter(|name| raw_body.contains(&format!("name=\"{name}\""))).collect::<Vec<_>>(),
+                "multipart_fields": multipart_fields,
             });
             let ids = self.response_ids.lock().unwrap();
             let platform_message_ids = ids.iter().rev().find(|(path, _)| path == endpoint)
