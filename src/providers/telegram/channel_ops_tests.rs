@@ -120,8 +120,12 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                     operation: "send".into(),
                     channel: self.scope.channel.clone(),
                     conversation,
-                    reply_to_id: body.get("reply_to_message_id").map(|value| value.as_str().unwrap_or_default().to_owned()),
-                    thread_id: body.get("message_thread_id").map(|value| value.as_str().unwrap_or_default().to_owned()),
+                    reply_to_id: body
+                        .get("reply_to_message_id")
+                        .map(|value| value.as_str().unwrap_or_default().to_owned()),
+                    thread_id: body
+                        .get("message_thread_id")
+                        .map(|value| value.as_str().unwrap_or_default().to_owned()),
                     payload_kinds,
                     platform_message_ids: vec!["321".into()],
                     request: body,

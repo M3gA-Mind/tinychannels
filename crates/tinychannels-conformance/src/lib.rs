@@ -363,7 +363,12 @@ pub fn intent_scope(intent: &ChannelOutboundIntent) -> Option<ExpectedScope> {
         conversation: intent.conversation_ref.clone()?,
         reply_to_id: intent.reply_to_id.clone(),
         thread_id: intent.thread_id.clone().or_else(|| {
-            intent.conversation_ref.as_ref().and_then(|conversation| conversation.thread_id.clone().or_else(|| conversation.topic_id.clone()))
+            intent.conversation_ref.as_ref().and_then(|conversation| {
+                conversation
+                    .thread_id
+                    .clone()
+                    .or_else(|| conversation.topic_id.clone())
+            })
         }),
     })
 }

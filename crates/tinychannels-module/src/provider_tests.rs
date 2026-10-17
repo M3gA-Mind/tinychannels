@@ -46,9 +46,11 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
     > {
         use tinychannels_conformance::ConformanceFeature as Feature;
         let payload = match feature {
-            Feature::Text => tinychannels_bus::OutboundPayload::Text {
-                text: "module-kit".into(),
-            },
+            Feature::Text | Feature::ThreadAddressing | Feature::ReplyAddressing => {
+                tinychannels_bus::OutboundPayload::Text {
+                    text: "module-kit".into(),
+                }
+            }
             Feature::Image => tinychannels_bus::OutboundPayload::Media {
                 text: None,
                 media_urls: vec!["https://example.invalid/image.png".into()],
@@ -68,6 +70,8 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             conversation_id: self.scope.conversation.id.clone(),
             channel_ref: Some(self.scope.channel.clone()),
             conversation_ref: Some(self.scope.conversation.clone()),
+            reply_to_id: self.scope.reply_to_id.clone(),
+            thread_id: self.scope.thread_id.clone(),
             payload,
             ..Default::default()
         };
@@ -83,11 +87,8 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 .get("chat_id")
                 .and_then(|value| value.as_str())
                 .unwrap_or_default();
-            let conversation = ConversationRef {
-                kind: ConversationKind::Dm,
-                id: chat.to_owned(),
-                ..Default::default()
-            };
+            let mut conversation = self.scope.conversation.clone();
+            conversation.id = chat.to_owned();
             let payload_kinds = if body.get("text").is_some() {
                 vec!["text".into()]
             } else {
@@ -101,8 +102,12 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     operation: "send".into(),
                     channel: self.scope.channel.clone(),
                     conversation,
-            reply_to_id: body.get("reply_to_message_id").map(|value| value.as_str().unwrap_or_default().to_owned()),
-            thread_id: body.get("message_thread_id").map(|value| value.as_str().unwrap_or_default().to_owned()),
+                    reply_to_id: body
+                        .get("reply_to_message_id")
+                        .map(|value| value.as_str().unwrap_or_default().to_owned()),
+                    thread_id: body
+                        .get("message_thread_id")
+                        .map(|value| value.as_str().unwrap_or_default().to_owned()),
                     payload_kinds,
                     platform_message_ids: vec!["321".into()],
                     request: body,
