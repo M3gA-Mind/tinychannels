@@ -7,6 +7,23 @@
 
 use async_trait::async_trait;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceCodecRequest {
+    pub audio_base64: String,
+    pub from: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceCodecResult {
+    pub audio_base64: String,
+}
+
+#[async_trait]
+pub trait VoiceCodec: Send + Sync {
+    async fn transcode(&self, request: VoiceCodecRequest) -> anyhow::Result<VoiceCodecResult>;
+}
+
 /// Persist audio with a host-authorized reference before a provider forwards
 /// it to a normalized channel envelope.
 #[derive(Debug, Clone, PartialEq, Eq)]
