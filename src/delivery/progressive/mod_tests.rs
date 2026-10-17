@@ -381,16 +381,17 @@ async fn id_less_initial_draft_disables_edits() {
 }
 
 #[tokio::test]
-async fn failed_initial_draft_sends_count_against_the_budget() {
+async fn uncertain_initial_draft_stops_retries_and_preserves_possible_delivery() {
     let (sender, mut reply) = turn("telegram:7");
-    FakeSender::script(&sender.sends, Outcome::Err(other));
     FakeSender::script(&sender.sends, Outcome::Err(other));
     reply.on_text_delta("a");
     reply.edit_tick().await;
     reply.on_text_delta("b");
     reply.edit_tick().await;
+    assert_eq!(sender.calls().len(), 1, "uncertain initial send is not retried");
     assert!(reply.state().edit_disabled);
-    assert!(!reply.state().draft_sent);
+    assert!(reply.state().draft_sent);
+    assert!(reply.state().delivery_uncertain);
 }
 
 #[tokio::test]
