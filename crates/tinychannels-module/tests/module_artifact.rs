@@ -1102,10 +1102,7 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     let telegram_api = MockServer::start().await;
     // SAFETY: this ignored integration test is run by itself against the compiled artifact.
     unsafe {
-        std::env::set_var(
-            "OPENHUMAN_TELEGRAM_BOT_API_BASE",
-            telegram_api.uri(),
-        );
+        std::env::set_var("OPENHUMAN_TELEGRAM_BOT_API_BASE", telegram_api.uri());
     }
     Mock::given(method("POST"))
         .and(path_regex(".*/getUpdates"))
@@ -1255,7 +1252,11 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .await
         .unwrap();
     let requests = telegram_api.received_requests().await.unwrap();
-    assert!(requests.iter().any(|request| request.url.path().ends_with("/sendPhoto")));
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.url.path().ends_with("/sendPhoto"))
+    );
 
     runtime_proxy
         .call_confidential::<()>("StopChannel", "telegram")

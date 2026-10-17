@@ -281,7 +281,6 @@ impl ModuleMediaRepository {
             Arc::clone(storage.blobs()),
         ))
     }
-
 }
 
 #[async_trait::async_trait]
