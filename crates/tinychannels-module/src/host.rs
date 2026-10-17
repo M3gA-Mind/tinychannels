@@ -473,7 +473,7 @@ impl HostChannels {
     ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
         let maximum = usize::try_from(request.max_bytes)
             .map_err(|_| Error::failed("voice media byte limit is invalid"))?;
-        let result = self
+        let result: tinychannels_bus::HostReadVoiceMediaResult = self
             .voice_callback(host_methods::READ_VOICE_MEDIA, request)
             .await?;
         let decoded = base64::Engine::decode(
