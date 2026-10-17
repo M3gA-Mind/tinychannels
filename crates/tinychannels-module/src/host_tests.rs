@@ -613,7 +613,7 @@ async fn denied_voice_publication_removes_unclaimed_shared_media() {
         .voice_publication_failures
         .store(1, Ordering::SeqCst);
     let provider_host =
-        Arc::new(crate::provider::Hooks::default().host(host.clone(), "telegram".into()));
+        Arc::new(crate::provider::Hooks::default()).host(host.clone(), "telegram".into());
     let store = provider_host.voice_media_store().unwrap();
     let scope = tinychannels_bus::HostVoiceScope {
         conversation: tinychannels_bus::ConversationRef {
