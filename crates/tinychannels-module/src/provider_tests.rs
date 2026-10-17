@@ -408,6 +408,7 @@ struct RunningTelegramConformance {
     scope: tinychannels_conformance::ExpectedScope,
     media: std::collections::HashMap<tinychannels_conformance::ConformanceFeature, tinychannels_bus::MediaReference>,
     callbacks: IngressVoiceCallback,
+    provider_host: Arc<dyn tinychannels::host::ChannelHost>,
     observed: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
     request_cursor: std::sync::Mutex<usize>,
     response_cursor: std::sync::Mutex<usize>,
@@ -511,17 +512,27 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     channel: self.scope.channel.clone(), conversation: self.scope.conversation.clone(),
                     turn_id: "turn-kit".into(),
                 };
-                let synthesized = self.callbacks.synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
-                    scope: scope.clone(), text: "speak this".into(), voice: None, format: Some("ogg_opus".into()),
+                let synthesizer = self.provider_host.synthesizer()
+                    .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
+                let synthesized = synthesizer.synthesize_scoped(scope.clone(), tinychannels::host::SpeechRequest {
+                    text: "speak this".into(), voice: None, format: Some("ogg_opus".into()),
+                    ..Default::default()
                 }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let stored = self.callbacks.store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
-                    scope, direction: tinychannels_bus::HostVoiceMediaDirection::Outbound,
-                    audio_base64: synthesized.audio_base64, mime_type: synthesized.mime_type,
-                    codec: Some("ogg_opus".into()), duration_ms: synthesized.duration_ms,
-                    file_name: Some("synthesized.ogg".into()), media_reference: None,
+                let audio = base64::engine::general_purpose::STANDARD.decode(&synthesized.audio_base64)
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let repository = self.provider_host.media_repository()
+                    .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
+                let stored = repository.store_media(tinychannels::host::MediaStoreRequest {
+                    metadata: tinychannels::host::MediaMetadata {
+                        scope: scope.clone(), kind: tinychannels_bus::MediaKind::Audio,
+                        content_type: synthesized.mime_type.clone(), file_name: Some("synthesized.ogg".into()),
+                        duration_ms: synthesized.duration_ms, codec: Some("ogg_opus".into()),
+                        voice_direction: Some(tinychannels_bus::HostVoiceMediaDirection::Outbound),
+                        dedupe_key: None, max_bytes: 8 * 1024 * 1024,
+                    }, bytes: audio,
                 }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                 tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Media {
-                    media: stored.media, audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: synthesized.duration_ms,
+                    media: stored, audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: synthesized.duration_ms,
                 } }
             }
             Feature::VoiceIn | Feature::InboundReactions => tinychannels_bus::OutboundPayload::Text { text: "ingress observation".into() },
@@ -573,7 +584,9 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 if voice.and_then(|v| v.get("transcript")).and_then(|t| t.get("text")).and_then(serde_json::Value::as_str).is_some() { payload_kinds.push("transcript".into()); }
                 self.observed.lock().unwrap().push(tinychannels_conformance::WireObservation {
                     feature, operation: "voice_in".into(), channel, conversation,
-                    reply_to_id: None, thread_id: None, payload_kinds, platform_message_ids: Vec::new(), request: envelope,
+                    reply_to_id: None,
+                    thread_id: conversation.thread_id.clone().or_else(|| conversation.topic_id.clone()),
+                    payload_kinds, platform_message_ids: Vec::new(), request: envelope,
                 });
                 return Ok(None);
             }
@@ -601,31 +614,6 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     recipient: self.scope.conversation.id.clone(),
                 }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                 Ok(None)
-            }
-            Feature::VoiceIn => {
-                tokio::time::timeout(std::time::Duration::from_secs(5), async {
-                    loop {
-                        if !self.callbacks.inbound.lock().await.is_empty() { break; }
-                        self.callbacks.ingress_changed.notified().await;
-                    }
-                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let envelope = self.callbacks.inbound.lock().await.first().map(|(_, value)| value.clone())
-                    .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
-                let channel = serde_json::from_value(envelope.get("channel").cloned().unwrap_or_default())
-                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let conversation: ConversationRef = serde_json::from_value(envelope.get("conversation").cloned().unwrap_or_default())
-                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let parts = envelope.get("parts").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
-                let voice = parts.iter().find(|part| part.get("type").and_then(serde_json::Value::as_str) == Some("voice_note"))
-                    .and_then(|part| part.get("voiceNote"));
-                let mut payload_kinds = Vec::new();
-                if voice.and_then(|v| v.get("media")).is_some() { payload_kinds.push("audio".into()); }
-                if voice.and_then(|v| v.get("transcript")).and_then(|t| t.get("text")).and_then(serde_json::Value::as_str).is_some() { payload_kinds.push("transcript".into()); }
-                self.observed.lock().unwrap().push(tinychannels_conformance::WireObservation {
-                    feature, operation: "voice_in".into(), channel, conversation,
-                    reply_to_id: None, thread_id: Some("77".into()), payload_kinds, platform_message_ids: Vec::new(), request: envelope,
-                });
-                return Ok(None);
             }
             Feature::Reactions => {
                 self.running.interact(tinychannels_bus::ChannelInteraction::SendReaction {
@@ -1995,7 +1983,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
             .expect("factory channel has no outside owners")
             .with_api_base_for_test(server.uri()),
     );
-    let running = Running::start_telegram(channel, hooks, host, None, true);
+    let running = Running::start_telegram(channel, hooks, host, None, false);
     let handle = running.adapter_handle();
     let repository = provider_host.media_repository().expect("configured Telegram host media repository");
     let media_scope = tinychannels_bus::HostVoiceScope {
@@ -2048,6 +2036,8 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         response_ids,
         media,
         callbacks,
+        provider_host,
+        response_cursor: std::sync::Mutex::new(0),
     };
     let descriptor = fixture.adapter.descriptor();
     assert_eq!(descriptor.id, "telegram");
