@@ -524,7 +524,10 @@ async fn voice_update_parser_preserves_caption_without_claiming_transcription() 
     assert_eq!(msg.sender, "alice");
     assert_eq!(msg.thread_ts.as_deref(), Some("60"));
     let requests = stt.requests.lock().unwrap().clone();
-    assert!(requests.is_empty(), "STT enrichment belongs to shared ingress");
+    assert!(
+        requests.is_empty(),
+        "STT enrichment belongs to shared ingress"
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -552,14 +555,9 @@ async fn update_without_text_or_voice_yields_nothing() {
         "message": { "message_id": 1, "chat": { "id": 1 }, "sticker": {} }
     });
     assert!(ch.parse_update_message_or_voice(&update).await.is_none());
-    assert!(
-        ch.parse_update_voice_message(&serde_json::json!({}))
-            .await
-            .is_none()
-    );
+    assert!(TelegramChannel::parse_update_voice_attachment(&update).is_none());
 }
 
-#[tokio::test]
 #[tokio::test]
 async fn voice_without_file_id_is_ignored() {
     let update = serde_json::json!({ "message": { "voice": { "file_id": "  " } } });
@@ -733,26 +731,5 @@ fn normalize_incoming_content_without_mention_collapses_whitespace() {
     assert_eq!(
         TelegramChannel::normalize_incoming_content("   ", "bot"),
         None
-    );
-}
-
-#[test]
-fn voice_content_without_caption_is_bare_transcript() {
-    let ctx = TelegramIncomingMessageContext {
-        sender_identity: "a".into(),
-        sender_name: None,
-        reply_target: "1".into(),
-        chat_id: "1".into(),
-        message_id: 1,
-        mention_text: None,
-    };
-    assert_eq!(
-        TelegramChannel::voice_message_content("words", Some("  "), &ctx, false),
-        "words"
-    );
-    assert_eq!(
-        TelegramChannel::voice_message_content("words", Some("cap"), &ctx, true),
-        "words",
-        "mention-only groups use the normalized mention text, not the raw caption"
     );
 }
