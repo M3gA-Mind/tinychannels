@@ -64,11 +64,6 @@ impl MediaUploads {
 
     pub(crate) async fn binding(&self, request: &MediaUploadFinish) -> Result<(String, usize)> {
         let mut state = self.state.lock().await;
-        state.uploads.retain(|_, upload| {
-            upload.finalizing
-                || upload.request.instance != request.instance
-                || upload.activation == activation
-        });
         Self::prune(&mut state);
         state
             .uploads
@@ -109,6 +104,11 @@ impl MediaUploads {
             return Err(Error::failed("media upload exceeds its chunk limit"));
         }
         let mut state = self.state.lock().await;
+        state.uploads.retain(|_, upload| {
+            upload.finalizing
+                || upload.request.instance != request.instance
+                || upload.activation == activation
+        });
         Self::prune(&mut state);
         if state.uploads.len() >= tinychannels_bus::module_media::MEDIA_UPLOAD_CAPACITY {
             return Err(Error::failed("media upload capacity is full"));
@@ -202,6 +202,8 @@ impl MediaUploads {
         if upload.finalizing {
             let changed = upload.changed.clone();
             let notified = changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
             drop(state);
             notified.await;
             return Box::pin(self.finish(request, repository)).await;
@@ -249,6 +251,7 @@ impl MediaUploads {
         let Some(upload) = state.uploads.remove(&request.0.0) else {
             return Err(Error::failed("media upload is no longer active"));
         };
+        let changed = upload.changed.clone();
         let media = match media {
             Ok(media) => media,
             Err(error) => {
@@ -270,6 +273,7 @@ impl MediaUploads {
             },
         );
         Self::trim_terminal(&mut state);
+        changed.notify_waiters();
         Ok(media)
     }
 

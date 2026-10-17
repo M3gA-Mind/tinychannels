@@ -140,6 +140,16 @@ impl Channels {
         }
     }
 
+    async fn media_activation(&self, instance: &str) -> BusResult<usize> {
+        self.running
+            .lock()
+            .await
+            .get(instance)
+            .filter(|provider| !provider.is_finished())
+            .map(|provider| Arc::as_ptr(provider) as usize)
+            .ok_or_else(|| BusError::failed("media provider instance is not running"))
+    }
+
     async fn start_channel_inner(
         &self,
         name: String,
@@ -1024,16 +1034,8 @@ impl Channels {
         if self.terminal.load(Ordering::SeqCst) {
             return Err(BusError::failed("module is shutting down"));
         }
-        if !self
-            .running
-            .lock()
-            .await
-            .get(&request.instance)
-            .is_some_and(|provider| !provider.is_finished())
-        {
-            return Err(BusError::failed("media provider instance is not running"));
-        }
-        self.media_uploads.begin(request).await
+        let activation = self.media_activation(&request.instance).await?;
+        self.media_uploads.begin(request, activation).await
     }
 
     /// Append one ordered, retry-safe media chunk over confidential TinyBus.
@@ -1044,6 +1046,10 @@ impl Channels {
     ) -> BusResult<u32> {
         if self.terminal.load(Ordering::SeqCst) {
             return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_uploads.binding_handle(&chunk.handle).await?;
+        if self.media_activation(&instance).await? != activation {
+            return Err(BusError::failed("media upload belongs to another provider activation"));
         }
         self.media_uploads.append(chunk).await
     }
@@ -1057,21 +1063,15 @@ impl Channels {
         if self.terminal.load(Ordering::SeqCst) {
             return Err(BusError::failed("module is shutting down"));
         }
-        let instance = self.media_uploads.instance(&request).await?;
-        if !self
-            .running
-            .lock()
-            .await
-            .get(&instance)
-            .is_some_and(|provider| !provider.is_finished())
-        {
-            return Err(BusError::failed("media provider instance is not running"));
+        let (instance, activation) = self.media_uploads.binding(&request).await?;
+        if self.media_activation(&instance).await? != activation {
+            return Err(BusError::failed("media upload belongs to another provider activation"));
         }
         let repository = crate::provider::ModuleMediaRepository(
             self.host.clone(),
             instance,
         );
-        self.media_uploads.finish(request, &repository).await
+        self.media_uploads.finish(request, activation, &repository).await
     }
 
     /// Abort buffered media without writing a durable record.
