@@ -145,6 +145,7 @@ impl std::fmt::Display for RunningSendError {
 pub(crate) struct Hooks {
     hooks: StdMutex<Vec<ShutdownHook>>,
     configured_instance: StdMutex<Option<String>>,
+    media_account_scope: StdMutex<Option<String>>,
 }
 impl LifecycleRegistry for Hooks {
     fn register_shutdown(&self, _name: &str, hook: ShutdownHook) {
@@ -165,6 +166,10 @@ impl Hooks {
             .configured_instance
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(configured_instance.clone());
+        *self
+            .media_account_scope
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = media_account_scope.clone();
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(
@@ -939,32 +944,28 @@ impl Running {
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
-        media_account_scope: Option<String>,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, media_account_scope, None, false)
+        Self::start_inner(channel, hooks, host, None, false)
     }
     pub(crate) fn start_supervised(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
-        media_account_scope: Option<String>,
         policy: ChannelSupervisionPolicy,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, media_account_scope, Some(policy), false)
+        Self::start_inner(channel, hooks, host, Some(policy), false)
     }
     pub(crate) fn start_outbound(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
-        media_account_scope: Option<String>,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, media_account_scope, None, true)
+        Self::start_inner(channel, hooks, host, None, true)
     }
     fn start_inner(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
-        media_account_scope: Option<String>,
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
     ) -> Arc<Self> {
@@ -981,6 +982,11 @@ impl Running {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .unwrap_or_else(|| listen_channel.name().to_owned());
+        let media_account_scope = hooks
+            .media_account_scope
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let worker_cancel = cancel.clone();
         let worker_instance = configured_instance.clone();
         let worker = tokio::spawn(async move {
