@@ -1,12 +1,27 @@
 # Shared voice pipeline
 
 TinyChannels owns the provider-neutral voice flow. Providers download inbound
-audio once, store it through `StoreVoiceMedia`, and deliver a normalized voice
-note containing the durable opaque media ID. The shared module ingress resolves
-that ID through `ReadVoiceMedia`, preserves the audio note, and enriches it with
-the host STT transcript. Provider transcripts take precedence, and completed
-host transcripts survive replay. A failed or unavailable STT callback marks
-the transcript unavailable without removing the stored audio.
+audio once and persist it through the host-granted scoped `BlobStore` media
+route, then deliver a normalized voice note containing a durable opaque media
+ID. Metadata binds that ID to the configured instance, account, full
+conversation, and originating turn. The `tinychannels_media_v1_` prefix marks
+references owned by this store; arbitrary unprefixed IDs remain authenticated
+legacy host references and resolve through `ReadVoiceMedia`. A malformed or
+out-of-scope ID in the new namespace never falls back to the legacy callback.
+The shared module ingress preserves the audio note and enriches it with the
+host STT transcript. Provider transcripts take precedence, and completed host
+transcripts survive replay. A failed or unavailable STT callback marks the
+transcript unavailable without removing the stored audio.
+
+The blob key is restricted to `channels/media/`; metadata lives in
+`channels_media_metadata`. The host grants only that blob prefix and metadata
+collection through `ScopedStorage`. The module validates the complete stored
+scope on every read and applies content-type, byte-size, and digest checks.
+Pending writes and deletions retain durable state for cleanup retries. Hosts
+still own their local-cache materialization: a returned `MediaReference.path`
+must be an actual path produced by host storage after its protected-path and
+symlink guards, never a blob key or provider URL. The OpenHuman adapter's
+narrow grant and guarded cache projection are downstream integration work.
 
 For completed assistant turns, the module asks the host's scoped
 `GetVoiceReplyPolicy` callback for its mode and verified turn facts. Automatic
@@ -16,10 +31,13 @@ Approval, tool, and clarification prompts are not automatically voiced. The
 provider's advertised output codecs and size/duration limits constrain
 synthesis. Speech is converted and probed by the loaded TinyVoice module
 through `tinyvoice-bus`, then persisted by `StoreVoiceMedia`. The durable opaque
-ID remains the intent identity. A separate `accessibleUrl` is retained only when the host has
-authorized a link that the recipient can open; it must not be a local path,
-provider token URL, or temporary cache location. Hosts own access checks for
-opaque IDs and link expiry/revocation.
+ID remains the intent identity. The host's existing voice publication callback
+receives the shared media reference so it can authorize a recipient link or
+materialize a guarded local cache path without storing a second copy. A separate
+`accessibleUrl` is retained only when the host has authorized a link that the
+recipient can open; it must not be a local path, provider token URL, or
+temporary cache location. Hosts own access checks for opaque IDs and link
+expiry/revocation.
 
 Providers resolve opaque IDs through a scoped `ReadVoiceMedia` call for native
 uploads. Telegram emits native voice for Ogg Opus and native audio for its

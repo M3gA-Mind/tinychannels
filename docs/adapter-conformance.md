@@ -44,6 +44,14 @@ account and conversation scope. The same configured Telegram adapter rejects
 undeclared image content before any platform request. CI runs these tests and
 the conformance-kit self-tests through `scripts/test-adapter-conformance.sh`.
 
+The shared media foundation also tests a connected Telegram inbound photo
+flow: a wiremock `getFile` response and authenticated file download pass through
+MIME/body validation into the host-scoped blob store, then appear as an ordered
+typed image with scope-bound readback. This proves the shared inbound path; it
+does not claim Telegram native outbound image delivery or conformance for other
+providers. Native upload request/receipt evidence remains required from each
+provider port before final issue acceptance.
+
 | Behavior | Foundation status | Final provider coverage |
 | --- | --- | --- |
 | Text | Running factory and Telegram Bot API mock-wire request/receipt tested | Pending full provider port coverage |
