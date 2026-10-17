@@ -39,19 +39,26 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
     async fn exercise(
         &self,
         feature: tinychannels_conformance::ConformanceFeature,
-    ) -> std::result::Result<Option<tinychannels_bus::ChannelSendOutcome>, tinychannels_bus::ChannelSendError> {
+    ) -> std::result::Result<
+        Option<tinychannels_bus::ChannelSendOutcome>,
+        tinychannels_bus::ChannelSendError,
+    > {
         use tinychannels_conformance::ConformanceFeature as Feature;
         let payload = match feature {
-            Feature::Text => tinychannels_bus::OutboundPayload::Text { text: "module-kit".into() },
+            Feature::Text => tinychannels_bus::OutboundPayload::Text {
+                text: "module-kit".into(),
+            },
             Feature::Image => tinychannels_bus::OutboundPayload::Media {
                 text: None,
                 media_urls: vec!["https://example.invalid/image.png".into()],
             },
-            _ => return Err(tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Unsupported,
-                message: "fixture does not expose this operation".into(),
-                ..Default::default()
-            }),
+            _ => {
+                return Err(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Unsupported,
+                    message: "fixture does not expose this operation".into(),
+                    ..Default::default()
+                });
+            }
         };
         let intent = tinychannels_bus::ChannelOutboundIntent {
             idempotency_key: "module-kit-send".into(),
@@ -70,21 +77,31 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 continue;
             }
             let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
-            let chat = body.get("chat_id").and_then(|value| value.as_str()).unwrap_or_default();
+            let chat = body
+                .get("chat_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
             let conversation = ConversationRef {
                 kind: ConversationKind::Dm,
                 id: chat.to_owned(),
                 ..Default::default()
             };
-            let payload_kinds = if body.get("text").is_some() { vec!["text".into()] } else { vec![] };
-            self.observed.lock().unwrap().push(tinychannels_conformance::WireObservation {
-                feature,
-                channel: self.scope.channel.clone(),
-                conversation,
-                payload_kinds,
-                platform_message_ids: vec!["321".into()],
-                request: body,
-            });
+            let payload_kinds = if body.get("text").is_some() {
+                vec!["text".into()]
+            } else {
+                vec![]
+            };
+            self.observed
+                .lock()
+                .unwrap()
+                .push(tinychannels_conformance::WireObservation {
+                    feature,
+                    channel: self.scope.channel.clone(),
+                    conversation,
+                    payload_kinds,
+                    platform_message_ids: vec!["321".into()],
+                    request: body,
+                });
         }
         *cursor = requests.len();
         result.map(Some)
@@ -1122,12 +1139,16 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         observed: Mutex::new(Vec::new()),
         request_cursor: Mutex::new(0),
     };
-    check_feature(&fixture, ConformanceFeature::Text).await.unwrap();
+    check_feature(&fixture, ConformanceFeature::Text)
+        .await
+        .unwrap();
     let observation = fixture.observations().pop().unwrap();
     assert_eq!(observation.request["chat_id"], "100");
     assert_eq!(observation.request["text"], "module-kit");
     assert_eq!(observation.platform_message_ids, ["321"]);
-    check_feature(&fixture, ConformanceFeature::Image).await.unwrap();
+    check_feature(&fixture, ConformanceFeature::Image)
+        .await
+        .unwrap();
     assert!(fixture.observations().is_empty());
     running.stop().await.unwrap();
 }
