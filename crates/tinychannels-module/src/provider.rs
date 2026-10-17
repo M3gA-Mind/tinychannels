@@ -23,6 +23,10 @@ impl<T> Drop for AbortOnDrop<T> {
 enum ProviderOperation {
     Send(SendMessage),
     SendTyped(tinychannels_bus::ChannelOutboundMessage),
+    NativeReaction(tinychannels_bus::ChannelRef, tinychannels_bus::ConversationRef, String, tinychannels_bus::channel::ChannelReaction, bool),
+    NativeEdit(tinychannels_bus::channel::MessageReceipt, tinychannels_bus::ChannelOutboundIntent),
+    NativeDelete(tinychannels_bus::channel::MessageReceipt),
+    NativeDraft(Option<tinychannels_bus::channel::MessageReceipt>, tinychannels_bus::ChannelOutboundIntent),
     Interaction(tinychannels_bus::ChannelInteraction),
 }
 
@@ -39,6 +43,7 @@ const MAX_TYPING_REFRESH_INTERVAL_SECS: u64 = 60;
 
 async fn dispatch_interaction(
     channel: Arc<dyn Channel>,
+    native: Option<NativePorts>,
     interaction: tinychannels_bus::ChannelInteraction,
     typing: &mut TypingRefreshes,
 ) -> Result<tinychannels_bus::ChannelInteractionResult> {
@@ -990,8 +995,34 @@ async fn listen_with_supervision(
 }
 
 /// A resource is retained until its owning task acknowledges cleanup.
+#[derive(Clone)]
+struct NativePorts {
+    adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
+    typed_send: Arc<dyn tinychannels::channel::ChannelTypedSend>,
+    typing: Arc<dyn tinychannels::channel::ChannelTyping>,
+    reactions: Arc<dyn tinychannels::channel::ChannelReaction>,
+    edits: Arc<dyn tinychannels::channel::ChannelEdit>,
+    deletes: Arc<dyn tinychannels::channel::ChannelDelete>,
+    drafts: Arc<dyn tinychannels::channel::ChannelStreamingDraft>,
+}
+
+impl NativePorts {
+    fn telegram(channel: Arc<tinychannels::TelegramChannel>) -> Self {
+        Self {
+            adapter: channel.clone(),
+            typed_send: channel.clone(),
+            typing: channel.clone(),
+            reactions: channel.clone(),
+            edits: channel.clone(),
+            deletes: channel.clone(),
+            drafts: channel,
+        }
+    }
+}
+
 pub(crate) struct Running {
     pub(crate) channel: Arc<dyn Channel>,
+    native_ports: Option<NativePorts>,
     pub(crate) media_account_scope: Option<String>,
     configured_instance: String,
     send: mpsc::Sender<SendCommand>,
@@ -1094,15 +1125,14 @@ fn adapter_operation_error(error: RunningSendError) -> tinychannels::channel::Ch
 #[async_trait::async_trait]
 impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
     fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
-        let mut descriptor = self.running.adapter_descriptor();
-        descriptor
-            .metadata
-            .insert("adapterMode".into(), "native-v2".into());
+        let mut descriptor = self.running.native_ports.as_ref().expect("Telegram native ports").adapter.descriptor();
+        descriptor.account_id = Some(self.running.configured_instance.clone());
+        descriptor.metadata.insert("configuredInstance".into(), self.running.configured_instance.clone());
         descriptor
     }
 
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.running.channel.capabilities()
+        self.running.native_ports.as_ref().expect("Telegram native ports").adapter.declared_capabilities()
     }
 
     fn proactive_target(&self) -> Option<String> {
@@ -1389,7 +1419,7 @@ impl Running {
         hooks: Arc<Hooks>,
         host: HostChannels,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, None, false)
+        Self::start_inner(channel, hooks, host, None, false, None)
     }
     pub(crate) fn start_supervised(
         channel: Arc<dyn Channel>,
@@ -1397,21 +1427,33 @@ impl Running {
         host: HostChannels,
         policy: ChannelSupervisionPolicy,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, Some(policy), false)
+        Self::start_inner(channel, hooks, host, Some(policy), false, None)
     }
     pub(crate) fn start_outbound(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, None, true)
+        Self::start_inner(channel, hooks, host, None, true, None)
     }
+    pub(crate) fn start_telegram(
+        channel: Arc<tinychannels::TelegramChannel>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: Option<ChannelSupervisionPolicy>,
+        outbound_only: bool,
+    ) -> Arc<Self> {
+        let channel_dyn: Arc<dyn Channel> = channel.clone();
+        Self::start_inner(channel_dyn, hooks, host, supervision, outbound_only, Some(NativePorts::telegram(channel)))
+    }
+
     fn start_inner(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
+        native_ports: Option<NativePorts>,
     ) -> Arc<Self> {
         let (cancel, mut canceled) = watch::channel(false);
         let send_cancel = cancel.subscribe();
@@ -1433,6 +1475,7 @@ impl Running {
             .clone();
         let worker_cancel = cancel.clone();
         let worker_instance = configured_instance.clone();
+        let worker_native = native_ports.clone();
         let worker = tokio::spawn(async move {
             let name = listen_channel.name().to_owned();
             host.report_status(&name, "connecting", None).await;
@@ -1471,9 +1514,13 @@ impl Running {
                             .await
                             .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
                             .map_err(|error| Error::failed(error.to_string())),
-                        ProviderOperation::SendTyped(message) => send_channel
-                            .send_typed_with_receipt(&message)
-                            .await
+                        ProviderOperation::SendTyped(message) => async {
+                            if let Some(native) = &worker_native {
+                                native.typed_send.send_typed(&message).await.map_err(|error| anyhow::anyhow!(error.message))
+                            } else {
+                                send_channel.send_typed_with_receipt(&message).await
+                            }
+                        }.await
                             .map(|mut outcome| {
                                 outcome.receipt.idempotency_key =
                                     Some(message.idempotency_key.clone());
@@ -1503,7 +1550,7 @@ impl Running {
                             })
                             .map_err(|error| Error::failed(error.to_string())),
                         ProviderOperation::Interaction(interaction) => {
-                            dispatch_interaction(send_channel.clone(), interaction, &mut typing)
+                            dispatch_interaction(send_channel.clone(), worker_native.clone(), interaction, &mut typing)
                                 .await
                         }
                     };
@@ -1539,6 +1586,7 @@ impl Running {
         });
         Arc::new(Self {
             channel,
+            native_ports,
             media_account_scope,
             configured_instance,
             send,
