@@ -2592,7 +2592,7 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
                 }
             },
             {
-                "update_id": 44,
+                "update_id": 42,
                 "callback_query": {
                     "id": "allowed-username", "data": "other-action",
                     "from": {"id": 43, "username": "alice"},
@@ -2600,14 +2600,14 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
                 }
             },
             {
-                "update_id": 42,
+                "update_id": 43,
                 "message": {
                     "message_id": 82, "chat": {"id": 100, "type": "private"},
                     "from": {"id": 42, "username": "outsider"}, "text": "stop listener"
                 }
             },
             {
-                "update_id": 43,
+                "update_id": 44,
                 "message": {
                     "message_id": 83, "chat": {"id": 100, "type": "private"},
                     "from": {"id": 42, "username": "outsider"}, "text": "close listener"
