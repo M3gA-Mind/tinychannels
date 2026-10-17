@@ -1179,6 +1179,44 @@ async fn native_location_contact_buttons_poll_and_presentation_use_bot_api_metho
 }
 
 #[tokio::test]
+async fn bridge_approval_presentation_renders_scoped_inline_choice_actions() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 991 })),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]);
+    let message = typed_parts(
+        "approval-presentation",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Presentation {
+                blocks: serde_json::json!({
+                    "kind": "approval",
+                    "id": "request-42",
+                    "prompt": "Run the command?",
+                    "choices": ["Allow once", "Deny"]
+                }),
+            },
+        }],
+    );
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert!(outcome.error.is_none());
+    assert_eq!(outcome.receipt.platform_message_ids, ["991"]);
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0]["text"], "Run the command\\?");
+    let keyboard = &bodies[0]["reply_markup"]["inline_keyboard"];
+    assert_eq!(keyboard[0][0]["text"], "Allow once");
+    assert_eq!(keyboard[0][1]["text"], "Deny");
+    assert_eq!(keyboard[0][0]["callback_data"], "approval-v1:request-42:0");
+    assert_eq!(keyboard[0][1]["callback_data"], "approval-v1:request-42:1");
+}
+
+#[tokio::test]
 async fn telegram_native_data_is_explicitly_unsupported_without_provider_io() {
     let server = mock_api().await;
     let channel = channel_for(&server, &["*"]);
