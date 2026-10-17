@@ -2125,7 +2125,7 @@ async fn telegram_photo_over_ten_megabytes_is_rejected_before_http() {
 
     let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
 
-    assert!(error.to_string().contains("upload method limit"));
+    assert!(error.to_string().contains("preflight"));
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -2343,7 +2343,7 @@ async fn typed_send_receipt_applies_tool_call_tag_sanitization() {
     let bodies = json_bodies(&server, "sendMessage").await;
     assert_eq!(
         bodies[0]["text"],
-        "before[REACTION:👍|321] [IMAGE:https://example.test/image.png]"
+        r"before\[REACTION:👍\|321\] \[IMAGE:https://example\.test/image\.png\]"
     );
     assert_eq!(bodies[0]["message_id"], serde_json::Value::Null);
     let requests = server.received_requests().await.unwrap();
@@ -3054,9 +3054,9 @@ fn callback_event_rejects_oversized_or_unscoped_callback_data() {
 }
 
 #[tokio::test]
-async fn send_bare_existing_path_uploads_it_as_attachment() {
+async fn send_bare_existing_path_remains_plain_text() {
     let server = mock_api().await;
-    mount_post(&server, "sendDocument", ok()).await;
+    mount_post(&server, "sendMessage", ok()).await;
     let ch = channel_for(&server, &["*"]);
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("report.pdf");
@@ -3066,10 +3066,10 @@ async fn send_bare_existing_path_uploads_it_as_attachment() {
         .await
         .unwrap();
 
-    assert!(json_bodies(&server, "sendMessage").await.is_empty());
-    let uploads = raw_bodies(&server, "sendDocument").await;
-    assert_eq!(uploads.len(), 1);
-    assert!(uploads[0].contains("report.pdf"));
+    assert_eq!(json_bodies(&server, "sendDocument").await.len(), 0);
+    let sent = json_bodies(&server, "sendMessage").await;
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0]["text"].as_str().unwrap().contains("report.pdf"));
 }
 
 #[tokio::test]
@@ -3169,7 +3169,8 @@ fn telegram_advertises_reaction_support() {
     assert!(caps.actions.supported.contains(&"edit".into()));
     assert!(caps.actions.supported.contains(&"delete".into()));
     assert!(caps.reactions);
-    assert!(caps.events.supported.contains(&"reaction".into()));
+    assert!(caps.events.supported.contains(&"reaction_added".into()));
+    assert!(caps.events.supported.contains(&"reaction_removed".into()));
     assert!(caps.events.supported.contains(&"button_callback".into()));
     assert!(!caps.events.supported.contains(&"read_receipt".into()));
     assert!(caps.content.location.outbound);
