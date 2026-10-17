@@ -36,7 +36,20 @@ pub(super) async fn delete_channel_message(
     channel: &str,
     message_id: &str,
 ) {
-    match sender.delete(channel, message_id).await {
+    delete_channel_message_with_receipt(sender, channel, message_id, None).await;
+}
+
+pub(super) async fn delete_channel_message_with_receipt(
+    sender: &dyn ProgressiveSender,
+    channel: &str,
+    message_id: &str,
+    receipt: Option<&tinychannels_bus::channel::MessageReceipt>,
+) {
+    let result = match receipt {
+        Some(receipt) => sender.delete_with_receipt(channel, receipt).await,
+        None => sender.delete(channel, message_id).await,
+    };
+    match result {
         Ok(()) => {
             tracing::info!(
                 "[channel-inbound] deleted ephemeral msg channel='{}' msg_id={}",
@@ -99,7 +112,11 @@ pub(super) async fn finalize_channel_reply(
             );
             replace_draft(sender, channel, &message_id, final_text).await;
         } else {
-            match sender.edit(channel, &message_id, final_text).await {
+            let edit = match state.message_receipt.as_ref() {
+                Some(receipt) => sender.edit_with_receipt(channel, receipt, final_text).await,
+                None => sender.edit(channel, &message_id, final_text).await,
+            };
+            match edit {
                 Ok(()) => {
                     tracing::info!(
                         "[channel-inbound] final edit ok channel='{}' msg_id={} chars={}",
@@ -192,8 +209,17 @@ pub(super) async fn abort_channel_reply(
             delete_channel_message(sender, channel, &message_id).await;
         }
     } else {
-        for message_id in std::mem::take(&mut state.message_ids) {
-            delete_channel_message(sender, channel, &message_id).await;
+        let message_ids = std::mem::take(&mut state.message_ids);
+        let receipt = state.message_receipt.take();
+        for message_id in message_ids {
+            let part_receipt = receipt.as_ref().map(|receipt| receipt_for_part(receipt, &message_id));
+            delete_channel_message_with_receipt(
+                sender,
+                channel,
+                &message_id,
+                part_receipt.as_ref(),
+            )
+            .await;
         }
         state.message_id = None;
     }
@@ -203,4 +229,15 @@ pub(super) async fn abort_channel_reply(
     if let Some(thinking_id) = state.thinking_message_id.take() {
         delete_channel_message(sender, channel, &thinking_id).await;
     }
+}
+
+fn receipt_for_part(
+    receipt: &tinychannels_bus::channel::MessageReceipt,
+    message_id: &str,
+) -> tinychannels_bus::channel::MessageReceipt {
+    let mut part_receipt = receipt.clone();
+    part_receipt.primary_platform_message_id = Some(message_id.to_owned());
+    part_receipt.platform_message_ids = vec![message_id.to_owned()];
+    part_receipt.parts.retain(|part| part.platform_message_id == message_id);
+    part_receipt
 }
