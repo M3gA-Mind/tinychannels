@@ -120,14 +120,16 @@ impl Callback {
         request: tinychannels_bus::HostStoreVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         self.voice_scopes.lock().await.push(request.scope);
-        self.voice_requests.lock().await.push(serde_json::json!({"kind":"store","direction":request.direction,"codec":request.codec,"durationMs":request.duration_ms}));
+        self.voice_requests.lock().await.push(serde_json::json!({"kind":"store","direction":request.direction,"codec":request.codec,"durationMs":request.duration_ms,"mediaReference":request.media_reference}));
+        let media = request.media_reference.unwrap_or(tinychannels_bus::MediaReference {
+            opaque_id: Some("voice-1".into()),
+            kind: tinychannels_bus::MediaKind::Audio,
+            ..Default::default()
+        });
+        let opaque_id = media.opaque_id.as_deref().unwrap_or("unknown");
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
-            media: tinychannels_bus::MediaReference {
-                opaque_id: Some("voice-1".into()),
-                kind: tinychannels_bus::MediaKind::Audio,
-                ..Default::default()
-            },
-            accessible_url: Some("https://media.example.test/authorized/voice-1".into()),
+            media,
+            accessible_url: Some(format!("https://media.example.test/authorized/{opaque_id}")),
         })
     }
 
@@ -138,7 +140,7 @@ impl Callback {
         self.voice_scopes.lock().await.push(request.scope);
         self.voice_requests.lock().await.push(serde_json::json!({"kind":"read","opaqueId":request.opaque_id,"maxBytes":request.max_bytes}));
         Ok(tinychannels_bus::HostReadVoiceMediaResult {
-            audio_base64: "UklGRg==".into(),
+            audio_base64: "UklGRgAAAABXQVZF".into(),
             mime_type: "audio/wav".into(),
             file_name: Some("voice.wav".into()),
         })
@@ -510,11 +512,33 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         })
         .await
         .unwrap();
-    assert_eq!(stored.media.opaque_id.as_deref(), Some("voice-1"));
+    let opaque_id = stored.media.opaque_id.as_deref().unwrap();
+    assert!(opaque_id.starts_with("tinychannels_media_v1_"));
+    assert_eq!(stored.media.codec.as_deref(), Some("wav_pcm16"));
     assert_eq!(
         stored.accessible_url.as_deref(),
-        Some("https://media.example.test/authorized/voice-1")
+        Some(format!("https://media.example.test/authorized/{opaque_id}").as_str())
     );
+    let resolved = provider_host
+        .voice_media_store()
+        .unwrap()
+        .read_voice(scope.clone(), opaque_id.to_owned())
+        .await
+        .unwrap();
+    assert_eq!(resolved.audio_base64, "UklGRgAAAABXQVZF");
+    let legacy_id = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
+    assert!(provider_host
+        .voice_media_store()
+        .unwrap()
+        .read_voice(scope.clone(), legacy_id.into())
+        .await
+        .is_ok());
+    assert!(provider_host
+        .voice_media_store()
+        .unwrap()
+        .read_voice(scope.clone(), "tinychannels_media_v1_malformed".into())
+        .await
+        .is_err());
     let scopes = callback.voice_scopes.lock().await;
     assert_eq!(scopes.len(), 2);
     for observed in scopes.iter() {
