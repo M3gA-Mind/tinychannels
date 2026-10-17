@@ -1203,10 +1203,11 @@ impl TelegramChannel {
         .await
         .map_err(|_| anyhow::anyhow!("Telegram media request timed out"))?
         .map_err(|_| anyhow::anyhow!("Telegram getFile request failed"))?;
-        let file_response: serde_json::Value = tokio::time::timeout_at(deadline, file_response.json())
-            .await
-            .map_err(|_| anyhow::anyhow!("Telegram media request timed out"))?
-            .map_err(|_| anyhow::anyhow!("Telegram getFile response was invalid"))?;
+        let file_response: serde_json::Value =
+            tokio::time::timeout_at(deadline, file_response.json())
+                .await
+                .map_err(|_| anyhow::anyhow!("Telegram media request timed out"))?
+                .map_err(|_| anyhow::anyhow!("Telegram getFile response was invalid"))?;
         if !file_response
             .get("ok")
             .and_then(serde_json::Value::as_bool)
