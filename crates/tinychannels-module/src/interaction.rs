@@ -7,10 +7,13 @@ pub(crate) fn configured_adapter_capabilities(
 ) -> tinychannels_bus::ChannelCapabilities {
     let adapter = provider.adapter_handle();
     let descriptor = adapter.descriptor();
+    debug_assert_eq!(
+        descriptor.id,
+        tinychannels_bus::provider_id(provider.channel.name())
+    );
     let mut capabilities = adapter.declared_capabilities();
     capabilities.account.configured = Some(true);
     capabilities.account.enabled = Some(true);
-    capabilities.account.account_id = descriptor.account_id;
     capabilities.account.proactive_target = adapter.proactive_target();
     capabilities
 }

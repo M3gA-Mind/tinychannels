@@ -677,9 +677,7 @@ impl ConfiguredAdapterFactory {
 }
 
 impl Running {
-    pub(crate) fn adapter_handle(
-        self: &Arc<Self>,
-    ) -> ConfiguredAdapterHandle {
+    pub(crate) fn adapter_handle(self: &Arc<Self>) -> ConfiguredAdapterHandle {
         ConfiguredAdapterFactory::legacy(self.clone())
     }
 
