@@ -1370,6 +1370,22 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         handle: read.handle.clone(),
         sequence: 0,
     };
+    for (method_name, args) in [
+        (
+            "ReadMediaChunk",
+            serde_json::to_value(chunk_request.clone()).unwrap(),
+        ),
+        (
+            "AbortMediaRead",
+            serde_json::to_value(MediaReadFinish(read.handle.clone())).unwrap(),
+        ),
+    ] {
+        let error = runtime_proxy
+            .call::<serde_json::Value>(method_name, args)
+            .await
+            .unwrap_err();
+        assert_eq!(error.wire_name(), tinybus::Error::CONFIDENTIALITY_REQUIRED);
+    }
     let chunk: tinychannels_bus::MediaReadChunkResult = runtime_proxy
         .call_confidential("ReadMediaChunk", chunk_request.clone())
         .await
