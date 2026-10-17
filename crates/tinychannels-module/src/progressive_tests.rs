@@ -1722,36 +1722,37 @@ async fn thinking_multipart_receipt_drives_per_part_token_cleanup() {
             }
         }),
     ));
-    let context = ProgressiveOutputContext {
-        turn_id: "thinking-receipt-turn".into(),
-        channel: tinychannels_bus::ChannelRef {
-            id: "discord".into(),
-            account_id: Some("discord:thinking-receipt".into()),
-        },
-        conversation: tinychannels_bus::ConversationRef {
-            kind: tinychannels_bus::ConversationKind::Dm,
-            id: "room".into(),
-            ..Default::default()
-        },
-    };
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
     capabilities.progressive_edits = true;
-    let mut reply = ProgressiveReply::new(
-        Arc::new(Sender {
-            host: replies.host.clone(),
-            context: Some(context),
-            send_sequence: std::sync::atomic::AtomicU64::new(0),
-        }),
+    let handle = open_scoped(
+        &replies,
         "discord:thinking-receipt",
+        "thinking-receipt-turn",
         capabilities,
-    );
-    reply.on_thinking_delta("reasoning");
-    reply.edit_tick().await;
-    assert_eq!(
-        reply.state().thinking_message_ids,
-        ["thinking-1", "thinking-2"]
-    );
-    reply.abort().await;
+    )
+    .await;
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::ThinkingDelta {
+                text: "reasoning".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    let closed = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::Cancellation { reason: None }],
+        })
+        .await
+        .unwrap();
+    assert_eq!(closed, ProgressiveResult::Closed);
     let requests = callback.requests.lock().await;
     let deletes: Vec<_> = requests
         .iter()
@@ -1817,6 +1818,65 @@ async fn filler_callback_error_after_acceptance_is_not_retried() {
     assert_eq!(sends, 1, "accepted-then-error filler must not be retried");
     assert!(reply.state().filler_delivery_uncertain);
     assert!(reply.state().filler_disabled);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn filler_multipart_receipt_drives_per_part_token_cleanup() {
+    let (replies, callback) = fixture(false).await;
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Success(
+        serde_json::json!({
+            "receipt": {
+                "primaryPlatformMessageId": "filler-1",
+                "platformMessageIds": ["filler-1", "filler-2"],
+                "parts": [
+                    {"platformMessageId": "filler-1", "deleteToken": "filler-delete-1"},
+                    {"platformMessageId": "filler-2", "deleteToken": "filler-delete-2"}
+                ]
+            }
+        }),
+    ));
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.progressive_edits = true;
+    let handle = open_scoped(
+        &replies,
+        "discord:filler-receipt",
+        "filler-receipt-turn",
+        capabilities,
+    )
+    .await;
+    tokio::time::advance(Duration::from_secs(13)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    let closed = replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    assert_eq!(closed, ProgressiveResult::Closed);
+    let requests = callback.requests.lock().await;
+    let deletes: Vec<_> = requests
+        .iter()
+        .filter_map(|request| match request {
+            ProgressiveTransportRequest::Delete {
+                receipt,
+                message_id,
+                ..
+            } => Some((message_id.as_str(), receipt.as_ref()?)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deletes.len(), 2);
+    assert_eq!(deletes[0].0, "filler-1");
+    assert_eq!(
+        deletes[0].1.parts[0].delete_token.as_deref(),
+        Some("filler-delete-1")
+    );
+    assert_eq!(deletes[1].0, "filler-2");
+    assert_eq!(
+        deletes[1].1.parts[0].delete_token.as_deref(),
+        Some("filler-delete-2")
+    );
     replies.shutdown().await.unwrap();
 }
 
