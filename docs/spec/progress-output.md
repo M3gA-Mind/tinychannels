@@ -26,6 +26,13 @@ shown as native text prompts, while observation retains the original
 correlation ID. Tool progress stays active until a completion event arrives;
 opaque call IDs are not rendered as user text.
 
+Thinking and filler messages retain complete receipts and per-part edit/delete
+tokens. A missing or partial ephemeral receipt fences later sends for that
+ephemeral stream without blocking the final reply. Explicit `Unavailable`
+means no provider attempt occurred and may be retried on a later timer tick.
+`Close` and turn cancellation delete every known draft, thinking, and filler
+part using its receipt authority.
+
 Scoped opens carry the host-selected turn ID, configured `ChannelRef` including
 account identity, and complete `ConversationRef`. The module checks the
 configured account key and provider before opening; send, edit, delete, typing,

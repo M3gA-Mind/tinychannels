@@ -1824,8 +1824,8 @@ async fn filler_callback_error_after_acceptance_is_not_retried() {
 #[tokio::test(start_paused = true)]
 async fn filler_multipart_receipt_drives_per_part_token_cleanup() {
     let (replies, callback) = fixture(false).await;
-    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Success(
-        serde_json::json!({
+    *callback.send_result.lock().await =
+        Some(ProgressiveTransportResult::Success(serde_json::json!({
             "receipt": {
                 "primaryPlatformMessageId": "filler-1",
                 "platformMessageIds": ["filler-1", "filler-2"],
@@ -1834,8 +1834,7 @@ async fn filler_multipart_receipt_drives_per_part_token_cleanup() {
                     {"platformMessageId": "filler-2", "deleteToken": "filler-delete-2"}
                 ]
             }
-        }),
-    ));
+        })));
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
     capabilities.progressive_edits = true;
     let handle = open_scoped(

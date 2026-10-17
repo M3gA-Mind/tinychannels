@@ -30,8 +30,12 @@ Output observation (`ProgressiveSender::output_event`) is not a provider send
 acknowledgement. A host must preserve event sequence and scope in its callback
 and must implement the receipt-aware Edit/Delete request fields if it supports
 opaque provider tokens. A multi-message draft is not edited through one message
-ID; its complete known receipt is used to clean up every ephemeral part. An
-ambiguous edit or delete does not trigger a replacement send.
+ID; its complete known receipt is used to edit or clean up every ephemeral
+part. Thinking and filler bubbles also retain every receipt part and opaque
+delete token. A missing or partial receipt disables retries for that ephemeral
+stream but does not suppress the independent final reply. An explicit
+`Unavailable` result means no attempt occurred and may be retried on a later
+tick. An ambiguous edit or delete does not trigger a replacement send.
 
 Approval and clarification prompts are delivered as text for native channels;
 their original correlation data remains in the typed output observation. Tool
