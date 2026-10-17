@@ -143,12 +143,12 @@ impl Channels {
     }
 
     async fn media_activation(&self, instance: &str) -> BusResult<String> {
-        if !self
+        if self
             .running
             .lock()
             .await
             .get(instance)
-            .is_some_and(|provider| !provider.is_finished())
+            .is_none_or(|provider| provider.is_finished())
         {
             return Err(BusError::failed("media provider instance is not running"));
         }

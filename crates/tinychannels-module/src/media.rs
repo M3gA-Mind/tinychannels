@@ -33,7 +33,7 @@ struct Upload {
 }
 
 enum Terminal {
-    Finished(MediaUploadResult),
+    Finished(Box<MediaUploadResult>),
     Aborted,
 }
 
@@ -206,7 +206,7 @@ impl MediaUploads {
                 ));
             }
             return match &entry.value {
-                Terminal::Finished(media) => Ok(media.clone()),
+                Terminal::Finished(media) => Ok(media.as_ref().clone()),
                 Terminal::Aborted => Err(Error::failed("media upload was aborted")),
             };
         }
@@ -285,7 +285,7 @@ impl MediaUploads {
                     state.terminal.insert(
                         handle,
                         TerminalEntry {
-                            value: Terminal::Finished(media.clone()),
+                            value: Terminal::Finished(Box::new(media.clone())),
                             instance,
                             activation: activation_for_terminal,
                             expires: Instant::now() + TERMINAL_LIFETIME,
