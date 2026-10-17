@@ -684,89 +684,6 @@ impl TelegramChannel {
         })
     }
 
-    #[cfg(test)]
-    pub(crate) async fn parse_update_voice_message(
-        &self,
-        update: &serde_json::Value,
-    ) -> Option<ChannelMessage> {
-        let update_id = update.get("update_id").and_then(serde_json::Value::as_i64);
-        let message = update
-            .get("message")
-            .or_else(|| update.get("edited_message"))?;
-        let voice = Self::parse_update_voice_attachment(update)?;
-        let caption = message.get("caption").and_then(serde_json::Value::as_str);
-        let chat_id = message
-            .get("chat")
-            .and_then(|chat| chat.get("id"))
-            .and_then(serde_json::Value::as_i64);
-        let message_id = message
-            .get("message_id")
-            .and_then(serde_json::Value::as_i64);
-
-        tracing::debug!(
-            update_id = ?update_id,
-            chat_id = ?chat_id,
-            message_id = ?message_id,
-            file_unique_id = voice.file_unique_id.as_deref().unwrap_or("unknown"),
-            has_caption = caption.is_some_and(|caption| !caption.trim().is_empty()),
-            "[telegram:voice] parse voice message entry"
-        );
-
-        let ctx = self.parse_incoming_message_context(message, caption)?;
-        tracing::debug!(
-            update_id = ?update_id,
-            chat_id = %ctx.chat_id,
-            message_id = ctx.message_id,
-            file_unique_id = voice.file_unique_id.as_deref().unwrap_or("unknown"),
-            has_mention_text = ctx.mention_text.is_some(),
-            "[telegram:voice] voice message accepted for transcription"
-        );
-
-        match self.transcribe_telegram_voice(&voice).await {
-            Ok(transcript) => {
-                let transcript = transcript.trim();
-                if transcript.is_empty() {
-                    tracing::warn!(
-                        chat_id = %ctx.chat_id,
-                        message_id = ctx.message_id,
-                        file_unique_id = voice.file_unique_id.as_deref().unwrap_or("unknown"),
-                        "[telegram:voice] inbound voice transcription returned empty text"
-                    );
-                    return Some(self.channel_message_from_context(
-                        ctx,
-                        caption.unwrap_or_default().to_owned(),
-                    ));
-                }
-
-                let mention_only_group = self.mention_only && Self::is_group_message(message);
-                let content =
-                    Self::voice_message_content(transcript, caption, &ctx, mention_only_group);
-
-                tracing::debug!(
-                    update_id = ?update_id,
-                    chat_id = %ctx.chat_id,
-                    message_id = ctx.message_id,
-                    file_unique_id = voice.file_unique_id.as_deref().unwrap_or("unknown"),
-                    content_chars = content.chars().count(),
-                    "[telegram:voice] voice transcript ready for channel dispatch"
-                );
-
-                Some(self.channel_message_from_context(ctx, content))
-            }
-            Err(error) => {
-                let error = self.redact_bot_token(error.to_string());
-                tracing::warn!(
-                    chat_id = %ctx.chat_id,
-                    message_id = ctx.message_id,
-                    file_unique_id = voice.file_unique_id.as_deref().unwrap_or("unknown"),
-                    %error,
-                    "[telegram:voice] inbound voice transcription failed"
-                );
-                Some(self.channel_message_from_context(ctx, caption.unwrap_or_default().to_owned()))
-            }
-        }
-    }
-
     pub(crate) async fn voice_note_for_ingress(
         &self,
         update: &serde_json::Value,
@@ -880,27 +797,6 @@ impl TelegramChannel {
             push_to_talk: true,
             transcript: None,
         }))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn voice_message_content(
-        transcript: &str,
-        caption: Option<&str>,
-        ctx: &TelegramIncomingMessageContext,
-        mention_only_group: bool,
-    ) -> String {
-        let caption_prefix = if mention_only_group {
-            ctx.mention_text.as_deref()
-        } else {
-            caption
-        }
-        .map(str::trim)
-        .filter(|caption| !caption.is_empty());
-
-        match caption_prefix {
-            Some(prefix) => format!("{prefix}\n\n{transcript}"),
-            None => transcript.to_string(),
-        }
     }
 
     /// A Telegram user's display name: first and last name, else their
@@ -1049,88 +945,6 @@ impl TelegramChannel {
             thread_ts: Some(ctx.message_id.to_string()),
             sender_name: ctx.sender_name,
         }
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn transcribe_telegram_voice(
-        &self,
-        voice: &TelegramVoiceAttachment,
-    ) -> anyhow::Result<String> {
-        tracing::debug!(
-            file_unique_id = voice.file_unique_id.as_deref().unwrap_or("unknown"),
-            declared_file_size = ?voice.file_size,
-            mime_type = voice.mime_type.as_deref().unwrap_or("unknown"),
-            "[telegram:voice] transcribe entry"
-        );
-
-        if let Some(file_size) = voice.file_size
-            && file_size > TELEGRAM_MAX_VOICE_FILE_BYTES
-        {
-            anyhow::bail!(
-                "Telegram voice file too large: {file_size} bytes (max {TELEGRAM_MAX_VOICE_FILE_BYTES})"
-            );
-        }
-
-        let (audio_bytes, file_name, api_file_size) = self
-            .download_telegram_voice_file(&voice.file_id, voice.file_unique_id.as_deref())
-            .await?;
-        tracing::debug!(
-            file_unique_id = voice.file_unique_id.as_deref().unwrap_or("unknown"),
-            downloaded_bytes = audio_bytes.len(),
-            api_file_size = ?api_file_size,
-            file_name = %file_name,
-            "[telegram:voice] download completed before transcription"
-        );
-
-        if let Some(file_size) = api_file_size
-            && file_size > TELEGRAM_MAX_VOICE_FILE_BYTES
-        {
-            anyhow::bail!(
-                "Telegram getFile reported voice file too large: {file_size} bytes (max {TELEGRAM_MAX_VOICE_FILE_BYTES})"
-            );
-        }
-        if u64::try_from(audio_bytes.len()).unwrap_or(u64::MAX) > TELEGRAM_MAX_VOICE_FILE_BYTES {
-            anyhow::bail!(
-                "downloaded Telegram voice file too large: {} bytes (max {TELEGRAM_MAX_VOICE_FILE_BYTES})",
-                audio_bytes.len()
-            );
-        }
-
-        let audio_base64 = BASE64.encode(&audio_bytes);
-        let mime_type = voice.mime_type.as_deref().unwrap_or("audio/ogg");
-
-        let Some(transcriber) = self.transcriber.as_ref() else {
-            tracing::warn!(
-                file_unique_id = voice.file_unique_id.as_deref().unwrap_or("unknown"),
-                "[telegram:voice] no transcriber injected; skipping voice transcription"
-            );
-            return Ok(String::new());
-        };
-
-        tracing::debug!(
-            provider = transcriber.name(),
-            mime_type = %mime_type,
-            file_name = %file_name,
-            bytes = audio_bytes.len(),
-            "[telegram:voice] calling STT provider for inbound voice"
-        );
-
-        let request = crate::host::TranscriptionRequest {
-            audio_base64,
-            mime_type: Some(mime_type.to_string()),
-            file_name: Some(file_name.clone()),
-            language: None,
-        };
-        let outcome = transcriber.transcribe(request).await?;
-
-        let text = outcome.text;
-        tracing::debug!(
-            file_unique_id = voice.file_unique_id.as_deref().unwrap_or("unknown"),
-            transcript_chars = text.chars().count(),
-            "[telegram:voice] transcription completed"
-        );
-
-        Ok(text)
     }
 
     pub(crate) fn redact_bot_token(&self, value: impl AsRef<str>) -> String {
