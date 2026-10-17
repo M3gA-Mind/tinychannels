@@ -124,6 +124,33 @@ pub struct HostReadVoiceMediaResult {
     pub file_name: Option<String>,
 }
 
+/// Host-selected speech policy and verified facts for one active turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum HostVoiceReplyMode {
+    Mirror,
+    Always,
+    Never,
+    SpeakReply,
+}
+
+/// Resolve voice reply policy from the host's authoritative turn state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HostVoiceReplyPolicyRequest {
+    pub scope: HostVoiceScope,
+}
+
+/// Host-authoritative policy and turn facts; codec constraints come from the
+/// provider's advertised voice capabilities and are applied by the module.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HostVoiceReplyPolicy {
+    pub mode: HostVoiceReplyMode,
+    pub inbound_has_voice: bool,
+    pub explicitly_requested: bool,
+}
+
 /// An event published by a provider through the host's event sink.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HostEventPublication {
