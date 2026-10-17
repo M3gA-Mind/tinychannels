@@ -44,8 +44,9 @@ mod voice;
 pub use dispatch::{DispatchOptions, DispatchRequest, TurnDispatcher, TurnHandle};
 pub use media::{
     MediaMetadata, MediaScope, MediaStoreRequest, MediaStreamRequest, ScopedMediaStore,
-    StoredMedia, is_allowed_content_type,
+    StoredMedia,
 };
+pub(crate) use media::is_allowed_content_type;
 pub use noop::{ChannelHostBuilder, NoopHost};
 pub use services::{
     AllowlistStore, ApprovalAsk, ApprovalDecision, ApprovalGate, ConversationMessage,
