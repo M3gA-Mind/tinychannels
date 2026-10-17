@@ -3648,3 +3648,14 @@ async fn native_typing_does_not_report_success_when_telegram_rejects_action() {
     assert!(!error.sent_before_error);
     assert_eq!(json_bodies(&server, "sendChatAction").await.len(), 2, "thread rejection is retried once at chat scope");
 }
+
+#[tokio::test]
+async fn native_typing_transport_error_preserves_attempt_uncertainty() {
+    let server = mock_api().await;
+    mount_post(&server, "sendChatAction", ResponseTemplate::new(500)).await;
+    let channel = channel_for(&server, &["*"]);
+    let error = crate::channel::ChannelTyping::start_typing(&channel, "100").await.unwrap_err();
+    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Unknown);
+    assert!(error.sent_before_error);
+    assert_eq!(json_bodies(&server, "sendChatAction").await.len(), 1);
+}
