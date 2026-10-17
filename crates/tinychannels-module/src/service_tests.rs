@@ -1271,6 +1271,7 @@ async fn large_voice_bytes_use_compact_scoped_reference_in_best_effort_and_requi
         let id = match durability {
             tinychannels::DeliveryDurability::BestEffort => "compact-best-effort",
             tinychannels::DeliveryDurability::Required => "compact-required",
+            tinychannels::DeliveryDurability::Disabled => unreachable!(),
         };
         let intent = voice_intent(id, durability, None);
         let encoded = serde_json::to_vec(&intent).unwrap();
