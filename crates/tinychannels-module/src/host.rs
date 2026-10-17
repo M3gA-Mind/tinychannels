@@ -491,7 +491,7 @@ impl HostChannels {
         )?;
         let response: tinyvoice_bus::codec::CodecOutput = tokio::time::timeout(
             HOST_VOICE_CALLBACK_TIMEOUT,
-            proxy.call(tinyvoice_bus::names::CODEC_TRANSCODE, (request,)),
+            proxy.call(tinyvoice_bus::names::methods::CODEC_TRANSCODE, (request,)),
         )
         .await
         .map_err(|_| Error::failed("TinyVoice codec call timed out"))??;
