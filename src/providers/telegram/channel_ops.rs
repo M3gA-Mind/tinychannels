@@ -1329,10 +1329,20 @@ impl TelegramChannel {
             return Err(anyhow::Error::new(TelegramPreDispatchError));
         }
         if !remove {
-            if !self
-                .send_message_reaction(&conversation.id, message_id, &reaction.value)
+            let applied = if let Some(custom_emoji_id) = reaction.custom_emoji_id.as_deref() {
+                self.send_message_custom_reaction(
+                    &conversation.id,
+                    message_id,
+                    custom_emoji_id,
+                )
                 .await?
-            {
+            } else if !reaction.value.trim().is_empty() {
+                self.send_message_reaction(&conversation.id, message_id, &reaction.value)
+                    .await?
+            } else {
+                return Err(anyhow::Error::new(TelegramPreDispatchError));
+            };
+            if !applied {
                 anyhow::bail!("Telegram did not apply the requested reaction");
             }
             return Ok(());

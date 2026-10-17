@@ -182,15 +182,47 @@ impl TelegramChannel {
             return Ok(false);
         }
 
+        self.send_message_reaction_type(
+            chat_id,
+            message_id,
+            serde_json::json!({ "type": "emoji", "emoji": emoji }),
+            emoji,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_message_custom_reaction(
+        &self,
+        chat_id: &str,
+        message_id: i64,
+        custom_emoji_id: &str,
+    ) -> anyhow::Result<bool> {
+        let custom_emoji_id = custom_emoji_id.trim();
+        if custom_emoji_id.is_empty() {
+            return Ok(false);
+        }
+
+        self.send_message_reaction_type(
+            chat_id,
+            message_id,
+            serde_json::json!({ "type": "custom_emoji", "custom_emoji_id": custom_emoji_id }),
+            custom_emoji_id,
+        )
+        .await
+    }
+
+    async fn send_message_reaction_type(
+        &self,
+        chat_id: &str,
+        message_id: i64,
+        reaction: serde_json::Value,
+        log_value: &str,
+    ) -> anyhow::Result<bool> {
+
         let body = serde_json::json!({
             "chat_id": chat_id,
             "message_id": message_id,
-            "reaction": [
-                {
-                    "type": "emoji",
-                    "emoji": emoji
-                }
-            ],
+            "reaction": [reaction],
             "is_big": false
         });
         let resp = self
@@ -202,20 +234,20 @@ impl TelegramChannel {
         let status = resp.status();
         let response = resp.json::<serde_json::Value>().await?;
         if status.is_success() && super::channel_ops::response_status_ok(&response) {
-            self.publish_reaction_sent(chat_id, message_id, emoji, true)
+            self.publish_reaction_sent(chat_id, message_id, log_value, true)
                 .await;
-            tracing::info!(chat_id, message_id, emoji, "Telegram reaction sent");
+            tracing::info!(chat_id, message_id, reaction = log_value, "Telegram reaction sent");
             return Ok(true);
         }
 
         tracing::warn!(
             chat_id,
             message_id,
-            emoji,
+            reaction = log_value,
             status = ?status,
             "Telegram reaction not applied; continuing without failure"
         );
-        self.publish_reaction_sent(chat_id, message_id, emoji, false)
+        self.publish_reaction_sent(chat_id, message_id, log_value, false)
             .await;
         Ok(false)
     }
