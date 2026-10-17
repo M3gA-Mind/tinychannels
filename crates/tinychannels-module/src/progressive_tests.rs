@@ -741,3 +741,47 @@ async fn typed_final_delivery_returns_partial_receipt_without_retrying() {
     assert_eq!(sends[0]["text"], "caption");
     replies.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn typed_send_preserves_configured_account_and_full_conversation_scope() {
+    use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
+
+    let (replies, callback) = fixture(false).await;
+    let context = ProgressiveOutputContext {
+        turn_id: "turn-topic-9".into(),
+        channel: ChannelRef {
+            id: "discord".into(),
+            account_id: Some("discord:account-b".into()),
+        },
+        conversation: ConversationRef {
+            kind: ConversationKind::Thread,
+            id: "room-1".into(),
+            scope_id: Some("guild-7".into()),
+            parent_id: Some("room-1".into()),
+            thread_id: Some("thread-8".into()),
+            topic_id: Some("topic-9".into()),
+        },
+    };
+    let sender = Sender {
+        host: replies.host.clone(),
+        context: Some(context.clone()),
+    };
+    sender
+        .send_parts("discord:room-1", &[], "scoped", Some(&context))
+        .await
+        .unwrap();
+    let requests = callback.requests.lock().await;
+    let ProgressiveTransportRequest::SendTyped {
+        turn_id,
+        channel_ref,
+        conversation,
+        ..
+    } = requests.last().unwrap()
+    else {
+        panic!("expected typed provider send")
+    };
+    assert_eq!(turn_id.as_deref(), Some("turn-topic-9"));
+    assert_eq!(channel_ref.as_ref(), Some(&context.channel));
+    assert_eq!(conversation.as_ref(), Some(&context.conversation));
+    replies.shutdown().await.unwrap();
+}

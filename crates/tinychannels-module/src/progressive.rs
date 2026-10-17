@@ -637,9 +637,17 @@ async fn run(
                                     part: tinychannels_bus::ContentPart::Text { text: text.clone(), markdown_dialect: None },
                                 }]
                             };
-                            result = reply.send_parts(&parts, &text).await
-                                .map(|outcome| ProgressiveResult::DeliveryOutcome { outcome })
-                                .map_err(|error| Error::failed(error.to_string()));
+                            result = match reply.send_parts(&parts, &text).await {
+                                Ok(outcome) => Ok(ProgressiveResult::DeliveryOutcome { outcome }),
+                                Err(ProgressiveSendError::UnsupportedContent) => {
+                                    reply.abort().await;
+                                    Ok(ProgressiveResult::DeliveryUnsupported { parts })
+                                }
+                                Err(error) => {
+                                    reply.abort().await;
+                                    Err(Error::failed(error.to_string()))
+                                }
+                            };
                         } else {
                             reply.finalize(&text).await;
                             result = Ok(ProgressiveResult::Closed);
