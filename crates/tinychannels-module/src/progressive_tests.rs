@@ -796,6 +796,40 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
 }
 
 #[tokio::test]
+async fn scoped_open_rejects_missing_identity_invalid_leases_and_unconfigured_accounts() {
+    let (replies, _) = fixture(false).await;
+    let scoped = |channel_id: &str, account_id: Option<&str>, conversation_id: &str,
+                  turn_id: &str, lifetime_ms| ProgressiveCommand::OpenOutput {
+        channel: tinychannels_bus::ChannelRef {
+            id: channel_id.into(),
+            account_id: account_id.map(str::to_owned),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: conversation_id.into(),
+            ..Default::default()
+        },
+        turn_id: turn_id.into(),
+        lifetime_ms,
+    };
+
+    for (request, expected) in [
+        (scoped("", Some("discord:one"), "room", "turn", 1), "invalid scoped"),
+        (scoped("discord", Some("discord:one"), "", "turn", 1), "invalid scoped"),
+        (scoped("discord", Some("discord:one"), "room", "", 1), "invalid scoped"),
+        (scoped("discord", Some("discord:one"), "room", "turn", 0), "invalid scoped"),
+        (scoped("discord", Some("discord:one"), "room", "turn", u64::MAX), "out of range"),
+        (scoped("discord", Some("slack:one"), "room", "turn", 10), "does not match"),
+        (scoped("discord", Some("discord:missing"), "room", "turn", 10), "not configured"),
+    ] {
+        let error = replies.execute(request).await.unwrap_err();
+        assert!(error.to_string().contains(expected), "{error}");
+    }
+    assert!(replies.state.lock().await.entries.is_empty());
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
     let (replies, _) = fixture(false).await;
     let mut reply = ProgressiveReply::new(
