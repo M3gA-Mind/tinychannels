@@ -886,7 +886,7 @@ async fn no_edit_channel_sends_final_text_in_configured_segments() {
                 account_id: Some("discord:segmented".into()),
             },
             conversation: tinychannels_bus::ConversationRef {
-                kind: tinychannels_bus::ConversationKind::Direct,
+                kind: tinychannels_bus::ConversationKind::Dm,
                 id: "room".into(),
                 ..Default::default()
             },
