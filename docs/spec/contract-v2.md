@@ -294,7 +294,7 @@ account/conversation scope.
 ## Migration and compatibility window
 
 The v2 content model advances the current TinyBus wire contract revision 21 to
-revision 22 and the module operation version 1.21 to 1.23. v21 is the prior
+revision 22 and the module operation version 1.21 to 1.25. v21 is the prior
 wire revision, not a Cargo semver major version. Keep existing member names,
 arities, and serialized meaning unchanged; additive v2 relay operations use
 new names and preserve v1 relay frames.
@@ -368,7 +368,7 @@ events. Provider voice paths may transcribe audio before legacy dispatch. The
 full ordered ContentPart model, first-class voice-note metadata, unified
 descriptor, normalized provider event family, and shared web event wire
 described above remain v2 requirements. Wire revision 22 and module operation
-version 1.23 are current contract facts. Legacy provider rich-content support
+version 1.25 are current contract facts. Legacy provider rich-content support
 remains limited until the provider migration leaf completes.
 
 Track implementation status in code changes and release notes, not by editing
