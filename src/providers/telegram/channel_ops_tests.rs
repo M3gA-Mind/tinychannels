@@ -1002,6 +1002,8 @@ async fn typed_image_rejects_non_numeric_platform_thread_before_upload() {
     message.turn_id = Some("turn-42".into());
     message.conversation_ref = Some(tinychannels_bus::ConversationRef {
         id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
         thread_id: Some("topic-77".into()),
         ..Default::default()
     });
