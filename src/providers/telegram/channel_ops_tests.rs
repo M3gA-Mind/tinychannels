@@ -2596,6 +2596,13 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
                     "message_id": 82, "chat": {"id": 100, "type": "private"},
                     "from": {"id": 42, "username": "outsider"}, "text": "stop listener"
                 }
+            },
+            {
+                "update_id": 43,
+                "message": {
+                    "message_id": 83, "chat": {"id": 100, "type": "private"},
+                    "from": {"id": 42, "username": "outsider"}, "text": "close listener"
+                }
             }
         ])),
     )
