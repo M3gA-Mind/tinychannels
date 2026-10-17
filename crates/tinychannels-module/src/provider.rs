@@ -922,10 +922,7 @@ impl tinychannels::host::EventSink for ModuleEvents {
                         voice_note,
                         scope,
                         request,
-                        Some(Arc::new(ModuleTranscriber(
-                            self.0.clone(),
-                            self.1.clone(),
-                        ))),
+                        Some(Arc::new(ModuleTranscriber(self.0.clone(), self.1.clone()))),
                     )
                     .await;
                 }
