@@ -2586,12 +2586,6 @@ impl crate::channel::ChannelTypedSend for TelegramChannel {
     {
         self.send_v2_with_receipt(message)
             .await
-            .map_err(|_| crate::channel::ChannelSendError {
-                kind: crate::channel::SendErrorKind::Forbidden,
-                message: "Telegram typed send was rejected before provider dispatch".into(),
-                retryable: false,
-                sent_before_error: false,
-                ..Default::default()
-            })
+            .map_err(typed_send_error)
     }
 }
