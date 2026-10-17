@@ -162,7 +162,8 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
             .execute(ProgressiveCommand::FeedOutput {
                 handle: handle.clone(),
                 events: vec![ChannelOutputEvent::TextDelta {
-                    text: "fixture".into()
+                    text: "fixture".into(),
+                    iteration: None,
                 }]
             })
             .await
@@ -202,7 +203,8 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
                     message: None
                 },
                 ChannelOutputEvent::TextDelta {
-                    text: "extra".into()
+                    text: "extra".into(),
+                    iteration: None,
                 }
             ],
             false,
@@ -372,7 +374,8 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
                         structured: Some(serde_json::json!({"kind": "search", "count": 1})),
                     },
                     ChannelOutputEvent::TextDelta {
-                        text: "partial answer".into()
+                        text: "partial answer".into(),
+                        iteration: None,
                     },
                 ],
             })
@@ -442,7 +445,7 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
     let error = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
-            events: vec![ChannelOutputEvent::TextDelta { text: "x".into() }; 33],
+            events: vec![ChannelOutputEvent::TextDelta { text: "x".into(), iteration: None }; 33],
         })
         .await
         .unwrap_err();
@@ -492,7 +495,8 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
             &mut reply,
             vec![
                 ChannelOutputEvent::TextDelta {
-                    text: "not committed".into()
+                    text: "not committed".into(),
+                    iteration: None,
                 },
                 ChannelOutputEvent::ThinkingDelta {
                     text: "extra".into(),
