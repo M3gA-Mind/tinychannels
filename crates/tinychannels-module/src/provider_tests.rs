@@ -484,9 +484,6 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 unsupported: true,
                 ..Default::default()
             }),
-            Feature::NativeData => tinychannels_bus::OutboundPayload::NativeChannelData {
-                data: serde_json::json!({"kind":"opaque-provider-data"}),
-            },
             _ => return Err(tinychannels_bus::channel::ChannelSendError {
                 kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
                 message: format!("{feature:?} fixture operation has not been invoked"),
@@ -524,7 +521,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             }
             Feature::Edit | Feature::Delete | Feature::StreamingDraft => {
                 let sent = self.adapter.send(intent.clone()).await?;
-                let receipt = sent.receipt;
+                let receipt = sent.receipt.clone();
                 *self.request_cursor.lock().unwrap() = self.server.received_requests().await.unwrap_or_default().len();
                 match feature {
                     Feature::Edit => {
