@@ -425,7 +425,7 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
     assert_eq!(transcription.text, "spoken words");
     assert_eq!(transcription.language.as_deref(), Some("en"));
 
-    let mut scope = tinychannels_bus::HostVoiceScope {
+    let scope = tinychannels_bus::HostVoiceScope {
         channel: tinychannels_bus::ChannelRef {
             id: "provider-forged-channel".into(),
             account_id: Some("provider-forged-account".into()),
