@@ -64,6 +64,9 @@ fn presentation_text(value: &serde_json::Value) -> anyhow::Result<String> {
                 if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
                     anyhow::bail!("Telegram presentation block contains unsupported fields");
                 }
+                if object.get("type").is_some_and(|value| !value.is_string()) {
+                    anyhow::bail!("Telegram presentation block type must be text");
+                }
                 if let Some(kind) = object.get("type").and_then(serde_json::Value::as_str)
                     && !matches!(
                         kind,
@@ -80,10 +83,13 @@ fn presentation_text(value: &serde_json::Value) -> anyhow::Result<String> {
                     anyhow::bail!("Telegram presentation block type is unsupported");
                 }
                 for key in ["title", "heading", "text", "caption", "description"] {
-                    if let Some(serde_json::Value::String(text)) = object.get(key)
-                        && !text.trim().is_empty()
-                    {
-                        out.push(text.clone());
+                    if let Some(value) = object.get(key) {
+                        let Some(text) = value.as_str() else {
+                            anyhow::bail!("Telegram presentation block text fields must be strings");
+                        };
+                        if !text.trim().is_empty() {
+                            out.push(text.to_owned());
+                        }
                     }
                 }
             }
