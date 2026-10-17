@@ -885,11 +885,9 @@ async fn run(
                     let cancellation = events
                         .iter()
                         .any(|event| matches!(event, ChannelOutputEvent::Cancellation { .. }));
-                    let final_message = events.iter().find_map(|event| match event {
-                        ChannelOutputEvent::FinalMessage { text, parts, .. } => {
-                            Some((text.clone(), parts.clone(), !parts.is_empty()))
-                        }
-                        _ => None,
+                    let final_message = events.iter().find_map(|event| {
+                        matches!(event, ChannelOutputEvent::FinalMessage { .. })
+                            .then(|| event.clone())
                     });
                     let mut result = apply(&mut reply, events, forward).await;
                     let failed = result.is_err();
@@ -906,49 +904,26 @@ async fn run(
                         let _ = response.send(result);
                         break;
                     }
-                    if let Some((text, event_parts, has_typed_parts)) = final_message {
+                    if delivery_has_failure(&result) {
+                        reply.abort().await;
+                        record_terminal(&terminal_feed, fingerprint, &result).await;
+                        let _ = response.send(result);
+                        break;
+                    }
+                    if let Some(final_event @ ChannelOutputEvent::FinalMessage { text, .. }) = final_message {
                         let (mut prior_outcomes, mut prior_unsupported) =
                             delivery_facts(&result);
-                        let mut draft_finalized = false;
                         if forward {
-                            if !has_typed_parts {
-                                match reply.finalize_existing_text(&text).await {
-                                    Ok(Some(outcome)) => {
-                                        prior_outcomes.push(outcome);
-                                        draft_finalized = true;
-                                    }
-                                    Err(error) => {
-                                        reply.abort().await;
-                                        result = Err(Error::failed(error.to_string()));
-                                    }
-                                    Ok(None) => {}
+                            match reply.finalize_output_event(&final_event).await {
+                                Ok(dispatch) => {
+                                    prior_outcomes.extend(dispatch.outcomes);
+                                    prior_unsupported.extend(dispatch.unsupported);
+                                    result = Ok(delivery_result(prior_outcomes, prior_unsupported));
                                 }
-                            }
-                            if result.is_ok() && !draft_finalized {
-                                let parts = if has_typed_parts {
-                                    event_parts
-                                } else {
-                                    vec![tinychannels_bus::OutboundContentPart::Content {
-                                        part: tinychannels_bus::ContentPart::Text {
-                                            text: text.clone(),
-                                            markdown_dialect: None,
-                                        },
-                                    }]
-                                };
-                                match reply.send_parts(&parts, &text).await {
-                                    Ok(outcome) => prior_outcomes.push(outcome),
-                                    Err(ProgressiveSendError::UnsupportedContent) => {
-                                        reply.abort().await;
-                                        prior_unsupported.extend(parts);
-                                    }
-                                    Err(error) => {
-                                        reply.abort().await;
-                                        result = Err(Error::failed(error.to_string()));
-                                    }
+                                Err(error) => {
+                                    reply.abort().await;
+                                    result = Err(Error::failed(error.to_string()));
                                 }
-                            }
-                            if result.is_ok() {
-                                result = Ok(delivery_result(prior_outcomes, prior_unsupported));
                             }
                         } else {
                             reply.finalize(&text).await;

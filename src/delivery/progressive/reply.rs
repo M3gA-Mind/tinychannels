@@ -197,6 +197,46 @@ impl ProgressiveReply {
         Ok(dispatch)
     }
 
+    /// Consume the canonical terminal event and retain the real provider
+    /// receipt. Text-only output edits an existing draft when possible;
+    /// ordered typed parts remain authoritative when present.
+    pub async fn finalize_output_event(
+        &mut self,
+        event: &tinychannels_bus::module_progressive::ChannelOutputEvent,
+    ) -> Result<super::ProgressiveOutputDispatch, super::ProgressiveSendError> {
+        let tinychannels_bus::module_progressive::ChannelOutputEvent::FinalMessage {
+            text, parts, ..
+        } = event
+        else {
+            return Ok(super::ProgressiveOutputDispatch::default());
+        };
+        let mut dispatch = super::ProgressiveOutputDispatch::default();
+        if parts.is_empty() {
+            if let Some(outcome) = self.finalize_existing_text(text).await? {
+                dispatch.outcomes.push(outcome);
+                return Ok(dispatch);
+            }
+        }
+        let parts = if parts.is_empty() {
+            vec![tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: text.clone(),
+                    markdown_dialect: None,
+                },
+            }]
+        } else {
+            parts.clone()
+        };
+        match self.send_parts(&parts, text).await {
+            Ok(outcome) => dispatch.outcomes.push(outcome),
+            Err(super::ProgressiveSendError::UnsupportedContent) => {
+                dispatch.unsupported.extend(parts)
+            }
+            Err(error) => return Err(error),
+        }
+        Ok(dispatch)
+    }
+
     /// Current per-turn state (for logging and tests).
     pub fn state(&self) -> &StreamingState {
         &self.state

@@ -1279,6 +1279,77 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
     replies.shutdown().await.unwrap();
 }
 
+#[tokio::test]
+async fn native_approval_and_clarification_events_deliver_prompts() {
+    let (base, callback) = fixture(false).await;
+    let configured = Arc::new(Mutex::new(HashMap::new()));
+    configured.lock().await.insert(
+        "discord:prompts".to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities: tinychannels_bus::ChannelCapabilities::default(),
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            base.host.clone(),
+        ),
+    );
+    let replies = Replies::new(base.host.clone(), configured);
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:prompts".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "prompt-turn".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected opened output")
+    };
+    for event in [
+        ChannelOutputEvent::ApprovalRequest {
+            id: "approval-7".into(),
+            prompt: "May I run the command?".into(),
+            choices: vec!["Allow once".into(), "Deny".into()],
+        },
+        ChannelOutputEvent::Clarification {
+            prompt: "Which folder should I use?".into(),
+        },
+    ] {
+        replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle: handle.clone(),
+                events: vec![event],
+            })
+            .await
+            .unwrap();
+    }
+    let requests = callback.requests.lock().await;
+    let delivered = requests
+        .iter()
+        .filter_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped { text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert!(delivered.iter().any(|text| text.contains("May I run the command?")));
+    assert!(delivered.iter().any(|text| text.contains("Allow once, Deny")));
+    assert!(delivered.iter().any(|text| text.contains("Which folder should I use?")));
+    assert!(requests.iter().any(|request| matches!(request,
+        ProgressiveTransportRequest::OutputEvent { event: ChannelOutputEvent::ApprovalRequest { id, .. }, .. }
+            if id == "approval-7"
+    )));
+    drop(requests);
+    replies.shutdown().await.unwrap();
+}
+
 #[tokio::test(start_paused = true)]
 async fn configured_progressive_channel_posts_and_edits_one_draft() {
     let (base, callback) = fixture(false).await;
