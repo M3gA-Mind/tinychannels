@@ -5055,7 +5055,7 @@ async fn send_final_voice_case(
         },
     };
     let sender = Arc::new(Sender {
-        media_account_scope: None,
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
