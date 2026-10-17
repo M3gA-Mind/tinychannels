@@ -314,8 +314,9 @@ impl Replies {
             .await
             .map_err(|_| Error::failed("progressive reply is closed"))?;
         drop(closing);
-        wait.await
-            .map_err(|_| Error::failed("progressive worker stopped"))??
+        Ok(wait
+            .await
+            .map_err(|_| Error::failed("progressive worker stopped"))??)
     }
 
     async fn entry(&self, handle: &str) -> Result<Arc<Entry>> {
