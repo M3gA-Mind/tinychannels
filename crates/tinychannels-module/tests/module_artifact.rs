@@ -1364,12 +1364,82 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     let send_result = runtime_proxy
         .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
             "SendChannelIntent",
-            ("telegram", send),
+            ("telegram", send.clone()),
         )
         .await
         .unwrap();
     assert_eq!(send_result.message_id.as_deref(), Some("91"));
     assert!(send_result.error.is_none());
+
+    let mut wrong_account = send.clone();
+    wrong_account.channel_ref.as_mut().unwrap().account_id = Some("telegram:other".into());
+    let mut wrong_conversation = send.clone();
+    wrong_conversation.conversation_id = "43".into();
+    wrong_conversation
+        .conversation_ref
+        .as_mut()
+        .unwrap()
+        .id = "43".into();
+    let mut wrong_scope = send.clone();
+    wrong_scope
+        .conversation_ref
+        .as_mut()
+        .unwrap()
+        .scope_id = Some("other-room".into());
+    let mut wrong_parent = send.clone();
+    wrong_parent
+        .conversation_ref
+        .as_mut()
+        .unwrap()
+        .parent_id = Some("other-parent".into());
+    let mut wrong_thread = send.clone();
+    wrong_thread.thread_id = Some("18".into());
+    wrong_thread
+        .conversation_ref
+        .as_mut()
+        .unwrap()
+        .thread_id = Some("18".into());
+    let mut wrong_topic = send.clone();
+    wrong_topic
+        .conversation_ref
+        .as_mut()
+        .unwrap()
+        .topic_id = Some("other-topic".into());
+    let mut wrong_turn = send.clone();
+    wrong_turn.turn_id = Some("turn-from-another-message".into());
+    let invalid_scopes = [
+        wrong_account,
+        wrong_conversation,
+        wrong_scope,
+        wrong_parent,
+        wrong_thread,
+        wrong_topic,
+        wrong_turn,
+    ];
+    for invalid in invalid_scopes {
+        let before = telegram_api
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path().ends_with("/sendPhoto"))
+            .count();
+        assert!(runtime_proxy
+            .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                "SendChannelIntent",
+                ("telegram", invalid),
+            )
+            .await
+            .is_err());
+        let after = telegram_api
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path().ends_with("/sendPhoto"))
+            .count();
+        assert_eq!(after, before, "out-of-scope media must not reach Telegram");
+    }
     let requests = telegram_api.received_requests().await.unwrap();
     let upload = requests
         .iter()
