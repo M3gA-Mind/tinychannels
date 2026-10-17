@@ -61,7 +61,9 @@ pub(crate) struct MediaReadReservation(OwnedSemaphorePermit);
 
 impl MediaReads {
     pub(crate) async fn reserve(&self) -> Result<MediaReadReservation> {
-        Self::prune(&mut self.state.lock().await);
+        let mut state = self.state.lock().await;
+        Self::prune(&mut state);
+        drop(state);
         self.capacity
             .clone()
             .try_acquire_owned()
