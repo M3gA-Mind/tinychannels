@@ -78,7 +78,8 @@ pub use web::{
     ChatRequestMetadata, ChatSuggestion, QueueMode, WebChannelEvent, WebCostSource,
     WebEventContext, WebEventPayload, WebGuardrailPayload, WebGuardrailReason,
     WebQueueItemPayload, WebSubagentProgressDetail, WebSubagentUsagePayload,
-    WebTurnTimingPayload, WebTurnUsagePayload, legacy_event_alias, web_event_schema_json,
+    WebTurnTimingPayload, WebTurnUsagePayload, cap_web_args, cap_web_output,
+    legacy_event_alias, tokens_per_second, web_event_schema_json, MAX_WEB_TOOL_PAYLOAD_BYTES,
 };
 
 #[cfg(test)]
