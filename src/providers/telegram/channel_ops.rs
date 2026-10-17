@@ -20,6 +20,36 @@ impl std::fmt::Display for TelegramPreDispatchError {
 impl std::error::Error for TelegramPreDispatchError {}
 
 #[derive(Debug)]
+pub(super) struct TelegramAttemptedError;
+
+impl std::fmt::Display for TelegramAttemptedError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Telegram Bot API operation failed after dispatch")
+    }
+}
+
+impl std::error::Error for TelegramAttemptedError {}
+
+fn typed_interaction_error(error: anyhow::Error, operation: &str) -> crate::channel::ChannelSendError {
+    if error.downcast_ref::<TelegramPreDispatchError>().is_some() {
+        return crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::Forbidden,
+            message: format!("Telegram {operation} was rejected before provider dispatch"),
+            retryable: false,
+            sent_before_error: false,
+            ..Default::default()
+        };
+    }
+    crate::channel::ChannelSendError {
+        kind: crate::channel::SendErrorKind::Unknown,
+        message: format!("Telegram {operation} outcome is uncertain"),
+        retryable: false,
+        sent_before_error: true,
+        ..Default::default()
+    }
+}
+
+#[derive(Debug)]
 struct TelegramUnsupportedError;
 
 impl std::fmt::Display for TelegramUnsupportedError {
@@ -148,7 +178,7 @@ fn presentation_content(
     Ok((parts.join("\n"), None))
 }
 
-fn response_status_ok(value: &serde_json::Value) -> bool {
+pub(super) fn response_status_ok(value: &serde_json::Value) -> bool {
     value.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
 }
 
@@ -1291,9 +1321,10 @@ impl TelegramChannel {
         reaction: &tinychannels_bus::channel::ChannelReaction,
         remove: bool,
     ) -> anyhow::Result<()> {
-        let message_id = provider_message_id.parse::<i64>().map_err(|_| {
-            anyhow::anyhow!("Telegram reaction requires a numeric provider message ID")
-        })?;
+        let message_id = provider_message_id.parse::<i64>().map_err(|_| anyhow::Error::new(TelegramPreDispatchError))?;
+        if conversation.id.trim().is_empty() {
+            return Err(anyhow::Error::new(TelegramPreDispatchError));
+        }
         if !remove {
             if !self
                 .send_message_reaction(&conversation.id, message_id, &reaction.value)
@@ -1336,22 +1367,33 @@ impl TelegramChannel {
         use tinychannels_bus::OutboundPayload;
         let text = match &intent.payload {
             OutboundPayload::Text { text } => text.clone(),
-            OutboundPayload::Parts { parts } => parts
-                .iter()
-                .filter_map(|part| match part {
-                    tinychannels_bus::OutboundContentPart::Content {
-                        part: tinychannels_bus::ContentPart::Text { text, .. },
-                    } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
+            OutboundPayload::Parts { parts } => {
+                let mut texts = Vec::with_capacity(parts.len());
+                for part in parts {
+                    match part {
+                        tinychannels_bus::OutboundContentPart::Content {
+                            part: tinychannels_bus::ContentPart::Text { text, .. },
+                        } => texts.push(text.as_str()),
+                        _ => return Err(anyhow::Error::new(TelegramPreDispatchError)),
+                    }
+                }
+                if texts.is_empty() { return Err(anyhow::Error::new(TelegramPreDispatchError)); }
+                texts.join("\n")
+            }
             _ => anyhow::bail!("Telegram message editing supports text content only"),
         };
         let conversation = receipt
             .conversation
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Telegram edit receipt has no conversation"))?;
+            .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
+        if receipt.channel.as_ref().is_some_and(|channel| channel.id != "telegram")
+            || intent.channel_ref.as_ref().is_some_and(|channel| channel.id != "telegram")
+            || intent.channel_ref.as_ref().zip(receipt.channel.as_ref()).is_some_and(|(intent, receipt)| intent != receipt)
+            || intent.conversation_id != conversation.id
+            || intent.conversation_ref.as_ref().is_some_and(|target| target != conversation)
+        {
+            return Err(anyhow::Error::new(TelegramPreDispatchError));
+        }
         let provider_message_id = receipt
             .primary_platform_message_id
             .as_deref()
@@ -1361,9 +1403,9 @@ impl TelegramChannel {
                     .first()
                     .map(|part| part.platform_message_id.as_str())
             })
-            .ok_or_else(|| anyhow::anyhow!("Telegram edit receipt has no message ID"))?
+            .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?
             .parse::<i64>()
-            .map_err(|_| anyhow::anyhow!("Telegram edit receipt has an invalid message ID"))?;
+            .map_err(|_| anyhow::Error::new(TelegramPreDispatchError))?;
         let response = self
             .http_client()
             .post(self.api_url("editMessageText"))
@@ -1393,7 +1435,10 @@ impl TelegramChannel {
         let conversation = receipt
             .conversation
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Telegram delete receipt has no conversation"))?;
+            .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
+        if receipt.channel.as_ref().is_some_and(|channel| channel.id != "telegram") || conversation.id.trim().is_empty() {
+            return Err(anyhow::Error::new(TelegramPreDispatchError));
+        }
         let provider_message_id = receipt
             .primary_platform_message_id
             .as_deref()
@@ -1403,9 +1448,9 @@ impl TelegramChannel {
                     .first()
                     .map(|part| part.platform_message_id.as_str())
             })
-            .ok_or_else(|| anyhow::anyhow!("Telegram delete receipt has no message ID"))?
+            .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?
             .parse::<i64>()
-            .map_err(|_| anyhow::anyhow!("Telegram delete receipt has an invalid message ID"))?;
+            .map_err(|_| anyhow::Error::new(TelegramPreDispatchError))?;
         let response = self
             .http_client()
             .post(self.api_url("deleteMessage"))
@@ -2325,7 +2370,9 @@ Ensure only one `openhuman` process is using this bot token."
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
         tracing::info!(recipient, "Telegram start_typing invoked");
         // Emit immediately so short model turns still show "typing…"
-        self.send_typing_action_once(recipient).await;
+        if !self.send_typing_action_once(recipient).await? {
+            anyhow::bail!("Telegram rejected the typing action");
+        }
 
         {
             let guard = self.typing_handle.lock();
@@ -2937,12 +2984,7 @@ impl crate::channel::ChannelReaction for TelegramChannel {
         }
         self.send_reaction_v2(conversation, provider_message_id, reaction, remove)
             .await
-            .map_err(|_error| crate::channel::ChannelSendError {
-                kind: crate::channel::SendErrorKind::Unknown,
-                message: "Telegram reaction operation failed".into(),
-                retryable: false,
-                ..Default::default()
-            })
+            .map_err(|error| typed_interaction_error(error, "reaction"))
     }
 }
 
@@ -2955,12 +2997,7 @@ impl crate::channel::ChannelEdit for TelegramChannel {
     ) -> Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError> {
         self.edit_message_v2(receipt, &intent)
             .await
-            .map_err(|_error| crate::channel::ChannelSendError {
-                kind: crate::channel::SendErrorKind::Unknown,
-                message: "Telegram edit operation failed".into(),
-                retryable: false,
-                ..Default::default()
-            })
+            .map_err(|error| typed_interaction_error(error, "edit"))
     }
 }
 
@@ -2972,12 +3009,7 @@ impl crate::channel::ChannelDelete for TelegramChannel {
     ) -> Result<(), crate::channel::ChannelSendError> {
         self.delete_message_v2(receipt)
             .await
-            .map_err(|_error| crate::channel::ChannelSendError {
-                kind: crate::channel::SendErrorKind::Unknown,
-                message: "Telegram delete operation failed".into(),
-                retryable: false,
-                ..Default::default()
-            })
+            .map_err(|error| typed_interaction_error(error, "delete"))
     }
 }
 
@@ -2987,8 +3019,17 @@ impl crate::channel::ChannelTyping for TelegramChannel {
         &self,
         conversation_id: &str,
     ) -> Result<(), crate::channel::ChannelSendError> {
-        self.send_typing_action_once(conversation_id).await;
-        Ok(())
+        match self.send_typing_action_once(conversation_id).await {
+            Ok(true) => Ok(()),
+            Ok(false) => Err(crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Forbidden,
+                message: "Telegram rejected the typing action".into(),
+                retryable: false,
+                sent_before_error: false,
+                ..Default::default()
+            }),
+            Err(error) => Err(typed_interaction_error(error, "typing")),
+        }
     }
 
     async fn stop_typing(
