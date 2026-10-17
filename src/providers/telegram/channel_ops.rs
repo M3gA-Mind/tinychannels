@@ -19,6 +19,55 @@ impl std::fmt::Display for TelegramPreDispatchError {
 
 impl std::error::Error for TelegramPreDispatchError {}
 
+#[derive(Debug)]
+struct TelegramUnsupportedError;
+
+impl std::fmt::Display for TelegramUnsupportedError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Telegram Bot API does not support this content operation")
+    }
+}
+
+impl std::error::Error for TelegramUnsupportedError {}
+
+fn vcard_escape(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace(';', "\\;")
+        .replace(',', "\\,")
+        .replace('\n', "\\n")
+        .replace('\r', "")
+}
+
+fn presentation_text(value: &serde_json::Value) -> String {
+    fn collect(value: &serde_json::Value, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::String(text) if !text.trim().is_empty() => out.push(text.clone()),
+            serde_json::Value::Array(items) => items.iter().for_each(|item| collect(item, out)),
+            serde_json::Value::Object(object) => {
+                for key in ["text", "title", "heading", "caption", "description"] {
+                    if let Some(value) = object.get(key) {
+                        collect(value, out);
+                    }
+                }
+                if object.keys().all(|key| !["text", "title", "heading", "caption", "description"].contains(&key.as_str())) {
+                    for value in object.values() {
+                        collect(value, out);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut parts = Vec::new();
+    collect(value, &mut parts);
+    parts.join("\n")
+}
+
+fn response_status_ok(value: &serde_json::Value) -> bool {
+    value.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
+}
+
 fn typed_send_error(error: anyhow::Error) -> crate::channel::ChannelSendError {
     if let Some(partial) = error.downcast_ref::<super::channel_send::PartialTextSendError>() {
         return partial.error.clone();
@@ -27,6 +76,16 @@ fn typed_send_error(error: anyhow::Error) -> crate::channel::ChannelSendError {
         return crate::channel::ChannelSendError {
             kind: crate::channel::SendErrorKind::Forbidden,
             message: "Telegram typed send was rejected before provider dispatch".into(),
+            retryable: false,
+            sent_before_error: false,
+            ..Default::default()
+        };
+    }
+    if error.downcast_ref::<TelegramUnsupportedError>().is_some() {
+        return crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::BadFormat,
+            message: "Telegram Bot API does not support this content operation".into(),
+            unsupported: true,
             retryable: false,
             sent_before_error: false,
             ..Default::default()
@@ -293,10 +352,171 @@ impl TelegramChannel {
 }
 
 impl TelegramChannel {
+    async fn send_structured_v2(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<Option<tinychannels_bus::channel::ChannelSendOutcome>> {
+        use tinychannels_bus::{OutboundContentPart, channel::ContentPart};
+
+        let structured = message.parts.iter().filter_map(|part| match part {
+            OutboundContentPart::Content { part } => match part {
+                ContentPart::Location { .. }
+                | ContentPart::Contact { .. }
+                | ContentPart::Buttons { .. }
+                | ContentPart::Poll { .. }
+                | ContentPart::Presentation { .. }
+                | ContentPart::Native { .. } => Some(part),
+                _ => None,
+            },
+            _ => None,
+        }).collect::<Vec<_>>();
+        if structured.is_empty() {
+            return Ok(None);
+        }
+        if structured.len() != 1 || message.parts.iter().any(|part| matches!(part,
+            OutboundContentPart::Voice { .. }
+                | OutboundContentPart::Content { part: ContentPart::Image { .. } | ContentPart::Video { .. } | ContentPart::Audio { .. } | ContentPart::File { .. } | ContentPart::Sticker { .. } | ContentPart::Contact { .. } | ContentPart::Location { .. } | ContentPart::Poll { .. } | ContentPart::Presentation { .. } | ContentPart::Native { .. } }
+        )) {
+            anyhow::bail!("Telegram structured message has an unsupported content combination");
+        }
+        let conversation = message.conversation_ref.clone().unwrap_or_else(|| tinychannels_bus::ConversationRef {
+            id: message.conversation_id.clone(),
+            thread_id: message.thread_id.clone(),
+            ..Default::default()
+        });
+        if conversation.id.trim().is_empty() {
+            anyhow::bail!("Telegram send requires a conversation identity");
+        }
+        let thread_id = conversation.topic_id.as_deref().or(conversation.thread_id.as_deref()).or(message.thread_id.as_deref());
+        let mut body = serde_json::json!({"chat_id": conversation.id});
+        let mut method = "sendMessage";
+        let kind = match structured[0] {
+            ContentPart::Location { latitude, longitude, label: _, address: _, accuracy_meters, live_until_unix_ms } => {
+                if !latitude.is_finite() || !longitude.is_finite() || !(-90.0..=90.0).contains(latitude) || !(-180.0..=180.0).contains(longitude) {
+                    anyhow::bail!("Telegram location coordinates are invalid");
+                }
+                method = "sendLocation";
+                body["latitude"] = serde_json::json!(latitude);
+                body["longitude"] = serde_json::json!(longitude);
+                if let Some(accuracy) = accuracy_meters {
+                    if !accuracy.is_finite() || !(0.0..=1500.0).contains(accuracy) { anyhow::bail!("Telegram location accuracy is invalid"); }
+                    body["horizontal_accuracy"] = serde_json::json!(accuracy);
+                }
+                if let Some(until) = live_until_unix_ms {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+                    let seconds = until.saturating_sub(now).div_ceil(1000);
+                    if !(60..=86400).contains(&seconds) { anyhow::bail!("Telegram live location duration must be 60..86400 seconds"); }
+                    body["live_period"] = serde_json::json!(seconds);
+                }
+                tinychannels_bus::channel::MessageReceiptPartKind::Location
+            }
+            ContentPart::Contact { display_name, phone_numbers, emails, organization } => {
+                let phone = phone_numbers.first().map(|method| method.value.trim()).filter(|value| !value.is_empty()).ok_or_else(|| anyhow::anyhow!("Telegram contact requires at least one phone number"))?;
+                if phone.len() > 256 { anyhow::bail!("Telegram contact phone number is too long"); }
+                let mut lines = vec!["BEGIN:VCARD".to_owned(), "VERSION:3.0".to_owned(), format!("FN:{}", vcard_escape(display_name))];
+                for entry in phone_numbers { lines.push(format!("TEL;TYPE={}:{}", entry.label.as_deref().unwrap_or("CELL"), vcard_escape(&entry.value))); }
+                for entry in emails { lines.push(format!("EMAIL;TYPE={}:{}", entry.label.as_deref().unwrap_or("INTERNET"), vcard_escape(&entry.value))); }
+                if let Some(org) = organization { lines.push(format!("ORG:{}", vcard_escape(org))); }
+                lines.push("END:VCARD".into());
+                let vcard = lines.join("\n");
+                if vcard.len() > 2048 { anyhow::bail!("Telegram contact vCard exceeds 2048 bytes"); }
+                let mut names = display_name.splitn(2, char::is_whitespace);
+                body["phone_number"] = serde_json::json!(phone);
+                body["first_name"] = serde_json::json!(names.next().unwrap_or("Contact"));
+                if let Some(last) = names.next().filter(|name| !name.trim().is_empty()) { body["last_name"] = serde_json::json!(last.trim()); }
+                body["vcard"] = serde_json::json!(vcard);
+                method = "sendContact";
+                tinychannels_bus::channel::MessageReceiptPartKind::Contact
+            }
+            ContentPart::Buttons { rows } => {
+                let text = message.parts.iter().filter_map(|part| match part {
+                    OutboundContentPart::Content { part: ContentPart::Text { text, .. } } => Some(text.as_str()),
+                    _ => None,
+                }).collect::<Vec<_>>().join("\n");
+                if text.is_empty() { anyhow::bail!("Telegram inline buttons require message text"); }
+                let mut keyboard = Vec::new();
+                for row in rows {
+                    let mut native_row = Vec::new();
+                    for button in row.iter().filter(|button| !button.disabled) {
+                        if button.id.is_empty() || button.id.len() > 64 || button.label.is_empty() || button.label.chars().count() > 64 {
+                            anyhow::bail!("Telegram button label or callback ID violates Bot API limits");
+                        }
+                        native_row.push(serde_json::json!({"text": button.label, "callback_data": button.id}));
+                    }
+                    if !native_row.is_empty() { keyboard.push(native_row); }
+                }
+                if keyboard.is_empty() { anyhow::bail!("Telegram inline keyboard has no enabled buttons"); }
+                body["text"] = serde_json::json!(markdown_v2_text(&strip_tool_call_tags(&text)));
+                body["parse_mode"] = serde_json::json!("MarkdownV2");
+                body["reply_markup"] = serde_json::json!({"inline_keyboard": keyboard});
+                tinychannels_bus::channel::MessageReceiptPartKind::Text
+            }
+            ContentPart::Poll { question, options, multiple_choice, closes_at_unix_ms, .. } => {
+                if question.trim().is_empty() || question.chars().count() > 300 || !(2..=12).contains(&options.len()) || options.iter().any(|option| option.trim().is_empty() || option.chars().count() > 100) {
+                    anyhow::bail!("Telegram poll does not satisfy Bot API question/option limits");
+                }
+                method = "sendPoll";
+                body["question"] = serde_json::json!(question);
+                body["options"] = serde_json::json!(options.iter().map(|text| serde_json::json!({"text": text})).collect::<Vec<_>>());
+                body["is_anonymous"] = serde_json::json!(true);
+                body["type"] = serde_json::json!("regular");
+                body["allows_multiple_answers"] = serde_json::json!(multiple_choice);
+                if let Some(closes_at) = closes_at_unix_ms {
+                    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+                    let seconds = closes_at.saturating_div(1000).saturating_sub(now);
+                    if !(5..=600).contains(&seconds) { anyhow::bail!("Telegram poll close time must be 5..600 seconds ahead"); }
+                    body["open_period"] = serde_json::json!(seconds);
+                }
+                tinychannels_bus::channel::MessageReceiptPartKind::Poll
+            }
+            ContentPart::Presentation { blocks } => {
+                let text = presentation_text(blocks);
+                if text.trim().is_empty() { anyhow::bail!("Telegram presentation contains no renderable text"); }
+                body["text"] = serde_json::json!(markdown_v2_text(&strip_tool_call_tags(&text)));
+                body["parse_mode"] = serde_json::json!("MarkdownV2");
+                tinychannels_bus::channel::MessageReceiptPartKind::Text
+            }
+            ContentPart::Native { .. } => return Err(anyhow::Error::new(TelegramUnsupportedError)),
+            _ => unreachable!(),
+        };
+        if let Some(thread) = thread_id { body["message_thread_id"] = serde_json::json!(thread); }
+        if let Some(reply) = message.reply_to_id.as_deref() {
+            let id = reply.parse::<i64>().map_err(|_| anyhow::anyhow!("Telegram reply target must be a numeric message ID"))?;
+            body["reply_parameters"] = serde_json::json!({"message_id": id});
+        }
+        let response = self.http_client().post(self.api_url(method)).json(&body).send().await
+            .map_err(|_| super::channel_send::partial_text_send_error(Vec::new(), format!("Telegram {method} outcome is uncertain"), false, true))?;
+        let value = response.json::<serde_json::Value>().await
+            .map_err(|_| super::channel_send::partial_text_send_error(Vec::new(), format!("Telegram {method} response is uncertain"), false, true))?;
+        if !response_status_ok(&value) {
+            return Err(super::channel_send::partial_text_send_error(Vec::new(), format!("Telegram {method} outcome is uncertain"), false, true));
+        }
+        let id = value.pointer("/result/message_id").and_then(serde_json::Value::as_i64).ok_or_else(|| super::channel_send::partial_text_send_error(Vec::new(), format!("Telegram {method} response omitted message ID"), false, true))?.to_string();
+        let channel = message.channel_ref.clone().or_else(|| Some(tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None }));
+        let part = tinychannels_bus::channel::MessageReceiptPart { platform_message_id: id.clone(), kind, index: 0, thread_id: thread_id.map(str::to_owned), reply_to_id: message.reply_to_id.clone(), edit_token: Some(id.clone()), delete_token: Some(id.clone()), ..Default::default() };
+        let receipt = tinychannels_bus::channel::MessageReceipt { idempotency_key: Some(message.idempotency_key.clone()), channel, conversation: Some(conversation), primary_platform_message_id: Some(id.clone()), platform_message_ids: vec![id], parts: vec![part], thread_id: thread_id.map(str::to_owned), reply_to_id: message.reply_to_id.clone(), sent_at: std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64, ..Default::default() };
+        Ok(Some(tinychannels_bus::channel::ChannelSendOutcome { receipt, error: None }))
+    }
+
     pub(crate) async fn send_v2_with_receipt(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+        if let Some(outcome) = self
+            .send_structured_v2(message)
+            .await
+            .map_err(|error| {
+                if error.downcast_ref::<TelegramUnsupportedError>().is_some()
+                    || error.downcast_ref::<super::channel_send::PartialTextSendError>().is_some()
+                {
+                    error
+                } else {
+                    anyhow::Error::new(TelegramPreDispatchError)
+                }
+            })?
+        {
+            return Ok(outcome);
+        }
         if message.parts.iter().any(|part| {
             matches!(
                 part,
@@ -834,7 +1054,7 @@ impl Channel for TelegramChannel {
         let reply_to_id = self.supports_reply_to_id();
         let thread_id = self.supports_thread_id();
         let media_enabled = self.media_repository.is_some();
-        let mut actions = vec!["send".into()];
+        let mut actions = vec!["send".into(), "typing".into(), "delete".into(), "edit".into()];
         if progressive_edits {
             actions.push("draft-update".into());
         }
@@ -849,6 +1069,13 @@ impl Channel for TelegramChannel {
         }
         actions.extend(["react".into(), "reactions".into()]);
         let mut parts = vec!["text".into()];
+        parts.extend([
+            "location".into(),
+            "contact".into(),
+            "buttons".into(),
+            "poll".into(),
+            "presentation".into(),
+        ]);
         let media_capability = |accepted: &[&str], emitted: &[&str], max_size_bytes: u64| {
             if media_enabled {
                 tinychannels_bus::ContentCapability {
@@ -969,6 +1196,26 @@ impl Channel for TelegramChannel {
                 } else {
                     tinychannels_bus::ContentCapability::default()
                 },
+                location: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                contact: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                buttons: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                poll: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                presentation: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
                 ..Default::default()
             },
             actions: tinychannels_bus::ActionCapabilities {
@@ -977,6 +1224,9 @@ impl Channel for TelegramChannel {
             },
             voice_in,
             voice_out,
+            events: tinychannels_bus::EventCapabilities {
+                supported: vec!["button_callback".into(), "reaction".into()],
+            },
             ..Default::default()
         }
     }
