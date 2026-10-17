@@ -133,7 +133,10 @@ pub(super) async fn flush_streaming_edit(
                 tracing::warn!(
                     "[channel-inbound][stream] initial draft response lacked an id — disabling progressive edits and preserving the response as uncertain channel='{}' receipt_parts={} response_fields={}",
                     channel,
-                    state.message_receipt.as_ref().map_or(0, |receipt| receipt.parts.len()),
+                    state
+                        .message_receipt
+                        .as_ref()
+                        .map_or(0, |receipt| receipt.parts.len()),
                     resp.as_object().map_or(0, serde_json::Map::len),
                 );
                 state.edit_disabled = true;

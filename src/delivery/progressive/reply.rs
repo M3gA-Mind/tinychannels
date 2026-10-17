@@ -218,14 +218,14 @@ impl ProgressiveReply {
             if let Some(receipt) = &self.state.message_receipt {
                 outcome.receipt = receipt.clone();
             }
-            outcome.error.get_or_insert_with(|| {
-                tinychannels_bus::channel::ChannelSendError {
+            outcome
+                .error
+                .get_or_insert_with(|| tinychannels_bus::channel::ChannelSendError {
                     kind: tinychannels_bus::channel::SendErrorKind::Unknown,
                     message: "an earlier progressive send has an uncertain outcome".into(),
                     sent_before_error: true,
                     ..Default::default()
-                }
-            });
+                });
             return Err(super::ProgressiveSendError::PartialOutcome(outcome));
         }
         if parts.is_empty() {

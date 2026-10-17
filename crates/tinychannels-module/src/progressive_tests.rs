@@ -181,7 +181,9 @@ impl Callback {
         if typed_send || matches!(request, ProgressiveTransportRequest::Send { .. }) {
             let fail_after_send = std::mem::take(&mut *self.rpc_error_after_send.lock().await);
             if fail_after_send {
-                return Err(Error::failed("fixture callback failed after accepting send"));
+                return Err(Error::failed(
+                    "fixture callback failed after accepting send",
+                ));
             }
         }
         Ok(ChannelBackendResult::ProgressiveTransport(result))
@@ -717,7 +719,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
         callback.sends.lock().await.last().unwrap()["text"],
         "complete answer"
     );
-    let result = replies
+    let error = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
             events: vec![ChannelOutputEvent::TextDelta {
@@ -903,7 +905,7 @@ async fn output_callback_failure_cleans_up_without_sending_a_replacement() {
     let (replies, callback) = fixture(false).await;
     let handle = open(&replies).await;
     *callback.output_result.lock().await = Some(ProgressiveTransportResult::Failed);
-    let error = replies
+    let result = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
             events: vec![ChannelOutputEvent::TextDelta {
@@ -1572,6 +1574,119 @@ async fn later_observation_failure_retains_prior_receipt_and_stops_terminal_batc
     ));
     assert_eq!(callback.sends.lock().await.len(), 1);
     replies.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn callback_error_after_accepting_draft_is_not_retried_or_resent() {
+    let (replies, callback) = fixture(false).await;
+    *callback.rpc_error_after_send.lock().await = true;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.progressive_edits = true;
+    let handle = open_scoped(
+        &replies,
+        "discord:ambiguous-draft",
+        "ambiguous-draft-turn",
+        capabilities,
+    )
+    .await;
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "draft text".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        tokio::time::advance(Duration::from_secs(1)).await;
+        for _ in 0..5 {
+            tokio::task::yield_now().await;
+        }
+    }
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "final text".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    let outcomes = match result {
+        ProgressiveResult::DeliveryOutcome { outcome } => vec![outcome],
+        ProgressiveResult::DeliveryOutcomes { outcomes }
+        | ProgressiveResult::DeliveryBatch { outcomes, .. } => outcomes,
+        other => panic!("expected retained uncertain draft result, got {other:?}"),
+    };
+    assert!(outcomes.iter().any(|outcome| {
+        outcome
+            .error
+            .as_ref()
+            .is_some_and(|error| error.sent_before_error)
+    }));
+    let sends = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .filter_map(|request| match request {
+            ProgressiveTransportRequest::Send {
+                idempotency_key, ..
+            } => Some(idempotency_key),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(sends.len(), 1);
+    assert!(sends[0].as_deref().is_some_and(|key| !key.is_empty()));
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn scoped_draft_keys_differ_for_identical_text_across_turns_and_accounts() {
+    let (replies, callback) = fixture(false).await;
+    for (account, turn) in [("discord:key-a", "turn-a"), ("discord:key-b", "turn-b")] {
+        let handle = open_scoped(
+            &replies,
+            account,
+            turn,
+            tinychannels_bus::ChannelCapabilities::default(),
+        )
+        .await;
+        replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle: handle.clone(),
+                events: vec![ChannelOutputEvent::TextDelta {
+                    text: "same draft text".into(),
+                    iteration: Some(1),
+                }],
+            })
+            .await
+            .unwrap();
+        tokio::time::advance(Duration::from_secs(1)).await;
+        for _ in 0..5 {
+            tokio::task::yield_now().await;
+        }
+        replies
+            .execute(ProgressiveCommand::Close { handle })
+            .await
+            .unwrap();
+    }
+    let requests = callback.requests.lock().await;
+    let keys = requests
+        .iter()
+        .filter_map(|request| match request {
+            ProgressiveTransportRequest::Send {
+                idempotency_key, ..
+            } => idempotency_key.as_deref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(keys.len(), 2);
+    assert_ne!(keys[0], keys[1]);
 }
 
 #[tokio::test(start_paused = true)]

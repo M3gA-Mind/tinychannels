@@ -48,15 +48,21 @@ impl Sender {
                     | ProgressiveTransportRequest::Delete { .. }
             );
         let authority = match &request {
-            ProgressiveTransportRequest::Edit { receipt, message_id, .. }
-            | ProgressiveTransportRequest::Delete { receipt, message_id, .. } => {
-                receipt.clone().or_else(|| {
-                    let mut receipt = tinychannels_bus::channel::MessageReceipt::default();
-                    receipt.primary_platform_message_id = Some(message_id.clone());
-                    receipt.platform_message_ids.push(message_id.clone());
-                    Some(receipt)
-                })
+            ProgressiveTransportRequest::Edit {
+                receipt,
+                message_id,
+                ..
             }
+            | ProgressiveTransportRequest::Delete {
+                receipt,
+                message_id,
+                ..
+            } => receipt.clone().or_else(|| {
+                let mut receipt = tinychannels_bus::channel::MessageReceipt::default();
+                receipt.primary_platform_message_id = Some(message_id.clone());
+                receipt.platform_message_ids.push(message_id.clone());
+                Some(receipt)
+            }),
             _ => None,
         };
         let result = self
@@ -147,7 +153,9 @@ impl ProgressiveSender for Sender {
         text: &str,
     ) -> std::result::Result<Value, ProgressiveSendError> {
         let (message, sequence, idempotency_key) = if let Some(context) = &self.context {
-            let sequence = self.send_sequence.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let sequence = self
+                .send_sequence
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let scope = serde_json::to_vec(&(
                 &context.turn_id,
                 &context.channel,
@@ -1100,14 +1108,14 @@ fn absorb_progressive_error(dispatch: &mut ProgressiveOutputDispatch, error: Pro
     use tinychannels_bus::module_progressive::ProgressiveOutputFailure;
     match error {
         ProgressiveSendError::PartialOutcome(mut outcome) => {
-            outcome.error.get_or_insert_with(|| {
-                tinychannels_bus::channel::ChannelSendError {
+            outcome
+                .error
+                .get_or_insert_with(|| tinychannels_bus::channel::ChannelSendError {
                     kind: tinychannels_bus::channel::SendErrorKind::Unknown,
                     message: "progressive provider returned a partial or uncertain outcome".into(),
                     sent_before_error: true,
                     ..Default::default()
-                }
-            });
+                });
             dispatch.outcomes.push(outcome);
             dispatch.failure = Some(ProgressiveOutputFailure::ProviderTransport);
         }
