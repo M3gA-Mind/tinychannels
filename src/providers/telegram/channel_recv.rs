@@ -684,6 +684,7 @@ impl TelegramChannel {
         })
     }
 
+    #[cfg(test)]
     pub(crate) async fn parse_update_voice_message(
         &self,
         update: &serde_json::Value,
@@ -881,6 +882,7 @@ impl TelegramChannel {
         }))
     }
 
+    #[cfg(test)]
     pub(crate) fn voice_message_content(
         transcript: &str,
         caption: Option<&str>,
@@ -1049,6 +1051,7 @@ impl TelegramChannel {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn send_voice_transcription_failure(
         &self,
         ctx: &TelegramIncomingMessageContext,
@@ -1064,6 +1067,7 @@ impl TelegramChannel {
             .await;
     }
 
+    #[cfg(test)]
     pub(crate) async fn transcribe_telegram_voice(
         &self,
         voice: &TelegramVoiceAttachment,
