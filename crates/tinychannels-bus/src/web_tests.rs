@@ -8,6 +8,12 @@ const CANCEL: &str = include_str!("fixtures/web/chat_cancelled.json");
 const TEXT_DELTA: &str = include_str!("fixtures/web/text_delta.json");
 const PROACTIVE: &str = include_str!("fixtures/web/proactive_message.json");
 const SUBAGENT_TOOL_RESULT: &str = include_str!("fixtures/web/subagent_tool_result.json");
+const CHAT_ERROR_GUARDRAIL: &str = include_str!("fixtures/web/chat_error_guardrail.json");
+const QUEUE_ITEM: &str = include_str!("fixtures/web/queue_item_queued.json");
+const THREAD_GOAL: &str = include_str!("fixtures/web/thread_goal_updated.json");
+const THREAD_TODOS: &str = include_str!("fixtures/web/thread_todos_changed.json");
+const TOOL_RESULT: &str = include_str!("fixtures/web/tool_result.json");
+const APPROVAL_DECIDED: &str = include_str!("fixtures/web/approval_decided.json");
 
 fn assert_historical_fixture_round_trips(fixture: &str) {
     let historical: serde_json::Value = serde_json::from_str(fixture).unwrap();
@@ -26,6 +32,12 @@ fn deployed_web_event_goldens_keep_their_serialized_shapes() {
         TEXT_DELTA,
         PROACTIVE,
         SUBAGENT_TOOL_RESULT,
+        CHAT_ERROR_GUARDRAIL,
+        QUEUE_ITEM,
+        THREAD_GOAL,
+        THREAD_TODOS,
+        TOOL_RESULT,
+        APPROVAL_DECIDED,
     ] {
         assert_historical_fixture_round_trips(fixture);
     }
@@ -223,22 +235,59 @@ fn schema_export_is_deterministic_and_contains_every_variant() {
         assert!(schema_text.contains(event), "schema omitted {event}");
     }
     for type_name in ["OutboundContentPart", "MediaReference", "VoiceNote"] {
-        assert!(schema_text.contains(type_name), "schema omitted {type_name}");
+        assert!(
+            schema_text.contains(type_name),
+            "schema omitted {type_name}"
+        );
     }
 }
 
 const HISTORICAL_EVENT_NAMES: &[&str] = &[
-    "chat_done", "chat_interim", "chat_suggestions", "chat_error", "chat_cancelled",
-    "text_delta", "thinking_delta", "tool_args_delta", "inference_start",
-    "inference_heartbeat", "iteration_start", "tool_call", "tool_progress", "tool_result",
-    "turn_cost", "subagent_spawned", "subagent_completed", "subagent_failed",
-    "subagent_awaiting_user", "subagent_iteration_start", "subagent_tool_call",
-    "subagent_tool_result", "subagent_text_delta", "subagent_thinking_delta",
-    "approval_request", "approval_decided", "plan_review_request", "plan_review_decided",
-    "queue_item_queued", "queue_item_delivered", "queue_item_removed", "thread_goal_updated",
-    "thread_goal_cleared", "thread_todos_changed", "run_mode_changed", "artifact_ready",
-    "artifact_failed", "artifact_pending", "memory_activity", "external_transfer_pending",
-    "proactive_message", "voice_speak", "user_error", "chat_message", "chat_segment",
+    "chat_done",
+    "chat_interim",
+    "chat_suggestions",
+    "chat_error",
+    "chat_cancelled",
+    "text_delta",
+    "thinking_delta",
+    "tool_args_delta",
+    "inference_start",
+    "inference_heartbeat",
+    "iteration_start",
+    "tool_call",
+    "tool_progress",
+    "tool_result",
+    "turn_cost",
+    "subagent_spawned",
+    "subagent_completed",
+    "subagent_failed",
+    "subagent_awaiting_user",
+    "subagent_iteration_start",
+    "subagent_tool_call",
+    "subagent_tool_result",
+    "subagent_text_delta",
+    "subagent_thinking_delta",
+    "approval_request",
+    "approval_decided",
+    "plan_review_request",
+    "plan_review_decided",
+    "queue_item_queued",
+    "queue_item_delivered",
+    "queue_item_removed",
+    "thread_goal_updated",
+    "thread_goal_cleared",
+    "thread_todos_changed",
+    "run_mode_changed",
+    "artifact_ready",
+    "artifact_failed",
+    "artifact_pending",
+    "memory_activity",
+    "external_transfer_pending",
+    "proactive_message",
+    "voice_speak",
+    "user_error",
+    "chat_message",
+    "chat_segment",
 ];
 
 #[test]

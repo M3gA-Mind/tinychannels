@@ -77,12 +77,11 @@ pub use version::{CONTRACT_VERSION, is_compatible};
 pub use web::{
     ChatRequestMetadata, ChatSuggestion, GuardrailPayload, GuardrailReason,
     MAX_WEB_TOOL_PAYLOAD_BYTES, QueueItemPayload, QueueMode, SubagentProgressDetail,
-    SubagentUsagePayload, TurnCostThrottle, TurnTimingPayload, TurnTimingSnapshot,
-    TurnTimingState, TurnUsagePayload, WebChannelEvent, WebCostSource, WebEventContext,
-    WebEventPayload, WebGuardrailPayload, WebGuardrailReason, WebQueueItemPayload,
-    WebSubagentProgressDetail, WebSubagentUsagePayload, WebTurnTimingPayload,
-    WebTurnUsagePayload, cap_web_args, cap_web_output, legacy_event_alias,
-    tokens_per_second, web_event_schema_json,
+    SubagentUsagePayload, TurnCostThrottle, TurnTimingPayload, TurnTimingSnapshot, TurnTimingState,
+    TurnUsagePayload, WebChannelEvent, WebCostSource, WebEventContext, WebEventPayload,
+    WebGuardrailPayload, WebGuardrailReason, WebQueueItemPayload, WebSubagentProgressDetail,
+    WebSubagentUsagePayload, WebTurnTimingPayload, WebTurnUsagePayload, cap_web_args,
+    cap_web_output, legacy_event_alias, tokens_per_second, web_event_schema_json,
 };
 
 #[cfg(test)]
