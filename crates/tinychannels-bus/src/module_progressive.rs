@@ -311,6 +311,8 @@ pub enum ProgressiveTransportRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         conversation: Option<crate::channel::ConversationRef>,
         message_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        receipt: Option<crate::channel::MessageReceipt>,
         text: String,
     },
     Delete {
@@ -322,6 +324,8 @@ pub enum ProgressiveTransportRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         conversation: Option<crate::channel::ConversationRef>,
         message_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        receipt: Option<crate::channel::MessageReceipt>,
     },
     Typing {
         channel: String,

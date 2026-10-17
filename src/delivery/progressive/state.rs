@@ -17,6 +17,9 @@ pub struct StreamingState {
     pub message_id: Option<String>,
     /// Every provider message that forms a multipart draft, in send order.
     pub message_ids: Vec<String>,
+    /// Full provider authority for editing/deleting draft parts when the
+    /// transport supplies normalized receipt tokens.
+    pub message_receipt: Option<tinychannels_bus::channel::MessageReceipt>,
     /// `true` once a draft message has been posted to the channel,
     /// even when the backend response didn't include an id to target
     /// for future edits. Decouples "a draft exists" from "we can edit
@@ -166,6 +169,18 @@ pub fn extract_message_ids(resp: &serde_json::Value) -> Vec<String> {
         }
     }
     unique
+}
+
+/// Retain the normalized receipt embedded in a provider response. Legacy
+/// responses that expose only IDs remain usable, but have no opaque tokens.
+pub fn extract_message_receipt(
+    resp: &serde_json::Value,
+) -> Option<tinychannels_bus::channel::MessageReceipt> {
+    let receipt_value = resp
+        .get("receipt")
+        .or_else(|| resp.get("data").and_then(|data| data.get("receipt")))
+        .cloned()?;
+    serde_json::from_value(receipt_value).ok()
 }
 
 fn receipt_id_value(value: &serde_json::Value) -> Option<String> {

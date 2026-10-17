@@ -1,7 +1,7 @@
 //! Posting and progressively editing the evolving draft reply bubble.
 
 use super::latch::{channel_edits_unsupported, mark_channel_edits_unsupported};
-use super::state::{StreamingState, extract_message_ids};
+use super::state::{StreamingState, extract_message_ids, extract_message_receipt};
 use super::{MAX_EDIT_FAILURES, ProgressiveSendError, ProgressiveSender};
 
 /// Post or edit the draft carrying the latest buffered text. The first call
@@ -30,7 +30,11 @@ pub(super) async fn flush_streaming_edit(
             state.latch_draft_edits_unsupported();
             return;
         }
-        match sender.edit(channel, &message_id, &draft).await {
+        let edit = match state.message_receipt.as_ref() {
+            Some(receipt) => sender.edit_with_receipt(channel, receipt, &draft).await,
+            None => sender.edit(channel, &message_id, &draft).await,
+        };
+        match edit {
             Ok(()) => {
                 tracing::debug!(
                     "[channel-inbound][stream] edit ok channel='{}' msg_id={} chars={}",
@@ -102,14 +106,21 @@ pub(super) async fn flush_streaming_edit(
             // id, so finalize never posts a second bubble.
             state.draft_sent = true;
             let ids = extract_message_ids(&resp);
+            state.message_receipt = extract_message_receipt(&resp);
             if let Some(id) = ids.first().cloned() {
                 tracing::debug!(
                     "[channel-inbound][stream] initial draft sent channel='{}' msg_id={}",
                     channel,
                     id,
                 );
-                state.message_id = Some(id);
+                state.message_id = Some(id.clone());
                 state.message_ids = ids;
+                if state.message_receipt.is_none() {
+                    let mut receipt = tinychannels_bus::channel::MessageReceipt::default();
+                    receipt.primary_platform_message_id = Some(id.clone());
+                    receipt.platform_message_ids = state.message_ids.clone();
+                    state.message_receipt = Some(receipt);
+                }
                 if state.message_ids.len() > 1 {
                     // A draft assembled from several provider messages is not
                     // safely editable through the single-ID legacy port.

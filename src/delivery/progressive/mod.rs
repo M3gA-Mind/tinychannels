@@ -164,8 +164,36 @@ pub trait ProgressiveSender: Send + Sync {
         text: &str,
     ) -> Result<(), ProgressiveSendError>;
 
+    /// Edit using the provider's normalized receipt authority when available.
+    /// Legacy implementations receive the primary message ID through `edit`.
+    async fn edit_with_receipt(
+        &self,
+        channel: &str,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        text: &str,
+    ) -> Result<(), ProgressiveSendError> {
+        let message_id = receipt
+            .primary_platform_message_id
+            .as_deref()
+            .ok_or_else(|| ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID")))?;
+        self.edit(channel, message_id, text).await
+    }
+
     /// Delete a posted message.
     async fn delete(&self, channel: &str, message_id: &str) -> Result<(), ProgressiveSendError>;
+
+    /// Delete using the provider's normalized receipt authority when available.
+    async fn delete_with_receipt(
+        &self,
+        channel: &str,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> Result<(), ProgressiveSendError> {
+        let message_id = receipt
+            .primary_platform_message_id
+            .as_deref()
+            .ok_or_else(|| ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID")))?;
+        self.delete(channel, message_id).await
+    }
 
     /// Show the typing indicator once.
     async fn typing(&self, channel: &str) -> Result<(), ProgressiveSendError>;
