@@ -1912,6 +1912,8 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     let server = MockServer::start().await;
     let response_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
     let response_ids_for_mock = response_ids.clone();
+    let message_contexts = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let message_contexts_for_mock = message_contexts.clone();
     let next_id = Arc::new(AtomicUsize::new(320));
     let next_id_for_mock = next_id.clone();
     Mock::given(method("POST"))
@@ -1932,6 +1934,18 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
                 } else { None };
                 let id = requested_edit_id.unwrap_or_else(|| next_id_for_mock.fetch_add(1, Ordering::SeqCst).to_string());
                 response_ids_for_mock.lock().unwrap().push((endpoint.to_owned(), id.clone()));
+                if endpoint != "editMessageText" {
+                    if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) {
+                        let field = |name: &str| body.get(name).and_then(|value| value.as_i64().map(|n| n.to_string()).or_else(|| value.as_str().map(str::to_owned)));
+                        let chat = field("chat_id").unwrap_or_default();
+                        let thread = field("message_thread_id");
+                        let reply = field("reply_to_message_id").or_else(|| body.get("reply_parameters")
+                            .and_then(|value| value.get("message_id"))
+                            .and_then(|value| value.as_i64().map(|n| n.to_string())));
+                        let context = ConversationRef { kind: ConversationKind::Group, id: chat, thread_id: thread.clone(), topic_id: thread, ..Default::default() };
+                        message_contexts_for_mock.lock().unwrap().insert(id.clone(), (context, reply));
+                    }
+                }
                 result = serde_json::json!({});
                 result["message_id"] = serde_json::Value::Number(id.parse::<u64>().unwrap().into());
             }
@@ -2049,6 +2063,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         callbacks,
         provider_host,
         response_cursor: std::sync::Mutex::new(0),
+        message_contexts,
     };
     let descriptor = fixture.adapter.descriptor();
     assert_eq!(descriptor.id, "telegram");
