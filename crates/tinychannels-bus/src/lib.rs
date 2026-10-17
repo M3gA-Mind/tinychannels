@@ -88,10 +88,11 @@ pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH,
 pub use traits::{Channel, ChannelIngress, ChannelMessage, ChannelSendExt, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};
 pub use web::{
-    ChatRequestMetadata, QueueMode, WebChannelEvent, WebEventContext, WebEventPayload,
-    WebGuardrailPayload, WebGuardrailReason, WebQueueItemPayload, WebSubagentProgressDetail,
-    WebSubagentUsagePayload, WebTurnTimingPayload, WebTurnUsagePayload, legacy_event_alias,
-    web_event_schema_json,
+    ChatRequestMetadata, ChatSuggestion, QueueMode, WebChannelEvent, WebCostSource,
+    WebEventContext, WebEventPayload, WebGuardrailPayload, WebGuardrailReason,
+    WebQueueItemPayload, WebSubagentProgressDetail, WebSubagentUsagePayload,
+    WebTurnTimingPayload, WebTurnUsagePayload, cap_web_args, cap_web_output,
+    legacy_event_alias, tokens_per_second, web_event_schema_json, MAX_WEB_TOOL_PAYLOAD_BYTES,
 };
 
 #[cfg(test)]
