@@ -321,3 +321,7 @@ pub fn intent_scope(intent: &ChannelOutboundIntent) -> Option<ExpectedScope> {
         conversation: intent.conversation_ref.clone()?,
     })
 }
+
+#[cfg(test)]
+#[path = "lib_tests.rs"]
+mod tests;
