@@ -155,7 +155,7 @@ impl ProgressiveReply {
                         .map(|part| tinychannels_bus::OutboundContentPart::Content { part }),
                 );
                 match self.send_content_parts(&outbound, "").await {
-                    Ok(outcome) => dispatch.outcomes.push(outcome),
+                    Ok(outcome) => dispatch.push_outcome(outcome),
                     Err(super::ProgressiveSendError::UnsupportedContent) => {
                         dispatch.unsupported.extend(outbound)
                     }
@@ -185,7 +185,7 @@ impl ProgressiveReply {
                     },
                 });
                 match self.send_content_parts(&outbound, "").await {
-                    Ok(outcome) => dispatch.outcomes.push(outcome),
+                    Ok(outcome) => dispatch.push_outcome(outcome),
                     Err(super::ProgressiveSendError::UnsupportedContent) => {
                         dispatch.unsupported.extend(outbound)
                     }
@@ -230,7 +230,7 @@ impl ProgressiveReply {
         }
         if parts.is_empty() {
             if let Some(outcome) = self.finalize_existing_text(text).await? {
-                dispatch.outcomes.push(outcome);
+                dispatch.push_outcome(outcome);
                 return Ok(dispatch);
             }
         }
@@ -245,7 +245,7 @@ impl ProgressiveReply {
             parts.clone()
         };
         match self.send_parts(&parts, text).await {
-            Ok(outcome) => dispatch.outcomes.push(outcome),
+            Ok(outcome) => dispatch.push_outcome(outcome),
             Err(super::ProgressiveSendError::UnsupportedContent) => {
                 dispatch.unsupported.extend(parts)
             }
@@ -296,7 +296,7 @@ impl ProgressiveReply {
             },
         };
         match self.send_content_parts(&[part.clone()], text).await {
-            Ok(outcome) => dispatch.outcomes.push(outcome),
+            Ok(outcome) => dispatch.push_outcome(outcome),
             Err(super::ProgressiveSendError::UnsupportedContent) => dispatch.unsupported.push(part),
             Err(error) => return Err(error),
         }
