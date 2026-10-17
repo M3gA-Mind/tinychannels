@@ -4388,7 +4388,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     });
     capabilities.voice_out.max_size_bytes = Some(1);
     let sender = Arc::new(Sender {
-        media_account_scope: Some("telegram:media-v1:fixture".into()),
+        media_account_scope: None,
         host: host.clone(),
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
@@ -4509,7 +4509,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         explicitly_requested: false,
     });
     let sender = Arc::new(Sender {
-        media_account_scope: None,
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
