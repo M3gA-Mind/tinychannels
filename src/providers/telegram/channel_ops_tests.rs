@@ -8,8 +8,27 @@ use tinychannels_runtime::channel::ChannelAdapter;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+struct TelegramConformanceSink(Arc<TelegramChannel>);
+
+#[async_trait::async_trait]
+impl tinychannels_runtime::adapters::LocalOutboundSink for TelegramConformanceSink {
+    async fn send(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<
+        tinychannels_bus::channel::MessageReceipt,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        let outcome = tinychannels::channel::ChannelAdapter::send(self.0.as_ref(), intent).await?;
+        if let Some(error) = outcome.error {
+            return Err(error);
+        }
+        Ok(outcome.receipt)
+    }
+}
+
 struct TelegramWireFixture {
-    adapter: Arc<TelegramChannel>,
+    adapter: tinychannels_runtime::adapters::LocalChannelAdapter,
     server: MockServer,
     observations: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
     request_cursor: std::sync::Mutex<usize>,
@@ -2223,7 +2242,16 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         reply_to_id: None,
         thread_id: None,
     };
-    let adapter = channel;
+    let adapter = tinychannels_runtime::adapters::LocalChannelAdapter::new(
+        tinychannels_bus::channel::ChannelDescriptor {
+            id: scope.channel.id.clone(),
+            display_name: "Telegram test account".into(),
+            account_id: scope.channel.account_id.clone(),
+            ..Default::default()
+        },
+        channel.capabilities(),
+        Arc::new(TelegramConformanceSink(channel)),
+    );
     let fixture = TelegramWireFixture {
         adapter,
         server,
