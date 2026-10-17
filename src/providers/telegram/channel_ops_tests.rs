@@ -848,10 +848,13 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
     assert_eq!(observation.request["text"], "hello-kit");
     assert_eq!(observation.platform_message_ids, ["321"]);
 
-    check_feature(&fixture, ConformanceFeature::Image)
+    check_feature(&fixture, ConformanceFeature::VoiceSynthesis)
         .await
         .unwrap();
-    assert!(fixture.observations().is_empty());
+    assert!(
+        fixture.observations().is_empty(),
+        "undeclared voice synthesis must not reach the mock platform"
+    );
 }
 
 #[tokio::test]
