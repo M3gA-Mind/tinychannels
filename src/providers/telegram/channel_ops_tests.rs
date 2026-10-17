@@ -258,12 +258,14 @@ fn telegram_advertises_typed_media_only_with_scoped_storage() {
     assert!(configured.content.video.inbound && configured.content.video.outbound);
     assert!(configured.content.audio.inbound && configured.content.audio.outbound);
     assert!(configured.content.file.inbound && configured.content.file.outbound);
-    assert!(configured.content.sticker.inbound && configured.content.sticker.outbound);
+    assert!(configured.content.sticker.inbound);
+    assert!(!configured.content.sticker.outbound);
     assert_eq!(
         configured.content.image.accepted_types,
         ["image/jpeg", "image/png", "image/gif", "image/webp"]
     );
     assert_eq!(configured.content.sticker.accepted_types, ["image/webp"]);
+    assert_eq!(configured.content.image.max_size_bytes, Some(10 * 1024 * 1024));
     assert_eq!(
         configured.content.video.max_size_bytes,
         Some(20 * 1024 * 1024)
@@ -272,6 +274,8 @@ fn telegram_advertises_typed_media_only_with_scoped_storage() {
         configured.content.file.max_size_bytes,
         Some(20 * 1024 * 1024)
     );
+    assert_eq!(configured.content.audio.emitted_types, ["audio/mpeg", "audio/mp4"]);
+    assert_eq!(configured.content.video.emitted_types, ["video/mp4"]);
 }
 
 #[async_trait::async_trait]
@@ -332,6 +336,12 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
                 BASE64
                     .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
                     .unwrap(),
+            ),
+            "oversized-photo" => (
+                tinychannels_bus::MediaKind::Image,
+                "image/jpeg",
+                "large.jpg",
+                oversized_jpeg_with_dimensions(),
             ),
             "stored-audio-1" => (
                 tinychannels_bus::MediaKind::Audio,
@@ -1186,10 +1196,53 @@ async fn telegram_rejects_wav_audio_before_native_upload() {
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn telegram_photo_over_ten_megabytes_is_rejected_before_http() {
+    let server = mock_api().await;
+    let channel = channel_for(&server, &["*"])
+        .with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("oversized-photo", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("oversized-photo".into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    }];
+
+    let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
+
+    assert!(error.to_string().contains("upload method limit"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
 fn valid_mp3_frame() -> Vec<u8> {
     // MPEG-1 Layer III, 128 kbps, 44.1 kHz frame (417 bytes).
     let mut bytes = vec![0_u8; 417];
     bytes[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
+    bytes
+}
+
+fn oversized_jpeg_with_dimensions() -> Vec<u8> {
+    let mut bytes = vec![0_u8; 10 * 1024 * 1024 + 1];
+    bytes[..11].copy_from_slice(&[0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01]);
     bytes
 }
 
