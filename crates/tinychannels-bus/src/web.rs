@@ -203,16 +203,6 @@ pub enum WebChannelEvent {
         round: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         usage: Option<WebTurnUsagePayload>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        cost_usd: Option<f64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        cost_source: Option<WebCostSource>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        context_window: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        context_tokens: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        subagents: Option<Vec<WebSubagentUsagePayload>>,
     },
     SubagentSpawned {
         #[serde(flatten)]
@@ -227,12 +217,6 @@ pub enum WebChannelEvent {
         round: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         subagent: Option<WebSubagentProgressDetail>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        mode: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        dedicated_thread: Option<bool>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        prompt_chars: Option<u64>,
     },
     SubagentCompleted {
         #[serde(flatten)]
@@ -249,22 +233,6 @@ pub enum WebChannelEvent {
         round: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         subagent: Option<WebSubagentProgressDetail>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        elapsed_ms: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        iterations: Option<u32>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output_chars: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        input_tokens: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output_tokens: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        cached_input_tokens: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        cost_usd: Option<f64>,
     },
     SubagentFailed {
         #[serde(flatten)]
@@ -311,10 +279,6 @@ pub enum WebChannelEvent {
         round: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         subagent: Option<WebSubagentProgressDetail>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        child_iteration: Option<u32>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        child_max_iterations: Option<u32>,
     },
     SubagentToolCall {
         #[serde(flatten)]
@@ -335,12 +299,6 @@ pub enum WebChannelEvent {
         tool_display_detail: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         subagent: Option<WebSubagentProgressDetail>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        child_iteration: Option<u32>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        agent_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        task_id: Option<String>,
     },
     SubagentToolResult {
         #[serde(flatten)]
@@ -371,14 +329,6 @@ pub enum WebChannelEvent {
         failure: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         subagent: Option<WebSubagentProgressDetail>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        child_iteration: Option<u32>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        agent_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        task_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        output_chars: Option<u64>,
     },
     SubagentTextDelta {
         #[serde(flatten)]
@@ -393,12 +343,6 @@ pub enum WebChannelEvent {
         skill_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         subagent: Option<WebSubagentProgressDetail>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        child_iteration: Option<u32>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        agent_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        task_id: Option<String>,
     },
     SubagentThinkingDelta {
         #[serde(flatten)]
@@ -413,12 +357,6 @@ pub enum WebChannelEvent {
         skill_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         subagent: Option<WebSubagentProgressDetail>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        child_iteration: Option<u32>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        agent_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        task_id: Option<String>,
     },
     ApprovalRequest {
         #[serde(flatten)]
