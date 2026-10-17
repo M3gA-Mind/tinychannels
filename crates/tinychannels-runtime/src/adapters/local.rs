@@ -122,13 +122,28 @@ impl ChannelAdapter for LocalChannelAdapter {
                 ..Default::default()
             });
         }
-        self.outbound
-            .send(intent)
-            .await
-            .map(|receipt| crate::channel::ChannelSendOutcome {
+        self.outbound.send(intent.clone()).await.map(|mut receipt| {
+            receipt.idempotency_key.get_or_insert(intent.idempotency_key);
+            receipt.channel.get_or_insert_with(|| {
+                tinychannels_bus::ChannelRef {
+                    id: self.descriptor.id.clone(),
+                    account_id: self.descriptor.account_id.clone(),
+                }
+            });
+            receipt.conversation.get_or_insert_with(|| {
+                intent.conversation_ref.clone().unwrap_or_else(|| {
+                    tinychannels_bus::ConversationRef {
+                        id: intent.conversation_id.clone(),
+                        thread_id: intent.thread_id.clone(),
+                        ..Default::default()
+                    }
+                })
+            });
+            crate::channel::ChannelSendOutcome {
                 receipt,
                 error: None,
-            })
+            }
+        })
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError> {
