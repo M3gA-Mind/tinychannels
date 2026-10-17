@@ -460,6 +460,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
                     content_type: request.mime_type,
                     file_name: request.file_name,
                     duration_ms: request.duration_ms,
+                    codec: request.codec,
                     voice_direction: Some(request.direction),
                     dedupe_key: None,
                     max_bytes: 8 * 1024 * 1024,
@@ -480,14 +481,13 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
                 media_reference: Some(media.clone()),
             })
             .await
-            .ok();
+            .map_err(|error| anyhow::anyhow!("host voice media publication failed: {:?}", error.kind()))?;
         let accessible_url = projection
-            .as_ref()
-            .and_then(|result| result.accessible_url.clone())
+            .accessible_url
             .filter(|url| !url.trim().is_empty());
         let mut media = media;
-        if let Some(projected) = projection.map(|result| result.media) {
-            media.local_cache_path = projected.local_cache_path;
+        if projection.media.opaque_id == media.opaque_id {
+            media.local_cache_path = projection.media.local_cache_path;
         }
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
             media,

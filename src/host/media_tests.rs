@@ -1,7 +1,9 @@
 use super::*;
 use base64::Engine;
 use std::ops::Range;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
 use tinystoragedrivers_core::{
     Blob, BlobMeta, BlobReader, BlobStore, MemoryStorage, Result as StorageResult, Scope,
@@ -46,6 +48,41 @@ struct PausedFirstPut {
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
     first: std::sync::atomic::AtomicBool,
+}
+
+struct CountingReader {
+    inner: std::io::Cursor<Vec<u8>>,
+    bytes_read: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl tokio::io::AsyncRead for CountingReader {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        context: &mut Context<'_>,
+        buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let before = buffer.filled().len();
+        let result = Pin::new(&mut self.inner).poll_read(context, buffer);
+        if let Poll::Ready(Ok(())) = result {
+            self.bytes_read.fetch_add(
+                buffer.filled().len() - before,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+        result
+    }
+}
+
+struct PanicReader;
+
+impl tokio::io::AsyncRead for PanicReader {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        _context: &mut Context<'_>,
+        _buffer: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        panic!("invalid scope must be rejected before reading the media body")
+    }
 }
 
 #[async_trait::async_trait]
@@ -257,15 +294,20 @@ async fn streamed_media_accepts_actual_length_and_rejects_unknown_length_over_ca
 
     let mut metadata = media_request(Vec::new(), None, None).metadata;
     metadata.max_bytes = 64;
+    let bytes_read = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     assert!(
         store
             .store_stream(MediaStreamRequest {
                 metadata,
-                reader: Box::pin(std::io::Cursor::new(vec![b'x'; 4096])),
+                reader: Box::pin(CountingReader {
+                    inner: std::io::Cursor::new(vec![b'x'; 4096]),
+                    bytes_read: Arc::clone(&bytes_read),
+                }),
             })
             .await
             .is_err()
     );
+    assert!(bytes_read.load(std::sync::atomic::Ordering::SeqCst) <= 65);
 }
 
 #[tokio::test]
@@ -276,7 +318,7 @@ async fn invalid_stream_scope_is_rejected_before_reading_body() {
     let result = store
         .store_stream(MediaStreamRequest {
             metadata,
-            reader: Box::pin(std::io::Cursor::new(valid_png())),
+            reader: Box::pin(PanicReader),
         })
         .await;
     assert!(result.is_err());
