@@ -270,7 +270,7 @@ impl ProgressiveReply {
                     tinychannels_bus::ContentPart::Text {
                         markdown_dialect, ..
                     },
-            } => *markdown_dialect,
+            } => markdown_dialect.clone(),
             _ => None,
         });
         let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
@@ -279,7 +279,7 @@ impl ProgressiveReply {
                 vec![tinychannels_bus::OutboundContentPart::Content {
                     part: tinychannels_bus::ContentPart::Text {
                         text: segment.clone(),
-                        markdown_dialect: dialect,
+                        markdown_dialect: dialect.clone(),
                     },
                 }]
             } else {
