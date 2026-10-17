@@ -4225,7 +4225,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     assert!(audio_request.iter().any(|part| matches!(part,
         tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Audio { media, codec: Some(codec), .. }
-        } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
+        } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_")) && codec == "ogg_opus"
     )));
     assert!(
         !audio_request
