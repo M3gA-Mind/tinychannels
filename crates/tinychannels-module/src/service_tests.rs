@@ -143,6 +143,16 @@ impl tinychannels::Channel for CaptureVoiceReceiptChannel {
         "fixture"
     }
 
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        tinychannels_bus::ChannelCapabilities {
+            voice_out: tinychannels_bus::VoiceCapabilities {
+                supported: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
         anyhow::bail!("voice intents must stay typed")
     }
