@@ -70,7 +70,7 @@ pub enum ChannelOutputEvent {
     },
     Media {
         text: Option<String>,
-        media: Vec<crate::channel::MediaReference>,
+        parts: Vec<crate::channel::ContentPart>,
     },
     VoiceNote {
         text: Option<String>,

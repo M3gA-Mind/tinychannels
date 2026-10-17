@@ -34,7 +34,7 @@ pub fn translate_output_event(
     options: BridgeTranslationOptions,
 ) -> Vec<ChannelOutboundIntent> {
     let payload = match event {
-        ChannelOutputEvent::TextDelta { text } => {
+        ChannelOutputEvent::TextDelta { text, .. } => {
             if presentation.supports_edit && !static_capabilities.block_streaming {
                 OutboundPayload::NativeChannelData {
                     data: json!({
@@ -77,18 +77,14 @@ pub fn translate_output_event(
             }
         }
         ChannelOutputEvent::Clarification { prompt } => OutboundPayload::Text { text: prompt },
-        ChannelOutputEvent::Media { text, media } => OutboundPayload::Media {
-            text,
-            media_urls: media
-                .into_iter()
-                .filter_map(|item| item.url.or(item.path))
-                .collect(),
+        ChannelOutputEvent::Media { text, parts } => OutboundPayload::NativeChannelData {
+            data: json!({"text": text, "parts": parts}),
         },
         ChannelOutputEvent::Cancellation { reason } => OutboundPayload::Text {
             text: reason.unwrap_or_else(|| "Cancelled.".to_string()),
         },
-        ChannelOutputEvent::Lifecycle { stage, message } => OutboundPayload::NativeChannelData {
-            data: json!({ "lifecycle": { "stage": stage, "message": message } }),
+        ChannelOutputEvent::Lifecycle { stage, message, iteration, max_iterations, stop } => OutboundPayload::NativeChannelData {
+            data: json!({ "lifecycle": { "stage": stage, "message": message, "iteration": iteration, "maxIterations": max_iterations, "stop": stop } }),
         },
         ChannelOutputEvent::Native { data } => OutboundPayload::NativeChannelData { data },
         event => OutboundPayload::NativeChannelData {
