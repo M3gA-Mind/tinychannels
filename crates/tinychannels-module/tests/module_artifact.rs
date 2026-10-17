@@ -1380,10 +1380,12 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     assert!(upload_text.contains("name=\"message_thread_id\"\r\n\r\n17"));
     assert!(upload_text.contains("name=\"caption\"\r\n\r\nfixture"));
     assert!(upload_text.contains("filename=\"tiny.png\""));
-    assert!(upload
-        .body
-        .windows(png_for_wire_check.len())
-        .any(|bytes| bytes == png_for_wire_check));
+    assert!(
+        upload
+            .body
+            .windows(png_for_wire_check.len())
+            .any(|bytes| bytes == png_for_wire_check)
+    );
 
     runtime_proxy
         .call_confidential::<()>("StopChannel", "telegram")
