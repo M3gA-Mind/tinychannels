@@ -448,10 +448,13 @@ async fn run(
         tokio::select! {
             command = inbox.recv() => match command {
                 Some(Command::Feed(events, forward, response)) => {
-                    let cancellation = events.iter().find_map(|event| match event {
-                        ChannelOutputEvent::Cancellation { reason } => Some(
-                            reason.clone().unwrap_or_else(|| "Cancelled.".into()),
-                        ),
+                    let cancellation = events
+                        .iter()
+                        .any(|event| matches!(event, ChannelOutputEvent::Cancellation { .. }));
+                    let final_message = events.iter().find_map(|event| match event {
+                        ChannelOutputEvent::FinalMessage { text, parts, .. } => {
+                            Some((text.clone(), !parts.is_empty()))
+                        }
                         _ => None,
                     });
                     let result = apply(&mut reply, events, forward).await;
@@ -461,23 +464,30 @@ async fn run(
                         reply.abort().await;
                         break;
                     }
-                    if let Some(reason) = cancellation {
-                        reply.finalize(&reason).await;
+                    if cancellation {
+                        reply.abort().await;
                         break;
                     }
-                    let terminal = events_terminal_hint(&events);
+                    if let Some((text, has_typed_parts)) = final_message {
+                        if has_typed_parts {
+                            reply.abort().await;
+                        } else {
+                            reply.finalize(&text).await;
+                        }
+                        break;
+                    }
                 }
                 Some(Command::Finish(text, response)) => {
                     reply.finalize(&text).await;
                     let _ = response.send(());
                     break;
                 }
-                None => { reply.finalize("Cancelled.").await; break; }
+                None => { reply.abort().await; break; }
             },
             _ = edits.tick() => reply.edit_tick().await,
             _ = typing.tick() => reply.typing_tick().await,
             _ = fillers.tick() => reply.filler_tick().await,
-            _ = &mut expiry => { reply.finalize("Sorry, the request timed out.").await; break; }
+            _ = &mut expiry => { reply.abort().await; break; }
         }
     }
 }

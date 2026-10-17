@@ -594,3 +594,72 @@ async fn transport_failures_preserve_recovery_classification() {
         }
     }
 }
+
+#[tokio::test]
+async fn output_callback_failure_cleans_up_without_sending_a_replacement() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Failed);
+    let error = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "already attempted".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("host output event callback failed")
+    );
+    assert!(callback.sends.lock().await.is_empty());
+    assert!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .any(|request| matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
+    );
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn canonical_final_and_cancellation_events_end_the_worker() {
+    let (replies, callback) = fixture(false).await;
+    let final_handle = open(&replies).await;
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: final_handle.clone(),
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "canonical final".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    let cancellation_handle = open(&replies).await;
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: cancellation_handle.clone(),
+            events: vec![ChannelOutputEvent::Cancellation { reason: None }],
+        })
+        .await
+        .unwrap();
+    assert_eq!(callback.sends.lock().await.len(), 1);
+    for handle in [final_handle, cancellation_handle] {
+        replies
+            .execute(ProgressiveCommand::Close { handle })
+            .await
+            .unwrap();
+    }
+    replies.shutdown().await.unwrap();
+}
