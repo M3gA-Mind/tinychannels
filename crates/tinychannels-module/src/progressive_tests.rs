@@ -950,6 +950,20 @@ async fn configured_progressive_channel_posts_and_edits_one_draft() {
             base.host.clone(),
         ),
     );
+    configured.insert(
+        "discord:editable-b".to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities: tinychannels_bus::ChannelCapabilities {
+                    progressive_edits: true,
+                    ..Default::default()
+                },
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            base.host.clone(),
+        ),
+    );
     let replies = Replies::new(base.host.clone(), Arc::new(Mutex::new(configured)));
     let opened = replies
         .execute(ProgressiveCommand::OpenOutput {
@@ -989,6 +1003,7 @@ async fn configured_progressive_channel_posts_and_edits_one_draft() {
             if message["text"] == "hello"
     )));
     drop(requests);
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::EditUnsupported);
     replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
@@ -1035,6 +1050,61 @@ async fn configured_progressive_channel_posts_and_edits_one_draft() {
         .filter(|request| matches!(request, ProgressiveTransportRequest::Typing { .. }))
         .count();
     assert_eq!(after, before, "terminal cancel must stop typing refresh");
+
+    *callback.send_result.lock().await = None;
+    let opened_b = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:editable-b".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room-b".into(),
+                ..Default::default()
+            },
+            turn_id: "editable-turn-b".into(),
+        })
+        .await
+        .unwrap();
+    let ProgressiveResult::Opened { handle: handle_b } = opened_b else {
+        panic!("expected second configured output")
+    };
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle_b.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "account b".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..5 { tokio::task::yield_now().await; }
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle_b.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "!".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..5 { tokio::task::yield_now().await; }
+    assert!(callback.requests.lock().await.iter().any(|request| matches!(request,
+        ProgressiveTransportRequest::Edit { turn_id: Some(turn_id), text, .. }
+            if turn_id == "editable-turn-b" && text == "account b!"
+    )), "account A's unsupported edit must not disable account B");
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle_b,
+            events: vec![ChannelOutputEvent::Cancellation { reason: None }],
+        })
+        .await
+        .unwrap();
     replies.shutdown().await.unwrap();
 }
 
