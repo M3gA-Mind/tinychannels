@@ -103,6 +103,46 @@ async fn dispatch_interaction(
             stop_typing_refresh(&handle, typing).await;
             Ok(tinychannels_bus::ChannelInteractionResult::Completed)
         }
+        Op::StartTyping { recipient } => {
+            if let Some(native) = &native {
+                native.typing.start_typing(&recipient).await.map_err(|_| Error::failed("provider typing operation failed"))?;
+                Ok(tinychannels_bus::ChannelInteractionResult::Completed)
+            } else {
+                crate::interaction::dispatch(channel.as_ref(), Op::StartTyping { recipient }).await
+            }
+        }
+        Op::StopTyping { recipient } => {
+            if let Some(native) = &native {
+                native.typing.stop_typing(&recipient).await.map_err(|_| Error::failed("provider typing operation failed"))?;
+                Ok(tinychannels_bus::ChannelInteractionResult::Completed)
+            } else {
+                crate::interaction::dispatch(channel.as_ref(), Op::StopTyping { recipient }).await
+            }
+        }
+        Op::SendReaction { channel: channel_ref, conversation, provider_message_id, reaction, remove } => {
+            if let Some(native) = &native {
+                native.reactions.send_reaction(&channel_ref, &conversation, &provider_message_id, &reaction, remove).await.map_err(|_| Error::failed("provider reaction failed"))?;
+                Ok(tinychannels_bus::ChannelInteractionResult::Completed)
+            } else {
+                crate::interaction::dispatch(channel.as_ref(), Op::SendReaction { channel: channel_ref, conversation, provider_message_id, reaction, remove }).await
+            }
+        }
+        Op::EditMessage { receipt, intent } => {
+            if let Some(native) = &native {
+                let receipt = native.edits.edit(&receipt, intent).await.map_err(|_| Error::failed("provider edit failed"))?;
+                Ok(tinychannels_bus::ChannelInteractionResult::Sent(Box::new(tinychannels_bus::channel::ChannelSendOutcome { receipt, error: None })))
+            } else {
+                crate::interaction::dispatch(channel.as_ref(), Op::EditMessage { receipt, intent }).await
+            }
+        }
+        Op::DeleteMessage { receipt } => {
+            if let Some(native) = &native {
+                native.deletes.delete(&receipt).await.map_err(|_| Error::failed("provider delete failed"))?;
+                Ok(tinychannels_bus::ChannelInteractionResult::Completed)
+            } else {
+                crate::interaction::dispatch(channel.as_ref(), Op::DeleteMessage { receipt }).await
+            }
+        }
         interaction => crate::interaction::dispatch(channel.as_ref(), interaction).await,
     }
 }
