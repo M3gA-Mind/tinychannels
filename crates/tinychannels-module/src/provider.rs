@@ -172,8 +172,14 @@ impl Hooks {
             .unwrap_or_else(|e| e.into_inner()) = media_account_scope.clone();
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
-            .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
-            .synthesizer(Arc::new(ModuleSynthesizer(callbacks.clone())))
+            .transcriber(Arc::new(ModuleTranscriber(
+                callbacks.clone(),
+                configured_instance.clone(),
+            )))
+            .synthesizer(Arc::new(ModuleSynthesizer(
+                callbacks.clone(),
+                configured_instance.clone(),
+            )))
             .voice_media_store(Arc::new(ModuleVoiceMediaStore(
                 callbacks.clone(),
                 configured_instance.clone(),
@@ -566,7 +572,7 @@ impl tinychannels::host::AllowlistStore for ModuleAllowlist {
     }
 }
 
-struct ModuleTranscriber(HostChannels);
+struct ModuleTranscriber(HostChannels, String);
 
 #[async_trait::async_trait]
 impl tinychannels::host::Transcriber for ModuleTranscriber {
@@ -622,7 +628,7 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
     }
 }
 
-pub(crate) struct ModuleSynthesizer(pub(crate) HostChannels);
+pub(crate) struct ModuleSynthesizer(pub(crate) HostChannels, pub(crate) String);
 
 #[async_trait::async_trait]
 impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
@@ -916,7 +922,10 @@ impl tinychannels::host::EventSink for ModuleEvents {
                         voice_note,
                         scope,
                         request,
-                        Some(Arc::new(ModuleTranscriber(self.0.clone()))),
+                        Some(Arc::new(ModuleTranscriber(
+                            self.0.clone(),
+                            self.1.clone(),
+                        ))),
                     )
                     .await;
                 }
