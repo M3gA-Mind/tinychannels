@@ -1517,12 +1517,7 @@ impl Channel for TelegramChannel {
         let reply_to_id = self.supports_reply_to_id();
         let thread_id = self.supports_thread_id();
         let media_enabled = self.media_repository.is_some();
-        let mut actions = vec![
-            "send".into(),
-            "typing".into(),
-            "delete".into(),
-            "edit".into(),
-        ];
+        let mut actions = vec!["send".into(), "typing".into(), "delete".into()];
         if progressive_edits {
             actions.push("draft-update".into());
         }

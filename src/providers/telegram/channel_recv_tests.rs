@@ -542,7 +542,7 @@ async fn bind_with_valid_code_but_no_identity_is_rejected() {
     .await;
 
     assert!(ch.allowlist_is_empty());
-    assert!(sent_texts(&server).await[0].contains("Could not identify your Telegram account."));
+    assert!(sent_texts(&server).await[0].contains(r"Could not identify your Telegram account\."));
 }
 
 #[tokio::test]
