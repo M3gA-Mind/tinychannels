@@ -115,11 +115,12 @@ fn media_event_preserves_ordered_typed_content_parts() {
         BridgeTranslationOptions::default(),
     )
     .unwrap();
-    let OutboundPayload::NativeChannelData { data } = &intents[0].payload else {
+    let OutboundPayload::Parts { parts } = &intents[0].payload else {
         panic!("expected typed media projection");
     };
-    assert_eq!(data["parts"][0]["kind"], "image");
-    assert_eq!(data["parts"][0]["altText"], "preview");
+    assert_eq!(parts.len(), 2);
+    let crate::channel::OutboundContentPart::Content { part } = &parts[1] else { panic!("expected image content part") };
+    assert!(matches!(part, ContentPart::Image { alt_text: Some(text), .. } if text == "preview"));
     assert_eq!(intents[0].thread_id, None);
     assert_eq!(
         intents[0]
@@ -128,6 +129,46 @@ fn media_event_preserves_ordered_typed_content_parts() {
             .and_then(|reference| reference.topic_id.as_deref()),
         Some("topic-1")
     );
+}
+
+#[test]
+fn scoped_event_sequence_keys_are_stable_for_replay_and_distinct_between_events() {
+    let event = ChannelOutputEvent::TextDelta { text: "same".into(), iteration: Some(1) };
+    let translate = |sequence| {
+        translate_output_event(
+            &turn(),
+            event.clone(),
+            &Default::default(),
+            &Default::default(),
+            BridgeTranslationOptions { event_sequence: sequence, ..Default::default() },
+        ).unwrap()[0].idempotency_key.clone()
+    };
+    assert_eq!(translate(4), translate(4));
+    assert_ne!(translate(4), translate(5));
+}
+
+#[test]
+fn final_message_keeps_caption_and_media_as_ordered_provider_parts() {
+    let intents = translate_output_event(
+        &turn(),
+        ChannelOutputEvent::FinalMessage {
+            text: "caption".into(),
+            parts: vec![crate::channel::OutboundContentPart::Content {
+                part: ContentPart::Image {
+                    media: MediaReference { kind: MediaKind::Image, url: Some("https://example.test/final.png".into()), ..Default::default() },
+                    caption: None,
+                    alt_text: Some("final".into()),
+                },
+            }],
+            receipt: None,
+        },
+        &Default::default(),
+        &Default::default(),
+        BridgeTranslationOptions::default(),
+    ).unwrap();
+    let OutboundPayload::Parts { parts } = &intents[0].payload else { panic!("final media must remain typed") };
+    assert!(matches!(&parts[0], crate::channel::OutboundContentPart::Content { part: ContentPart::Text { text, .. } } if text == "caption"));
+    assert!(matches!(&parts[1], crate::channel::OutboundContentPart::Content { part: ContentPart::Image { .. } }));
 }
 
 #[test]
@@ -219,7 +260,7 @@ fn harness_events_preserve_text_and_routing_metadata() {
             intents[0].payload,
             OutboundPayload::Text { text: text.into() }
         );
-        assert_eq!(intents[0].idempotency_key, "turn-1:text");
+        assert!(intents[0].idempotency_key.starts_with("turn-1:"));
         assert_eq!(intents[0].channel_id, "telegram");
         assert_eq!(intents[0].conversation_id, "chat-1");
         assert_eq!(intents[0].reply_to_id, None);
@@ -287,9 +328,6 @@ fn lifecycle_and_native_events_preserve_structured_data() {
             serde_json::json!({"lifecycle": {
                 "stage": lifecycle.stage,
                 "message": lifecycle.message,
-                "iteration": null,
-                "maxIterations": null,
-                "stop": null,
             }}),
         ),
         (
@@ -311,7 +349,7 @@ fn lifecycle_and_native_events_preserve_structured_data() {
             intents[0].payload,
             OutboundPayload::NativeChannelData { data }
         );
-        assert_eq!(intents[0].idempotency_key, "turn-1:native");
+        assert!(intents[0].idempotency_key.starts_with("turn-1:"));
     }
 }
 
