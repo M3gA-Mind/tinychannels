@@ -3068,6 +3068,20 @@ async fn typing_refresh_reports_acceptance_rejection_and_transport_error() {
 fn telegram_advertises_reaction_support() {
     let ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
     assert!(ch.supports_reactions());
+    let caps = ch.capabilities();
+    assert!(caps.actions.supported.contains(&"typing".into()));
+    assert!(caps.actions.supported.contains(&"edit".into()));
+    assert!(caps.actions.supported.contains(&"delete".into()));
+    assert!(caps.reactions);
+    assert!(caps.events.supported.contains(&"reaction".into()));
+    assert!(caps.events.supported.contains(&"button_callback".into()));
+    assert!(!caps.events.supported.contains(&"read_receipt".into()));
+    assert!(caps.content.location.outbound);
+    assert!(caps.content.contact.outbound);
+    assert!(caps.content.buttons.outbound);
+    assert!(caps.content.poll.outbound);
+    assert!(caps.content.presentation.outbound);
+    assert!(!caps.content.native.outbound);
 }
 
 fn fast_backoff(mut ch: TelegramChannel) -> TelegramChannel {
