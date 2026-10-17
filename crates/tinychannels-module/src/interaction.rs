@@ -84,12 +84,13 @@ pub(crate) async fn dispatch(
                 .await
         }
         Op::SendReaction {
-            conversation_id,
-            message_id,
+            conversation,
+            provider_message_id,
             reaction,
+            ..
         } => {
             return provider
-                .send_reaction(&conversation_id, &message_id, &reaction)
+                .send_reaction(&conversation.id, &provider_message_id, &reaction.value)
                 .await
                 .map(|()| ChannelInteractionResult::Completed)
                 .map_err(|_| tinybus::Error::failed("provider reaction failed"));

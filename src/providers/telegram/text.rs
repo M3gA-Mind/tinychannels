@@ -41,7 +41,7 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
 
     // Pair inline and fenced code delimiters in one pass. Code spans have
     // their own escaping rules and are opaque to the later syntax scans.
-    let mut pending_ticks = [Vec::<usize>::new(), Vec::<usize>::new()];
+    let mut code_open: Option<(usize, usize)> = None;
     let mut cursor = 0;
     while cursor < chars.len() {
         if chars[cursor] != '`' || escaped[cursor] {
@@ -53,14 +53,18 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
             cursor += 1;
         }
         let run = cursor - start;
-        let slot = usize::from(run >= 3);
-        let width = if slot == 0 { 1 } else { 3 };
-        if let Some(open) = pending_ticks[slot].pop() {
-            syntax[open..open + width].fill(true);
-            syntax[start..start + width].fill(true);
-            code[open + width..start].fill(true);
-        } else {
-            pending_ticks[slot].push(start);
+        let width = if run >= 3 { 3 } else { 1 };
+        match code_open {
+            Some((open, open_width)) if width == open_width => {
+                syntax[open..open + open_width].fill(true);
+                syntax[start..start + open_width].fill(true);
+                code[open + open_width..start].fill(true);
+                code_open = None;
+            }
+            Some(_) => {
+                // Other backtick runs are code content, not nested entities.
+            }
+            None => code_open = Some((start, width)),
         }
     }
 

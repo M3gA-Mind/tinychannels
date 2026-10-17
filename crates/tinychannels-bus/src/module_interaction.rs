@@ -50,9 +50,10 @@ pub enum ChannelInteraction {
         thread_ts: Option<String>,
     },
     SendReaction {
-        conversation_id: String,
-        message_id: String,
-        reaction: String,
+        channel: crate::channel::ChannelRef,
+        conversation: crate::channel::ConversationRef,
+        provider_message_id: String,
+        reaction: crate::channel::ChannelReaction,
     },
     EditMessage {
         receipt: crate::channel::MessageReceipt,
