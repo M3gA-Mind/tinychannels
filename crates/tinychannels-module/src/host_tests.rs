@@ -598,6 +598,7 @@ async fn scoped_voice_callbacks_round_trip_scope_and_enforce_media_limits() {
             codec: Some("wav_pcm16".into()),
             duration_ms: Some(1_250),
             file_name: Some("voice.wav".into()),
+            media_reference: None,
         })
         .await
         .unwrap();

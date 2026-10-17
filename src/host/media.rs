@@ -15,7 +15,7 @@ use tokio::io::AsyncReadExt;
 
 const MEDIA_COLLECTION: &str = "channels_media_metadata";
 const MEDIA_KEY_PREFIX: &str = "channels/media/";
-const OPAQUE_ID_PREFIX: &str = "tcmedia1_";
+const OPAQUE_ID_PREFIX: &str = "tinychannels_media_v1_";
 
 /// The identity required to store or resolve media for one channel turn.
 pub type MediaScope = tinychannels_bus::HostVoiceScope;
