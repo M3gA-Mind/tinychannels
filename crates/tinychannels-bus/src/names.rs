@@ -111,6 +111,8 @@ pub mod host_methods {
     pub const PERSIST_ALLOWED_IDENTITY: &str = "PersistAllowedIdentity";
     /// `Transcribe` — use the host's configured speech recognition provider.
     pub const TRANSCRIBE: &str = "Transcribe";
+    /// Scoped STT for the shared voice pipeline.
+    pub const TRANSCRIBE_VOICE: &str = "TranscribeVoice";
     /// `SynthesizeSpeech` — use the host's configured speech synthesis provider.
     pub const SYNTHESIZE_SPEECH: &str = "SynthesizeSpeech";
     /// `StoreVoiceMedia` — persist voice media and return a durable host reference.

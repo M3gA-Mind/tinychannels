@@ -61,6 +61,7 @@ pub use host::{
     HostEventPublication, HostSpeechSynthesisRequest, HostSpeechSynthesisResult,
     HostStoreVoiceMediaRequest, HostStoreVoiceMediaResult, HostTranscriptionRequest,
     HostTranscriptionResult, HostVoiceMediaDirection, HostVoiceScope,
+    HostVoiceTranscriptionRequest,
 };
 pub use http::HttpProxyPolicy;
 pub use module_controller::{
