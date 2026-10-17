@@ -401,3 +401,7 @@ fn content_matches(content_type: &str, bytes: &[u8]) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+#[path = "media_tests.rs"]
+mod tests;
