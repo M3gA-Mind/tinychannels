@@ -763,11 +763,6 @@ impl TelegramChannel {
             .and_then(serde_json::Value::as_str)
             .is_some()
             || message.get("voice").is_some()
-            || message.get("photo").is_some()
-            || message.get("document").is_some()
-            || message.get("video").is_some()
-            || message.get("audio").is_some()
-            || message.get("sticker").is_some()
     }
 
     pub(crate) fn parse_update_message(
