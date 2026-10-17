@@ -60,10 +60,16 @@ pub struct TurnStopSummary {
     pub operation: Option<String>,
 }
 
-/// Compatibility type name for progressive commands. It is the same
-/// canonical DTO used by host turn dispatch.
-#[deprecated(note = "use ChannelOutputEvent")]
-pub type ProgressiveEvent = ChannelOutputEvent;
+/// Frozen v1 progressive event wire shape retained for the compatibility
+/// operation. New hosts should use `FeedOutput` and `ChannelOutputEvent`.
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "event", content = "value", rename_all = "snake_case")]
+pub enum ProgressiveEvent {
+    TextDelta(String),
+    ThinkingDelta(String),
+    ToolCall(String),
+    ToolResult { tool_name: String, success: bool },
+}
 
 /// Compatibility name retained while module callers migrate to the shared
 /// output DTO. New producers should send `ChannelOutputEvent` values.
@@ -76,6 +82,12 @@ pub enum ProgressiveCommand {
         channel: String,
     },
     Feed {
+        handle: String,
+        events: Vec<ProgressiveEvent>,
+    },
+    /// Feed canonical output events without converting them through the v1
+    /// four-variant progressive projection.
+    FeedOutput {
         handle: String,
         events: Vec<ChannelOutputEvent>,
     },

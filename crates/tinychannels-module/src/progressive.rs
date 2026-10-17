@@ -162,6 +162,29 @@ impl Replies {
         match request {
             ProgressiveCommand::Open { channel } => self.open(channel).await,
             ProgressiveCommand::Feed { handle, events } => {
+                let events = events.into_iter().map(compat_event).collect();
+                self.feed(handle, events).await
+            }
+            ProgressiveCommand::FeedOutput { handle, events } => self.feed(handle, events).await,
+            ProgressiveCommand::Finish { handle, text } => {
+                if text.len() > MAX_CONTENT {
+                    return Err(Error::failed("progressive content exceeds its limit"));
+                }
+                let entry = self.entry(&handle).await?;
+                close_entry(entry, text, false).await?;
+                Ok(ProgressiveResult::Closed)
+            }
+            ProgressiveCommand::Close { handle } => {
+                let entry = self.state.lock().await.entries.get(&handle).cloned();
+                if let Some(entry) = entry {
+                    close_entry(entry, "Cancelled.".into(), true).await?;
+                }
+                Ok(ProgressiveResult::Closed)
+            }
+        }
+    }
+
+    async fn feed(&self, handle: String, events: Vec<ChannelOutputEvent>) -> Result<ProgressiveResult> {
                 if events.len() > 32 {
                     return Err(Error::failed("too many progressive events"));
                 }
@@ -180,23 +203,6 @@ impl Replies {
                 wait.await
                     .map_err(|_| Error::failed("progressive worker stopped"))??;
                 Ok(ProgressiveResult::Updated)
-            }
-            ProgressiveCommand::Finish { handle, text } => {
-                if text.len() > MAX_CONTENT {
-                    return Err(Error::failed("progressive content exceeds its limit"));
-                }
-                let entry = self.entry(&handle).await?;
-                close_entry(entry, text, false).await?;
-                Ok(ProgressiveResult::Closed)
-            }
-            ProgressiveCommand::Close { handle } => {
-                let entry = self.state.lock().await.entries.get(&handle).cloned();
-                if let Some(entry) = entry {
-                    close_entry(entry, "Cancelled.".into(), true).await?;
-                }
-                Ok(ProgressiveResult::Closed)
-            }
-        }
     }
 
     async fn entry(&self, handle: &str) -> Result<Arc<Entry>> {
@@ -302,6 +308,20 @@ impl Replies {
         }
         self.state.lock().await.entries.clear();
         Ok(())
+    }
+}
+
+fn compat_event(event: tinychannels_bus::module_progressive::ProgressiveEvent) -> ChannelOutputEvent {
+    use tinychannels_bus::module_progressive::ProgressiveEvent as Legacy;
+    match event {
+        Legacy::TextDelta(text) => ChannelOutputEvent::TextDelta { text, iteration: None },
+        Legacy::ThinkingDelta(text) => ChannelOutputEvent::ThinkingDelta { text, iteration: None },
+        Legacy::ToolCall(tool_name) => ChannelOutputEvent::ToolProgress { label: tool_name, message: None },
+        Legacy::ToolResult { tool_name, success } => ChannelOutputEvent::ToolCallCompleted {
+            call_id: String::new(), tool_name, success, output_chars: 0, output: String::new(),
+            arguments: None, elapsed_ms: 0, iteration: 0, failure: None,
+            display_label: None, display_detail: None, structured: None,
+        },
     }
 }
 

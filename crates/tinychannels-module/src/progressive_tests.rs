@@ -159,7 +159,7 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
     let handle = open(&first).await;
     assert!(
         second
-            .execute(ProgressiveCommand::Feed {
+            .execute(ProgressiveCommand::FeedOutput {
                 handle: handle.clone(),
                 events: vec![ChannelOutputEvent::TextDelta { text: "fixture".into() }]
             })
@@ -202,7 +202,7 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     let handle = open(&replies).await;
     assert!(
         replies
-            .execute(ProgressiveCommand::Feed {
+            .execute(ProgressiveCommand::FeedOutput {
                 handle: handle.clone(),
                 events: vec![ChannelOutputEvent::ThinkingDelta { text: "x".repeat(MAX_REQUEST), iteration: None }]
             })
@@ -331,7 +331,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
     let handle = open(&replies).await;
     assert_eq!(
         replies
-            .execute(ProgressiveCommand::Feed {
+            .execute(ProgressiveCommand::FeedOutput {
                 handle: handle.clone(),
                 events: vec![
                     ChannelOutputEvent::ThinkingDelta { text: "considering".into(), iteration: None },
@@ -360,7 +360,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
         "complete answer"
     );
     let error = replies
-        .execute(ProgressiveCommand::Feed {
+        .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
             events: vec![ChannelOutputEvent::TextDelta { text: "late".into() }],
         })
@@ -369,7 +369,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
     assert!(error.to_string().contains("closed"));
     replies.shutdown().await.unwrap();
     let error = replies
-        .execute(ProgressiveCommand::Feed {
+        .execute(ProgressiveCommand::FeedOutput {
             handle,
             events: vec![],
         })
@@ -394,7 +394,7 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
     assert!(replies.state.lock().await.entries.is_empty());
     let handle = open(&replies).await;
     let error = replies
-        .execute(ProgressiveCommand::Feed {
+        .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
             events: vec![ChannelOutputEvent::TextDelta { text: "x".into() }; 33],
         })
@@ -403,7 +403,7 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
     assert!(error.to_string().contains("too many progressive events"));
     assert_eq!(
         replies
-            .execute(ProgressiveCommand::Feed {
+            .execute(ProgressiveCommand::FeedOutput {
                 handle,
                 events: vec![]
             })

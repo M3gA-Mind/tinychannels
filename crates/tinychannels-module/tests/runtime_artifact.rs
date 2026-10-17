@@ -208,7 +208,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     let updated: ProgressiveResult = first_client
         .call_confidential(
             methods::EXECUTE_PROGRESSIVE,
-            ProgressiveCommand::Feed {
+            ProgressiveCommand::FeedOutput {
                 handle: handle.clone(),
                 events: vec![ChannelOutputEvent::TextDelta { text: "artifact draft".into() }],
             },
