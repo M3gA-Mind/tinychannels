@@ -2173,7 +2173,7 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
     async fn status(
         &self,
     ) -> Result<tinychannels_runtime::controllers::ChannelAccountSnapshot, crate::channel::ChannelSendError> {
-        Channel::status(self).await.map_err(|error| crate::channel::ChannelSendError {
+        <Self as Channel>::status(self).await.map_err(|error| crate::channel::ChannelSendError {
             kind: crate::channel::SendErrorKind::Transient,
             message: error.to_string(),
             retryable: true,
