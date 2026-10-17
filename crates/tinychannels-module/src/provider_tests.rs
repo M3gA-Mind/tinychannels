@@ -512,7 +512,6 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     platform_message_ids: result
                         .as_ref()
                         .ok()
-                        .and_then(|outcome| outcome.as_ref())
                         .map(|outcome| outcome.receipt.platform_message_ids.clone())
                         .unwrap_or_default(),
                     request: body,
