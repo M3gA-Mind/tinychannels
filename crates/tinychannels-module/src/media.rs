@@ -44,14 +44,14 @@ struct ReadState {
 
 /// Runtime-local bounded byte buffers created only after scoped-store validation.
 pub(crate) struct MediaReads {
-    state: Mutex<ReadState>,
+    state: Arc<Mutex<ReadState>>,
     capacity: Arc<Semaphore>,
 }
 
 impl Default for MediaReads {
     fn default() -> Self {
         Self {
-            state: Mutex::new(ReadState::default()),
+            state: Arc::new(Mutex::new(ReadState::default())),
             capacity: Arc::new(Semaphore::new(
                 tinychannels_bus::module_media::MEDIA_READ_CAPACITY,
             )),
@@ -160,18 +160,27 @@ impl MediaReads {
         if info_bytes.len() > tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES {
             return Err(Error::failed("resolved media metadata exceeds its limit"));
         }
+        let expires = Instant::now() + READ_LIFETIME;
         state.reads.insert(
             handle,
             Read {
                 instance: request.instance,
                 activation,
-                expires: Instant::now() + READ_LIFETIME,
+                expires,
                 bytes: media.bytes,
                 next_sequence: 0,
                 last_chunk: None,
                 _permit: reservation.0,
             },
         );
+        let state = Arc::downgrade(&self.state);
+        let expiry_handle = info.handle.0.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep_until(expires).await;
+            if let Some(state) = state.upgrade() {
+                state.lock().await.reads.remove(&expiry_handle);
+            }
+        });
         Ok(info)
     }
 
