@@ -224,48 +224,46 @@ pub fn build_telegram_channel(
     http: &dyn HttpClientFactory,
 ) -> Option<Arc<TelegramChannel>> {
     let tg = config.telegram.as_ref()?;
-        tracing::info!(
-            channel = "telegram",
-            allowed_users_count = tg.allowed_users.len(),
-            mention_only = tg.mention_only,
-            "[channels] telegram enabled (bot token not logged)"
-        );
-        let mut telegram = TelegramChannel::new(
-            tg.bot_token.clone(),
-            tg.allowed_users.clone(),
-            tg.mention_only,
-        )
-        .with_streaming(
-            tg.stream_mode,
-            tg.draft_update_interval_ms,
-            tg.silent_streaming,
-        )
-        .with_chat_id(tg.chat_id.clone())
-        .with_http_client(http.client_for("channel.telegram"));
-        // Each is optional — telegram degrades gracefully without them.
-        if let Some(transcriber) = host.transcriber() {
-            telegram = telegram.with_transcriber(transcriber);
-        }
-        if let Some(store) = host.voice_media_store() {
-            telegram = telegram.with_voice_media_store(store);
-        }
-        if let Some(repository) = host.media_repository() {
-            telegram = telegram.with_media_repository(repository);
-        }
-        telegram = telegram.with_voice_synthesis(
-            host.synthesizer().is_some()
-                && host.voice_codec().is_some()
-                && host.voice_media_store().is_some(),
-        );
-        if let Some(allowlist) = host.allowlist() {
-            telegram = telegram.with_allowlist(allowlist);
-        }
-        if let Some(events) = host.events() {
-            telegram = telegram.with_events(events);
-        }
-        return Some(Arc::new(telegram));
+    tracing::info!(
+        channel = "telegram",
+        allowed_users_count = tg.allowed_users.len(),
+        mention_only = tg.mention_only,
+        "[channels] telegram enabled (bot token not logged)"
+    );
+    let mut telegram = TelegramChannel::new(
+        tg.bot_token.clone(),
+        tg.allowed_users.clone(),
+        tg.mention_only,
+    )
+    .with_streaming(
+        tg.stream_mode,
+        tg.draft_update_interval_ms,
+        tg.silent_streaming,
+    )
+    .with_chat_id(tg.chat_id.clone())
+    .with_http_client(http.client_for("channel.telegram"));
+    // Each is optional — telegram degrades gracefully without them.
+    if let Some(transcriber) = host.transcriber() {
+        telegram = telegram.with_transcriber(transcriber);
     }
-
+    if let Some(store) = host.voice_media_store() {
+        telegram = telegram.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        telegram = telegram.with_media_repository(repository);
+    }
+    telegram = telegram.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(allowlist) = host.allowlist() {
+        telegram = telegram.with_allowlist(allowlist);
+    }
+    if let Some(events) = host.events() {
+        telegram = telegram.with_events(events);
+    }
+    Some(Arc::new(telegram))
 }
 
 /// Build every provider that `config` enables.
