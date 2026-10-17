@@ -40,6 +40,7 @@ pub struct ChannelHostBuilder {
     transcriber: Option<Arc<dyn Transcriber>>,
     synthesizer: Option<Arc<dyn SpeechSynthesizer>>,
     voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
+    voice_codec: Option<Arc<dyn super::VoiceCodec>>,
     approvals: Option<Arc<dyn ApprovalGate>>,
     reactions: Option<Arc<dyn ReactionGate>>,
     conversations: Option<Arc<dyn ConversationStore>>,
@@ -70,6 +71,10 @@ impl ChannelHostBuilder {
     }
     pub fn voice_media_store(mut self, value: Arc<dyn VoiceMediaStore>) -> Self {
         self.voice_media_store = Some(value);
+        self
+    }
+    pub fn voice_codec(mut self, value: Arc<dyn super::VoiceCodec>) -> Self {
+        self.voice_codec = Some(value);
         self
     }
     pub fn approvals(mut self, value: Arc<dyn ApprovalGate>) -> Self {
@@ -116,6 +121,7 @@ impl ChannelHostBuilder {
             transcriber: self.transcriber,
             synthesizer: self.synthesizer,
             voice_media_store: self.voice_media_store,
+            voice_codec: self.voice_codec,
             approvals: self.approvals,
             reactions: self.reactions,
             conversations: self.conversations,
@@ -135,6 +141,7 @@ struct CompositeHost {
     transcriber: Option<Arc<dyn Transcriber>>,
     synthesizer: Option<Arc<dyn SpeechSynthesizer>>,
     voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
+    voice_codec: Option<Arc<dyn super::VoiceCodec>>,
     approvals: Option<Arc<dyn ApprovalGate>>,
     reactions: Option<Arc<dyn ReactionGate>>,
     conversations: Option<Arc<dyn ConversationStore>>,
@@ -158,6 +165,9 @@ impl ChannelHost for CompositeHost {
     }
     fn voice_media_store(&self) -> Option<Arc<dyn VoiceMediaStore>> {
         self.voice_media_store.clone()
+    }
+    fn voice_codec(&self) -> Option<Arc<dyn super::VoiceCodec>> {
+        self.voice_codec.clone()
     }
     fn approvals(&self) -> Option<Arc<dyn ApprovalGate>> {
         self.approvals.clone()

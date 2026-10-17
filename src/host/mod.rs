@@ -47,7 +47,7 @@ pub use services::{
     ConversationStore, EventSink, LifecycleRegistry, ReactionDecision, ReactionGate, ReactionQuery,
     RunEventAppend, RunLedger, RunTelemetry, RunUpsert, ShutdownHook, SpeechRequest, SpeechResult,
     SpeechSynthesizer, StorageProvider, Transcriber, TranscriptionRequest, TranscriptionResult,
-    VoiceMediaRequest, VoiceMediaStore,
+    VoiceCodec, VoiceCodecRequest, VoiceCodecResult, VoiceMediaRequest, VoiceMediaStore,
 };
 pub use voice::{
     VoiceEnrichmentStatus, VoiceReplyMode, enrich_voice_note, should_synthesize_reply,
@@ -147,6 +147,10 @@ pub trait ChannelHost: Send + Sync {
     }
     /// Durable voice media storage for normalized inbound and outbound parts.
     fn voice_media_store(&self) -> Option<Arc<dyn VoiceMediaStore>> {
+        None
+    }
+    /// Codec operations implemented by the loaded TinyVoice module.
+    fn voice_codec(&self) -> Option<Arc<dyn VoiceCodec>> {
         None
     }
     /// Human-in-the-loop approval gate.

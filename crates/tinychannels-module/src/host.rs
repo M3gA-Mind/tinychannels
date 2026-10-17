@@ -475,6 +475,32 @@ impl HostChannels {
             .await
     }
 
+    /// Call the loaded TinyVoice codec module over its minimal bus contract.
+    pub async fn transcode_voice(
+        &self,
+        request: tinyvoice_bus::codec::CodecTranscodeRequest,
+    ) -> Result<tinyvoice_bus::codec::CodecOutput> {
+        const LIMIT: usize = 12 * 1024 * 1024;
+        if serde_json::to_vec(&request).map_or(true, |bytes| bytes.len() > LIMIT) {
+            return Err(Error::failed("voice codec request exceeds byte limit"));
+        }
+        let proxy = self.connection.proxy(
+            tinyvoice_bus::BUS_NAME,
+            tinyvoice_bus::OBJECT_PATH,
+            tinyvoice_bus::BUS_NAME,
+        )?;
+        let response: tinyvoice_bus::codec::CodecOutput = tokio::time::timeout(
+            HOST_VOICE_CALLBACK_TIMEOUT,
+            proxy.call(tinyvoice_bus::names::CODEC_TRANSCODE, (request,)),
+        )
+        .await
+        .map_err(|_| Error::failed("TinyVoice codec call timed out"))??;
+        if serde_json::to_vec(&response).map_or(true, |bytes| bytes.len() > LIMIT) {
+            return Err(Error::failed("voice codec response exceeds byte limit"));
+        }
+        Ok(response)
+    }
+
     /// Invoke one bounded host-owned credential, persistence, or managed API
     /// capability required by the module's controller adapter.
     pub async fn dispatch_controller_backend(

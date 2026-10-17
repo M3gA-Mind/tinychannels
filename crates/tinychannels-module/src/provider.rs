@@ -176,6 +176,7 @@ impl Hooks {
                 callbacks.clone(),
                 configured_instance.clone(),
             )))
+            .voice_codec(Arc::new(ModuleVoiceCodec(callbacks.clone())))
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
                 configured_instance,
@@ -189,6 +190,31 @@ impl Hooks {
         for hook in hooks {
             hook().await;
         }
+    }
+}
+
+struct ModuleVoiceCodec(HostChannels);
+
+#[async_trait::async_trait]
+impl tinychannels::host::VoiceCodec for ModuleVoiceCodec {
+    async fn transcode(
+        &self,
+        request: tinychannels::host::VoiceCodecRequest,
+    ) -> anyhow::Result<tinychannels::host::VoiceCodecResult> {
+        use tinyvoice_bus::codec::{AudioCodec, CodecTranscodeRequest};
+        let parse = |format: &str| match format {
+            "wav_pcm16" | "audio/wav" => Ok(AudioCodec::WavPcm16),
+            "ogg_opus" | "audio/ogg" => Ok(AudioCodec::OggOpus),
+            "m4a_aac" | "audio/mp4" => Ok(AudioCodec::M4aAac),
+            "mp3" | "audio/mpeg" => Ok(AudioCodec::Mp3),
+            _ => anyhow::bail!("unsupported TinyVoice codec format"),
+        };
+        let result = self.0.transcode_voice(CodecTranscodeRequest {
+            audio_base64: request.audio_base64,
+            from: parse(&request.from)?,
+            target: parse(&request.target)?,
+        }).await.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(tinychannels::host::VoiceCodecResult { audio_base64: result.audio_base64 })
     }
 }
 
