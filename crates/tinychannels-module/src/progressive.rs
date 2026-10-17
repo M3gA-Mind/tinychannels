@@ -39,11 +39,47 @@ impl Sender {
         &self,
         request: ProgressiveTransportRequest,
     ) -> std::result::Result<Value, ProgressiveSendError> {
+        let scoped_effect = self.context.is_some()
+            && matches!(
+                &request,
+                ProgressiveTransportRequest::Send { .. }
+                    | ProgressiveTransportRequest::SendTyped { .. }
+                    | ProgressiveTransportRequest::Edit { .. }
+                    | ProgressiveTransportRequest::Delete { .. }
+            );
+        let authority = match &request {
+            ProgressiveTransportRequest::Edit { receipt, message_id, .. }
+            | ProgressiveTransportRequest::Delete { receipt, message_id, .. } => {
+                receipt.clone().or_else(|| {
+                    let mut receipt = tinychannels_bus::channel::MessageReceipt::default();
+                    receipt.primary_platform_message_id = Some(message_id.clone());
+                    receipt.platform_message_ids.push(message_id.clone());
+                    Some(receipt)
+                })
+            }
+            _ => None,
+        };
         let result = self
             .host
             .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(request))
             .await
-            .map_err(|_| ProgressiveSendError::Unavailable)?;
+            .map_err(|_| {
+                if scoped_effect {
+                    let mut outcome = tinychannels_bus::channel::ChannelSendOutcome {
+                        receipt: authority.unwrap_or_default(),
+                        ..Default::default()
+                    };
+                    outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
+                        kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                        message: "progressive callback failed after an unknown side effect".into(),
+                        sent_before_error: true,
+                        ..Default::default()
+                    });
+                    ProgressiveSendError::PartialOutcome(outcome)
+                } else {
+                    ProgressiveSendError::Unavailable
+                }
+            })?;
         match result {
             ChannelBackendResult::ProgressiveTransport(
                 ProgressiveTransportResult::Acknowledged,

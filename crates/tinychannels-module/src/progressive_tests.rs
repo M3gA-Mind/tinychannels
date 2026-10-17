@@ -118,6 +118,7 @@ struct Callback {
     output_queue: Arc<Mutex<std::collections::VecDeque<ProgressiveTransportResult>>>,
     send_result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
     send_queue: Arc<Mutex<std::collections::VecDeque<ProgressiveTransportResult>>>,
+    rpc_error_after_send: Arc<Mutex<bool>>,
     block: bool,
     entered: Arc<Notify>,
     released: Arc<Notify>,
@@ -177,6 +178,12 @@ impl Callback {
                 ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"}))
             }
         });
+        if typed_send || matches!(request, ProgressiveTransportRequest::Send { .. }) {
+            let fail_after_send = std::mem::take(&mut *self.rpc_error_after_send.lock().await);
+            if fail_after_send {
+                return Err(Error::failed("fixture callback failed after accepting send"));
+            }
+        }
         Ok(ChannelBackendResult::ProgressiveTransport(result))
     }
 }
@@ -710,7 +717,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
         callback.sends.lock().await.last().unwrap()["text"],
         "complete answer"
     );
-    let error = replies
+    let result = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
             events: vec![ChannelOutputEvent::TextDelta {

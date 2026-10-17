@@ -17,6 +17,9 @@ pub(super) async fn flush_streaming_edit(
         return;
     }
     state.dirty = false;
+    if state.edit_disabled || state.delivery_uncertain {
+        return;
+    }
 
     if let Some(message_id) = state.message_id.clone() {
         // Known-missing edit route: skip the guaranteed 404 and let
