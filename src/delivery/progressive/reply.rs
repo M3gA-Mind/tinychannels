@@ -38,7 +38,9 @@ impl ProgressiveReply {
     ) -> Self {
         let channel = channel.into();
         let progressive_ui = channel_supports_progressive_ui(&capabilities);
-        let native_approval = capabilities.chat_approvals;
+        let native_approval = capabilities.chat_approvals
+            && capabilities.content.buttons.outbound
+            && capabilities.content.presentation.outbound;
         tracing::debug!(
             "[channel-inbound] progressive reply channel='{}' progressive_ui={}",
             channel,
