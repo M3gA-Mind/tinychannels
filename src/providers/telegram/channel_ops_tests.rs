@@ -1612,7 +1612,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("sticker upload is not enabled")
+            .contains("WEBP stickers only")
     );
 
     assert!(server.received_requests().await.unwrap().is_empty());
