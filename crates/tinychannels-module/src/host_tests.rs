@@ -128,7 +128,7 @@ impl Callback {
                 kind: tinychannels_bus::MediaKind::Audio,
                 ..Default::default()
             });
-        let opaque_id = media.opaque_id.as_deref().unwrap_or("unknown");
+        let opaque_id = media.opaque_id.clone().unwrap_or_else(|| "unknown".into());
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
             media,
             accessible_url: Some(format!("https://media.example.test/authorized/{opaque_id}")),
