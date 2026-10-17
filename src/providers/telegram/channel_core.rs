@@ -67,7 +67,6 @@ impl TelegramChannel {
             mention_only,
             bot_username: parking_lot::Mutex::new(None),
             recent_updates: parking_lot::Mutex::new(TelegramUpdateWindow::default()),
-            pending_voice_notes: parking_lot::Mutex::new(std::collections::HashMap::new()),
             recent_approval_prompts: parking_lot::Mutex::new(std::collections::HashMap::new()),
             poll_error_backoff: TELEGRAM_POLL_ERROR_BACKOFF,
             poll_conflict_backoff: TELEGRAM_POLL_CONFLICT_BACKOFF,
