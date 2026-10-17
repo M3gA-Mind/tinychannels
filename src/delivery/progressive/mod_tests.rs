@@ -522,13 +522,13 @@ async fn missing_edit_route_preserves_owned_bubbles_and_skips_later_requests() {
         ..Default::default()
     };
     FakeSender::script(&sender.edits, Outcome::Err(unsupported));
-    flush_thinking_message(&sender, channel, &mut state).await;
+    flush_thinking_message(&sender, channel, &mut state, true).await;
     assert!(state.thinking_edit_disabled);
     assert_eq!(state.thinking_message_id.as_deref(), Some("thinking-id"));
-    flush_streaming_edit(&sender, channel, &mut state).await;
+    flush_streaming_edit(&sender, channel, &mut state, true).await;
     assert!(state.edit_disabled);
     assert_eq!(state.message_id.as_deref(), Some("draft-id"));
-    flush_thinking_message(&sender, channel, &mut state).await;
+    flush_thinking_message(&sender, channel, &mut state, true).await;
     assert_eq!(
         sender.calls().len(),
         1,
@@ -550,8 +550,8 @@ async fn unavailable_bubble_transport_does_not_spend_failure_budgets_or_claim_de
     for _ in 0..3 {
         FakeSender::script(&sender.sends, Outcome::Err(unavailable));
     }
-    flush_streaming_edit(&sender, "coverage-unavailable", &mut state).await;
-    flush_thinking_message(&sender, "coverage-unavailable", &mut state).await;
+    flush_streaming_edit(&sender, "coverage-unavailable", &mut state, true).await;
+    flush_thinking_message(&sender, "coverage-unavailable", &mut state, true).await;
     send_filler_message(&sender, "coverage-unavailable", &mut state).await;
     assert!(!state.draft_sent && !state.thinking_sent);
     assert!(!state.edit_disabled && !state.thinking_edit_disabled && !state.filler_disabled);
@@ -560,7 +560,7 @@ async fn unavailable_bubble_transport_does_not_spend_failure_budgets_or_claim_de
     assert!(state.filler_message_ids.is_empty());
     state.message_id = Some("existing".into());
     FakeSender::script(&sender.edits, Outcome::Err(unavailable));
-    flush_streaming_edit(&sender, "coverage-unavailable", &mut state).await;
+    flush_streaming_edit(&sender, "coverage-unavailable", &mut state, true).await;
     assert_eq!(state.message_id.as_deref(), Some("existing"));
     assert_eq!(state.edit_failures, 0);
 }
@@ -576,10 +576,10 @@ async fn transient_thinking_edit_failure_retains_cleanup_id_and_allows_retry() {
         ..Default::default()
     };
     FakeSender::script(&sender.edits, Outcome::Err(other));
-    flush_thinking_message(&sender, "coverage-thinking-retry", &mut state).await;
+    flush_thinking_message(&sender, "coverage-thinking-retry", &mut state, true).await;
     assert!(!state.thinking_edit_disabled);
     assert_eq!(state.thinking_message_id.as_deref(), Some("thinking-id"));
-    flush_thinking_message(&sender, "coverage-thinking-retry", &mut state).await;
+    flush_thinking_message(&sender, "coverage-thinking-retry", &mut state, true).await;
     assert_eq!(sender.calls().len(), 2);
 }
 
@@ -593,7 +593,7 @@ async fn empty_thinking_and_filler_without_an_id_do_not_claim_cleanup_ownership(
         thinking_dirty: true,
         ..Default::default()
     };
-    flush_thinking_message(&sender, "coverage-empty-thinking", &mut state).await;
+    flush_thinking_message(&sender, "coverage-empty-thinking", &mut state, true).await;
     assert!(sender.calls().is_empty());
     assert!(!state.thinking_dirty);
     FakeSender::script(&sender.sends, Outcome::Ok(json!({"ok": true})));
