@@ -15,6 +15,8 @@ pub struct StreamingState {
     /// Backend-assigned message id returned from the initial
     /// `send_channel_message`; subsequent edits target this id.
     pub message_id: Option<String>,
+    /// Every provider message that forms a multipart draft, in send order.
+    pub message_ids: Vec<String>,
     /// `true` once a draft message has been posted to the channel,
     /// even when the backend response didn't include an id to target
     /// for future edits. Decouples "a draft exists" from "we can edit
@@ -126,36 +128,37 @@ pub struct TypingState {
 /// the last one returns the id as a JSON number, not a string, so
 /// `as_str()` alone misses it (#600).
 pub fn extract_message_id(resp: &serde_json::Value) -> Option<String> {
-    if let Some(id) = resp
-        .get("platformMessageIds")
-        .and_then(serde_json::Value::as_array)
-        .and_then(|ids| ids.first())
-        .and_then(receipt_id_value)
-        .or_else(|| {
-            resp.get("parts")
-                .and_then(serde_json::Value::as_array)
-                .and_then(|parts| parts.first())
-                .and_then(|part| part.get("platformMessageId"))
-                .and_then(receipt_id_value)
-        })
-    {
-        return Some(id);
+    extract_message_ids(resp).into_iter().next()
+}
+
+/// Extract every actual provider ID from normalized receipts and legacy
+/// response shapes, preserving provider order and removing duplicates.
+pub fn extract_message_ids(resp: &serde_json::Value) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(values) = resp.get("platformMessageIds").and_then(serde_json::Value::as_array) {
+        ids.extend(values.iter().filter_map(receipt_id_value));
+    }
+    if let Some(parts) = resp.get("parts").and_then(serde_json::Value::as_array) {
+        ids.extend(parts.iter().filter_map(|part| part.get("platformMessageId").and_then(receipt_id_value)));
+    }
+    if let Some(receipt) = resp.get("receipt") {
+        ids.extend(extract_message_ids(receipt));
     }
     let candidate = resp
         .get("id")
         .or_else(|| resp.get("messageId"))
         .or_else(|| resp.get("data").and_then(|d| d.get("id")))
-        .or_else(|| resp.get("data").and_then(|d| d.get("messageId")))?;
-    if let Some(s) = candidate.as_str() {
-        return Some(s.to_string());
+        .or_else(|| resp.get("data").and_then(|d| d.get("messageId")));
+    if let Some(id) = candidate.and_then(receipt_id_value) {
+        ids.push(id);
     }
-    if let Some(n) = candidate.as_i64() {
-        return Some(n.to_string());
+    let mut unique = Vec::new();
+    for id in ids {
+        if !unique.contains(&id) {
+            unique.push(id);
+        }
     }
-    if let Some(n) = candidate.as_u64() {
-        return Some(n.to_string());
-    }
-    None
+    unique
 }
 
 fn receipt_id_value(value: &serde_json::Value) -> Option<String> {

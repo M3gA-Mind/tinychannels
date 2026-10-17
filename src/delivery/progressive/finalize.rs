@@ -187,8 +187,15 @@ pub(super) async fn abort_channel_reply(
     channel: &str,
     state: &mut StreamingState,
 ) {
-    if let Some(message_id) = state.message_id.take() {
-        delete_channel_message(sender, channel, &message_id).await;
+    if state.message_ids.is_empty() {
+        if let Some(message_id) = state.message_id.take() {
+            delete_channel_message(sender, channel, &message_id).await;
+        }
+    } else {
+        for message_id in std::mem::take(&mut state.message_ids) {
+            delete_channel_message(sender, channel, &message_id).await;
+        }
+        state.message_id = None;
     }
     for id in std::mem::take(&mut state.filler_message_ids) {
         delete_channel_message(sender, channel, &id).await;

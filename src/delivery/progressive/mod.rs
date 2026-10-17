@@ -26,7 +26,7 @@ use serde_json::Value;
 
 pub use latch::{channel_edits_unsupported, edit_capability_key, mark_channel_edits_unsupported};
 pub use reply::ProgressiveReply;
-pub use state::{StreamingState, TypingState, extract_message_id, latest_thinking_snippet};
+pub use state::{StreamingState, TypingState, extract_message_id, extract_message_ids, latest_thinking_snippet};
 
 /// Minimum interval between progressive edits of the outbound message. Stays
 /// comfortably below Telegram's ~1 edit/sec per-chat cap; Slack has a similar

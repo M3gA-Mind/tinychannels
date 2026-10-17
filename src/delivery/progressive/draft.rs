@@ -1,7 +1,7 @@
 //! Posting and progressively editing the evolving draft reply bubble.
 
 use super::latch::{channel_edits_unsupported, mark_channel_edits_unsupported};
-use super::state::{StreamingState, extract_message_id};
+use super::state::{StreamingState, extract_message_ids};
 use super::{MAX_EDIT_FAILURES, ProgressiveSendError, ProgressiveSender};
 
 /// Post or edit the draft carrying the latest buffered text. The first call
@@ -101,13 +101,20 @@ pub(super) async fn flush_streaming_edit(
             // A message reached the user: record that before looking for an
             // id, so finalize never posts a second bubble.
             state.draft_sent = true;
-            if let Some(id) = extract_message_id(&resp) {
+            let ids = extract_message_ids(&resp);
+            if let Some(id) = ids.first().cloned() {
                 tracing::debug!(
                     "[channel-inbound][stream] initial draft sent channel='{}' msg_id={}",
                     channel,
                     id,
                 );
                 state.message_id = Some(id);
+                state.message_ids = ids;
+                if state.message_ids.len() > 1 {
+                    // A draft assembled from several provider messages is not
+                    // safely editable through the single-ID legacy port.
+                    state.edit_disabled = true;
+                }
             } else {
                 tracing::warn!(
                     "[channel-inbound][stream] initial draft sent but response lacked id — disabling progressive edits (finalize will skip sending a duplicate) channel='{}' resp={}",

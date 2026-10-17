@@ -181,6 +181,11 @@ impl ProgressiveReply {
         let Some(message_id) = self.state.message_id.clone() else {
             return Ok(None);
         };
+        let message_ids = if self.state.message_ids.is_empty() {
+            vec![message_id.clone()]
+        } else {
+            self.state.message_ids.clone()
+        };
         if !self.progressive_ui {
             return Ok(None);
         }
@@ -190,6 +195,14 @@ impl ProgressiveReply {
             .await
         {
             Ok(()) => {
+                for id in message_ids.iter().skip(1) {
+                    super::finalize::delete_channel_message(
+                        self.sender.as_ref(),
+                        &self.channel,
+                        id,
+                    )
+                    .await;
+                }
                 for id in std::mem::take(&mut self.state.filler_message_ids) {
                     super::finalize::delete_channel_message(
                         self.sender.as_ref(),
@@ -208,6 +221,7 @@ impl ProgressiveReply {
                 }
                 self.state.content = final_text.to_owned();
                 self.state.dirty = false;
+                self.state.message_ids = vec![message_id.clone()];
                 let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
                 outcome.receipt.primary_platform_message_id = Some(message_id.clone());
                 outcome.receipt.platform_message_ids.push(message_id);
