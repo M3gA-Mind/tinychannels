@@ -535,12 +535,14 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
     assert_eq!(resolved.audio_base64, "UklGRgAAAABXQVZF");
     let mut foreign_scope = scope.clone();
     foreign_scope.conversation.id = "foreign-conversation".into();
-    assert!(provider_host
-        .voice_media_store()
-        .unwrap()
-        .read_voice(foreign_scope, opaque_id.to_owned())
-        .await
-        .is_err());
+    assert!(
+        provider_host
+            .voice_media_store()
+            .unwrap()
+            .read_voice(foreign_scope, opaque_id.to_owned())
+            .await
+            .is_err()
+    );
     let legacy_id = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
     assert!(
         provider_host
@@ -579,13 +581,12 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         .unwrap();
     assert_eq!(publication["direction"], "inbound");
     assert_eq!(publication["codec"], "wav_pcm16");
-    assert_eq!(
-        publication["mediaReference"]["opaque_id"],
-        opaque_id
+    assert_eq!(publication["mediaReference"]["opaque_id"], opaque_id);
+    assert!(
+        voice_requests
+            .iter()
+            .any(|request| { request["kind"] == "read" && request["opaqueId"] == legacy_id })
     );
-    assert!(voice_requests.iter().any(|request| {
-        request["kind"] == "read" && request["opaqueId"] == legacy_id
-    }));
     drop(voice_requests);
 
     provider_host
@@ -611,7 +612,8 @@ async fn denied_voice_publication_removes_unclaimed_shared_media() {
     callback
         .voice_publication_failures
         .store(1, Ordering::SeqCst);
-    let provider_host = Arc::new(crate::provider::Hooks::default().host(host.clone(), "telegram".into()));
+    let provider_host =
+        Arc::new(crate::provider::Hooks::default().host(host.clone(), "telegram".into()));
     let store = provider_host.voice_media_store().unwrap();
     let scope = tinychannels_bus::HostVoiceScope {
         conversation: tinychannels_bus::ConversationRef {
@@ -621,18 +623,20 @@ async fn denied_voice_publication_removes_unclaimed_shared_media() {
         turn_id: "turn-denied".into(),
         ..Default::default()
     };
-    assert!(store
-        .store_voice(tinychannels::host::VoiceMediaRequest {
-            audio_base64: "UklGRgAAAABXQVZF".into(),
-            mime_type: "audio/wav".into(),
-            codec: Some("wav_pcm16".into()),
-            duration_ms: None,
-            file_name: Some("voice.wav".into()),
-            direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
-            scope: scope.clone(),
-        })
-        .await
-        .is_err());
+    assert!(
+        store
+            .store_voice(tinychannels::host::VoiceMediaRequest {
+                audio_base64: "UklGRgAAAABXQVZF".into(),
+                mime_type: "audio/wav".into(),
+                codec: Some("wav_pcm16".into()),
+                duration_ms: None,
+                file_name: Some("voice.wav".into()),
+                direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
+                scope: scope.clone(),
+            })
+            .await
+            .is_err()
+    );
     let requests = callback.voice_requests.lock().await;
     let publication = requests
         .iter()
