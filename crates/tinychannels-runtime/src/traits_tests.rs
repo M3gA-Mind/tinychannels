@@ -111,7 +111,10 @@ async fn send_idempotent_defaults_to_send() {
 #[test]
 fn capabilities_default_to_configured_instance_facts() {
     let capabilities = DummyChannel.capabilities();
-    assert_eq!(capabilities.version, crate::ChannelCapabilities::VERSION);
+    assert_eq!(
+        capabilities.version,
+        tinychannels_bus::ChannelCapabilities::VERSION
+    );
     assert!(capabilities.content.text.inbound);
     assert!(capabilities.content.text.outbound);
     assert!(
