@@ -501,7 +501,25 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             Feature::Presentation => content(Part::Presentation { blocks: serde_json::json!({"kind":"approval","id":"fixture-request","prompt":"Approve this action?","choices":["Approve","Deny"]}) }),
             Feature::NativeData => tinychannels_bus::OutboundPayload::NativeChannelData { data: serde_json::json!({"kind":"provider_specific"}) },
             Feature::VoiceOut => tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Media { media: media(), audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: Some(1000) } },
-            Feature::VoiceSynthesis => tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Synthesize { text: "speak this".into(), voice: None } },
+            Feature::VoiceSynthesis => {
+                let scope = tinychannels_bus::HostVoiceScope {
+                    configured_instance: self.adapter.configured_instance.clone(),
+                    channel: self.scope.channel.clone(), conversation: self.scope.conversation.clone(),
+                    turn_id: "turn-kit".into(),
+                };
+                let synthesized = self.callbacks.synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
+                    scope: scope.clone(), text: "speak this".into(), voice: None, format: Some("ogg_opus".into()),
+                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let stored = self.callbacks.store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
+                    scope, direction: tinychannels_bus::HostVoiceMediaDirection::Outbound,
+                    audio_base64: synthesized.audio_base64, mime_type: synthesized.mime_type,
+                    codec: Some("ogg_opus".into()), duration_ms: synthesized.duration_ms,
+                    file_name: Some("synthesized.ogg".into()), media_reference: None,
+                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Media {
+                    media: stored.media, audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: synthesized.duration_ms,
+                } }
+            }
             Feature::VoiceIn | Feature::InboundReactions => tinychannels_bus::OutboundPayload::Text { text: "ingress observation".into() },
             Feature::Typing | Feature::Reactions | Feature::Edit | Feature::Delete | Feature::StreamingDraft => tinychannels_bus::OutboundPayload::Text { text: "operation fixture".into() },
             Feature::ReadReceipts => return Err(tinychannels_bus::channel::ChannelSendError {
