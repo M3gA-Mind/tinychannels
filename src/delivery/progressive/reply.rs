@@ -440,10 +440,6 @@ impl ProgressiveReply {
                 Ok(Some(outcome))
             }
             Err(error) => {
-                if true {
-                    self.abort().await;
-                    return Err(error);
-                }
                 let mut outcome = match error {
                     super::ProgressiveSendError::PartialOutcome(outcome) => outcome,
                     super::ProgressiveSendError::Unavailable => {
