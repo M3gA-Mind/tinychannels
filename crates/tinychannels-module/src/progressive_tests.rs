@@ -199,7 +199,10 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
 async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     let (replies, _) = fixture(false).await;
     let mut reply = ProgressiveReply::new(
-        Arc::new(Sender { host: replies.host.clone(), context: None }),
+        Arc::new(Sender {
+            host: replies.host.clone(),
+            context: None,
+        }),
         "discord:fixture",
         tinychannels_bus::ChannelCapabilities::unknown(),
     );
@@ -503,7 +506,10 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
 async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
     let (replies, _) = fixture(false).await;
     let mut reply = ProgressiveReply::new(
-        Arc::new(Sender { host: replies.host.clone(), context: None }),
+        Arc::new(Sender {
+            host: replies.host.clone(),
+            context: None,
+        }),
         "discord:fixture",
         tinychannels_bus::ChannelCapabilities::unknown(),
     );
@@ -542,7 +548,10 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
 #[tokio::test]
 async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
     let (replies, callback) = fixture(false).await;
-    let sender = Sender { host: replies.host.clone(), context: None };
+    let sender = Sender {
+        host: replies.host.clone(),
+        context: None,
+    };
     sender
         .edit("discord:room", "message-id", "updated")
         .await
@@ -562,7 +571,10 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
 #[tokio::test]
 async fn transport_failures_preserve_recovery_classification() {
     let (replies, callback) = fixture(false).await;
-    let sender = Sender { host: replies.host.clone(), context: None };
+    let sender = Sender {
+        host: replies.host.clone(),
+        context: None,
+    };
     for result in [
         ProgressiveTransportResult::Unavailable,
         ProgressiveTransportResult::EditUnsupported,
