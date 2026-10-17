@@ -186,7 +186,7 @@ fn final_message_keeps_caption_and_media_as_ordered_provider_parts() {
         panic!("final media must remain typed")
     };
     assert!(
-        matches!(&parts[0], crate::channel::OutboundContentPart::Content { part: ContentPart::Text { text, .. } } if text == "caption")
+        matches!(&parts[0], tinychannels_bus::OutboundContentPart::Content { part: ContentPart::Text { text, .. } } if text == "caption")
     );
     assert!(matches!(
         &parts[1],
