@@ -143,17 +143,28 @@ impl StubTinyVoiceCodec {
         request: tinyvoice_bus::codec::CodecTranscodeRequest,
     ) -> tinybus::Result<tinyvoice_bus::codec::CodecOutput> {
         self.0.fetch_add(1, Ordering::SeqCst);
+        let bytes = match request.target {
+            tinyvoice_bus::codec::AudioCodec::OggOpus => progressive_test_ogg(),
+            tinyvoice_bus::codec::AudioCodec::WavPcm16 => progressive_test_wav(),
+            _ => return Err(tinybus::Error::failed("unsupported fixture target codec")),
+        };
         Ok(tinyvoice_bus::codec::CodecOutput {
-            audio_base64: request.audio_base64,
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
         })
     }
 
     async fn codec_probe(
         &self,
-        _request: tinyvoice_bus::codec::CodecInput,
+        request: tinyvoice_bus::codec::CodecInput,
     ) -> tinybus::Result<tinyvoice_bus::codec::CodecInfo> {
         Ok(tinyvoice_bus::codec::CodecInfo {
-            codec: tinyvoice_bus::codec::AudioCodec::WavPcm16,
+            codec: if request.audio_base64.starts_with(
+                &base64::engine::general_purpose::STANDARD.encode(b"OggS"),
+            ) {
+                tinyvoice_bus::codec::AudioCodec::OggOpus
+            } else {
+                tinyvoice_bus::codec::AudioCodec::WavPcm16
+            },
             duration_ms: 1_500,
             sample_rate: 48_000,
             channels: 1,
@@ -208,10 +219,20 @@ impl Callback {
         request: tinychannels_bus::HostStoreVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         self.voice_store_calls.fetch_add(1, Ordering::SeqCst);
-        let media = request
-            .media_reference
-            .expect("module publishes its canonical scoped media reference");
-        self.published_voice_media.lock().await.push(media.clone());
+        let media = request.media_reference.unwrap_or_else(|| {
+            tinychannels_bus::MediaReference {
+                opaque_id: Some("durable-host-voice".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            }
+        });
+        if media
+            .opaque_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
+        {
+            self.published_voice_media.lock().await.push(media.clone());
+        }
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
             media,
             accessible_url: Some("https://media.example/authorized/voice".into()),
@@ -4490,7 +4511,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
     capabilities.voice_out.supported = true;
     capabilities.voice_out.synthesis = true;
-    capabilities.voice_out.accepted_codecs = vec!["wav_pcm16".into()];
+    capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
     capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
     capabilities.voice_out.max_duration_ms = Some(10_000);
     let sender = Arc::new(Sender {
@@ -4538,7 +4559,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
                         codec: Some(codec),
                         ..
                     }
-                } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_")) && codec == "wav_pcm16"
+                } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_")) && codec == "ogg_opus"
             ))),
             "captured outbound parts: {send:?}; synthesis calls {}; store calls {}",
             callback.synthesis_calls.load(Ordering::SeqCst),
@@ -4586,7 +4607,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         .read(scope, &sent_id, 1024 * 1024)
         .await
         .expect("published voice reference resolves in host scoped storage");
-    assert_eq!(stored.bytes, progressive_test_wav());
+    assert_eq!(stored.bytes, progressive_test_ogg());
 
     // Mirror, Never, and SpeakReply are evaluated against the host's scoped
     // policy on each final turn. A denied policy sends the canonical text and
