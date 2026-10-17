@@ -1890,7 +1890,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     let media_inputs: [(ConformanceFeature, tinychannels_bus::MediaKind, &str, &str, &[u8]); 6] = [
         (ConformanceFeature::Image, tinychannels_bus::MediaKind::Image, "image/png", "fixture.png", &png),
         (ConformanceFeature::Video, tinychannels_bus::MediaKind::Video, "video/mp4", "fixture.mp4", include_bytes!("../../../src/providers/telegram/fixtures/cc0-flower.mp4")),
-        (ConformanceFeature::Audio, tinychannels_bus::MediaKind::Audio, "audio/mpeg", "fixture.mp3", include_bytes!("../../../../tinyvoice/crates/tinyvoice/tests/fixtures/mp3-test.bit")),
+        (ConformanceFeature::Audio, tinychannels_bus::MediaKind::Audio, "audio/mpeg", "fixture.mp3", include_bytes!("../../../src/providers/telegram/fixtures/cc0-mp3-test.mp3")),
         (ConformanceFeature::VoiceOut, tinychannels_bus::MediaKind::Audio, "audio/ogg", "voice.ogg", include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
         (ConformanceFeature::File, tinychannels_bus::MediaKind::Document, "text/plain", "fixture.txt", b"Telegram module conformance document\n"),
         (ConformanceFeature::Sticker, tinychannels_bus::MediaKind::Image, "image/webp", "sticker-512.webp", include_bytes!("../../../src/providers/telegram/fixtures/sticker-512.webp")),
