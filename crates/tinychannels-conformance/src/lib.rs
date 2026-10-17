@@ -167,9 +167,9 @@ pub async fn check_feature(
 
     if !declared {
         let explicitly_unsupported = match &result {
-            Err(error) => error.kind == SendErrorKind::Unsupported && !error.retryable,
+            Err(error) => error.unsupported && !error.retryable,
             Ok(Some(outcome)) => outcome.error.as_ref().is_some_and(|error| {
-                error.kind == SendErrorKind::Unsupported
+                error.unsupported
                     && !error.retryable
                     && outcome.receipt.platform_message_ids.is_empty()
                     && outcome.receipt.parts.is_empty()

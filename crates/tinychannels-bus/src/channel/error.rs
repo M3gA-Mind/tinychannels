@@ -8,8 +8,6 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SendErrorKind {
-    /// The adapter intentionally does not expose this operation or payload.
-    Unsupported,
     TooLong,
     BadFormat,
     Forbidden,
@@ -26,6 +24,8 @@ pub enum SendErrorKind {
 pub struct ChannelSendError {
     pub kind: SendErrorKind,
     pub message: String,
+    /// True only when the adapter intentionally does not expose this operation.
+    pub unsupported: bool,
     pub retryable: bool,
     /// Provider I/O may have reached the remote service despite the error.
     pub sent_before_error: bool,
@@ -40,6 +40,7 @@ impl Default for ChannelSendError {
         Self {
             kind: SendErrorKind::Unknown,
             message: String::new(),
+            unsupported: false,
             retryable: false,
             sent_before_error: false,
             retry_after: None,

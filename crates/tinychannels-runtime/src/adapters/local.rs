@@ -102,8 +102,9 @@ impl ChannelAdapter for LocalChannelAdapter {
         };
         if !supported {
             return Err(ChannelSendError {
-                kind: SendErrorKind::Unsupported,
+                kind: SendErrorKind::BadFormat,
                 message: "configured adapter does not declare this outbound payload".into(),
+                unsupported: true,
                 retryable: false,
                 ..Default::default()
             });
