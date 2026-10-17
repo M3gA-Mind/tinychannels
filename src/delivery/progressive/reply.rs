@@ -257,22 +257,8 @@ impl ProgressiveReply {
         } else {
             parts.clone()
         };
-        let voice_final = parts.iter().any(|part| {
-            matches!(part, tinychannels_bus::OutboundContentPart::Voice { .. })
-        });
         match self.send_parts(&parts, text).await {
-            Ok(outcome) => {
-                let confirmed = outcome.error.is_none();
-                let final_receipt = outcome.receipt.clone();
-                dispatch.push_outcome(outcome);
-                // A typed voice reply replaces the visible text draft. Remove
-                // it only after the provider confirms the new delivery; an
-                // unknown/partial outcome must retain the existing receipt as
-                // the duplicate-send fence.
-                if voice_final && confirmed {
-                    self.remove_replaced_text_draft(&final_receipt).await;
-                }
-            }
+            Ok(outcome) => dispatch.push_outcome(outcome),
             Err(super::ProgressiveSendError::UnsupportedContent) => {
                 dispatch.unsupported.extend(parts)
             }
@@ -281,48 +267,6 @@ impl ProgressiveReply {
         Ok(dispatch)
     }
 
-    async fn remove_replaced_text_draft(
-        &mut self,
-        final_receipt: &tinychannels_bus::channel::MessageReceipt,
-    ) {
-        let Some(primary) = self.state.message_id.clone() else {
-            return;
-        };
-        let ids = if self.state.message_ids.is_empty() {
-            vec![primary]
-        } else {
-            self.state.message_ids.clone()
-        };
-        let final_ids = super::state::message_receipt_ids(final_receipt);
-        let mut stale_ids = ids
-            .into_iter()
-            .filter(|id| !final_ids.contains(id))
-            .collect::<Vec<_>>();
-        stale_ids.dedup();
-        let stale_receipts = self
-            .state
-            .message_receipt
-            .as_ref()
-            .map(|receipt| {
-                stale_ids
-                    .iter()
-                    .map(|id| super::finalize::receipt_for_part(receipt, id))
-                    .collect()
-            })
-            .unwrap_or_default();
-        super::finalize::delete_ephemeral_messages(
-            self.sender.as_ref(),
-            &self.channel,
-            stale_ids,
-            stale_receipts,
-        )
-        .await;
-        self.state.message_id = None;
-        self.state.message_ids.clear();
-        self.state.message_receipt = None;
-        self.state.dirty = false;
-        self.state.content.clear();
-    }
 
     /// Current per-turn state (for logging and tests).
     pub fn state(&self) -> &StreamingState {
