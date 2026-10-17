@@ -103,10 +103,12 @@ impl Callback {
         request: tinychannels_bus::HostSpeechSynthesisRequest,
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
         self.voice_scopes.lock().await.push(request.scope);
-        self.projected_voice_media_ids
-            .lock()
-            .await
-            .push(request.media_reference.as_ref().and_then(|media| media.opaque_id.clone()));
+        self.projected_voice_media_ids.lock().await.push(
+            request
+                .media_reference
+                .as_ref()
+                .and_then(|media| media.opaque_id.clone()),
+        );
         self.voice_requests.lock().await.push(
             serde_json::json!({"kind":"synthesize","text":request.text,"format":request.format}),
         );
