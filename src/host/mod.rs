@@ -43,7 +43,8 @@ mod voice;
 
 pub use dispatch::{DispatchOptions, DispatchRequest, TurnDispatcher, TurnHandle};
 pub use media::{
-    MediaMetadata, MediaScope, MediaStoreRequest, MediaStreamRequest, ScopedMediaStore, StoredMedia,
+    MediaMetadata, MediaScope, MediaStoreRequest, MediaStreamRequest, ScopedMediaStore,
+    StoredMedia, is_allowed_content_type,
 };
 pub use noop::{ChannelHostBuilder, NoopHost};
 pub use services::{

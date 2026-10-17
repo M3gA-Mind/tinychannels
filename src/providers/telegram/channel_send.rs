@@ -31,7 +31,6 @@ pub(crate) struct TelegramVoiceUpload<'a> {
     pub(crate) reply_to_id: Option<&'a str>,
     pub(crate) caption: Option<&'a str>,
     pub(crate) bytes: Vec<u8>,
-    pub(crate) content_type: &'a str,
     pub(crate) file_name: &'a str,
 }
 
@@ -43,6 +42,7 @@ pub(crate) struct TelegramMediaUpload<'a> {
     pub(crate) reply_to_id: Option<&'a str>,
     pub(crate) caption: Option<&'a str>,
     pub(crate) bytes: Vec<u8>,
+    pub(crate) content_type: &'a str,
     pub(crate) file_name: &'a str,
 }
 
