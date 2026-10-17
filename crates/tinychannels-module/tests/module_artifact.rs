@@ -1220,6 +1220,7 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     let tinychannels_bus::ChannelInteractionResult::Sent(draft_outcome) = draft_result else {
         panic!("configured Telegram v2 draft returned no receipt")
     };
+    assert!(draft_outcome.error.is_none(), "configured Telegram v2 draft should report a successful native send");
     assert_eq!(draft_outcome.receipt.channel.as_ref(), Some(&draft_scope_channel));
     assert_eq!(draft_outcome.receipt.conversation.as_ref(), Some(&draft_scope_conversation));
     assert_eq!(draft_outcome.receipt.primary_platform_message_id.as_deref(), Some("92"));
@@ -1227,9 +1228,35 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     let create_body: serde_json::Value = serde_json::from_slice(&draft_requests.iter().find(|request| request.url.path().ends_with("/sendMessage")).unwrap().body).unwrap();
     assert_eq!(create_body["message_thread_id"], "17");
     assert_eq!(create_body["parse_mode"], "MarkdownV2");
+    let mut update_intent = draft_intent.clone();
+    update_intent.payload = tinychannels_bus::OutboundPayload::Text { text: "updated progress".into() };
+    let update_result: tinychannels_bus::ChannelInteractionResult = runtime_proxy
+        .call_confidential("ChannelInteraction", tinychannels_bus::ChannelInteractionRequest {
+            channel: "telegram".into(),
+            interaction: tinychannels_bus::ChannelInteraction::UpsertDraft {
+                previous: Some(draft_outcome.receipt.clone()),
+                intent: update_intent,
+            },
+        })
+        .await
+        .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::Sent(update_outcome) = update_result else {
+        panic!("configured Telegram v2 draft update returned no receipt")
+    };
+    assert!(update_outcome.error.is_none(), "configured Telegram v2 draft update should report a successful native edit");
+    assert_eq!(update_outcome.receipt.primary_platform_message_id.as_deref(), Some("92"));
+    let updated_requests = telegram_api.received_requests().await.unwrap();
+    let edit_body: serde_json::Value = serde_json::from_slice(
+        &updated_requests.iter().find(|request| request.url.path().ends_with("/editMessageText")).unwrap().body,
+    )
+    .unwrap();
+    assert_eq!(edit_body["parse_mode"], "MarkdownV2");
     let mut forged_receipt = draft_outcome.receipt.clone();
     forged_receipt.conversation.as_mut().unwrap().topic_id = Some("18".into());
-    let before_reject = draft_requests.len();
+    let before_reject = updated_requests
+        .iter()
+        .filter(|request| request.url.path().ends_with("/sendMessage") || request.url.path().ends_with("/editMessageText"))
+        .count();
     assert!(runtime_proxy
         .call_confidential::<tinychannels_bus::ChannelInteractionResult>("ChannelInteraction", tinychannels_bus::ChannelInteractionRequest {
             channel: "telegram".into(),
@@ -1237,7 +1264,14 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         })
         .await
         .is_err());
-    assert_eq!(telegram_api.received_requests().await.unwrap().len(), before_reject, "forged prior draft scope must be rejected without Bot API I/O");
+    let after_reject = telegram_api
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path().ends_with("/sendMessage") || request.url.path().ends_with("/editMessageText"))
+        .count();
+    assert_eq!(after_reject, before_reject, "forged prior draft scope must be rejected without Bot API write I/O");
     other_runtime_proxy
         .call_confidential::<()>(
             "StartChannelConfigured",
