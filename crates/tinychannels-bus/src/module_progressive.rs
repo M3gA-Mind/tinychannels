@@ -250,6 +250,11 @@ pub enum ProgressiveResult {
     DeliveryOutcome {
         outcome: crate::channel::ChannelSendOutcome,
     },
+    /// Rich content is retained for a host/provider port that does not yet
+    /// support it; it is never flattened to text or dropped.
+    DeliveryUnsupported {
+        parts: Vec<crate::channel::OutboundContentPart>,
+    },
 }
 
 /// The host supplies its managed REST transport and captured credential.
