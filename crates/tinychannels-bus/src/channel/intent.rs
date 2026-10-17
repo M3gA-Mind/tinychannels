@@ -300,6 +300,7 @@ impl ChannelOutboundMessage {
                     .as_ref()
                     .and_then(|reference| reference.thread_id.clone())
             }),
+            turn_id: None,
             idempotency_key: intent.idempotency_key.clone(),
             parts,
         }
@@ -341,6 +342,7 @@ impl ChannelOutboundMessage {
             }),
             reply_to_id: message.reply_to_id.clone(),
             thread_id: message.thread_ts.clone(),
+            turn_id: None,
             idempotency_key: message.idempotency_key.clone().unwrap_or_default(),
             parts: vec![OutboundContentPart::Content {
                 part: ContentPart::Text {
