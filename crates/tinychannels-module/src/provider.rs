@@ -1737,6 +1737,12 @@ impl Running {
                 })
                 && has_message_id
         };
+        if let tinychannels_bus::ChannelInteraction::UpsertDraft { previous, intent } = interaction {
+            let receipt = self.upsert_native_draft(previous, intent).await?;
+            return Ok(tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
+                tinychannels_bus::channel::ChannelSendOutcome { receipt, error: None },
+            )));
+        }
         match &interaction {
             tinychannels_bus::ChannelInteraction::SendReaction {
                 channel,

@@ -68,6 +68,9 @@ pub(crate) async fn dispatch(
                 .map(ChannelInteractionResult::Draft)
                 .map_err(|_| tinybus::Error::failed("provider draft creation failed"));
         }
+        Op::UpsertDraft { .. } => {
+            return Err(tinybus::Error::failed("typed draft requires configured provider queue"));
+        }
         Op::UpdateDraft {
             recipient,
             message_id,
