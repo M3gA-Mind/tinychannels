@@ -152,7 +152,7 @@ impl StubTinyVoiceCodec {
         _request: tinyvoice_bus::codec::CodecInput,
     ) -> tinybus::Result<tinyvoice_bus::codec::CodecInfo> {
         Ok(tinyvoice_bus::codec::CodecInfo {
-            codec: tinyvoice_bus::codec::AudioCodec::OggOpus,
+            codec: tinyvoice_bus::codec::AudioCodec::WavPcm16,
             duration_ms: 1_500,
             sample_rate: 48_000,
             channels: 1,
@@ -2392,7 +2392,7 @@ async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked()
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
     capabilities.voice_out.supported = true;
     capabilities.voice_out.synthesis = true;
-    capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
+    capabilities.voice_out.accepted_codecs = vec!["wav_pcm16".into()];
     replies.running.lock().await.insert(
         "discord:voice-lease".into(),
         Running::start(
@@ -4535,7 +4535,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
                     codec: Some(codec),
                     ..
                 }
-            } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
+            } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "wav_pcm16"
         ))));
     }
     assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
@@ -4666,6 +4666,175 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     }
     assert_eq!(codec_ops.load(Ordering::SeqCst), 3);
     assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 3);
+
+    let mut audio_capabilities = capabilities.clone();
+    audio_capabilities.voice_out.supported = false;
+    audio_capabilities.voice_out.accepted_codecs.clear();
+    audio_capabilities.content.audio.outbound = true;
+    audio_capabilities.content.audio.accepted_types = vec!["audio/wav".into()];
+    audio_capabilities.content.parts.push("audio".into());
+    let audio_parts = send_final_voice_case(
+        &host,
+        &callback,
+        audio_capabilities,
+        "audio-file-fallback",
+        tinychannels_bus::HostVoiceReplyMode::Always,
+        vec![voice_test_text_part("audio fallback transcript")],
+        "audio fallback transcript",
+    )
+    .await;
+    assert!(audio_parts.iter().any(|part| matches!(
+        part,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Audio {
+                media,
+                codec: Some(codec),
+                transcript: Some(transcript),
+                ..
+            }
+        } if media.opaque_id.as_deref() == Some("durable-host-voice")
+            && codec == "wav_pcm16"
+            && transcript == "audio fallback transcript"
+    )));
+
+    let mut link_capabilities = capabilities.clone();
+    link_capabilities.voice_out.supported = false;
+    link_capabilities.voice_out.accepted_codecs.clear();
+    let link_parts = send_final_voice_case(
+        &host,
+        &callback,
+        link_capabilities,
+        "authorized-link-fallback",
+        tinychannels_bus::HostVoiceReplyMode::Always,
+        vec![
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("ordered-image".into()),
+                        kind: tinychannels_bus::MediaKind::Image,
+                        ..Default::default()
+                    },
+                    caption: None,
+                    alt_text: None,
+                },
+            },
+            voice_test_text_part("link fallback transcript"),
+        ],
+        "link fallback transcript",
+    )
+    .await;
+    assert!(matches!(link_parts.as_slice(), [
+        tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Image { .. } },
+        tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Text { text, .. } },
+    ] if text.contains("link fallback transcript")
+        && text.contains("https://media.example/authorized/voice")));
+
+    let mut size_limited = capabilities.clone();
+    size_limited.voice_out.max_size_bytes = Some(1);
+    let size_fallback = send_final_voice_case(
+        &host,
+        &callback,
+        size_limited,
+        "size-limit-fallback",
+        tinychannels_bus::HostVoiceReplyMode::Always,
+        Vec::new(),
+        "bounded text",
+    )
+    .await;
+    assert!(size_fallback.iter().any(|part| matches!(
+        part,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text { text, .. }
+        } if text.contains("Audio reply exceeded the channel size limit")
+            && text.contains("bounded text")
+    )));
+
+    let mut duration_limited = capabilities.clone();
+    duration_limited.voice_out.max_duration_ms = Some(1_000);
+    let duration_fallback = send_final_voice_case(
+        &host,
+        &callback,
+        duration_limited,
+        "duration-limit-fallback",
+        tinychannels_bus::HostVoiceReplyMode::Always,
+        vec![voice_test_text_part("long voice note")],
+        "long voice note",
+    )
+    .await;
+    assert!(duration_fallback.iter().any(|part| matches!(
+        part,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text { text, .. }
+        } if text.contains("Audio reply was too long to send")
+            && text.contains("long voice note")
+    )));
+}
+
+fn voice_test_text_part(text: &str) -> tinychannels_bus::OutboundContentPart {
+    tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Text {
+            text: text.into(),
+            markdown_dialect: None,
+        },
+    }
+}
+
+async fn send_final_voice_case(
+    host: &HostChannels,
+    callback: &Callback,
+    capabilities: tinychannels_bus::ChannelCapabilities,
+    turn_id: &str,
+    mode: tinychannels_bus::HostVoiceReplyMode,
+    parts: Vec<tinychannels_bus::OutboundContentPart>,
+    text: &str,
+) -> Vec<tinychannels_bus::OutboundContentPart> {
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode,
+        inbound_has_voice: true,
+        explicitly_requested: true,
+    });
+    let context = ProgressiveOutputContext {
+        turn_id: turn_id.into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:bot-1".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "chat-1".into(),
+            topic_id: Some("topic-2".into()),
+            ..Default::default()
+        },
+    };
+    let sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        sender,
+        "telegram:bot-1",
+        capabilities,
+        context,
+    );
+    reply
+        .send_parts(&parts, text)
+        .await
+        .expect("configured voice fallback delivers text or typed media");
+    let requests = callback.requests.lock().await;
+    requests
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(actual_turn),
+                parts,
+                ..
+            } if actual_turn == turn_id => Some(parts.clone()),
+            _ => None,
+        })
+        .expect("final turn dispatches one typed response")
 }
 
 fn progressive_test_wav() -> Vec<u8> {
