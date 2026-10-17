@@ -1262,11 +1262,19 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
         })
         .await
         .unwrap();
-    assert!(
-        matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
-        if outcome.receipt.platform_message_ids == ["media-part-1"]
-            && outcome.error.as_ref().is_some_and(|error| error.sent_before_error))
-    );
+    let outcomes = match result {
+        ProgressiveResult::DeliveryOutcome { outcome } => vec![outcome],
+        ProgressiveResult::DeliveryOutcomes { outcomes } => outcomes,
+        ProgressiveResult::DeliveryBatch { outcomes, .. } => outcomes,
+        other => panic!("expected retained media outcome, got {other:?}"),
+    };
+    assert!(outcomes.iter().any(|outcome| {
+        outcome.receipt.platform_message_ids == ["media-part-1"]
+            && outcome
+                .error
+                .as_ref()
+                .is_some_and(|error| error.sent_before_error)
+    }));
     assert_eq!(callback.sends.lock().await.len(), 1);
     replies.shutdown().await.unwrap();
 }
