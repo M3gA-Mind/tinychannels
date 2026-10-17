@@ -289,8 +289,12 @@ impl DeliveryResultStore for DocumentDeliveryStore {
         else {
             return Ok(None);
         };
-        let record: StoredResult = serde_json::from_value(found.doc)
+        let record: StoredResult = serde_json::from_value(found.doc.clone())
             .map_err(|_| invalid("stored delivery result is unreadable"))?;
+        // The result sits under the id it was saved for; any other id is a stray copy.
+        if doc_id(&record.id).ok().as_deref() != Some(found.id.as_str()) {
+            return Err(invalid("stored delivery result is unreadable"));
+        }
         Ok(Some(record.into()))
     }
 

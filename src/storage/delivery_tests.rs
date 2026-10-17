@@ -379,9 +379,14 @@ async fn a_result_stored_under_the_wrong_id_is_unreadable_not_returned() {
         .await
         .unwrap();
     let stored = docs.get(RESULTS_COLLECTION, "real").await.unwrap().unwrap();
-    docs.put(RESULTS_COLLECTION, "other", stored.doc, Precondition::Absent)
-        .await
-        .unwrap();
+    docs.put(
+        RESULTS_COLLECTION,
+        "other",
+        stored.doc,
+        Precondition::Absent,
+    )
+    .await
+    .unwrap();
 
     assert!(matches!(
         store.load_result("other").await,

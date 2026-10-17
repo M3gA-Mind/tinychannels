@@ -8,9 +8,10 @@
 //! same records, so a resumed run reproduces an interrupted one.
 //!
 //! A record that was already unreadable under v1 (it failed the same checks the
-//! stores apply on read) is dropped with a warning rather than carried forward
-//! or allowed to fail the whole step: one poisoned row must not keep a
-//! collection in `migrating` forever.
+//! stores apply on read) is dropped silently rather than carried forward or
+//! allowed to fail the whole step: one poisoned row must not keep a collection
+//! in `migrating` forever. The contract crate carries no logging dependency, so
+//! the drop leaves no trace, including for a pending or failed delivery.
 //!
 //! WhatsApp key material is never reinterpreted. The base64 strings the v1
 //! backend wrote are copied byte for byte (only the field that holds them is
@@ -279,6 +280,9 @@ fn whatsapp(
                 continue;
             };
             let mut body: Map<String, Value> = object.clone();
+            // The v1 id may be the only place these were recorded.
+            body.insert("account".into(), Value::String(account.clone()));
+            body.insert("key".into(), Value::String(key.clone()));
             if unwrap_value && let Some(bytes) = body.remove("value") {
                 body.insert("data_b64".into(), bytes);
             }
