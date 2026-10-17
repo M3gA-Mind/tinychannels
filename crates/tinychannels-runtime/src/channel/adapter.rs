@@ -31,8 +31,10 @@ pub trait ChannelAdapter: Send + Sync {
 
     async fn stop(&self) -> Result<(), ChannelSendError>;
 
-    async fn send(&self, intent: ChannelOutboundIntent)
-    -> Result<crate::channel::ChannelSendOutcome, ChannelSendError>;
+    async fn send(
+        &self,
+        intent: ChannelOutboundIntent,
+    ) -> Result<crate::channel::ChannelSendOutcome, ChannelSendError>;
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError>;
 }
