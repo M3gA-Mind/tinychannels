@@ -30,6 +30,135 @@ fn media_account_scope_hashes_credentials_but_ignores_mutable_policy() {
         "a matching unverified token prefix cannot cross configured accounts"
     );
 }
+
+#[test]
+fn configured_media_scope_requires_each_supported_providers_authentication_material() {
+    use tinychannels_bus::config::*;
+
+    let cases: Vec<(&str, tinychannels_bus::ChannelsConfig, fn(&mut tinychannels_bus::ChannelsConfig))> = vec![
+        (
+            "telegram",
+            tinychannels_bus::ChannelsConfig { telegram: Some(TelegramConfig { bot_token: "bot:secret".into(), chat_id: None, allowed_users: vec![], stream_mode: Default::default(), draft_update_interval_ms: 1000, silent_streaming: true, mention_only: false }), ..Default::default() },
+            |c| c.telegram.as_mut().unwrap().bot_token.clear(),
+        ),
+        (
+            "discord",
+            tinychannels_bus::ChannelsConfig { discord: Some(DiscordConfig { bot_token: "secret".into(), guild_id: None, channel_id: None, allowed_users: vec![], listen_to_bots: false, mention_only: false }), ..Default::default() },
+            |c| c.discord.as_mut().unwrap().bot_token.clear(),
+        ),
+        (
+            "slack",
+            tinychannels_bus::ChannelsConfig { slack: Some(SlackConfig { bot_token: "bot".into(), app_token: Some("app".into()), channel_id: None, allowed_users: vec![] }), ..Default::default() },
+            |c| c.slack.as_mut().unwrap().app_token = None,
+        ),
+        (
+            "mattermost",
+            tinychannels_bus::ChannelsConfig { mattermost: Some(MattermostConfig { url: "https://chat.example".into(), bot_token: "secret".into(), channel_id: None, allowed_users: vec![], thread_replies: None, mention_only: None }), ..Default::default() },
+            |c| c.mattermost.as_mut().unwrap().bot_token.clear(),
+        ),
+        (
+            "webhook",
+            tinychannels_bus::ChannelsConfig { webhook: Some(WebhookConfig { port: 8080, secret: Some("secret".into()) }), ..Default::default() },
+            |c| c.webhook.as_mut().unwrap().secret = None,
+        ),
+        (
+            "matrix",
+            tinychannels_bus::ChannelsConfig { matrix: Some(MatrixConfig { homeserver: "https://matrix.example".into(), access_token: "secret".into(), user_id: Some("@bot:example".into()), device_id: None, room_id: "!room:example".into(), allowed_users: vec![] }), ..Default::default() },
+            |c| c.matrix.as_mut().unwrap().access_token.clear(),
+        ),
+        (
+            "email",
+            tinychannels_bus::ChannelsConfig { email: Some(EmailConfig { imap_host: "imap.example".into(), imap_port: 993, imap_folder: "INBOX".into(), smtp_host: "smtp.example".into(), smtp_port: 465, smtp_tls: true, username: "user".into(), password: "secret".into(), from_address: "user@example".into(), idle_timeout_secs: 300, allowed_senders: vec![] }), ..Default::default() },
+            |c| c.email.as_mut().unwrap().password.clear(),
+        ),
+        (
+            "whatsapp",
+            tinychannels_bus::ChannelsConfig { whatsapp: Some(WhatsAppConfig { access_token: Some("secret".into()), phone_number_id: Some("phone-1".into()), verify_token: None, app_secret: Some("app".into()), session_path: None, pair_phone: None, pair_code: None, allowed_numbers: vec![] }), ..Default::default() },
+            |c| c.whatsapp.as_mut().unwrap().access_token = None,
+        ),
+        (
+            "linq",
+            tinychannels_bus::ChannelsConfig { linq: Some(LinqConfig { api_token: "secret".into(), from_phone: "+15550001".into(), allowed_senders: vec![] }), ..Default::default() },
+            |c| c.linq.as_mut().unwrap().api_token.clear(),
+        ),
+        (
+            "irc",
+            tinychannels_bus::ChannelsConfig { irc: Some(IrcConfig { server: "irc.example".into(), port: 6697, nickname: "bot".into(), username: Some("auth-user".into()), channels: vec![], allowed_users: vec![], server_password: None, nickserv_password: None, sasl_password: Some("secret".into()), verify_tls: Some(true) }), ..Default::default() },
+            |c| c.irc.as_mut().unwrap().sasl_password = None,
+        ),
+        (
+            "lark",
+            tinychannels_bus::ChannelsConfig { lark: Some(LarkConfig { app_id: "app".into(), app_secret: "secret".into(), encrypt_key: None, verification_token: None, allowed_users: vec![], use_feishu: false, receive_mode: Default::default(), port: None }), ..Default::default() },
+            |c| c.lark.as_mut().unwrap().app_secret.clear(),
+        ),
+        (
+            "dingtalk",
+            tinychannels_bus::ChannelsConfig { dingtalk: Some(DingTalkConfig { client_id: "client".into(), client_secret: "secret".into(), allowed_users: vec![] }), ..Default::default() },
+            |c| c.dingtalk.as_mut().unwrap().client_secret.clear(),
+        ),
+        (
+            "qq",
+            tinychannels_bus::ChannelsConfig { qq: Some(QQConfig { app_id: "app".into(), app_secret: "secret".into(), allowed_users: vec![] }), ..Default::default() },
+            |c| c.qq.as_mut().unwrap().app_secret.clear(),
+        ),
+        (
+            "yuanbao",
+            tinychannels_bus::ChannelsConfig { yuanbao: Some(YuanbaoConfig { app_key: "key".into(), app_secret: "secret".into(), ..Default::default() }), ..Default::default() },
+            |c| c.yuanbao.as_mut().unwrap().app_secret.clear(),
+        ),
+    ];
+    for (provider, config, clear_auth) in cases {
+        assert!(
+            configured_media_account_scope(provider, &config).is_some(),
+            "{provider} has the auth material required for media scope"
+        );
+        let mut unauthenticated = config;
+        clear_auth(&mut unauthenticated);
+        assert!(
+            configured_media_account_scope(provider, &unauthenticated).is_none(),
+            "{provider} cannot fall back to a public endpoint or display field"
+        );
+    }
+
+    let unauthenticated_signal = tinychannels_bus::ChannelsConfig {
+        signal: Some(SignalConfig {
+            http_url: "http://signal.example".into(),
+            account: "+15550001".into(),
+            group_id: None,
+            allowed_from: vec![],
+            ignore_attachments: false,
+            ignore_stories: false,
+        }),
+        ..Default::default()
+    };
+    assert!(configured_media_account_scope("signal", &unauthenticated_signal).is_none());
+    let session_only_whatsapp = tinychannels_bus::ChannelsConfig {
+        whatsapp: Some(WhatsAppConfig {
+            session_path: Some("/private/session".into()),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    assert!(configured_media_account_scope("whatsapp", &session_only_whatsapp).is_none());
+
+    let email = tinychannels_bus::ChannelsConfig {
+        email: Some(EmailConfig {
+            imap_host: "imap.example".into(),
+            imap_port: 993,
+            username: "user".into(),
+            password: "secret".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut alternate_imap = email.clone();
+    alternate_imap.email.as_mut().unwrap().imap_port = 1993;
+    assert_ne!(
+        configured_media_account_scope("email", &email),
+        configured_media_account_scope("email", &alternate_imap),
+        "endpoint authority participates in the account binding"
+    );
+}
 use base64::Engine as _;
 use sha2::Digest as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
