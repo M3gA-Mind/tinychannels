@@ -1869,7 +1869,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
                 file_name: Some(file_name.into()), duration_ms: Some(200), codec: Some(if content_type == "audio/ogg" { "ogg_opus".into() } else { String::new() }),
                 voice_direction: None, dedupe_key: None, max_bytes: 20 * 1024 * 1024,
             }, bytes: bytes.to_vec(),
-        }).await.expect("store scoped Telegram conformance fixture");
+        }).await.unwrap_or_else(|error| panic!("store scoped {feature:?} conformance fixture: {error}"));
         media.insert(feature, reference);
     }
     let fixture = RunningTelegramConformance {
