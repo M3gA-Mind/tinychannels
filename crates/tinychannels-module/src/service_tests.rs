@@ -2885,7 +2885,13 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         .provider_activations
         .lock()
         .await
-        .insert("fixture".into(), "activation-a".into());
+        .insert(
+            "fixture".into(),
+            super::ProviderActivation {
+                generation: "activation-a".into(),
+                media_account_scope: Some("fixture:media-v1:test".into()),
+            },
+        );
     let bytes = base64::engine::general_purpose::STANDARD
         .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII=")
         .unwrap();
@@ -2949,7 +2955,13 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         .provider_activations
         .lock()
         .await
-        .insert("fixture".into(), "activation-b".into());
+        .insert(
+            "fixture".into(),
+            super::ProviderActivation {
+                generation: "activation-b".into(),
+                media_account_scope: Some("fixture:media-v1:test".into()),
+            },
+        );
     assert!(service.finish_media_upload(finish).await.is_err());
     service.terminal.store(true, Ordering::SeqCst);
     assert!(
