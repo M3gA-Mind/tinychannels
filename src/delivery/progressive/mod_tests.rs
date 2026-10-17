@@ -1998,7 +1998,11 @@ async fn uncertain_send_diagnostics_report_only_shape_counts_without_message_or_
     assert!(messages.contains("initial draft response lacked an id"));
     assert!(messages.contains("receipt_parts=0"));
     assert!(messages.contains("response_fields="));
-    assert!(messages.contains("edit ok"));
+    assert!(
+        messages.contains("edit ok"),
+        "captured diagnostics: {messages}; edit calls: {:?}",
+        sender.calls()
+    );
     for secret in [
         "private-idempotency-key",
         "private-edit-token",
