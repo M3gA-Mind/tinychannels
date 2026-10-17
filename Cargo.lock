@@ -2808,6 +2808,7 @@ name = "tinychannels-conformance"
 version = "0.1.34"
 dependencies = [
  "async-trait",
+ "serde_json",
  "tinychannels-bus",
  "tinychannels-runtime",
 ]
