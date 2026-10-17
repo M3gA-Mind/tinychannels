@@ -961,7 +961,7 @@ impl tinychannels::channel::ChannelAdapter for Running {
         &self,
         intent: tinychannels_bus::ChannelOutboundIntent,
     ) -> std::result::Result<
-        tinychannels::channel::MessageReceipt,
+        tinychannels::channel::ChannelSendOutcome,
         tinychannels::channel::ChannelSendError,
     > {
         self.validate_adapter_intent(&intent)?;
