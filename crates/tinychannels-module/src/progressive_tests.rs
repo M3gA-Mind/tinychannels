@@ -42,15 +42,16 @@ impl Callback {
         };
         self.requests.lock().await.push(request.clone());
         let typed_send = matches!(request, ProgressiveTransportRequest::SendTyped { .. });
-        if matches!(
-            request,
-            ProgressiveTransportRequest::Send { .. }
-                | ProgressiveTransportRequest::SendTyped { .. }
-        ) {
-            self.sends
-                .lock()
-                .await
-                .push(serde_json::to_value(&request).unwrap());
+        match &request {
+            ProgressiveTransportRequest::Send { message, .. } => {
+                self.sends.lock().await.push(message.clone());
+            }
+            ProgressiveTransportRequest::SendTyped { text, parts, .. } => {
+                self.sends.lock().await.push(serde_json::json!({"text": text, "parts": parts}));
+            }
+            _ => {}
+        }
+        if typed_send {
             if self.block {
                 self.entered.notify_one();
                 self.released.notified().await;
