@@ -1103,8 +1103,8 @@ async fn typed_media_preserves_legacy_address_and_requires_host_opaque_id() {
         ok_with(serde_json::json!({ "message_id": 701 })),
     )
     .await;
-    let channel = channel_for(&server, &["*"])
-        .with_media_repository(Arc::new(UncheckedMediaReadFixture));
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(UncheckedMediaReadFixture));
     let mut message = typed_text("legacy-address", String::new());
     message.channel_ref = Some(tinychannels_bus::ChannelRef {
         id: "telegram".into(),
