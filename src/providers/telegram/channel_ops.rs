@@ -1395,7 +1395,7 @@ async fn send_typed_media_with_receipt(
             .parse::<i64>()
             .map_err(|_| anyhow::anyhow!("Telegram reply_to_id must be a numeric message ID"))?;
     }
-    let repository = self
+    let repository = channel
         .media_repository
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("Telegram media upload requires scoped host storage"))?;
@@ -1423,7 +1423,7 @@ async fn send_typed_media_with_receipt(
                 part: tinychannels_bus::ContentPart::Text { text, .. },
             } => {
                 let text = strip_tool_call_tags(text);
-                match self
+                match channel
                     .send_text_chunks_with_ids(
                         &text,
                         &conversation.id,
@@ -1579,7 +1579,7 @@ async fn send_typed_media_with_receipt(
         let caption = caption.map(strip_tool_call_tags);
         let content_type = stored.content_type.clone();
         let receipt_index = receipt_parts.len();
-        match self
+        match channel
             .send_media_bytes_with_id(super::channel_send::TelegramMediaUpload {
                 method,
                 field,
