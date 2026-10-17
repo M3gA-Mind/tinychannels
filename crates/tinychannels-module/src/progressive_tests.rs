@@ -2354,16 +2354,36 @@ async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked()
     capabilities.voice_out.supported = true;
     capabilities.voice_out.synthesis = true;
     capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
-    let handle = open_scoped_provider(
-        &replies,
-        "discord",
-        "discord:voice-lease",
-        "blocked-voice-turn",
-        capabilities,
-    )
-    .await;
-    // Give the output a short lease after opening, then keep the host synthesis
-    // callback pending so the finalization path must observe expiry itself.
+    replies.running.lock().await.insert(
+        "discord:voice-lease".into(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities,
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            replies.host.clone(),
+        ),
+    );
+    let ProgressiveResult::Opened { handle } = replies.execute(
+        ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:voice-lease".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "voice-lease-room".into(),
+                ..Default::default()
+            },
+            turn_id: "blocked-voice-turn".into(),
+            lifetime_ms: 1100,
+        },
+    ).await.unwrap() else {
+        panic!("expected opened scoped output")
+    };
+    // Keep the host synthesis callback pending so finalization must observe
+    // the short output lease itself.
     let feed_replies = replies.clone();
     let feed = tokio::spawn(async move {
         feed_replies.execute(ProgressiveCommand::FeedOutput {
