@@ -23,6 +23,8 @@ pub enum ChannelOutputEvent {
     },
     FinalMessage {
         text: String,
+        parts: Vec<crate::channel::OutboundContentPart>,
+        receipt: Option<crate::channel::MessageReceipt>,
     },
     ToolProgress {
         label: String,

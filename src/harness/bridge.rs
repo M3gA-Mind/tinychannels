@@ -49,7 +49,15 @@ pub fn translate_output_event(
                 OutboundPayload::Text { text }
             }
         }
-        ChannelOutputEvent::FinalMessage { text } => OutboundPayload::Text { text },
+        ChannelOutputEvent::FinalMessage { text, parts, receipt } => {
+            if parts.is_empty() {
+                OutboundPayload::Text { text }
+            } else {
+                OutboundPayload::NativeChannelData {
+                    data: json!({"text": text, "parts": parts, "receipt": receipt}),
+                }
+            }
+        }
         ChannelOutputEvent::ToolProgress { label, message } => OutboundPayload::Text {
             text: match message {
                 Some(message) => format!("{label}: {message}"),
