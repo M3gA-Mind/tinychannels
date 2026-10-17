@@ -1,4 +1,6 @@
 use super::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tokio::sync::Notify;
 
 fn request(byte_count: usize) -> MediaUploadBegin {
     MediaUploadBegin {
@@ -30,8 +32,8 @@ fn request(byte_count: usize) -> MediaUploadBegin {
 
 #[tokio::test]
 async fn chunks_are_ordered_bounded_idempotent_and_abort_replays() {
-    let uploads = MediaUploads::default();
-    let handle = uploads.begin(request(3), 17).await.unwrap();
+    let uploads = std::sync::Arc::new(MediaUploads::default());
+    let handle = uploads.begin(request(3), "activation-a".into()).await.unwrap();
     assert!(uploads
         .append(MediaUploadChunk {
             handle: handle.clone(),
@@ -66,7 +68,7 @@ async fn chunks_are_ordered_bounded_idempotent_and_abort_replays() {
 
 #[tokio::test]
 async fn reservations_and_metadata_are_bounded_before_retaining_media() {
-    let uploads = MediaUploads::default();
+    let uploads = std::sync::Arc::new(MediaUploads::default());
     let oversized = request(1);
     let mut oversized_metadata = oversized.clone();
     oversized_metadata.scope.conversation.thread_id = Some(
@@ -80,16 +82,16 @@ async fn reservations_and_metadata_are_bounded_before_retaining_media() {
         )
         .await
         .is_err());
-    uploads.begin(oversized, 1).await.unwrap();
-    uploads.begin(request(1), 1).await.unwrap();
+    uploads.begin(oversized, "activation-a".into()).await.unwrap();
+    uploads.begin(request(1), "activation-a".into()).await.unwrap();
     assert!(uploads.begin(request(1), 1).await.is_err());
     assert_eq!(uploads.state.lock().await.uploads.len(), 2);
 }
 
 #[tokio::test(start_paused = true)]
 async fn expired_reservations_are_rejected_and_release_their_capacity() {
-    let uploads = MediaUploads::default();
-    let handle = uploads.begin(request(1), 5).await.unwrap();
+    let uploads = std::sync::Arc::new(MediaUploads::default());
+    let handle = uploads.begin(request(1), "activation-a".into()).await.unwrap();
     tokio::time::advance(UPLOAD_LIFETIME + Duration::from_millis(1)).await;
     assert!(uploads.binding_handle(&handle).await.is_err());
     assert!(uploads.append(MediaUploadChunk {
@@ -97,5 +99,119 @@ async fn expired_reservations_are_rejected_and_release_their_capacity() {
         sequence: 0,
         bytes: vec![0],
     }).await.is_err());
-    uploads.begin(request(1), 5).await.unwrap();
+    uploads.begin(request(1), "activation-a".into()).await.unwrap();
+}
+
+#[derive(Default)]
+struct BlockingPersistence {
+    entered: Notify,
+    release: Notify,
+    calls: AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl MediaPersistence for BlockingPersistence {
+    async fn store_public_media(
+        &self,
+        request: tinychannels::host::MediaStoreRequest,
+    ) -> Result<MediaUploadResult> {
+        assert_eq!(request.metadata.scope.conversation.thread_id.as_deref(), Some("thread"));
+        assert_eq!(request.metadata.scope.turn_id, "turn");
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.entered.notify_one();
+        self.release.notified().await;
+        Ok(tinychannels_bus::MediaReference {
+            opaque_id: Some("tinychannels_media_v1_saved".into()),
+            content_type: Some("image/png".into()),
+            size_bytes: Some(1),
+            kind: tinychannels_bus::MediaKind::Image,
+            ..Default::default()
+        })
+    }
+}
+
+async fn ready_upload(uploads: &std::sync::Arc<MediaUploads>) -> MediaUploadHandle {
+    let handle = uploads
+        .begin(request(1), "activation-a".into())
+        .await
+        .unwrap();
+    uploads
+        .append(MediaUploadChunk {
+            handle: handle.clone(),
+            sequence: 0,
+            bytes: vec![42],
+        })
+        .await
+        .unwrap();
+    handle
+}
+
+#[tokio::test]
+async fn finalizing_upload_keeps_capacity_and_abort_cannot_race_persistence() {
+    let uploads = std::sync::Arc::new(MediaUploads::default());
+    let repository = std::sync::Arc::new(BlockingPersistence::default());
+    let handle = ready_upload(&uploads).await;
+    let _second = uploads
+        .begin(request(1), "activation-a".into())
+        .await
+        .unwrap();
+    let finishing = {
+        let uploads = uploads.clone();
+        let repository = repository.clone();
+        let handle = handle.clone();
+        tokio::spawn(async move {
+            uploads
+                .finish(MediaUploadFinish(handle), "activation-a".into(), repository)
+                .await
+        })
+    };
+    repository.entered.notified().await;
+    assert!(uploads.begin(request(1), "activation-a".into()).await.is_err());
+    assert!(uploads.abort(MediaUploadFinish(handle.clone())).await.is_err());
+    let duplicate = {
+        let uploads = uploads.clone();
+        let repository = repository.clone();
+        tokio::spawn(async move {
+            uploads
+                .finish(MediaUploadFinish(handle), "activation-a".into(), repository)
+                .await
+        })
+    };
+    repository.release.notify_one();
+    let first = finishing.await.unwrap().unwrap();
+    let second = duplicate.await.unwrap().unwrap();
+    assert_eq!(first, second);
+    assert_eq!(repository.calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn cancelling_the_bus_waiter_does_not_cancel_or_duplicate_finalize() {
+    let uploads = std::sync::Arc::new(MediaUploads::default());
+    let repository = std::sync::Arc::new(BlockingPersistence::default());
+    let handle = ready_upload(&uploads).await;
+    let waiter = {
+        let uploads = uploads.clone();
+        let repository = repository.clone();
+        let handle = handle.clone();
+        tokio::spawn(async move {
+            uploads
+                .finish(MediaUploadFinish(handle), "activation-a".into(), repository)
+                .await
+        })
+    };
+    repository.entered.notified().await;
+    waiter.abort();
+    assert!(waiter.await.unwrap_err().is_cancelled());
+    assert!(uploads.begin(request(1), "activation-a".into()).await.is_err());
+    repository.release.notify_one();
+    let replay = uploads
+        .finish(
+            MediaUploadFinish(handle),
+            "activation-a".into(),
+            repository.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(replay.opaque_id.as_deref(), Some("tinychannels_media_v1_saved"));
+    assert_eq!(repository.calls.load(Ordering::SeqCst), 1);
 }
