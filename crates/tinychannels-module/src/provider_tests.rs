@@ -499,45 +499,53 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
         let requests = self.server.received_requests().await.unwrap_or_default();
         let mut cursor = self.request_cursor.lock().unwrap();
         for request in requests.iter().skip(*cursor) {
-            if !request.url.path().ends_with("/sendMessage") {
+            if !request.method.to_string().eq_ignore_ascii_case("POST") {
                 continue;
             }
-            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
-            let chat = body
-                .get("chat_id")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
+            let endpoint = request.url.path().rsplit('/').next().unwrap_or_default();
+            let raw_body = String::from_utf8_lossy(&request.body);
+            let body: serde_json::Value = serde_json::from_slice(&request.body)
+                .unwrap_or_else(|_| serde_json::json!({"raw_multipart": raw_body}));
+            let field = |name: &str| -> Option<String> {
+                body.get(name).and_then(|v| v.as_str().map(str::to_owned)
+                    .or_else(|| v.as_i64().map(|n| n.to_string())))
+                    .or_else(|| {
+                        let marker = format!("name=\"{name}\"\r\n\r\n");
+                        raw_body.split_once(&marker)?.1.split("\r\n").next().map(str::to_owned)
+                    })
+            };
+            let chat = field("chat_id").unwrap_or_default();
             let mut conversation = self.scope.conversation.clone();
-            conversation.id = chat.to_owned();
-            let payload_kinds = if body.get("text").is_some() {
-                vec!["text".into()]
-            } else {
-                vec![]
+            if !chat.is_empty() { conversation.id = chat; }
+            let thread_id = field("message_thread_id");
+            conversation.thread_id = thread_id.clone();
+            conversation.topic_id = thread_id.clone();
+            let (operation, payload_kind) = match endpoint {
+                "sendMessage" => ("send", "text"), "sendPhoto" => ("send", "image"),
+                "sendVideo" => ("send", "video"), "sendAudio" => ("send", "audio"),
+                "sendVoice" => ("send", "voice"), "sendDocument" => ("send", "file"),
+                "sendSticker" => ("send", "sticker"), "sendLocation" | "sendVenue" => ("send", "location"),
+                "sendContact" => ("send", "contact"), "sendPoll" => ("send", "poll"),
+                "editMessageText" => ("edit", "text"), "deleteMessage" => ("delete", ""),
+                "setMessageReaction" => ("reaction_send", ""), "sendChatAction" => ("typing", ""),
+                _ => continue,
             };
-            let wire_id = |field: &str| {
-                body.get(field).map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| value.to_string())
-                })
-            };
+            let ids = self.response_ids.lock().unwrap();
+            let platform_message_ids = ids.iter().rev().find(|(path, _)| path == endpoint)
+                .map(|(_, id)| vec![id.clone()]).unwrap_or_default();
+            drop(ids);
             self.observed
                 .lock()
                 .unwrap()
                 .push(tinychannels_conformance::WireObservation {
                     feature,
-                    operation: "send".into(),
+                    operation: operation.into(),
                     channel: self.scope.channel.clone(),
                     conversation,
-                    reply_to_id: wire_id("reply_to_message_id"),
-                    thread_id: wire_id("message_thread_id"),
-                    payload_kinds,
-                    platform_message_ids: result
-                        .as_ref()
-                        .ok()
-                        .map(|outcome| outcome.receipt.platform_message_ids.clone())
-                        .unwrap_or_default(),
+                    reply_to_id: field("reply_to_message_id"),
+                    thread_id,
+                    payload_kinds: if payload_kind.is_empty() { vec![] } else { vec![payload_kind.into()] },
+                    platform_message_ids,
                     request: body,
                 });
         }
