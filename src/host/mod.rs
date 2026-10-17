@@ -76,6 +76,7 @@ pub struct HostCapabilities {
     pub stt: bool,
     pub tts: bool,
     pub voice_media_store: bool,
+    pub media_repository: bool,
     pub approvals: bool,
     pub reaction_gate: bool,
     pub conversation_store: bool,
@@ -94,6 +95,7 @@ impl HostCapabilities {
         stt: false,
         tts: false,
         voice_media_store: false,
+        media_repository: false,
         approvals: false,
         reaction_gate: false,
         conversation_store: false,
@@ -112,6 +114,7 @@ impl HostCapabilities {
             stt: host.transcriber().is_some(),
             tts: host.synthesizer().is_some(),
             voice_media_store: host.voice_media_store().is_some(),
+            media_repository: host.media_repository().is_some(),
             approvals: host.approvals().is_some(),
             reaction_gate: host.reactions().is_some(),
             conversation_store: host.conversations().is_some(),
@@ -152,6 +155,10 @@ pub trait ChannelHost: Send + Sync {
     }
     /// Durable voice media storage for normalized inbound and outbound parts.
     fn voice_media_store(&self) -> Option<Arc<dyn VoiceMediaStore>> {
+        None
+    }
+    /// Durable shared media storage for typed channel attachments.
+    fn media_repository(&self) -> Option<Arc<dyn MediaRepository>> {
         None
     }
     /// Codec operations implemented by the loaded TinyVoice module.
@@ -203,6 +210,7 @@ pub trait ChannelHost: Send + Sync {
             stt: self.transcriber().is_some(),
             tts: self.synthesizer().is_some(),
             voice_media_store: self.voice_media_store().is_some(),
+            media_repository: self.media_repository().is_some(),
             approvals: self.approvals().is_some(),
             reaction_gate: self.reactions().is_some(),
             conversation_store: self.conversations().is_some(),

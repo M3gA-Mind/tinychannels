@@ -384,6 +384,23 @@ pub trait StorageProvider: Send + Sync {
     }
 }
 
+/// Shared durable media repository for providers that support typed
+/// attachments. The implementation is bound to host-granted scoped storage.
+#[async_trait]
+pub trait MediaRepository: Send + Sync {
+    async fn store_media(
+        &self,
+        request: super::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference>;
+
+    async fn read_media(
+        &self,
+        scope: super::MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<super::StoredMedia>;
+}
+
 // ---------------------------------------------------------------------------
 // Run ledger (telemetry / observability)
 // ---------------------------------------------------------------------------
