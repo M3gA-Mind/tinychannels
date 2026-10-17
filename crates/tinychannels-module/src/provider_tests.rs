@@ -612,7 +612,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             }
             Feature::Typing => {
                 self.running.interact(tinychannels_bus::ChannelInteraction::StartTyping {
-                    recipient: self.scope.conversation.id.clone(),
+                    recipient: format!("{}:{}", self.scope.conversation.id, self.scope.thread_id.as_deref().unwrap_or_default()),
                 }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                 Ok(None)
             }
