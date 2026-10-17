@@ -32,7 +32,7 @@ pub fn translate_output_event(
     static_capabilities: &ChannelStaticCapabilities,
     presentation: &ChannelPresentationCapabilities,
     options: BridgeTranslationOptions,
-) -> Vec<ChannelOutboundIntent> {
+) -> Result<Vec<ChannelOutboundIntent>, serde_json::Error> {
     let payload = match event {
         ChannelOutputEvent::TextDelta { text, .. } => {
             if presentation.supports_edit && !static_capabilities.block_streaming {
@@ -106,11 +106,11 @@ pub fn translate_output_event(
         },
         ChannelOutputEvent::Native { data } => OutboundPayload::NativeChannelData { data },
         event => OutboundPayload::NativeChannelData {
-            data: serde_json::to_value(event).unwrap_or(serde_json::Value::Null),
+            data: serde_json::to_value(event)?,
         },
     };
 
-    vec![ChannelOutboundIntent {
+    Ok(vec![ChannelOutboundIntent {
         idempotency_key: format!("{}:{}", turn.id, intent_suffix(&payload)),
         channel_id: turn.envelope.channel.id.clone(),
         conversation_id: turn.envelope.conversation.id.clone(),
@@ -120,7 +120,7 @@ pub fn translate_output_event(
         thread_id: turn.envelope.conversation.thread_id.clone(),
         durability: options.durability,
         payload,
-    }]
+    }])
 }
 
 fn supports_native_approval(
