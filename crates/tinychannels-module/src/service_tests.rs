@@ -1238,6 +1238,7 @@ async fn large_voice_bytes_use_compact_scoped_reference_in_best_effort_and_requi
         idempotency_key: id.into(),
         channel_id: "fixture".into(),
         conversation_id: "room-1".into(),
+        turn_id: Some(format!("{id}-origin-turn")),
         durability,
         payload: tinychannels_bus::OutboundPayload::Voice {
             voice: tinychannels_bus::OutboundVoice::Media {
