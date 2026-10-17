@@ -950,25 +950,27 @@ async fn typed_media_failure_after_text_keeps_real_partial_ids_and_forbids_retry
         ResponseTemplate::new(400).set_body_string("rejected"),
     )
     .await;
-    let channel = channel_for(&server, &["*"])
-        .with_media_repository(Arc::new(TypedMediaReadFixture));
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
     let mut message = typed_text("partial-image", "before".into());
     message.channel_ref = Some(tinychannels_bus::ChannelRef {
         id: "telegram".into(),
         account_id: Some("telegram-main".into()),
     });
     message.turn_id = Some("turn-42".into());
-    message.parts.push(tinychannels_bus::OutboundContentPart::Content {
-        part: tinychannels_bus::ContentPart::Image {
-            media: tinychannels_bus::MediaReference {
-                opaque_id: Some("stored-photo-1".into()),
-                kind: tinychannels_bus::MediaKind::Image,
-                ..Default::default()
+    message
+        .parts
+        .push(tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-photo-1".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
             },
-            caption: None,
-            alt_text: None,
-        },
-    });
+        });
 
     let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
 
@@ -980,6 +982,69 @@ async fn typed_media_failure_after_text_keeps_real_partial_ids_and_forbids_retry
     assert_eq!(requests.len(), 2);
     assert!(requests[0].url.path().ends_with("/sendMessage"));
     assert!(requests[1].url.path().ends_with("/sendPhoto"));
+}
+
+#[tokio::test]
+async fn configured_local_adapter_accepts_and_delivers_typed_telegram_media() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendPhoto",
+        ok_with(serde_json::json!({"message_id": 22})),
+    )
+    .await;
+    let channel = Arc::new(
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture)),
+    );
+    let account = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    };
+    let adapter = tinychannels_runtime::adapters::LocalChannelAdapter::new(
+        tinychannels_bus::channel::ChannelDescriptor {
+            id: account.id.clone(),
+            account_id: account.account_id.clone(),
+            ..Default::default()
+        },
+        channel.capabilities(),
+        Arc::new(TelegramConformanceSink(channel)),
+    );
+    let outcome = adapter
+        .send(tinychannels_bus::ChannelOutboundIntent {
+            idempotency_key: "adapter-photo".into(),
+            channel_id: account.id.clone(),
+            conversation_id: conversation.id.clone(),
+            channel_ref: Some(account.clone()),
+            conversation_ref: Some(conversation.clone()),
+            turn_id: Some("turn-42".into()),
+            payload: tinychannels_bus::OutboundPayload::Parts {
+                parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Image {
+                        media: tinychannels_bus::MediaReference {
+                            opaque_id: Some("stored-photo-1".into()),
+                            kind: tinychannels_bus::MediaKind::Image,
+                            ..Default::default()
+                        },
+                        caption: Some("caption".into()),
+                        alt_text: None,
+                    },
+                }],
+            },
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(outcome.receipt.platform_message_ids, ["22"]);
+    assert!(outcome.error.is_none());
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].url.path().ends_with("/sendPhoto"));
 }
 
 #[tokio::test]
