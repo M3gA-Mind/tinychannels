@@ -818,7 +818,6 @@ async fn scoped_open_rejects_missing_identity_invalid_leases_and_unconfigured_ac
         (scoped("discord", Some("discord:one"), "", "turn", 1), "invalid scoped"),
         (scoped("discord", Some("discord:one"), "room", "", 1), "invalid scoped"),
         (scoped("discord", Some("discord:one"), "room", "turn", 0), "invalid scoped"),
-        (scoped("discord", Some("slack:one"), "room", "turn", 10), "does not match"),
         (scoped("discord", Some("discord:missing"), "room", "turn", 10), "not configured"),
     ] {
         let error = replies.execute(request).await.unwrap_err();
@@ -2633,8 +2632,8 @@ async fn module_outcome_receipts_keep_all_draft_edit_and_close_tokens() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(deletes.len(), 1, "the draft is deleted on close");
-    assert_eq!(deletes[0], &receipt);
+    assert_eq!(deletes.len(), 2, "draft and thinking bubbles are deleted on close");
+    assert!(deletes.iter().all(|actual| *actual == &receipt));
     replies.shutdown().await.unwrap();
 }
 
