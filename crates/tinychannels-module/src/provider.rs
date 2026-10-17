@@ -1152,7 +1152,7 @@ struct TelegramNativeAdapter {
 fn adapter_operation_error(error: RunningSendError) -> tinychannels::channel::ChannelSendError {
     tinychannels::channel::ChannelSendError {
         kind: tinychannels::channel::SendErrorKind::Unknown,
-        message: error.to_string(),
+        message: "Telegram operation failed".into(),
         retryable: matches!(error, RunningSendError::NotDispatched(_)),
         sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
         ..Default::default()
@@ -1198,8 +1198,8 @@ impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
             .await
             .map_err(|error| tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Transient,
-                message: error.to_string(),
-                retryable: true,
+                message: "Telegram runtime stop failed".into(),
+                retryable: false,
                 sent_before_error: true,
                 ..Default::default()
             })
@@ -1918,7 +1918,7 @@ impl tinychannels::channel::ChannelAdapter for Running {
             let sent_before_error = matches!(error, RunningSendError::AfterDispatch(_));
             tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Unknown,
-                message: error.to_string(),
+                message: if self.native_ports.is_some() { "Telegram send failed".into() } else { error.to_string() },
                 retryable: !sent_before_error,
                 sent_before_error,
                 ..Default::default()

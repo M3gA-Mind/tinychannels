@@ -1,5 +1,5 @@
-use crate::ChannelOutboundIntent;
 use super::*;
+use crate::ChannelOutboundIntent;
 
 #[test]
 fn draft_finalization_preserves_thread_and_content_on_wire() {
