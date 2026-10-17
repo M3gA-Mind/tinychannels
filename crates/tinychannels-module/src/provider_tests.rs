@@ -631,10 +631,18 @@ async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
     assert_eq!(stt.len(), 1);
     assert_eq!(stt[0].scope.configured_instance, "telegram:bot-a");
     assert_eq!(stt[0].scope.channel.id, "telegram");
+    assert!(!stt[0].scope.configured_instance.contains("media-v1"));
     assert_eq!(
         stt[0].scope.channel.account_id.as_deref(),
         Some("telegram:bot-a")
     );
+    assert!(!stt[0]
+        .scope
+        .channel
+        .account_id
+        .as_deref()
+        .unwrap()
+        .contains("media-v1"));
     assert_eq!(
         stt[0].scope.conversation,
         ConversationRef {
