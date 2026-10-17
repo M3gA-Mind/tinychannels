@@ -20,7 +20,7 @@ impl tinychannels_runtime::adapters::LocalOutboundSink for TelegramConformanceSi
             .send_typed_with_receipt(&message)
             .await
             .map_err(|error| tinychannels_bus::ChannelSendError {
-                kind: tinychannels_bus::SendErrorKind::Unknown,
+                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
                 message: error.to_string(),
                 ..Default::default()
             })?;
@@ -75,7 +75,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             },
             _ => {
                 return Err(tinychannels_bus::ChannelSendError {
-                    kind: tinychannels_bus::SendErrorKind::BadFormat,
+                    kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
                     message: "fixture does not implement this operation".into(),
                     ..Default::default()
                 });

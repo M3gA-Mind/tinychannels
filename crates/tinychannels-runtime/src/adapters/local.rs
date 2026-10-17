@@ -7,7 +7,7 @@ use crate::channel::{
 use crate::controllers::{ChannelAccountSnapshot, ChannelAccountState};
 use async_trait::async_trait;
 use std::sync::Arc;
-use tinychannels_bus::{OutboundPayload, SendErrorKind};
+use tinychannels_bus::{OutboundPayload, channel::SendErrorKind};
 
 /// Host callback used by `LocalChannelAdapter` to perform delivery.
 #[async_trait]
