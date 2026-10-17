@@ -2384,7 +2384,7 @@ async fn execute_progressive_bus_member_runs_the_shared_engine() {
         )
         .unwrap();
     let opened: ProgressiveResult = proxy
-        .call_confidential(
+        .call(
             "ExecuteProgressive",
             (ProgressiveCommand::Open {
                 channel: "fixture".into(),
@@ -2396,7 +2396,7 @@ async fn execute_progressive_bus_member_runs_the_shared_engine() {
         panic!("bus member did not open a shared progressive turn")
     };
     let closed: ProgressiveResult = proxy
-        .call_confidential(
+        .call(
             "ExecuteProgressive",
             (ProgressiveCommand::Close { handle },),
         )
