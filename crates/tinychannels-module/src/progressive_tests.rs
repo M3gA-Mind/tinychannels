@@ -894,3 +894,56 @@ async fn unsupported_rich_final_returns_the_unflattened_parts() {
     assert_eq!(sent_parts, &parts);
     replies.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn media_and_voice_events_use_ordered_typed_provider_sends() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    let voice = tinychannels_bus::VoiceNote {
+        media: tinychannels_bus::MediaReference {
+            kind: tinychannels_bus::MediaKind::Audio,
+            url: Some("https://media.invalid/voice.ogg".into()),
+            content_type: Some("audio/ogg".into()),
+            ..Default::default()
+        },
+        codec: Some("opus".into()),
+        duration_ms: Some(800),
+        transcript: Some(tinychannels_bus::VoiceTranscript {
+            text: "spoken words".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let result = replies.execute(ProgressiveCommand::FeedOutput {
+        handle,
+        events: vec![
+            ChannelOutputEvent::Media {
+                text: Some("image caption".into()),
+                parts: vec![tinychannels_bus::ContentPart::Image {
+                    media: tinychannels_bus::MediaReference {
+                        kind: tinychannels_bus::MediaKind::Image,
+                        url: Some("https://media.invalid/image.png".into()),
+                        ..Default::default()
+                    },
+                    caption: None,
+                    alt_text: Some("image".into()),
+                }],
+            },
+            ChannelOutputEvent::VoiceNote { text: None, voice },
+        ],
+    }).await.unwrap();
+    let ProgressiveResult::DeliveryOutcomes { outcomes } = result else { panic!("expected both provider receipts") };
+    assert_eq!(outcomes.len(), 2);
+    assert_eq!(outcomes[0].receipt.platform_message_ids, ["fixture-message"]);
+    let sends = callback.requests.lock().await;
+    let typed = sends.iter().filter_map(|request| match request {
+        ProgressiveTransportRequest::SendTyped { parts, .. } => Some(parts),
+        _ => None,
+    }).collect::<Vec<_>>();
+    assert_eq!(typed.len(), 2);
+    assert!(matches!(&typed[0][0], tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Text { text, .. } } if text == "image caption"));
+    assert!(matches!(&typed[0][1], tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Image { .. } }));
+    assert!(matches!(&typed[1][0], tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Text { text, .. } } if text == "spoken words"));
+    assert!(matches!(&typed[1][1], tinychannels_bus::OutboundContentPart::Voice { voice: tinychannels_bus::OutboundVoice::Media { codec: Some(codec), .. } } if codec == "opus"));
+    replies.shutdown().await.unwrap();
+}
