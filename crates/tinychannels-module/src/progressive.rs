@@ -1000,7 +1000,7 @@ impl Replies {
         }
         let provider_id = tinychannels_bus::provider_id(&channel);
         let running = self.running.lock().await;
-        let capabilities = if let Some(context) = context.as_ref() {
+        let (capabilities, media_account_scope) = if let Some(context) = context.as_ref() {
             let configured_instance = context
                 .channel
                 .account_id
@@ -1011,16 +1011,23 @@ impl Replies {
                     "scoped channel identity does not match its configured account",
                 ));
             }
-            running
+            let provider = running
                 .get(configured_instance)
-                .ok_or_else(|| Error::failed("scoped channel instance is not configured"))?
-                .channel
-                .capabilities()
+                .ok_or_else(|| Error::failed("scoped channel instance is not configured"))?;
+            (
+                provider.channel.capabilities(),
+                provider.media_account_scope.clone(),
+            )
         } else {
-            running
-                .get(provider_id)
-                .map(|provider| provider.channel.capabilities())
-                .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
+            running.get(provider_id).map_or_else(
+                || (tinychannels_bus::ChannelCapabilities::unknown(), None),
+                |provider| {
+                    (
+                        provider.channel.capabilities(),
+                        provider.media_account_scope.clone(),
+                    )
+                },
+            )
         };
         drop(running);
         let mut state = self.state.lock().await;
@@ -1067,6 +1074,7 @@ impl Replies {
             host,
             channel,
             capabilities,
+            media_account_scope,
             context,
             lifetime,
             terminal_feed.clone(),
