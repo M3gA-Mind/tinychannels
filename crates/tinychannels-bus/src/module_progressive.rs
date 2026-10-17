@@ -7,10 +7,6 @@ use serde_json::Value;
 /// progressive delivery. Fields are transport DTOs; the host owns policy for
 /// selecting which payloads may be shown to a recipient.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "canonical wire events retain complete typed payloads without boxing"
-)]
 #[serde(
     tag = "type",
     rename_all = "snake_case",
@@ -82,37 +78,7 @@ pub enum ChannelOutputEvent {
         text: Option<String>,
         voice: crate::channel::VoiceNote,
     },
-    Subagent {
-        agent_id: String,
-        task_id: String,
-        state: String,
-        mode: Option<String>,
-        dedicated_thread: Option<bool>,
-        parent_call_id: Option<String>,
-        call_id: Option<String>,
-        iteration: Option<u32>,
-        max_iterations: Option<u32>,
-        prompt_chars: Option<usize>,
-        message: Option<String>,
-        display_name: Option<String>,
-        tool_name: Option<String>,
-        arguments: Option<Value>,
-        success: Option<bool>,
-        elapsed_ms: Option<u64>,
-        output_chars: Option<usize>,
-        output: Option<String>,
-        structured: Option<Value>,
-        usage: Option<SubagentUsage>,
-        failure: Option<ToolFailureSummary>,
-        display_label: Option<String>,
-        display_detail: Option<String>,
-        worker_thread_id: Option<String>,
-        worktree_path: Option<String>,
-        changed_files: Vec<String>,
-        dirty_status: Option<bool>,
-        stop: Option<TurnStopSummary>,
-        extended_policy: Option<bool>,
-    },
+    Subagent(Box<SubagentOutput>),
     ModelUsage {
         model: String,
         provider_id: String,
@@ -154,6 +120,41 @@ pub enum ChannelOutputEvent {
     Native {
         data: Value,
     },
+}
+
+/// Authorized subagent progress fields carried together in one boxed variant.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct SubagentOutput {
+    agent_id: String,
+    task_id: String,
+    state: String,
+    mode: Option<String>,
+    dedicated_thread: Option<bool>,
+    parent_call_id: Option<String>,
+    call_id: Option<String>,
+    iteration: Option<u32>,
+    max_iterations: Option<u32>,
+    prompt_chars: Option<usize>,
+    message: Option<String>,
+    display_name: Option<String>,
+    tool_name: Option<String>,
+    arguments: Option<Value>,
+    success: Option<bool>,
+    elapsed_ms: Option<u64>,
+    output_chars: Option<usize>,
+    output: Option<String>,
+    structured: Option<Value>,
+    usage: Option<SubagentUsage>,
+    failure: Option<ToolFailureSummary>,
+    display_label: Option<String>,
+    display_detail: Option<String>,
+    worker_thread_id: Option<String>,
+    worktree_path: Option<String>,
+    changed_files: Vec<String>,
+    dirty_status: Option<bool>,
+    stop: Option<TurnStopSummary>,
+    extended_policy: Option<bool>,
 }
 
 /// Transport-safe projection of a classified tool failure.
@@ -244,10 +245,6 @@ pub enum ProgressiveCommand {
 
 /// Completion of one bounded command.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "wire results preserve complete provider receipts without boxing"
-)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum ProgressiveResult {
     Opened {
@@ -258,7 +255,7 @@ pub enum ProgressiveResult {
     /// V2 terminal delivery acknowledgement; carries every known platform
     /// receipt and any partial-send failure from the provider.
     DeliveryOutcome {
-        outcome: crate::channel::ChannelSendOutcome,
+        outcome: Box<crate::channel::ChannelSendOutcome>,
     },
     /// Rich content is retained for a host/provider port that does not yet
     /// support it; it is never flattened to text or dropped.
@@ -285,10 +282,6 @@ pub enum ProgressiveOutputFailure {
 
 /// The host supplies its managed REST transport and captured credential.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "transport requests preserve ordered canonical payloads as wire DTOs"
-)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum ProgressiveTransportRequest {
     /// Ordered, host-authorized projection of one canonical turn event.
@@ -298,7 +291,7 @@ pub enum ProgressiveTransportRequest {
         channel_ref: Option<crate::channel::ChannelRef>,
         conversation: Option<crate::channel::ConversationRef>,
         sequence: u64,
-        event: ChannelOutputEvent,
+        event: Box<ChannelOutputEvent>,
     },
     Send {
         channel: String,
@@ -371,10 +364,6 @@ pub enum ProgressiveTransportRequest {
 
 /// Typed transport facts preserve the module's existing recovery rules.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "transport results preserve typed provider receipt facts as wire DTOs"
-)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ProgressiveTransportResult {
     /// Observation callback accepted the event; this does not acknowledge a
@@ -383,7 +372,7 @@ pub enum ProgressiveTransportResult {
     Success(Value),
     /// Structured result for hosts that can preserve normalized receipts and
     /// partial-send failure facts across the module boundary.
-    Outcome(crate::channel::ChannelSendOutcome),
+    Outcome(Box<crate::channel::ChannelSendOutcome>),
     /// The provider adapter explicitly does not support this typed payload.
     UnsupportedContent,
     Unavailable,

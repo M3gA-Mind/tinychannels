@@ -143,16 +143,12 @@ pub enum ChannelControllerResult {
 /// Provider validation and protocol calls stay in TinyChannels; the host only
 /// supplies config persistence and managed backend operations.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "backend request preserves complete transport DTOs without boxing"
-)]
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
 pub enum ChannelBackendRequest {
     /// Access only host-owned conversations, history, and session caches.
     RemoteControl(crate::module_remote::RemoteHostRequest),
     /// Execute only managed transport; module owns progressive state and idempotency.
-    ProgressiveTransport(crate::module_progressive::ProgressiveTransportRequest),
+    ProgressiveTransport(Box<crate::module_progressive::ProgressiveTransportRequest>),
     /// Disconnect through the host credential/configuration store.
     Disconnect {
         channel: String,
@@ -180,14 +176,10 @@ pub enum ChannelBackendRequest {
 
 /// Results from narrow host-owned controller capabilities.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "backend result preserves complete typed transport facts without boxing"
-)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ChannelBackendResult {
     RemoteControl(crate::module_remote::RemoteHostResult),
-    ProgressiveTransport(crate::module_progressive::ProgressiveTransportResult),
+    ProgressiveTransport(Box<crate::module_progressive::ProgressiveTransportResult>),
     Disconnected(ChannelDisconnectResult),
     Status(Vec<ChannelStatusEntry>),
     SendReaction(ChannelReactionResult),
