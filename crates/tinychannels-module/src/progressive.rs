@@ -1057,7 +1057,10 @@ async fn record_terminal(
     };
     let mut memo = terminal_feed.lock().await;
     if let Some(memo) = memo.as_mut().filter(|memo| memo.fingerprint == fingerprint) {
-        let result = result.clone().map_err(|error| error.to_string());
+        let result = match result {
+            Ok(value) => Ok(value.clone()),
+            Err(error) => Err(error.to_string()),
+        };
         memo.result = Some(result.clone());
         memo.notify.send_replace(Some(result));
     }
