@@ -601,3 +601,79 @@ async fn empty_thinking_and_filler_without_an_id_do_not_claim_cleanup_ownership(
     assert!(state.filler_message_ids.is_empty());
     assert_eq!(state.filler_failures, 0);
 }
+
+#[test]
+fn unicode_segment_boundaries_match_configured_units() {
+    let source = "a😀éz";
+    let utf8 = super::reply::split_text_by_limit(
+        source,
+        4,
+        tinychannels_bus::LengthUnit::Utf8Bytes,
+    )
+    .unwrap();
+    assert_eq!(utf8.concat(), source);
+    assert!(utf8.iter().all(|segment| segment.len() <= 4));
+    let utf16 = super::reply::split_text_by_limit(
+        source,
+        2,
+        tinychannels_bus::LengthUnit::Utf16Units,
+    )
+    .unwrap();
+    assert_eq!(utf16.concat(), source);
+    assert!(utf16.iter().all(|segment| segment.encode_utf16().count() <= 2));
+    assert!(super::reply::split_text_by_limit(
+        "😀",
+        1,
+        tinychannels_bus::LengthUnit::Utf8Bytes,
+    )
+    .is_err());
+}
+
+#[test]
+fn ordered_text_parts_keep_dialects_and_do_not_duplicate_projection() {
+    let first = tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Text {
+            text: "abcd".into(),
+            markdown_dialect: Some("markdown".into()),
+        },
+    };
+    let second = tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Text {
+            text: "ef".into(),
+            markdown_dialect: Some("plain".into()),
+        },
+    };
+    let segments = super::reply::segment_text_parts(
+        &[first.clone(), second.clone()],
+        "abcdef",
+        4,
+        tinychannels_bus::LengthUnit::Characters,
+    )
+    .unwrap();
+    assert_eq!(segments.len(), 2);
+    assert_eq!(segments[0], (vec![first], "abcd".into()));
+    assert_eq!(segments[1], (vec![second], "ef".into()));
+
+    let projected_parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "a".into(),
+                markdown_dialect: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "b".into(),
+                markdown_dialect: None,
+            },
+        },
+    ];
+    let projected = super::reply::segment_text_parts(
+        &projected_parts,
+        "ab",
+        4,
+        tinychannels_bus::LengthUnit::Characters,
+    )
+    .unwrap();
+    assert_eq!(projected, vec![(projected_parts, "ab".into())]);
+}
