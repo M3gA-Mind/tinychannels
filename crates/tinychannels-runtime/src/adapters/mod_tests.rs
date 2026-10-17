@@ -30,6 +30,18 @@ impl LocalOutboundSink for RecordingOutboundSink {
     }
 }
 
+struct FixedOutboundSink(Result<MessageReceipt, ChannelSendError>);
+
+#[async_trait]
+impl LocalOutboundSink for FixedOutboundSink {
+    async fn send(
+        &self,
+        _intent: ChannelOutboundIntent,
+    ) -> Result<MessageReceipt, ChannelSendError> {
+        self.0.clone()
+    }
+}
+
 struct NoopInboundSink;
 
 #[async_trait]
@@ -171,6 +183,267 @@ async fn local_adapter_rejects_foreign_scope_before_dispatch() {
         tinychannels_bus::channel::SendErrorKind::Forbidden
     );
     assert!(sink.ids.lock().expect("ids lock").is_empty());
+}
+
+#[tokio::test]
+async fn local_adapter_capability_gate_covers_canonical_payload_kinds() {
+    let outbound = tinychannels_bus::ContentCapability {
+        outbound: true,
+        ..Default::default()
+    };
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        content: tinychannels_bus::ContentCapabilities {
+            text: outbound.clone(),
+            image: outbound.clone(),
+            video: outbound.clone(),
+            audio: outbound.clone(),
+            file: outbound.clone(),
+            sticker: outbound.clone(),
+            location: outbound.clone(),
+            contact: outbound.clone(),
+            buttons: outbound.clone(),
+            poll: outbound.clone(),
+            presentation: outbound.clone(),
+            native: outbound,
+            ..Default::default()
+        },
+        voice_out: tinychannels_bus::VoiceCapabilities {
+            supported: true,
+            synthesis: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let sink = Arc::new(RecordingOutboundSink::default());
+    let adapter = LocalChannelAdapter::new(
+        ChannelDescriptor {
+            id: "local".into(),
+            account_id: Some("host".into()),
+            ..Default::default()
+        },
+        capabilities,
+        sink.clone(),
+    );
+    let media = tinychannels_bus::MediaReference::default();
+    let content = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "text".into(),
+                markdown_dialect: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: media.clone(),
+                caption: None,
+                alt_text: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Video {
+                media: media.clone(),
+                caption: None,
+                duration_ms: None,
+                thumbnail: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Audio {
+                media: media.clone(),
+                codec: None,
+                duration_ms: None,
+                title: None,
+                transcript: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::File {
+                media: media.clone(),
+                file_name: None,
+                caption: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::VoiceNote {
+                voice_note: tinychannels_bus::VoiceNote {
+                    media: media.clone(),
+                    ..Default::default()
+                },
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Sticker {
+                media: media.clone(),
+                pack_id: None,
+                sticker_id: None,
+                emoji: None,
+                alt_text: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Location {
+                latitude: 0.0,
+                longitude: 0.0,
+                label: None,
+                address: None,
+                accuracy_meters: None,
+                live_until_unix_ms: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Contact {
+                display_name: "person".into(),
+                phone_numbers: vec![],
+                emails: vec![],
+                organization: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Buttons { rows: vec![] },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Poll {
+                question: "Q?".into(),
+                options: vec!["A".into()],
+                multiple_choice: false,
+                closes_at_unix_ms: None,
+                provider_poll_id: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Presentation {
+                blocks: serde_json::json!([]),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Native {
+                provider: "local".into(),
+                data: serde_json::json!({}),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: media.clone(),
+                audio_base64: None,
+                codec: None,
+                duration_ms: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Synthesize {
+                text: "voice".into(),
+                voice: None,
+            },
+        },
+    ];
+    let result = adapter
+        .send(ChannelOutboundIntent {
+            idempotency_key: "all-parts".into(),
+            channel_id: "local".into(),
+            conversation_id: "chat-1".into(),
+            payload: OutboundPayload::Parts { parts: content },
+            ..Default::default()
+        })
+        .await;
+    assert!(result.is_ok());
+    assert_eq!(sink.ids.lock().unwrap().as_slice(), ["all-parts"]);
+
+    for payload in [
+        OutboundPayload::Text { text: "x".into() },
+        OutboundPayload::Media {
+            text: None,
+            media_urls: vec![],
+        },
+        OutboundPayload::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media,
+                audio_base64: None,
+                codec: None,
+                duration_ms: None,
+            },
+        },
+        OutboundPayload::Files { file_urls: vec![] },
+        OutboundPayload::Poll {
+            question: "Q?".into(),
+            options: vec![],
+        },
+        OutboundPayload::PresentationBlocks {
+            blocks: serde_json::json!([]),
+        },
+        OutboundPayload::NativeChannelData {
+            data: serde_json::json!({}),
+        },
+    ] {
+        assert!(adapter.send(ChannelOutboundIntent {
+            idempotency_key: "top-level".into(),
+            channel_id: "local".into(),
+            conversation_id: "chat-1".into(),
+            payload,
+            ..Default::default()
+        }).await.is_ok());
+    }
+}
+
+#[tokio::test]
+async fn local_adapter_preserves_uncertain_sink_errors_and_rejects_mis_scoped_receipts() {
+    let descriptor = ChannelDescriptor {
+        id: "local".into(),
+        account_id: Some("host".into()),
+        ..Default::default()
+    };
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.content.text.outbound = true;
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "uncertain".into(),
+        channel_id: "local".into(),
+        conversation_id: "chat-1".into(),
+        payload: OutboundPayload::Text { text: "text".into() },
+        ..Default::default()
+    };
+    let adapter = LocalChannelAdapter::new(
+        descriptor.clone(),
+        capabilities.clone(),
+        Arc::new(FixedOutboundSink(Err(ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+            retryable: true,
+            continuation_message_ids: vec!["second-part".into()],
+            ..Default::default()
+        }))),
+    );
+    let error = adapter.send(intent.clone()).await.unwrap_err();
+    assert!(error.sent_before_error && !error.retryable);
+    assert_eq!(error.continuation_message_ids, ["second-part"]);
+
+    let adapter = LocalChannelAdapter::new(
+        descriptor,
+        capabilities,
+        Arc::new(FixedOutboundSink(Ok(MessageReceipt {
+            channel: Some(tinychannels_bus::ChannelRef {
+                id: "local".into(),
+                account_id: Some("foreign".into()),
+            }),
+            conversation: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "elsewhere".into(),
+                ..Default::default()
+            }),
+            primary_platform_message_id: Some("sent".into()),
+            platform_message_ids: vec!["sent".into()],
+            parts: vec![tinychannels_bus::channel::MessageReceiptPart {
+                platform_message_id: "sent".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }))),
+    );
+    let outcome = adapter.send(intent).await.unwrap();
+    assert!(outcome.error.as_ref().is_some_and(|error| {
+        error.sent_before_error && !error.retryable && !error.unsupported
+    }));
+    assert_eq!(
+        outcome.receipt.channel.unwrap().account_id.as_deref(),
+        Some("foreign")
+    );
 }
 
 #[tokio::test]
