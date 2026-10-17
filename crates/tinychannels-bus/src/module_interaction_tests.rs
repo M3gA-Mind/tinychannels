@@ -77,19 +77,35 @@ fn typed_draft_interaction_round_trips_full_account_and_topic_scope() {
         channel: "telegram:account-a".into(),
         interaction: ChannelInteraction::UpsertDraft {
             previous: Some(crate::channel::MessageReceipt {
-                    channel: Some(crate::channel::ChannelRef { id: "telegram".into(), account_id: Some("telegram:account-a".into()) }),
-                    conversation: Some(crate::channel::ConversationRef { id: "-100".into(), topic_id: Some("topic-4".into()), ..Default::default() }),
-                    primary_platform_message_id: Some("91".into()),
-                    platform_message_ids: vec!["91".into()],
+                channel: Some(crate::channel::ChannelRef {
+                    id: "telegram".into(),
+                    account_id: Some("telegram:account-a".into()),
+                }),
+                conversation: Some(crate::channel::ConversationRef {
+                    id: "-100".into(),
+                    topic_id: Some("topic-4".into()),
                     ..Default::default()
                 }),
+                primary_platform_message_id: Some("91".into()),
+                platform_message_ids: vec!["91".into()],
+                ..Default::default()
+            }),
             intent: ChannelOutboundIntent {
                 idempotency_key: "draft-op".into(),
                 channel_id: "telegram".into(),
                 conversation_id: "-100".into(),
-                channel_ref: Some(crate::channel::ChannelRef { id: "telegram".into(), account_id: Some("telegram:account-a".into()) }),
-                conversation_ref: Some(crate::channel::ConversationRef { id: "-100".into(), topic_id: Some("topic-4".into()), ..Default::default() }),
-                payload: crate::OutboundPayload::Text { text: "progress".into() },
+                channel_ref: Some(crate::channel::ChannelRef {
+                    id: "telegram".into(),
+                    account_id: Some("telegram:account-a".into()),
+                }),
+                conversation_ref: Some(crate::channel::ConversationRef {
+                    id: "-100".into(),
+                    topic_id: Some("topic-4".into()),
+                    ..Default::default()
+                }),
+                payload: crate::OutboundPayload::Text {
+                    text: "progress".into(),
+                },
                 ..Default::default()
             },
         },
@@ -101,7 +117,16 @@ fn typed_draft_interaction_round_trips_full_account_and_topic_scope() {
         panic!("wrong interaction")
     };
     let previous = previous.unwrap();
-    assert_eq!(previous.channel.unwrap().account_id.as_deref(), Some("telegram:account-a"));
-    assert_eq!(previous.conversation.unwrap().topic_id.as_deref(), Some("topic-4"));
-    assert_eq!(intent.conversation_ref.unwrap().topic_id.as_deref(), Some("topic-4"));
+    assert_eq!(
+        previous.channel.unwrap().account_id.as_deref(),
+        Some("telegram:account-a")
+    );
+    assert_eq!(
+        previous.conversation.unwrap().topic_id.as_deref(),
+        Some("topic-4")
+    );
+    assert_eq!(
+        intent.conversation_ref.unwrap().topic_id.as_deref(),
+        Some("topic-4")
+    );
 }

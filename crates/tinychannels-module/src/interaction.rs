@@ -69,7 +69,9 @@ pub(crate) async fn dispatch(
                 .map_err(|_| tinybus::Error::failed("provider draft creation failed"));
         }
         Op::UpsertDraft { .. } => {
-            return Err(tinybus::Error::failed("typed draft requires configured provider queue"));
+            return Err(tinybus::Error::failed(
+                "typed draft requires configured provider queue",
+            ));
         }
         Op::UpdateDraft {
             recipient,

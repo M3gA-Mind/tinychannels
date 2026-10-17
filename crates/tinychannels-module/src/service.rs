@@ -50,7 +50,8 @@ use tinychannels::delivery::{
     enqueue_delivery, recover_pending_deliveries,
 };
 use tinychannels::factory::{
-    ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels, build_telegram_channel,
+    ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
+    build_telegram_channel,
 };
 use tinychannels::host::ChannelHost;
 use tinychannels_bus::ChannelControllerRequest;
@@ -231,10 +232,18 @@ impl Channels {
             ));
         }
         let provider = if let Some(telegram) = telegram {
-            Running::start_telegram(telegram, hooks, self.host.clone(), supervision, outbound_only)
+            Running::start_telegram(
+                telegram,
+                hooks,
+                self.host.clone(),
+                supervision,
+                outbound_only,
+            )
         } else {
             match supervision {
-                Some(policy) => Running::start_supervised(channel, hooks, self.host.clone(), policy),
+                Some(policy) => {
+                    Running::start_supervised(channel, hooks, self.host.clone(), policy)
+                }
                 None if outbound_only => Running::start_outbound(channel, hooks, self.host.clone()),
                 None => Running::start(channel, hooks, self.host.clone()),
             }

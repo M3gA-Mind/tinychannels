@@ -11,9 +11,9 @@ pub use tinychannels_bus::channel::types;
 
 pub use crate::traits::{Channel, ChannelMessage, ChannelSendExt, SendMessage, SendMessageExt};
 pub use adapter::{
-    ChannelAdapter, ChannelDelete, ChannelDirectory, ChannelEdit, ChannelInboundSink, ChannelTypedSend,
+    ChannelAdapter, ChannelDelete, ChannelDirectory, ChannelEdit, ChannelInboundSink,
     ChannelReaction, ChannelReceiveAckPolicy, ChannelResolver, ChannelSetup, ChannelStreamingDraft,
-    ChannelTyping,
+    ChannelTypedSend, ChannelTyping,
 };
 pub use capabilities::{
     CHANNEL_MESSAGE_ACTION_NAMES, ChannelPresentationCapabilities, ChannelStaticCapabilities,

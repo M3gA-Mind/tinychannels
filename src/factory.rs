@@ -212,7 +212,6 @@ impl HttpClientFactory for ConfiguredHttpClients {
     }
 }
 
-
 /// Build the configured Telegram channel as its concrete provider type.
 ///
 /// The module uses this to retain the same Telegram object as both the polling
