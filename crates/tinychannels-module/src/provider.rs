@@ -1119,6 +1119,7 @@ pub(crate) struct Running {
     finished: Arc<AtomicBool>,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AdapterMode {
     LegacyBacked,
@@ -1127,8 +1128,10 @@ pub(crate) enum AdapterMode {
 
 pub(crate) struct ConfiguredAdapterHandle {
     pub(crate) configured_instance: String,
+    #[cfg(test)]
     pub(crate) mode: AdapterMode,
     adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
+    #[cfg(test)]
     telegram_native: Option<Arc<TelegramNativeAdapter>>,
 }
 
@@ -1164,31 +1167,27 @@ impl ConfiguredAdapterHandle {
         self.adapter.send(intent).await
     }
 
+    #[cfg(test)]
     pub(crate) fn reactions(&self) -> Option<&dyn tinychannels::channel::ChannelReaction> {
         self.telegram_native
             .as_deref()
             .map(|adapter| adapter as &dyn tinychannels::channel::ChannelReaction)
     }
 
+    #[cfg(test)]
     pub(crate) fn edits(&self) -> Option<&dyn tinychannels::channel::ChannelEdit> {
         self.telegram_native
             .as_deref()
             .map(|adapter| adapter as &dyn tinychannels::channel::ChannelEdit)
     }
 
+    #[cfg(test)]
     pub(crate) fn deletes(&self) -> Option<&dyn tinychannels::channel::ChannelDelete> {
         self.telegram_native
             .as_deref()
             .map(|adapter| adapter as &dyn tinychannels::channel::ChannelDelete)
     }
 
-    pub(crate) fn streaming_drafts(
-        &self,
-    ) -> Option<&dyn tinychannels::channel::ChannelStreamingDraft> {
-        self.telegram_native
-            .as_deref()
-            .map(|adapter| adapter as &dyn tinychannels::channel::ChannelStreamingDraft)
-    }
 }
 
 pub(crate) struct ConfiguredAdapterFactory;
@@ -1261,7 +1260,7 @@ impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
         self.running
             .stop()
             .await
-            .map_err(|error| tinychannels::channel::ChannelSendError {
+            .map_err(|_error| tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Transient,
                 message: "Telegram runtime stop failed".into(),
                 retryable: false,
@@ -1412,8 +1411,10 @@ impl ConfiguredAdapterFactory {
         let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = running;
         ConfiguredAdapterHandle {
             configured_instance,
+            #[cfg(test)]
             mode: AdapterMode::LegacyBacked,
             adapter,
+            #[cfg(test)]
             telegram_native: None,
         }
     }
@@ -1424,8 +1425,10 @@ impl ConfiguredAdapterFactory {
         let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = native.clone();
         ConfiguredAdapterHandle {
             configured_instance,
+            #[cfg(test)]
             mode: AdapterMode::TelegramNativeV2,
             adapter,
+            #[cfg(test)]
             telegram_native: Some(native),
         }
     }
