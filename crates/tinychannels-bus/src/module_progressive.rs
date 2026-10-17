@@ -256,19 +256,43 @@ pub enum ProgressiveTransportRequest {
     },
     Send {
         channel: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        channel_ref: Option<crate::channel::ChannelRef>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation: Option<crate::channel::ConversationRef>,
         message: Value,
     },
     Edit {
         channel: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        channel_ref: Option<crate::channel::ChannelRef>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation: Option<crate::channel::ConversationRef>,
         message_id: String,
         text: String,
     },
     Delete {
         channel: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        channel_ref: Option<crate::channel::ChannelRef>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation: Option<crate::channel::ConversationRef>,
         message_id: String,
     },
     Typing {
         channel: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        channel_ref: Option<crate::channel::ChannelRef>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation: Option<crate::channel::ConversationRef>,
     },
 }
 

@@ -28,7 +28,10 @@ const MAX_CONTENT: usize = 384 * 1024;
 const MAX_REQUEST: usize = MAX_CONTENT * 12 + 64 * 1024;
 const TURN_LIFETIME: Duration = Duration::from_secs(180);
 
-struct Sender(HostChannels);
+struct Sender {
+    host: HostChannels,
+    context: Option<ProgressiveOutputContext>,
+}
 
 impl Sender {
     async fn invoke(
@@ -36,7 +39,7 @@ impl Sender {
         request: ProgressiveTransportRequest,
     ) -> std::result::Result<Value, ProgressiveSendError> {
         let result = self
-            .0
+            .host
             .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(request))
             .await
             .map_err(|_| ProgressiveSendError::Unavailable)?;
@@ -116,6 +119,9 @@ impl ProgressiveSender for Sender {
         let message = tinychannels::legacy_message_value_from_outbound_intent(&intent);
         self.invoke(ProgressiveTransportRequest::Send {
             channel: channel.into(),
+            turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
+            channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
+            conversation: self.context.as_ref().map(|context| context.conversation.clone()),
             message,
         })
         .await
@@ -128,6 +134,9 @@ impl ProgressiveSender for Sender {
     ) -> std::result::Result<(), ProgressiveSendError> {
         self.invoke(ProgressiveTransportRequest::Edit {
             channel: channel.into(),
+            turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
+            channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
+            conversation: self.context.as_ref().map(|context| context.conversation.clone()),
             message_id: message_id.into(),
             text: text.into(),
         })
@@ -141,6 +150,9 @@ impl ProgressiveSender for Sender {
     ) -> std::result::Result<(), ProgressiveSendError> {
         self.invoke(ProgressiveTransportRequest::Delete {
             channel: channel.into(),
+            turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
+            channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
+            conversation: self.context.as_ref().map(|context| context.conversation.clone()),
             message_id: message_id.into(),
         })
         .await
@@ -149,6 +161,9 @@ impl ProgressiveSender for Sender {
     async fn typing(&self, channel: &str) -> std::result::Result<(), ProgressiveSendError> {
         self.invoke(ProgressiveTransportRequest::Typing {
             channel: channel.into(),
+            turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
+            channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
+            conversation: self.context.as_ref().map(|context| context.conversation.clone()),
         })
         .await
         .map(drop)
@@ -491,9 +506,9 @@ async fn run(
     mut inbox: mpsc::Receiver<Command>,
 ) {
     let mut reply = if let Some(context) = context {
-        ProgressiveReply::new_scoped(Arc::new(Sender(host)), channel, capabilities, context)
+        ProgressiveReply::new_scoped(Arc::new(Sender { host, context: Some(context.clone()) }), channel, capabilities, context)
     } else {
-        ProgressiveReply::new(Arc::new(Sender(host)), channel, capabilities)
+        ProgressiveReply::new(Arc::new(Sender { host, context: None }), channel, capabilities)
     };
     let mut edits = tokio::time::interval(EDIT_FLUSH_INTERVAL);
     let mut typing = tokio::time::interval(TYPING_REFRESH_INTERVAL);
