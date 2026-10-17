@@ -803,6 +803,49 @@ impl Running {
         }
     }
 
+    fn adapter_descriptor(&self) -> tinychannels_bus::ChannelDescriptor {
+        let channel_id = tinychannels_bus::provider_id(&self.configured_instance).to_owned();
+        tinychannels_bus::ChannelDescriptor {
+            id: channel_id,
+            display_name: self.channel.name().to_owned(),
+            account_id: Some(self.configured_instance.clone()),
+            metadata: std::collections::BTreeMap::from([
+                ("configuredInstance".into(), self.configured_instance.clone()),
+                ("adapterMode".into(), "legacy-backed".into()),
+            ]),
+            ..Default::default()
+        }
+    }
+
+    fn validate_adapter_intent(
+        &self,
+        intent: &tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<(), tinychannels::channel::ChannelSendError> {
+        let expected_channel = tinychannels_bus::provider_id(&self.configured_instance);
+        if intent.channel_id != expected_channel
+            || intent
+                .channel_ref
+                .as_ref()
+                .is_some_and(|reference| {
+                    reference.id != expected_channel
+                        || reference.account_id.as_deref()
+                            != Some(self.configured_instance.as_str())
+                })
+        {
+            return Err(adapter_scope_error("channel account does not match configured instance"));
+        }
+        if intent.conversation_id.trim().is_empty()
+            || intent.conversation_ref.as_ref().is_some_and(|conversation| {
+                conversation.id != intent.conversation_id
+                    || (intent.thread_id.is_some()
+                        && conversation.thread_id != intent.thread_id)
+            })
+        {
+            return Err(adapter_scope_error("conversation address is incomplete or inconsistent"));
+        }
+        Ok(())
+    }
+
     pub(crate) async fn interact(
         &self,
         interaction: tinychannels_bus::ChannelInteraction,
@@ -853,6 +896,91 @@ impl Running {
         }
         worker.take();
         Ok(())
+    }
+}
+
+fn adapter_scope_error(message: &str) -> tinychannels::channel::ChannelSendError {
+    tinychannels::channel::ChannelSendError {
+        kind: tinychannels::channel::SendErrorKind::Forbidden,
+        message: message.into(),
+        retryable: false,
+        ..Default::default()
+    }
+}
+
+/// The module's configured runtime handle is the adapter factory's concrete
+/// legacy-backed entry until its provider receives a native adapter port.
+/// It reuses the already-running listener and typed send worker.
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelAdapter for Running {
+    fn descriptor(&self) -> tinychannels_bus::ChannelDescriptor {
+        self.adapter_descriptor()
+    }
+
+    async fn start(
+        &self,
+        _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Err(tinychannels::channel::ChannelSendError {
+            kind: tinychannels::channel::SendErrorKind::Forbidden,
+            message: "configured adapter is already started by the module runtime".into(),
+            retryable: false,
+            ..Default::default()
+        })
+    }
+
+    async fn stop(
+        &self,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Running::stop(self).await.map_err(|error| tinychannels::channel::ChannelSendError {
+            kind: tinychannels::channel::SendErrorKind::Transient,
+            message: error.to_string(),
+            retryable: true,
+            sent_before_error: true,
+            ..Default::default()
+        })
+    }
+
+    async fn send(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<tinychannels::channel::MessageReceipt, tinychannels::channel::ChannelSendError> {
+        self.validate_adapter_intent(&intent)?;
+        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+        let outcome = self.send_typed(message).await.map_err(|error| {
+            let sent_before_error = matches!(error, RunningSendError::AfterDispatch(_));
+            tinychannels::channel::ChannelSendError {
+                kind: tinychannels::channel::SendErrorKind::Unknown,
+                message: error.to_string(),
+                retryable: !sent_before_error,
+                sent_before_error,
+                ..Default::default()
+            }
+        })?;
+        if let Some(mut error) = outcome.error {
+            error.sent_before_error |= !outcome.receipt.platform_message_ids.is_empty();
+            error.continuation_message_ids.extend(
+                outcome.receipt.platform_message_ids.iter().cloned(),
+            );
+            return Err(error);
+        }
+        Ok(outcome.receipt)
+    }
+
+    async fn status(
+        &self,
+    ) -> std::result::Result<tinychannels::controllers::ChannelAccountSnapshot, tinychannels::channel::ChannelSendError> {
+        let healthy = self.channel.health_check().await;
+        Ok(tinychannels::controllers::ChannelAccountSnapshot {
+            channel_id: tinychannels_bus::provider_id(&self.configured_instance).into(),
+            account_id: Some(self.configured_instance.clone()),
+            states: vec![
+                tinychannels::controllers::ChannelAccountState::Configured,
+                tinychannels::controllers::ChannelAccountState::Enabled,
+            ],
+            health_state: Some(if healthy { "healthy" } else { "unhealthy" }.into()),
+            ..Default::default()
+        })
     }
 }
 
