@@ -124,10 +124,22 @@ impl ProgressiveReply {
         }
         let sender = Arc::clone(&self.sender);
         if self.state.thinking_dirty && !self.state.thinking_edit_disabled {
-            flush_thinking_message(sender.as_ref(), &self.channel, &mut self.state, self.use_global_edit_latch).await;
+            flush_thinking_message(
+                sender.as_ref(),
+                &self.channel,
+                &mut self.state,
+                self.use_global_edit_latch,
+            )
+            .await;
         }
         if self.state.dirty && !self.state.edit_disabled {
-            flush_streaming_edit(sender.as_ref(), &self.channel, &mut self.state, self.use_global_edit_latch).await;
+            flush_streaming_edit(
+                sender.as_ref(),
+                &self.channel,
+                &mut self.state,
+                self.use_global_edit_latch,
+            )
+            .await;
         }
     }
 
@@ -149,7 +161,14 @@ impl ProgressiveReply {
     /// Deliver the canonical reply and remove every ephemeral bubble.
     pub async fn finalize(&mut self, final_text: &str) {
         let sender = Arc::clone(&self.sender);
-        finalize_channel_reply(sender.as_ref(), &self.channel, &mut self.state, final_text, self.use_global_edit_latch).await;
+        finalize_channel_reply(
+            sender.as_ref(),
+            &self.channel,
+            &mut self.state,
+            final_text,
+            self.use_global_edit_latch,
+        )
+        .await;
     }
 
     /// Finish a text-only turn by editing the existing draft in place and
@@ -157,20 +176,35 @@ impl ProgressiveReply {
     pub async fn finalize_existing_text(
         &mut self,
         final_text: &str,
-    ) -> Result<Option<tinychannels_bus::channel::ChannelSendOutcome>, super::ProgressiveSendError> {
+    ) -> Result<Option<tinychannels_bus::channel::ChannelSendOutcome>, super::ProgressiveSendError>
+    {
         let Some(message_id) = self.state.message_id.clone() else {
             return Ok(None);
         };
         if !self.progressive_ui {
             return Ok(None);
         }
-        match self.sender.edit(&self.channel, &message_id, final_text).await {
+        match self
+            .sender
+            .edit(&self.channel, &message_id, final_text)
+            .await
+        {
             Ok(()) => {
                 for id in std::mem::take(&mut self.state.filler_message_ids) {
-                    super::finalize::delete_channel_message(self.sender.as_ref(), &self.channel, &id).await;
+                    super::finalize::delete_channel_message(
+                        self.sender.as_ref(),
+                        &self.channel,
+                        &id,
+                    )
+                    .await;
                 }
                 if let Some(id) = self.state.thinking_message_id.take() {
-                    super::finalize::delete_channel_message(self.sender.as_ref(), &self.channel, &id).await;
+                    super::finalize::delete_channel_message(
+                        self.sender.as_ref(),
+                        &self.channel,
+                        &id,
+                    )
+                    .await;
                 }
                 self.state.content = final_text.to_owned();
                 self.state.dirty = false;

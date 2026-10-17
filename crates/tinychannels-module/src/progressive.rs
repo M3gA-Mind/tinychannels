@@ -136,11 +136,14 @@ impl ProgressiveSender for Sender {
         sequence: u64,
     ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
     {
-        let text_only = parts.iter().all(|part| matches!(part,
-            tinychannels_bus::OutboundContentPart::Content {
-                part: tinychannels_bus::ContentPart::Text { .. }
-            }
-        ));
+        let text_only = parts.iter().all(|part| {
+            matches!(
+                part,
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { .. }
+                }
+            )
+        });
         let segments = match self.text_limit.filter(|_| text_only) {
             Some((limit, unit)) => split_text_by_limit(text, limit, unit)?,
             None => vec![text.to_owned()],
@@ -165,7 +168,9 @@ impl ProgressiveSender for Sender {
                 context,
                 sequence,
                 index as u32,
-            ).await {
+            )
+            .await
+            {
                 Ok(outcome) => outcome,
                 Err(ProgressiveSendError::PartialOutcome(outcome)) => outcome,
                 Err(error) if index > 0 => {
@@ -259,7 +264,9 @@ fn split_text_by_limit(
     unit: tinychannels_bus::LengthUnit,
 ) -> std::result::Result<Vec<String>, ProgressiveSendError> {
     if limit == 0 {
-        return Err(ProgressiveSendError::Other(anyhow::anyhow!("configured text limit is zero")));
+        return Err(ProgressiveSendError::Other(anyhow::anyhow!(
+            "configured text limit is zero"
+        )));
     }
     let mut segments = Vec::new();
     let mut current = String::new();
@@ -271,7 +278,9 @@ fn split_text_by_limit(
             tinychannels_bus::LengthUnit::Utf16Units => scalar.len_utf16() as u64,
         };
         if cost > limit {
-            return Err(ProgressiveSendError::Other(anyhow::anyhow!("one text scalar exceeds configured text limit")));
+            return Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                "one text scalar exceeds configured text limit"
+            )));
         }
         if used > 0 && used + cost > limit {
             segments.push(std::mem::take(&mut current));
@@ -325,9 +334,9 @@ async fn send_typed_part(
         .await
         .map_err(|_| ProgressiveSendError::Unavailable)?
     {
-        ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Outcome(outcome)) => {
-            Ok(outcome)
-        }
+        ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Outcome(
+            outcome,
+        )) => Ok(outcome),
         ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Unavailable) => {
             Err(ProgressiveSendError::Unavailable)
         }
@@ -336,9 +345,9 @@ async fn send_typed_part(
                 "typed provider send failed with unknown outcome"
             )))
         }
-        ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::UnsupportedContent) => {
-            Err(ProgressiveSendError::UnsupportedContent)
-        }
+        ChannelBackendResult::ProgressiveTransport(
+            ProgressiveTransportResult::UnsupportedContent,
+        ) => Err(ProgressiveSendError::UnsupportedContent),
         _ => Err(ProgressiveSendError::UnsupportedContent),
     }
 }
@@ -352,18 +361,34 @@ fn merge_receipt(
         *aggregate = next;
         return;
     }
-    aggregate.platform_message_ids.extend(next.platform_message_ids);
+    aggregate
+        .platform_message_ids
+        .extend(next.platform_message_ids);
     aggregate.parts.extend(next.parts);
     if aggregate.primary_platform_message_id.is_none() {
         aggregate.primary_platform_message_id = next.primary_platform_message_id;
     }
-    if aggregate.channel.is_none() { aggregate.channel = next.channel; }
-    if aggregate.conversation.is_none() { aggregate.conversation = next.conversation; }
-    if aggregate.idempotency_key.is_none() { aggregate.idempotency_key = next.idempotency_key; }
-    if aggregate.thread_id.is_none() { aggregate.thread_id = next.thread_id; }
-    if aggregate.reply_to_id.is_none() { aggregate.reply_to_id = next.reply_to_id; }
-    if aggregate.edit_token.is_none() { aggregate.edit_token = next.edit_token; }
-    if aggregate.delete_token.is_none() { aggregate.delete_token = next.delete_token; }
+    if aggregate.channel.is_none() {
+        aggregate.channel = next.channel;
+    }
+    if aggregate.conversation.is_none() {
+        aggregate.conversation = next.conversation;
+    }
+    if aggregate.idempotency_key.is_none() {
+        aggregate.idempotency_key = next.idempotency_key;
+    }
+    if aggregate.thread_id.is_none() {
+        aggregate.thread_id = next.thread_id;
+    }
+    if aggregate.reply_to_id.is_none() {
+        aggregate.reply_to_id = next.reply_to_id;
+    }
+    if aggregate.edit_token.is_none() {
+        aggregate.edit_token = next.edit_token;
+    }
+    if aggregate.delete_token.is_none() {
+        aggregate.delete_token = next.delete_token;
+    }
     aggregate.sent_at = aggregate.sent_at.max(next.sent_at);
     if let Some(mut raw) = next.raw {
         aggregate.raw.get_or_insert_with(Vec::new).append(&mut raw);
@@ -864,7 +889,10 @@ async fn run(
     terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
     mut inbox: mpsc::Receiver<Command>,
 ) {
-    let text_limit = capabilities.text.text_limit.map(|limit| (limit, capabilities.text.length_unit));
+    let text_limit = capabilities
+        .text
+        .text_limit
+        .map(|limit| (limit, capabilities.text.length_unit));
     let mut reply = if let Some(context) = context {
         ProgressiveReply::new_scoped(
             Arc::new(Sender {

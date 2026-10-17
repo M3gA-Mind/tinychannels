@@ -914,7 +914,10 @@ async fn no_edit_channel_sends_final_text_in_configured_segments() {
         .unwrap();
     let sends = callback.sends.lock().await;
     assert_eq!(
-        sends.iter().map(|send| send["text"].as_str().unwrap()).collect::<Vec<_>>(),
+        sends
+            .iter()
+            .map(|send| send["text"].as_str().unwrap())
+            .collect::<Vec<_>>(),
         ["abcd", "efgh", "ij"]
     );
     assert!(matches!(result, ProgressiveResult::DeliveryOutcome { .. }));
@@ -929,7 +932,11 @@ fn text_segments_obey_unicode_units_without_losing_scalars() {
     assert!(utf8.iter().all(|segment| segment.len() <= 4));
     let utf16 = split_text_by_limit(source, 2, tinychannels_bus::LengthUnit::Utf16Units).unwrap();
     assert_eq!(utf16.concat(), source);
-    assert!(utf16.iter().all(|segment| segment.encode_utf16().count() <= 2));
+    assert!(
+        utf16
+            .iter()
+            .all(|segment| segment.encode_utf16().count() <= 2)
+    );
     assert!(split_text_by_limit("😀", 1, tinychannels_bus::LengthUnit::Utf8Bytes).is_err());
 }
 
@@ -980,7 +987,9 @@ async fn terminal_text_edits_existing_draft_without_duplicate_send() {
         .await
         .unwrap();
     tokio::time::advance(Duration::from_secs(1)).await;
-    for _ in 0..5 { tokio::task::yield_now().await; }
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
     let result = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle,
@@ -992,10 +1001,16 @@ async fn terminal_text_edits_existing_draft_without_duplicate_send() {
         })
         .await
         .unwrap();
-    assert!(matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
-        if outcome.receipt.platform_message_ids == ["fixture-message"]));
+    assert!(
+        matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
+        if outcome.receipt.platform_message_ids == ["fixture-message"])
+    );
     let sends = callback.sends.lock().await;
-    assert_eq!(sends.len(), 1, "the terminal result must edit the visible draft");
+    assert_eq!(
+        sends.len(),
+        1,
+        "the terminal result must edit the visible draft"
+    );
     assert!(matches!(callback.requests.lock().await.last().unwrap(),
         ProgressiveTransportRequest::Edit { text, message_id, .. }
             if text == "complete" && message_id == "fixture-message"
@@ -1151,7 +1166,9 @@ async fn configured_progressive_channel_posts_and_edits_one_draft() {
         .await
         .unwrap();
     tokio::time::advance(Duration::from_secs(1)).await;
-    for _ in 0..5 { tokio::task::yield_now().await; }
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
     replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle_b.clone(),
@@ -1163,11 +1180,21 @@ async fn configured_progressive_channel_posts_and_edits_one_draft() {
         .await
         .unwrap();
     tokio::time::advance(Duration::from_secs(1)).await;
-    for _ in 0..5 { tokio::task::yield_now().await; }
-    assert!(callback.requests.lock().await.iter().any(|request| matches!(request,
-        ProgressiveTransportRequest::Edit { turn_id: Some(turn_id), text, .. }
-            if turn_id == "editable-turn-b" && text == "account b!"
-    )), "account A's unsupported edit must not disable account B");
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .any(|request| matches!(request,
+                ProgressiveTransportRequest::Edit { turn_id: Some(turn_id), text, .. }
+                    if turn_id == "editable-turn-b" && text == "account b!"
+            )),
+        "account A's unsupported edit must not disable account B"
+    );
     replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle_b,
