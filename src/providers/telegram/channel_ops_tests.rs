@@ -2603,6 +2603,20 @@ async fn send_reaction_marker_without_target_is_ignored() {
 }
 
 #[tokio::test]
+async fn legacy_reaction_marker_is_plain_text_not_a_telegram_operation() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &["*"]);
+
+    ch.send(&SendMessage::new("[REACTION:🔥] hello", "100"))
+        .await
+        .unwrap();
+
+    assert!(json_bodies(&server, "setMessageReaction").await.is_empty());
+    assert_eq!(sent_texts(&server).await, ["[REACTION:🔥] hello"]);
+}
+
+#[tokio::test]
 async fn send_with_attachment_markers_sends_text_then_attachments() {
     let server = mock_api().await;
     mount_post(&server, "sendMessage", ok()).await;
