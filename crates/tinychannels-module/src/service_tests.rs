@@ -2973,7 +2973,7 @@ fn request_media_fixture() -> tinychannels_bus::MediaUploadBegin {
             },
             turn_id: "turn".into(),
         },
-        kind: tinychannels_bus::MediaKind::File,
+        kind: tinychannels_bus::MediaKind::Unknown,
         content_type: "application/octet-stream".into(),
         file_name: None,
         duration_ms: None,
