@@ -915,11 +915,13 @@ async fn run(
                     if let Some((text, event_parts, has_typed_parts)) = final_message {
                         let (mut prior_outcomes, mut prior_unsupported) =
                             delivery_facts(&result);
+                        let mut draft_finalized = false;
                         if forward {
                             if !has_typed_parts {
                                 match reply.finalize_existing_text(&text).await {
                                     Ok(Some(outcome)) => {
                                         prior_outcomes.push(outcome);
+                                        draft_finalized = true;
                                     }
                                     Err(error) => {
                                         reply.abort().await;
@@ -928,7 +930,7 @@ async fn run(
                                     Ok(None) => {}
                                 }
                             }
-                            if result.is_ok() {
+                            if result.is_ok() && !draft_finalized {
                             let parts = if has_typed_parts {
                                 event_parts
                             } else {
@@ -951,6 +953,9 @@ async fn run(
                                     Err(Error::failed(error.to_string()))
                                 }
                             };
+                            }
+                            if result.is_ok() && draft_finalized {
+                                result = Ok(delivery_result(prior_outcomes, prior_unsupported));
                             }
                         } else {
                             reply.finalize(&text).await;
