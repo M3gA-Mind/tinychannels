@@ -112,6 +112,14 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             } else {
                 vec![]
             };
+            let wire_id = |field: &str| {
+                body.get(field).map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string())
+                })
+            };
             self.observations
                 .lock()
                 .unwrap()
@@ -120,12 +128,8 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                     operation: "send".into(),
                     channel: self.scope.channel.clone(),
                     conversation,
-                    reply_to_id: body
-                        .get("reply_to_message_id")
-                        .map(|value| value.as_str().unwrap_or_default().to_owned()),
-                    thread_id: body
-                        .get("message_thread_id")
-                        .map(|value| value.as_str().unwrap_or_default().to_owned()),
+                    reply_to_id: wire_id("reply_to_message_id"),
+                    thread_id: wire_id("message_thread_id"),
                     payload_kinds,
                     platform_message_ids: vec!["321".into()],
                     request: body,
