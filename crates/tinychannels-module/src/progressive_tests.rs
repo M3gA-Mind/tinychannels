@@ -199,7 +199,7 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
 async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     let (replies, _) = fixture(false).await;
     let mut reply = ProgressiveReply::new(
-        Arc::new(Sender(replies.host.clone())),
+        Arc::new(Sender { host: replies.host.clone(), context: None }),
         "discord:fixture",
         tinychannels_bus::ChannelCapabilities::unknown(),
     );
@@ -503,7 +503,7 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
 async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
     let (replies, _) = fixture(false).await;
     let mut reply = ProgressiveReply::new(
-        Arc::new(Sender(replies.host.clone())),
+        Arc::new(Sender { host: replies.host.clone(), context: None }),
         "discord:fixture",
         tinychannels_bus::ChannelCapabilities::unknown(),
     );
@@ -542,7 +542,7 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
 #[tokio::test]
 async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
     let (replies, callback) = fixture(false).await;
-    let sender = Sender(replies.host.clone());
+    let sender = Sender { host: replies.host.clone(), context: None };
     sender
         .edit("discord:room", "message-id", "updated")
         .await
@@ -550,11 +550,11 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
     sender.delete("discord:room", "message-id").await.unwrap();
     let requests = callback.requests.lock().await;
     assert!(
-        matches!(&requests[0], ProgressiveTransportRequest::Edit { channel, message_id, text }
+        matches!(&requests[0], ProgressiveTransportRequest::Edit { channel, message_id, text, .. }
         if channel == "discord:room" && message_id == "message-id" && text == "updated")
     );
     assert!(
-        matches!(&requests[1], ProgressiveTransportRequest::Delete { channel, message_id }
+        matches!(&requests[1], ProgressiveTransportRequest::Delete { channel, message_id, .. }
         if channel == "discord:room" && message_id == "message-id")
     );
 }
@@ -562,7 +562,7 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
 #[tokio::test]
 async fn transport_failures_preserve_recovery_classification() {
     let (replies, callback) = fixture(false).await;
-    let sender = Sender(replies.host.clone());
+    let sender = Sender { host: replies.host.clone(), context: None };
     for result in [
         ProgressiveTransportResult::Unavailable,
         ProgressiveTransportResult::EditUnsupported,
