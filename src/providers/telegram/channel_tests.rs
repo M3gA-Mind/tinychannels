@@ -1,7 +1,4 @@
-use super::super::attachments::{
-    TelegramAttachmentKind, infer_attachment_kind_from_target, infer_attachment_mime,
-    parse_attachment_markers, parse_path_only_attachment,
-};
+use super::super::attachments::infer_attachment_mime;
 use super::super::text::{
     TELEGRAM_MAX_MESSAGE_LENGTH, split_message_for_telegram, strip_tool_call_tags,
 };
@@ -394,203 +391,36 @@ fn telegram_allowlist_is_empty_tracks_runtime_state() {
 }
 
 #[test]
-fn parse_attachment_markers_extracts_multiple_types() {
-    let message = "Here are files [IMAGE:/tmp/a.png] and [DOCUMENT:https://example.com/a.pdf]";
-    let (cleaned, attachments) = parse_attachment_markers(message);
-
-    assert_eq!(cleaned, "Here are files  and");
-    assert_eq!(attachments.len(), 2);
-    assert_eq!(attachments[0].kind, TelegramAttachmentKind::Image);
-    assert_eq!(attachments[0].target, "/tmp/a.png");
-    assert_eq!(attachments[1].kind, TelegramAttachmentKind::Document);
-    assert_eq!(attachments[1].target, "https://example.com/a.pdf");
-}
-
-#[test]
-fn parse_attachment_markers_keeps_invalid_markers_in_text() {
-    let message = "Report [UNKNOWN:/tmp/a.bin]";
-    let (cleaned, attachments) = parse_attachment_markers(message);
-
-    assert_eq!(cleaned, "Report [UNKNOWN:/tmp/a.bin]");
-    assert!(attachments.is_empty());
-}
-
-#[test]
-fn parse_path_only_attachment_detects_existing_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let image_path = dir.path().join("snap.png");
-    std::fs::write(&image_path, b"fake-png").unwrap();
-
-    let parsed = parse_path_only_attachment(image_path.to_string_lossy().as_ref())
-        .expect("expected attachment");
-
-    assert_eq!(parsed.kind, TelegramAttachmentKind::Image);
-    assert_eq!(parsed.target, image_path.to_string_lossy());
-}
-
-#[test]
-fn parse_path_only_attachment_rejects_sentence_text() {
-    assert!(parse_path_only_attachment("Screenshot saved to /tmp/snap.png").is_none());
-}
-
-#[test]
-fn infer_attachment_kind_from_target_detects_document_extension() {
-    assert_eq!(
-        infer_attachment_kind_from_target("https://example.com/files/specs.pdf?download=1"),
-        Some(TelegramAttachmentKind::Document)
-    );
-}
-
-#[test]
-fn attachment_kind_and_mime_inference_cover_supported_download_extensions() {
-    for (path, kind, mime) in [
-        (
-            "photo.PNG?download=1",
-            TelegramAttachmentKind::Image,
-            Some("image/png"),
-        ),
-        (
-            "photo.jpeg#preview",
-            TelegramAttachmentKind::Image,
-            Some("image/jpeg"),
-        ),
-        (
-            "photo.gif",
-            TelegramAttachmentKind::Image,
-            Some("image/gif"),
-        ),
-        (
-            "photo.webp",
-            TelegramAttachmentKind::Image,
-            Some("image/webp"),
-        ),
-        (
-            "movie.mp4",
-            TelegramAttachmentKind::Video,
-            Some("video/mp4"),
-        ),
-        (
-            "movie.mov",
-            TelegramAttachmentKind::Video,
-            Some("video/quicktime"),
-        ),
-        ("movie.mkv", TelegramAttachmentKind::Video, None),
-        ("movie.avi", TelegramAttachmentKind::Video, None),
-        (
-            "movie.webm",
-            TelegramAttachmentKind::Video,
-            Some("video/webm"),
-        ),
-        (
-            "sound.mp3",
-            TelegramAttachmentKind::Audio,
-            Some("audio/mpeg"),
-        ),
-        (
-            "sound.m4a",
-            TelegramAttachmentKind::Audio,
-            Some("audio/mp4"),
-        ),
-        (
-            "sound.wav",
-            TelegramAttachmentKind::Audio,
-            Some("audio/wav"),
-        ),
-        ("sound.flac", TelegramAttachmentKind::Audio, None),
-        (
-            "voice.ogg",
-            TelegramAttachmentKind::Voice,
-            Some("audio/ogg"),
-        ),
-        (
-            "voice.oga",
-            TelegramAttachmentKind::Voice,
-            Some("audio/ogg"),
-        ),
-        (
-            "voice.opus",
-            TelegramAttachmentKind::Voice,
-            Some("audio/ogg"),
-        ),
-        (
-            "spec.pdf",
-            TelegramAttachmentKind::Document,
-            Some("application/pdf"),
-        ),
-        (
-            "notes.txt",
-            TelegramAttachmentKind::Document,
-            Some("text/plain"),
-        ),
-        (
-            "notes.md",
-            TelegramAttachmentKind::Document,
-            Some("text/plain"),
-        ),
-        (
-            "data.csv",
-            TelegramAttachmentKind::Document,
-            Some("text/csv"),
-        ),
-        (
-            "data.json",
-            TelegramAttachmentKind::Document,
-            Some("application/json"),
-        ),
-        (
-            "archive.zip",
-            TelegramAttachmentKind::Document,
-            Some("application/zip"),
-        ),
-        ("archive.tar", TelegramAttachmentKind::Document, None),
-        ("archive.gz", TelegramAttachmentKind::Document, None),
-        ("document.doc", TelegramAttachmentKind::Document, None),
+fn inbound_media_mime_inference_handles_known_extensions_and_urls() {
+    for (path, expected) in [
+        ("photo.PNG?download=1", Some("image/png")),
+        ("photo.jpeg#preview", Some("image/jpeg")),
+        ("photo.gif", Some("image/gif")),
+        ("photo.webp", Some("image/webp")),
+        ("movie.mp4", Some("video/mp4")),
+        ("movie.mov", Some("video/quicktime")),
+        ("movie.webm", Some("video/webm")),
+        ("sound.mp3", Some("audio/mpeg")),
+        ("sound.m4a", Some("audio/mp4")),
+        ("sound.wav", Some("audio/wav")),
+        ("voice.ogg", Some("audio/ogg")),
+        ("spec.pdf", Some("application/pdf")),
+        ("notes.txt", Some("text/plain")),
+        ("data.csv", Some("text/csv")),
+        ("data.json", Some("application/json")),
+        ("archive.zip", Some("application/zip")),
         (
             "document.docx",
-            TelegramAttachmentKind::Document,
             Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
         ),
-        ("sheet.xls", TelegramAttachmentKind::Document, None),
         (
             "sheet.xlsx",
-            TelegramAttachmentKind::Document,
             Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         ),
-        ("slides.ppt", TelegramAttachmentKind::Document, None),
-        ("slides.pptx", TelegramAttachmentKind::Document, None),
+        ("unknown.bin", None),
     ] {
-        assert_eq!(
-            infer_attachment_kind_from_target(path),
-            Some(kind),
-            "{path}"
-        );
-        assert_eq!(infer_attachment_mime(path), mime, "{path}");
+        assert_eq!(infer_attachment_mime(path), expected, "{path}");
     }
-    assert_eq!(infer_attachment_kind_from_target("unknown.bin"), None);
-    assert_eq!(infer_attachment_mime("unknown.bin"), None);
-}
-
-#[test]
-fn attachment_marker_aliases_and_path_urls_are_normalized() {
-    let (cleaned, attachments) = parse_attachment_markers(
-        "[ photo : https://example.com/a.JPG?download=1 ][FILE:/tmp/a.pdf][audio:/tmp/a.mp3][VOICE:/tmp/v.ogg]",
-    );
-    assert!(cleaned.is_empty());
-    assert_eq!(
-        attachments.iter().map(|part| part.kind).collect::<Vec<_>>(),
-        [
-            TelegramAttachmentKind::Image,
-            TelegramAttachmentKind::Document,
-            TelegramAttachmentKind::Audio,
-            TelegramAttachmentKind::Voice,
-        ]
-    );
-    let url = parse_path_only_attachment(" `https://example.com/a.JPEG?download=1` ")
-        .expect("URL with query and wrapper quotes is an attachment");
-    assert_eq!(url.kind, TelegramAttachmentKind::Image);
-    assert_eq!(url.target, "https://example.com/a.JPEG?download=1");
-    assert!(parse_path_only_attachment("https://example.com/file.unknown").is_none());
-    assert!(parse_path_only_attachment("/tmp/file.png\nmore text").is_none());
 }
 
 #[test]

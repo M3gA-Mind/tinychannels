@@ -2684,7 +2684,11 @@ async fn native_approval_and_clarification_events_deliver_prompts() {
             .iter()
             .any(|text| text.contains("May I run the command?"))
     );
-    assert!(delivered.iter().any(|text| text.contains("Allow once, Deny")));
+    assert!(
+        delivered
+            .iter()
+            .any(|text| text.contains("Allow once, Deny"))
+    );
     assert!(
         delivered
             .iter()
@@ -2761,19 +2765,22 @@ async fn provider_with_native_presentation_sends_typed_approval_choices() {
         .unwrap();
 
     let requests = callback.requests.lock().await;
-    assert!(requests.iter().any(|request| matches!(request,
-        ProgressiveTransportRequest::SendTyped { parts, .. }
-            if parts.iter().any(|part| matches!(part,
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Presentation { blocks }
-                } if blocks == &serde_json::json!({
-                    "kind": "approval",
-                    "id": "approval-7",
-                    "prompt": "May I run the command?",
-                    "choices": ["Allow once", "Deny"]
-                })
-            ))
-    )), "native approval is transported as typed choices; the provider applies no decision");
+    assert!(
+        requests.iter().any(|request| matches!(request,
+            ProgressiveTransportRequest::SendTyped { parts, .. }
+                if parts.iter().any(|part| matches!(part,
+                    tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Presentation { blocks }
+                    } if blocks == &serde_json::json!({
+                        "kind": "approval",
+                        "id": "approval-7",
+                        "prompt": "May I run the command?",
+                        "choices": ["Allow once", "Deny"]
+                    })
+                ))
+        )),
+        "native approval is transported as typed choices; the provider applies no decision"
+    );
     drop(requests);
     replies.shutdown().await.unwrap();
 }

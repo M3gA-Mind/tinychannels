@@ -406,14 +406,18 @@ struct RunningTelegramConformance {
     running: Arc<Running>,
     server: wiremock::MockServer,
     scope: tinychannels_conformance::ExpectedScope,
-    media: std::collections::HashMap<tinychannels_conformance::ConformanceFeature, tinychannels_bus::MediaReference>,
+    media: std::collections::HashMap<
+        tinychannels_conformance::ConformanceFeature,
+        tinychannels_bus::MediaReference,
+    >,
     callbacks: IngressVoiceCallback,
     provider_host: Arc<dyn tinychannels::host::ChannelHost>,
     observed: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
     request_cursor: std::sync::Mutex<usize>,
     response_cursor: std::sync::Mutex<usize>,
     response_ids: Arc<std::sync::Mutex<Vec<(String, String)>>>,
-    message_contexts: Arc<std::sync::Mutex<std::collections::HashMap<String, (ConversationRef, Option<String>)>>>,
+    message_contexts:
+        Arc<std::sync::Mutex<std::collections::HashMap<String, (ConversationRef, Option<String>)>>>,
 }
 
 #[async_trait::async_trait]
@@ -461,94 +465,236 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
         Option<tinychannels_bus::channel::ChannelSendOutcome>,
         tinychannels_bus::channel::ChannelSendError,
     > {
-        use tinychannels_conformance::ConformanceFeature as Feature;
         use tinychannels_bus::{ContentPart as Part, OutboundContentPart as OutPart};
-        let media = || self.media.get(&feature).cloned().unwrap_or_else(|| {
-            let (kind, content_type, file_name) = match feature {
-                Feature::Image => (tinychannels_bus::MediaKind::Image, "image/png", "fixture.png"),
-                Feature::Video => (tinychannels_bus::MediaKind::Video, "video/mp4", "fixture.mp4"),
-                Feature::Audio => (tinychannels_bus::MediaKind::Audio, "audio/mpeg", "fixture.mp3"),
-                Feature::VoiceOut => (tinychannels_bus::MediaKind::Audio, "audio/ogg", "voice.ogg"),
-                Feature::Sticker => (tinychannels_bus::MediaKind::Image, "image/webp", "sticker-512.webp"),
-                _ => (tinychannels_bus::MediaKind::Document, "text/plain", "fixture.txt"),
-            };
-            tinychannels_bus::MediaReference {
-                url: Some(format!("https://fixtures.invalid/{file_name}")),
-                content_type: Some(content_type.into()),
-                file_name: Some(file_name.into()),
-                kind,
-                ..Default::default()
-            }
-        });
+        use tinychannels_conformance::ConformanceFeature as Feature;
+        let media = || {
+            self.media.get(&feature).cloned().unwrap_or_else(|| {
+                let (kind, content_type, file_name) = match feature {
+                    Feature::Image => (
+                        tinychannels_bus::MediaKind::Image,
+                        "image/png",
+                        "fixture.png",
+                    ),
+                    Feature::Video => (
+                        tinychannels_bus::MediaKind::Video,
+                        "video/mp4",
+                        "fixture.mp4",
+                    ),
+                    Feature::Audio => (
+                        tinychannels_bus::MediaKind::Audio,
+                        "audio/mpeg",
+                        "fixture.mp3",
+                    ),
+                    Feature::VoiceOut => {
+                        (tinychannels_bus::MediaKind::Audio, "audio/ogg", "voice.ogg")
+                    }
+                    Feature::Sticker => (
+                        tinychannels_bus::MediaKind::Image,
+                        "image/webp",
+                        "sticker-512.webp",
+                    ),
+                    _ => (
+                        tinychannels_bus::MediaKind::Document,
+                        "text/plain",
+                        "fixture.txt",
+                    ),
+                };
+                tinychannels_bus::MediaReference {
+                    url: Some(format!("https://fixtures.invalid/{file_name}")),
+                    content_type: Some(content_type.into()),
+                    file_name: Some(file_name.into()),
+                    kind,
+                    ..Default::default()
+                }
+            })
+        };
         let content = |part| tinychannels_bus::OutboundPayload::Parts {
             parts: vec![OutPart::Content { part }],
         };
         let payload = match feature {
             Feature::Text | Feature::ThreadAddressing | Feature::ReplyAddressing => {
-                tinychannels_bus::OutboundPayload::Text { text: "module-kit".into() }
+                tinychannels_bus::OutboundPayload::Text {
+                    text: "module-kit".into(),
+                }
             }
-            Feature::Image => content(Part::Image { media: media(), caption: Some("image case".into()), alt_text: None }),
-            Feature::Video => content(Part::Video { media: media(), caption: Some("video case".into()), duration_ms: Some(1000), thumbnail: None }),
-            Feature::Audio => content(Part::Audio { media: media(), codec: Some("mp3".into()), duration_ms: Some(1000), title: Some("audio case".into()), transcript: None }),
-            Feature::File => content(Part::File { media: media(), file_name: Some("fixture.pdf".into()), caption: Some("file case".into()) }),
-            Feature::Sticker => content(Part::Sticker { media: media(), pack_id: None, sticker_id: None, emoji: Some("🙂".into()), alt_text: None }),
-            Feature::Location => content(Part::Location { latitude: 29.3759, longitude: 47.9774, label: None, address: None, accuracy_meters: Some(10.0), live_until_unix_ms: None }),
+            Feature::Image => content(Part::Image {
+                media: media(),
+                caption: Some("image case".into()),
+                alt_text: None,
+            }),
+            Feature::Video => content(Part::Video {
+                media: media(),
+                caption: Some("video case".into()),
+                duration_ms: Some(1000),
+                thumbnail: None,
+            }),
+            Feature::Audio => content(Part::Audio {
+                media: media(),
+                codec: Some("mp3".into()),
+                duration_ms: Some(1000),
+                title: Some("audio case".into()),
+                transcript: None,
+            }),
+            Feature::File => content(Part::File {
+                media: media(),
+                file_name: Some("fixture.pdf".into()),
+                caption: Some("file case".into()),
+            }),
+            Feature::Sticker => content(Part::Sticker {
+                media: media(),
+                pack_id: None,
+                sticker_id: None,
+                emoji: Some("🙂".into()),
+                alt_text: None,
+            }),
+            Feature::Location => content(Part::Location {
+                latitude: 29.3759,
+                longitude: 47.9774,
+                label: None,
+                address: None,
+                accuracy_meters: Some(10.0),
+                live_until_unix_ms: None,
+            }),
             Feature::Contact => content(Part::Contact {
                 display_name: "Telegram Fixture".into(),
-                phone_numbers: vec![tinychannels_bus::ContactMethod { value: "+15550123".into(), label: Some("CELL".into()) }],
-                emails: Vec::new(), organization: None,
+                phone_numbers: vec![tinychannels_bus::ContactMethod {
+                    value: "+15550123".into(),
+                    label: Some("CELL".into()),
+                }],
+                emails: Vec::new(),
+                organization: None,
             }),
-            Feature::Buttons => tinychannels_bus::OutboundPayload::Parts { parts: vec![
-                OutPart::Content { part: Part::Text { text: "Choose an action".into(), markdown_dialect: None } },
-                OutPart::Content { part: Part::Buttons { rows: vec![vec![tinychannels_bus::ButtonAction { id: "opaque-action".into(), label: "Continue".into(), style: None, disabled: false }]] } },
-            ] },
-            Feature::Poll => content(Part::Poll { question: "Choose one".into(), options: vec!["First".into(), "Second".into()], multiple_choice: false, closes_at_unix_ms: None, provider_poll_id: None }),
-            Feature::Presentation => content(Part::Presentation { blocks: serde_json::json!({"kind":"approval","id":"fixture-request","prompt":"Approve this action?","choices":["Approve","Deny"]}) }),
-            Feature::NativeData => tinychannels_bus::OutboundPayload::NativeChannelData { data: serde_json::json!({"kind":"provider_specific"}) },
-            Feature::VoiceOut => tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Media { media: media(), audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: Some(1000) } },
+            Feature::Buttons => tinychannels_bus::OutboundPayload::Parts {
+                parts: vec![
+                    OutPart::Content {
+                        part: Part::Text {
+                            text: "Choose an action".into(),
+                            markdown_dialect: None,
+                        },
+                    },
+                    OutPart::Content {
+                        part: Part::Buttons {
+                            rows: vec![vec![tinychannels_bus::ButtonAction {
+                                id: "opaque-action".into(),
+                                label: "Continue".into(),
+                                style: None,
+                                disabled: false,
+                            }]],
+                        },
+                    },
+                ],
+            },
+            Feature::Poll => content(Part::Poll {
+                question: "Choose one".into(),
+                options: vec!["First".into(), "Second".into()],
+                multiple_choice: false,
+                closes_at_unix_ms: None,
+                provider_poll_id: None,
+            }),
+            Feature::Presentation => content(Part::Presentation {
+                blocks: serde_json::json!({"kind":"approval","id":"fixture-request","prompt":"Approve this action?","choices":["Approve","Deny"]}),
+            }),
+            Feature::NativeData => tinychannels_bus::OutboundPayload::NativeChannelData {
+                data: serde_json::json!({"kind":"provider_specific"}),
+            },
+            Feature::VoiceOut => tinychannels_bus::OutboundPayload::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: media(),
+                    audio_base64: None,
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: Some(1000),
+                },
+            },
             Feature::VoiceSynthesis => {
                 let scope = tinychannels_bus::HostVoiceScope {
                     configured_instance: self.adapter.configured_instance.clone(),
-                    channel: self.scope.channel.clone(), conversation: self.scope.conversation.clone(),
+                    channel: self.scope.channel.clone(),
+                    conversation: self.scope.conversation.clone(),
                     turn_id: "turn-kit".into(),
                 };
-                let synthesizer = self.provider_host.synthesizer()
+                let synthesizer = self
+                    .provider_host
+                    .synthesizer()
                     .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
-                let synthesized = synthesizer.synthesize_scoped(scope.clone(), tinychannels::host::SpeechRequest {
-                    text: "speak this".into(), voice: None, format: Some("ogg_opus".into()),
-                    thread_id: scope.conversation.thread_id.clone().or_else(|| scope.conversation.topic_id.clone()),
-                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let audio = base64::engine::general_purpose::STANDARD.decode(&synthesized.audio_base64)
+                let synthesized = synthesizer
+                    .synthesize_scoped(
+                        scope.clone(),
+                        tinychannels::host::SpeechRequest {
+                            text: "speak this".into(),
+                            voice: None,
+                            format: Some("ogg_opus".into()),
+                            thread_id: scope
+                                .conversation
+                                .thread_id
+                                .clone()
+                                .or_else(|| scope.conversation.topic_id.clone()),
+                        },
+                    )
+                    .await
                     .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let repository = self.provider_host.media_repository()
+                let audio = base64::engine::general_purpose::STANDARD
+                    .decode(&synthesized.audio_base64)
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let repository = self
+                    .provider_host
+                    .media_repository()
                     .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
-                let stored = repository.store_media(tinychannels::host::MediaStoreRequest {
-                    metadata: tinychannels::host::MediaMetadata {
-                        scope: scope.clone(), kind: tinychannels_bus::MediaKind::Audio,
-                        content_type: synthesized.mime_type.clone(), file_name: Some("synthesized.ogg".into()),
-                        duration_ms: synthesized.duration_ms, codec: Some("ogg_opus".into()),
-                        voice_direction: Some(tinychannels_bus::HostVoiceMediaDirection::Outbound),
-                        dedupe_key: None, max_bytes: 8 * 1024 * 1024,
-                    }, bytes: audio,
-                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Media {
-                    media: stored, audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: synthesized.duration_ms,
-                } }
+                let stored = repository
+                    .store_media(tinychannels::host::MediaStoreRequest {
+                        metadata: tinychannels::host::MediaMetadata {
+                            scope: scope.clone(),
+                            kind: tinychannels_bus::MediaKind::Audio,
+                            content_type: synthesized.mime_type.clone(),
+                            file_name: Some("synthesized.ogg".into()),
+                            duration_ms: synthesized.duration_ms,
+                            codec: Some("ogg_opus".into()),
+                            voice_direction: Some(
+                                tinychannels_bus::HostVoiceMediaDirection::Outbound,
+                            ),
+                            dedupe_key: None,
+                            max_bytes: 8 * 1024 * 1024,
+                        },
+                        bytes: audio,
+                    })
+                    .await
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                tinychannels_bus::OutboundPayload::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media {
+                        media: stored,
+                        audio_base64: None,
+                        codec: Some("ogg_opus".into()),
+                        duration_ms: synthesized.duration_ms,
+                    },
+                }
             }
-            Feature::VoiceIn | Feature::InboundReactions => tinychannels_bus::OutboundPayload::Text { text: "ingress observation".into() },
-            Feature::Typing | Feature::Reactions | Feature::Edit | Feature::Delete | Feature::StreamingDraft => tinychannels_bus::OutboundPayload::Text { text: "operation fixture".into() },
-            Feature::ReadReceipts => return Err(tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
-                message: "Telegram Bot API has no read-receipt operation".into(),
-                unsupported: true,
-                ..Default::default()
-            }),
-            _ => return Err(tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
-                message: format!("{feature:?} fixture operation has not been invoked"),
-                unsupported: true,
-                ..Default::default()
-            }),
+            Feature::VoiceIn | Feature::InboundReactions => {
+                tinychannels_bus::OutboundPayload::Text {
+                    text: "ingress observation".into(),
+                }
+            }
+            Feature::Typing
+            | Feature::Reactions
+            | Feature::Edit
+            | Feature::Delete
+            | Feature::StreamingDraft => tinychannels_bus::OutboundPayload::Text {
+                text: "operation fixture".into(),
+            },
+            Feature::ReadReceipts => {
+                return Err(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
+                    message: "Telegram Bot API has no read-receipt operation".into(),
+                    unsupported: true,
+                    ..Default::default()
+                });
+            }
+            _ => {
+                return Err(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
+                    message: format!("{feature:?} fixture operation has not been invoked"),
+                    unsupported: true,
+                    ..Default::default()
+                });
+            }
         };
         let intent = tinychannels_bus::ChannelOutboundIntent {
             idempotency_key: "module-kit-send".into(),
@@ -562,110 +708,282 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             payload,
             ..Default::default()
         };
-        let result: std::result::Result<Option<tinychannels_bus::channel::ChannelSendOutcome>, tinychannels_bus::channel::ChannelSendError> = match feature {
+        let result: std::result::Result<
+            Option<tinychannels_bus::channel::ChannelSendOutcome>,
+            tinychannels_bus::channel::ChannelSendError,
+        > = match feature {
             Feature::VoiceIn => {
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
                     loop {
-                        if !self.callbacks.inbound.lock().await.is_empty() { break; }
+                        if !self.callbacks.inbound.lock().await.is_empty() {
+                            break;
+                        }
                         self.callbacks.ingress_changed.notified().await;
                     }
-                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let envelope = self.callbacks.inbound.lock().await.first().map(|(_, value)| value.clone())
+                })
+                .await
+                .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let envelope = self
+                    .callbacks
+                    .inbound
+                    .lock()
+                    .await
+                    .first()
+                    .map(|(_, value)| value.clone())
                     .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
-                let channel = serde_json::from_value(envelope.get("channel").cloned().unwrap_or_default())
-                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let conversation: ConversationRef = serde_json::from_value(envelope.get("conversation").cloned().unwrap_or_default())
-                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let parts = envelope.get("parts").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
-                let voice = parts.iter().find(|part| part.get("kind").and_then(serde_json::Value::as_str) == Some("voice_note"))
+                let channel =
+                    serde_json::from_value(envelope.get("channel").cloned().unwrap_or_default())
+                        .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let conversation: ConversationRef = serde_json::from_value(
+                    envelope.get("conversation").cloned().unwrap_or_default(),
+                )
+                .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let parts = envelope
+                    .get("parts")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let voice = parts
+                    .iter()
+                    .find(|part| {
+                        part.get("kind").and_then(serde_json::Value::as_str) == Some("voice_note")
+                    })
                     .and_then(|part| part.get("voiceNote"));
                 let mut payload_kinds = Vec::new();
-                if voice.and_then(|v| v.get("media")).is_some() { payload_kinds.push("audio".into()); }
-                if voice.and_then(|v| v.get("transcript")).and_then(|t| t.get("text")).and_then(serde_json::Value::as_str).is_some() { payload_kinds.push("transcript".into()); }
-                let thread_id = conversation.thread_id.clone().or_else(|| conversation.topic_id.clone());
-                self.observed.lock().unwrap().push(tinychannels_conformance::WireObservation {
-                    feature, operation: "voice_in".into(), channel, conversation,
-                    reply_to_id: None,
-                    thread_id,
-                    payload_kinds, platform_message_ids: Vec::new(), request: envelope,
-                });
+                if voice.and_then(|v| v.get("media")).is_some() {
+                    payload_kinds.push("audio".into());
+                }
+                if voice
+                    .and_then(|v| v.get("transcript"))
+                    .and_then(|t| t.get("text"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+                {
+                    payload_kinds.push("transcript".into());
+                }
+                let thread_id = conversation
+                    .thread_id
+                    .clone()
+                    .or_else(|| conversation.topic_id.clone());
+                self.observed
+                    .lock()
+                    .unwrap()
+                    .push(tinychannels_conformance::WireObservation {
+                        feature,
+                        operation: "voice_in".into(),
+                        channel,
+                        conversation,
+                        reply_to_id: None,
+                        thread_id,
+                        payload_kinds,
+                        platform_message_ids: Vec::new(),
+                        request: envelope,
+                    });
                 return Ok(None);
             }
             Feature::InboundReactions => {
                 tokio::time::timeout(std::time::Duration::from_secs(5), async {
                     loop {
-                        if self.callbacks.events.lock().await.iter().any(|event| matches!(event.event,
-                            tinychannels_bus::ChannelEventKind::ReactionAdded { .. } | tinychannels_bus::ChannelEventKind::ReactionRemoved { .. })) { break; }
+                        if self.callbacks.events.lock().await.iter().any(|event| {
+                            matches!(
+                                event.event,
+                                tinychannels_bus::ChannelEventKind::ReactionAdded { .. }
+                                    | tinychannels_bus::ChannelEventKind::ReactionRemoved { .. }
+                            )
+                        }) {
+                            break;
+                        }
                         self.callbacks.ingress_changed.notified().await;
                     }
-                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                })
+                .await
+                .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                 let events = self.callbacks.events.lock().await;
-                let event = events.iter().find(|event| matches!(event.event,
-                    tinychannels_bus::ChannelEventKind::ReactionAdded { .. } | tinychannels_bus::ChannelEventKind::ReactionRemoved { .. }))
+                let event = events
+                    .iter()
+                    .find(|event| {
+                        matches!(
+                            event.event,
+                            tinychannels_bus::ChannelEventKind::ReactionAdded { .. }
+                                | tinychannels_bus::ChannelEventKind::ReactionRemoved { .. }
+                        )
+                    })
                     .expect("reaction update observed");
-                self.observed.lock().unwrap().push(tinychannels_conformance::WireObservation {
-                    feature, operation: "reaction_receive".into(), channel: event.channel.clone(),
-                    conversation: event.conversation.clone().unwrap_or_default(), reply_to_id: None, thread_id: None,
-                    payload_kinds: Vec::new(), platform_message_ids: Vec::new(), request: serde_json::to_value(event).unwrap(),
-                });
+                self.observed
+                    .lock()
+                    .unwrap()
+                    .push(tinychannels_conformance::WireObservation {
+                        feature,
+                        operation: "reaction_receive".into(),
+                        channel: event.channel.clone(),
+                        conversation: event.conversation.clone().unwrap_or_default(),
+                        reply_to_id: None,
+                        thread_id: None,
+                        payload_kinds: Vec::new(),
+                        platform_message_ids: Vec::new(),
+                        request: serde_json::to_value(event).unwrap(),
+                    });
                 return Ok(None);
             }
             Feature::Typing => {
-                self.running.interact(tinychannels_bus::ChannelInteraction::StartTyping {
-                    recipient: format!("{}:{}", self.scope.conversation.id, self.scope.thread_id.as_deref().unwrap_or_default()),
-                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                self.running
+                    .interact(tinychannels_bus::ChannelInteraction::StartTyping {
+                        recipient: format!(
+                            "{}:{}",
+                            self.scope.conversation.id,
+                            self.scope.thread_id.as_deref().unwrap_or_default()
+                        ),
+                    })
+                    .await
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                 Ok(None)
             }
             Feature::Reactions => {
                 let sent = self.adapter.send(intent.clone()).await?;
-                let provider_message_id = sent.receipt.primary_platform_message_id.clone()
+                let provider_message_id = sent
+                    .receipt
+                    .primary_platform_message_id
+                    .clone()
                     .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
-                *self.request_cursor.lock().unwrap() = self.server.received_requests().await.unwrap_or_default().len();
+                *self.request_cursor.lock().unwrap() = self
+                    .server
+                    .received_requests()
+                    .await
+                    .unwrap_or_default()
+                    .len();
                 *self.response_cursor.lock().unwrap() = self.response_ids.lock().unwrap().len();
-                self.running.interact(tinychannels_bus::ChannelInteraction::SendReaction {
-                    channel: self.scope.channel.clone(),
-                    conversation: self.scope.conversation.clone(),
-                    provider_message_id,
-                    reaction: tinychannels_bus::channel::ChannelReaction { value: "👍".into(), custom_emoji_id: None },
-                    remove: false,
-                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                self.running
+                    .interact(tinychannels_bus::ChannelInteraction::SendReaction {
+                        channel: self.scope.channel.clone(),
+                        conversation: self.scope.conversation.clone(),
+                        provider_message_id,
+                        reaction: tinychannels_bus::channel::ChannelReaction {
+                            value: "👍".into(),
+                            custom_emoji_id: None,
+                        },
+                        remove: false,
+                    })
+                    .await
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                 Ok(None)
             }
             Feature::Edit | Feature::Delete | Feature::StreamingDraft => {
-                let sent = if feature == Feature::StreamingDraft { None } else { Some(self.adapter.send(intent.clone()).await?) };
+                let sent = if feature == Feature::StreamingDraft {
+                    None
+                } else {
+                    Some(self.adapter.send(intent.clone()).await?)
+                };
                 let receipt = sent.as_ref().map(|outcome| outcome.receipt.clone());
-                *self.request_cursor.lock().unwrap() = self.server.received_requests().await.unwrap_or_default().len();
+                *self.request_cursor.lock().unwrap() = self
+                    .server
+                    .received_requests()
+                    .await
+                    .unwrap_or_default()
+                    .len();
                 *self.response_cursor.lock().unwrap() = self.response_ids.lock().unwrap().len();
                 match feature {
                     Feature::Edit => {
                         let receipt = receipt.expect("edit fixture primed a provider message");
-                        let edit = tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "edited kit".into() }, ..intent.clone() };
-                        let result = self.running.interact(tinychannels_bus::ChannelInteraction::EditMessage { receipt, intent: edit }).await
+                        let edit = tinychannels_bus::ChannelOutboundIntent {
+                            payload: tinychannels_bus::OutboundPayload::Text {
+                                text: "edited kit".into(),
+                            },
+                            ..intent.clone()
+                        };
+                        let result = self
+                            .running
+                            .interact(tinychannels_bus::ChannelInteraction::EditMessage {
+                                receipt,
+                                intent: edit,
+                            })
+                            .await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                        let tinychannels_bus::ChannelInteractionResult::Sent(outcome) = result else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
+                        let tinychannels_bus::ChannelInteractionResult::Sent(outcome) = result
+                        else {
+                            return Err(tinychannels_bus::channel::ChannelSendError::default());
+                        };
                         Ok(Some(*outcome))
                     }
                     Feature::Delete => {
-                        self.running.interact(tinychannels_bus::ChannelInteraction::DeleteMessage { receipt: receipt.expect("delete fixture primed a provider message") }).await
+                        self.running
+                            .interact(tinychannels_bus::ChannelInteraction::DeleteMessage {
+                                receipt: receipt.expect("delete fixture primed a provider message"),
+                            })
+                            .await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                         Ok(None)
                     }
                     Feature::StreamingDraft => {
-                        let created = self.running.interact(tinychannels_bus::ChannelInteraction::UpsertDraft { previous: None, intent: intent.clone() }).await
+                        let created = self
+                            .running
+                            .interact(tinychannels_bus::ChannelInteraction::UpsertDraft {
+                                previous: None,
+                                intent: intent.clone(),
+                            })
+                            .await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                        let tinychannels_bus::ChannelInteractionResult::Sent(created) = created else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
-                        let updated_intent = tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "draft update".into() }, ..intent.clone() };
-                        let updated = self.running.interact(tinychannels_bus::ChannelInteraction::UpsertDraft { previous: Some(created.receipt), intent: updated_intent.clone() }).await
+                        let tinychannels_bus::ChannelInteractionResult::Sent(created) = created
+                        else {
+                            return Err(tinychannels_bus::channel::ChannelSendError::default());
+                        };
+                        let updated_intent = tinychannels_bus::ChannelOutboundIntent {
+                            payload: tinychannels_bus::OutboundPayload::Text {
+                                text: "draft update".into(),
+                            },
+                            ..intent.clone()
+                        };
+                        let updated = self
+                            .running
+                            .interact(tinychannels_bus::ChannelInteraction::UpsertDraft {
+                                previous: Some(created.receipt),
+                                intent: updated_intent.clone(),
+                            })
+                            .await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                        let tinychannels_bus::ChannelInteractionResult::Sent(updated) = updated else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
-                        let finalized = self.running.interact(tinychannels_bus::ChannelInteraction::EditMessage { receipt: updated.receipt.clone(), intent: tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "draft final".into() }, ..updated_intent } }).await
+                        let tinychannels_bus::ChannelInteractionResult::Sent(updated) = updated
+                        else {
+                            return Err(tinychannels_bus::channel::ChannelSendError::default());
+                        };
+                        let finalized = self
+                            .running
+                            .interact(tinychannels_bus::ChannelInteraction::EditMessage {
+                                receipt: updated.receipt.clone(),
+                                intent: tinychannels_bus::ChannelOutboundIntent {
+                                    payload: tinychannels_bus::OutboundPayload::Text {
+                                        text: "draft final".into(),
+                                    },
+                                    ..updated_intent
+                                },
+                            })
+                            .await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                        let canceled = self.running.interact(tinychannels_bus::ChannelInteraction::UpsertDraft { previous: None, intent: tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "draft cancel pending".into() }, ..intent.clone() } }).await
+                        let canceled = self
+                            .running
+                            .interact(tinychannels_bus::ChannelInteraction::UpsertDraft {
+                                previous: None,
+                                intent: tinychannels_bus::ChannelOutboundIntent {
+                                    payload: tinychannels_bus::OutboundPayload::Text {
+                                        text: "draft cancel pending".into(),
+                                    },
+                                    ..intent.clone()
+                                },
+                            })
+                            .await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                        let tinychannels_bus::ChannelInteractionResult::Sent(canceled) = canceled else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
-                        self.running.interact(tinychannels_bus::ChannelInteraction::DeleteMessage { receipt: canceled.receipt }).await
+                        let tinychannels_bus::ChannelInteractionResult::Sent(canceled) = canceled
+                        else {
+                            return Err(tinychannels_bus::channel::ChannelSendError::default());
+                        };
+                        self.running
+                            .interact(tinychannels_bus::ChannelInteraction::DeleteMessage {
+                                receipt: canceled.receipt,
+                            })
+                            .await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                        let tinychannels_bus::ChannelInteractionResult::Sent(outcome) = finalized else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
+                        let tinychannels_bus::ChannelInteractionResult::Sent(outcome) = finalized
+                        else {
+                            return Err(tinychannels_bus::channel::ChannelSendError::default());
+                        };
                         Ok(Some(*outcome))
                     }
                     _ => unreachable!(),
@@ -684,61 +1002,123 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             let body: serde_json::Value = serde_json::from_slice(&request.body)
                 .unwrap_or_else(|_| serde_json::json!({"raw_multipart": raw_body}));
             let field = |name: &str| -> Option<String> {
-                body.get(name).and_then(|v| v.as_str().map(str::to_owned)
-                    .or_else(|| v.as_i64().map(|n| n.to_string())))
+                body.get(name)
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(str::to_owned)
+                            .or_else(|| v.as_i64().map(|n| n.to_string()))
+                    })
                     .or_else(|| {
                         let marker = format!("name=\"{name}\"\r\n\r\n");
-                        raw_body.split_once(&marker)?.1.split("\r\n").next().map(str::to_owned)
+                        raw_body
+                            .split_once(&marker)?
+                            .1
+                            .split("\r\n")
+                            .next()
+                            .map(str::to_owned)
                     })
             };
             let chat = field("chat_id").unwrap_or_default();
             let message_id = field("message_id");
-            let mapped_context = message_id.as_ref().and_then(|id| self.message_contexts.lock().unwrap().get(id).cloned());
-            let mut conversation = mapped_context.as_ref().map(|(conversation, _)| conversation.clone()).unwrap_or_else(|| self.scope.conversation.clone());
-            if !chat.is_empty() { conversation.id = chat.clone(); }
-            let thread_id = mapped_context.as_ref().and_then(|(conversation, _)| conversation.thread_id.clone().or_else(|| conversation.topic_id.clone())).or_else(|| field("message_thread_id"));
+            let mapped_context = message_id
+                .as_ref()
+                .and_then(|id| self.message_contexts.lock().unwrap().get(id).cloned());
+            let mut conversation = mapped_context
+                .as_ref()
+                .map(|(conversation, _)| conversation.clone())
+                .unwrap_or_else(|| self.scope.conversation.clone());
+            if !chat.is_empty() {
+                conversation.id = chat.clone();
+            }
+            let thread_id = mapped_context
+                .as_ref()
+                .and_then(|(conversation, _)| {
+                    conversation
+                        .thread_id
+                        .clone()
+                        .or_else(|| conversation.topic_id.clone())
+                })
+                .or_else(|| field("message_thread_id"));
             conversation.thread_id = thread_id.clone();
             conversation.topic_id = thread_id.clone();
-            let reply_to_id = mapped_context.as_ref().and_then(|(_, reply)| reply.clone()).or_else(|| field("reply_to_message_id"));
+            let reply_to_id = mapped_context
+                .as_ref()
+                .and_then(|(_, reply)| reply.clone())
+                .or_else(|| field("reply_to_message_id"));
             let (mut operation, endpoint_kind) = match endpoint {
-                "sendMessage" => ("send", "text"), "sendPhoto" => ("send", "image"),
-                "sendVideo" => ("send", "video"), "sendAudio" => ("send", "audio"),
-                "sendVoice" => ("send", "voice"), "sendDocument" => ("send", "file"),
-                "sendSticker" => ("send", "sticker"), "sendLocation" | "sendVenue" => ("send", "location"),
-                "sendContact" => ("send", "contact"), "sendPoll" => ("send", "poll"),
-                "editMessageText" => ("edit", "text"), "deleteMessage" => ("delete", ""),
-                "setMessageReaction" => ("reaction_send", ""), "sendChatAction" => ("typing", ""),
+                "sendMessage" => ("send", "text"),
+                "sendPhoto" => ("send", "image"),
+                "sendVideo" => ("send", "video"),
+                "sendAudio" => ("send", "audio"),
+                "sendVoice" => ("send", "voice"),
+                "sendDocument" => ("send", "file"),
+                "sendSticker" => ("send", "sticker"),
+                "sendLocation" | "sendVenue" => ("send", "location"),
+                "sendContact" => ("send", "contact"),
+                "sendPoll" => ("send", "poll"),
+                "editMessageText" => ("edit", "text"),
+                "deleteMessage" => ("delete", ""),
+                "setMessageReaction" => ("reaction_send", ""),
+                "sendChatAction" => ("typing", ""),
                 _ => continue,
             };
             if feature == Feature::StreamingDraft {
                 operation = match endpoint {
-                    "sendMessage" if field("text").as_deref() == Some("operation fixture") => "draft_create",
+                    "sendMessage" if field("text").as_deref() == Some("operation fixture") => {
+                        "draft_create"
+                    }
                     "sendMessage" => "draft_cancel_create",
-                    "editMessageText" if field("text").as_deref() == Some("draft update") => "draft_update",
+                    "editMessageText" if field("text").as_deref() == Some("draft update") => {
+                        "draft_update"
+                    }
                     "editMessageText" => "draft_finalize",
                     "deleteMessage" => "draft_cancel_cleanup",
                     _ => operation,
                 };
             }
-            let keyboard = body.get("reply_markup").and_then(|markup| markup.get("inline_keyboard"))
+            let keyboard = body
+                .get("reply_markup")
+                .and_then(|markup| markup.get("inline_keyboard"))
                 .and_then(serde_json::Value::as_array);
-            let has_action_button = keyboard.is_some_and(|rows| rows.iter().any(|row| {
-                row.as_array().is_some_and(|buttons| buttons.iter().any(|button| {
-                    button.get("callback_data").and_then(serde_json::Value::as_str).is_some_and(|data| !data.is_empty())
-                }))
-            }));
+            let has_action_button = keyboard.is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    row.as_array().is_some_and(|buttons| {
+                        buttons.iter().any(|button| {
+                            button
+                                .get("callback_data")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some_and(|data| !data.is_empty())
+                        })
+                    })
+                })
+            });
             let payload_kind = if feature == Feature::Buttons && has_action_button {
                 "buttons"
             } else if feature == Feature::Presentation
                 && has_action_button
-                && body.get("text").and_then(serde_json::Value::as_str).is_some_and(|text| !text.is_empty())
+                && body
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|text| !text.is_empty())
             {
                 "presentation"
             } else {
                 endpoint_kind
             };
-            let multipart_fields = ["photo", "video", "audio", "voice", "document", "sticker", "latitude", "phone_number", "question"]
-                .into_iter().filter(|name| raw_body.contains(&format!("name=\"{name}\""))).collect::<Vec<_>>();
+            let multipart_fields = [
+                "photo",
+                "video",
+                "audio",
+                "voice",
+                "document",
+                "sticker",
+                "latitude",
+                "phone_number",
+                "question",
+            ]
+            .into_iter()
+            .filter(|name| raw_body.contains(&format!("name=\"{name}\"")))
+            .collect::<Vec<_>>();
             let request_summary = serde_json::json!({
                 "endpoint": endpoint,
                 "chat_id": chat,
@@ -752,7 +1132,11 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             });
             let ids = self.response_ids.lock().unwrap();
             let mut response_cursor = self.response_cursor.lock().unwrap();
-            let matched_response = ids.iter().enumerate().skip(*response_cursor).find(|(_, (path, _))| path == endpoint);
+            let matched_response = ids
+                .iter()
+                .enumerate()
+                .skip(*response_cursor)
+                .find(|(_, (path, _))| path == endpoint);
             let platform_message_ids = if let Some((index, (_, id))) = matched_response {
                 *response_cursor = index + 1;
                 vec![id.clone()]
@@ -771,7 +1155,11 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     conversation,
                     reply_to_id,
                     thread_id,
-                    payload_kinds: if payload_kind.is_empty() { vec![] } else { vec![payload_kind.into()] },
+                    payload_kinds: if payload_kind.is_empty() {
+                        vec![]
+                    } else {
+                        vec![payload_kind.into()]
+                    },
                     platform_message_ids,
                     request: request_summary,
                 });
@@ -800,7 +1188,9 @@ impl IngressVoiceCallback {
     ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
         self.read_requests.lock().await.push(request);
         Ok(tinychannels_bus::HostReadVoiceMediaResult {
-            audio_base64: base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+                "../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg"
+            )),
             mime_type: "audio/ogg".into(),
             file_name: Some("voice.oga".into()),
         })
@@ -828,7 +1218,9 @@ impl IngressVoiceCallback {
         _request: tinychannels_bus::HostSpeechSynthesisRequest,
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
         Ok(tinychannels_bus::HostSpeechSynthesisResult {
-            audio_base64: base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+                "../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg"
+            )),
             mime_type: "audio/ogg".into(),
             duration_ms: Some(1000),
         })
@@ -838,13 +1230,15 @@ impl IngressVoiceCallback {
         &self,
         request: tinychannels_bus::HostStoreVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
-        let media = request.media_reference.unwrap_or(tinychannels_bus::MediaReference {
-            opaque_id: Some("fixture-voice-media".into()),
-            kind: tinychannels_bus::MediaKind::Audio,
-            content_type: Some(request.mime_type),
-            file_name: request.file_name,
-            ..Default::default()
-        });
+        let media = request
+            .media_reference
+            .unwrap_or(tinychannels_bus::MediaReference {
+                opaque_id: Some("fixture-voice-media".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                content_type: Some(request.mime_type),
+                file_name: request.file_name,
+                ..Default::default()
+            });
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
             media,
             accessible_url: None,
@@ -2002,7 +2396,9 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         .await;
     Mock::given(method("GET"))
         .and(path("/file/bottest-token/voice.oga"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg").to_vec()))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(
+            include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+        ))
         .mount(&server)
         .await;
     let instance = "telegram:account-a".to_owned();
@@ -2040,31 +2436,100 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     );
     let running = Running::start_telegram(channel, hooks, host, None, false);
     let handle = running.adapter_handle();
-    let repository = provider_host.media_repository().expect("configured Telegram host media repository");
+    let repository = provider_host
+        .media_repository()
+        .expect("configured Telegram host media repository");
     let media_scope = tinychannels_bus::HostVoiceScope {
         configured_instance: "telegram:account-a".into(),
-        channel: tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: Some("telegram:account-a".into()) },
-        conversation: ConversationRef { kind: ConversationKind::Group, id: "-100".into(), thread_id: Some("77".into()), topic_id: Some("77".into()), ..Default::default() },
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:account-a".into()),
+        },
+        conversation: ConversationRef {
+            kind: ConversationKind::Group,
+            id: "-100".into(),
+            thread_id: Some("77".into()),
+            topic_id: Some("77".into()),
+            ..Default::default()
+        },
         turn_id: "turn-kit".into(),
     };
     let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=").unwrap();
-    let media_inputs: [(ConformanceFeature, tinychannels_bus::MediaKind, &str, &str, &[u8]); 6] = [
-        (ConformanceFeature::Image, tinychannels_bus::MediaKind::Image, "image/png", "fixture.png", &png),
-        (ConformanceFeature::Video, tinychannels_bus::MediaKind::Video, "video/mp4", "fixture.mp4", include_bytes!("../../../src/providers/telegram/fixtures/cc0-flower.mp4")),
-        (ConformanceFeature::Audio, tinychannels_bus::MediaKind::Audio, "audio/mpeg", "fixture.mp3", include_bytes!("../../../src/providers/telegram/fixtures/cc0-mp3-test.mp3")),
-        (ConformanceFeature::VoiceOut, tinychannels_bus::MediaKind::Audio, "audio/ogg", "voice.ogg", include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
-        (ConformanceFeature::File, tinychannels_bus::MediaKind::Document, "text/plain", "fixture.txt", b"Telegram module conformance document\n"),
-        (ConformanceFeature::Sticker, tinychannels_bus::MediaKind::Image, "image/webp", "sticker-512.webp", include_bytes!("../../../src/providers/telegram/fixtures/sticker-512.webp")),
+    let media_inputs: [(
+        ConformanceFeature,
+        tinychannels_bus::MediaKind,
+        &str,
+        &str,
+        &[u8],
+    ); 6] = [
+        (
+            ConformanceFeature::Image,
+            tinychannels_bus::MediaKind::Image,
+            "image/png",
+            "fixture.png",
+            &png,
+        ),
+        (
+            ConformanceFeature::Video,
+            tinychannels_bus::MediaKind::Video,
+            "video/mp4",
+            "fixture.mp4",
+            include_bytes!("../../../src/providers/telegram/fixtures/cc0-flower.mp4"),
+        ),
+        (
+            ConformanceFeature::Audio,
+            tinychannels_bus::MediaKind::Audio,
+            "audio/mpeg",
+            "fixture.mp3",
+            include_bytes!("../../../src/providers/telegram/fixtures/cc0-mp3-test.mp3"),
+        ),
+        (
+            ConformanceFeature::VoiceOut,
+            tinychannels_bus::MediaKind::Audio,
+            "audio/ogg",
+            "voice.ogg",
+            include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg"),
+        ),
+        (
+            ConformanceFeature::File,
+            tinychannels_bus::MediaKind::Document,
+            "text/plain",
+            "fixture.txt",
+            b"Telegram module conformance document\n",
+        ),
+        (
+            ConformanceFeature::Sticker,
+            tinychannels_bus::MediaKind::Image,
+            "image/webp",
+            "sticker-512.webp",
+            include_bytes!("../../../src/providers/telegram/fixtures/sticker-512.webp"),
+        ),
     ];
     let mut media = std::collections::HashMap::new();
     for (feature, kind, content_type, file_name, bytes) in media_inputs {
-        let reference = repository.store_media(tinychannels::host::MediaStoreRequest {
-            metadata: tinychannels::host::MediaMetadata {
-                scope: media_scope.clone(), kind, content_type: content_type.into(),
-                file_name: Some(file_name.into()), duration_ms: Some(200), codec: Some(if content_type == "audio/ogg" { "ogg_opus".into() } else { String::new() }),
-                voice_direction: None, dedupe_key: None, max_bytes: 20 * 1024 * 1024,
-            }, bytes: bytes.to_vec(),
-        }).await.unwrap_or_else(|error| panic!("store scoped {feature:?} conformance fixture: {error}"));
+        let reference = repository
+            .store_media(tinychannels::host::MediaStoreRequest {
+                metadata: tinychannels::host::MediaMetadata {
+                    scope: media_scope.clone(),
+                    kind,
+                    content_type: content_type.into(),
+                    file_name: Some(file_name.into()),
+                    duration_ms: Some(200),
+                    codec: Some(if content_type == "audio/ogg" {
+                        "ogg_opus".into()
+                    } else {
+                        String::new()
+                    }),
+                    voice_direction: None,
+                    dedupe_key: None,
+                    max_bytes: 20 * 1024 * 1024,
+                },
+                bytes: bytes.to_vec(),
+            })
+            .await
+            .unwrap_or_else(|error| {
+                panic!("store scoped {feature:?} conformance fixture: {error}")
+            });
         media.insert(feature, reference);
     }
     let fixture = RunningTelegramConformance {
@@ -2106,11 +2571,18 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     let mut results = Vec::new();
     for feature in ConformanceFeature::ALL {
         let result = check_feature(&fixture, feature).await;
-        println!("{feature:?}: {result:?}; observations={:?}", fixture.observations());
+        println!(
+            "{feature:?}: {result:?}; observations={:?}",
+            fixture.observations()
+        );
         results.push((feature, result));
     }
     for (feature, result) in &results {
-        assert!(result.is_ok(), "{feature:?}: {}", result.as_ref().unwrap_err());
+        assert!(
+            result.is_ok(),
+            "{feature:?}: {}",
+            result.as_ref().unwrap_err()
+        );
     }
     assert_eq!(results.len(), ConformanceFeature::ALL.len());
     running.stop().await.unwrap();
@@ -2602,7 +3074,11 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(callbacks.len(), 2, "spoofed first_name must not authorize ingress");
+    assert_eq!(
+        callbacks.len(),
+        2,
+        "spoofed first_name must not authorize ingress"
+    );
     let (by_id, query_id, action_id, provider_message_id, actor) = callbacks[0];
     assert_eq!(query_id, "allowed-id-query");
     assert_eq!(action_id, "approval-v1:request-42:0");
@@ -2613,7 +3089,10 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
     assert_eq!(by_id.channel.account_id.as_deref(), Some(instance.as_str()));
     assert_eq!(by_id.channel.id, "telegram");
     assert_eq!(by_id.conversation.as_ref().unwrap().id, "-100");
-    assert_eq!(by_id.conversation.as_ref().unwrap().topic_id.as_deref(), Some("77"));
+    assert_eq!(
+        by_id.conversation.as_ref().unwrap().topic_id.as_deref(),
+        Some("77")
+    );
     let (by_username, query_id, action_id, provider_message_id, actor) = callbacks[1];
     assert_eq!(query_id, "allowed-username-query");
     assert_eq!(action_id, "approval-v1:request-42:1");
@@ -2622,7 +3101,10 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
     assert_eq!(actor.id, "43");
     assert_eq!(actor.name.as_deref(), Some("alice"));
     assert_eq!(by_username.channel.id, "telegram");
-    assert_eq!(by_username.channel.account_id.as_deref(), Some(instance.as_str()));
+    assert_eq!(
+        by_username.channel.account_id.as_deref(),
+        Some(instance.as_str())
+    );
     assert_eq!(by_username.conversation.as_ref().unwrap().id, "100");
     assert_eq!(by_username.conversation.as_ref().unwrap().topic_id, None);
 

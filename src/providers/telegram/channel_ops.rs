@@ -30,7 +30,10 @@ impl std::fmt::Display for TelegramAttemptedError {
 
 impl std::error::Error for TelegramAttemptedError {}
 
-fn typed_interaction_error(error: anyhow::Error, operation: &str) -> crate::channel::ChannelSendError {
+fn typed_interaction_error(
+    error: anyhow::Error,
+    operation: &str,
+) -> crate::channel::ChannelSendError {
     if error.downcast_ref::<TelegramPreDispatchError>().is_some() {
         return crate::channel::ChannelSendError {
             kind: crate::channel::SendErrorKind::Forbidden,
@@ -82,11 +85,14 @@ fn safe_vcard_type<'a>(label: Option<&'a str>, fallback: &'a str) -> &'a str {
 fn presentation_content(
     value: &serde_json::Value,
 ) -> anyhow::Result<(String, Option<serde_json::Value>)> {
-    if let Some(object) = value.as_object().filter(|object| {
-        object.get("kind").and_then(serde_json::Value::as_str) == Some("approval")
-    }) {
+    if let Some(object) = value
+        .as_object()
+        .filter(|object| object.get("kind").and_then(serde_json::Value::as_str) == Some("approval"))
+    {
         if object.len() != 4
-            || object.keys().any(|key| !["kind", "id", "prompt", "choices"].contains(&key.as_str()))
+            || object
+                .keys()
+                .any(|key| !["kind", "id", "prompt", "choices"].contains(&key.as_str()))
         {
             anyhow::bail!("Telegram approval presentation has unsupported fields");
         }
@@ -400,9 +406,7 @@ impl TelegramChannel {
             .get("location")
             .or_else(|| venue.and_then(|venue| venue.get("location")));
         if let Some(location) = location {
-            let latitude = location
-                .get("latitude")
-                .and_then(serde_json::Value::as_f64);
+            let latitude = location.get("latitude").and_then(serde_json::Value::as_f64);
             let longitude = location
                 .get("longitude")
                 .and_then(serde_json::Value::as_f64);
@@ -422,7 +426,8 @@ impl TelegramChannel {
                     })
                     .filter(|seconds| *seconds > 0)
                     .and_then(|seconds| {
-                        message_date_ms.map(|date| date.saturating_add(seconds.saturating_mul(1000)))
+                        message_date_ms
+                            .map(|date| date.saturating_add(seconds.saturating_mul(1000)))
                     });
                 parts.push(tinychannels_bus::ContentPart::Location {
                     latitude,
@@ -740,11 +745,7 @@ impl TelegramChannel {
                 if rows.iter().flatten().any(|button| button.disabled) {
                     anyhow::bail!("Telegram inline keyboards cannot render disabled buttons");
                 }
-                if rows
-                    .iter()
-                    .flatten()
-                    .any(|button| button.style.is_some())
-                {
+                if rows.iter().flatten().any(|button| button.style.is_some()) {
                     anyhow::bail!("Telegram inline keyboards do not support button styles");
                 }
                 let mut keyboard = Vec::new();
@@ -1321,7 +1322,9 @@ impl TelegramChannel {
         reaction: &tinychannels_bus::channel::ChannelReaction,
         remove: bool,
     ) -> anyhow::Result<()> {
-        let message_id = provider_message_id.parse::<i64>().map_err(|_| anyhow::Error::new(TelegramPreDispatchError))?;
+        let message_id = provider_message_id
+            .parse::<i64>()
+            .map_err(|_| anyhow::Error::new(TelegramPreDispatchError))?;
         if conversation.id.trim().is_empty() {
             return Err(anyhow::Error::new(TelegramPreDispatchError));
         }
@@ -1377,7 +1380,9 @@ impl TelegramChannel {
                         _ => return Err(anyhow::Error::new(TelegramPreDispatchError)),
                     }
                 }
-                if texts.is_empty() { return Err(anyhow::Error::new(TelegramPreDispatchError)); }
+                if texts.is_empty() {
+                    return Err(anyhow::Error::new(TelegramPreDispatchError));
+                }
                 texts.join("\n")
             }
             _ => anyhow::bail!("Telegram message editing supports text content only"),
@@ -1386,11 +1391,24 @@ impl TelegramChannel {
             .conversation
             .as_ref()
             .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
-        if receipt.channel.as_ref().is_some_and(|channel| channel.id != "telegram")
-            || intent.channel_ref.as_ref().is_some_and(|channel| channel.id != "telegram")
-            || intent.channel_ref.as_ref().zip(receipt.channel.as_ref()).is_some_and(|(intent, receipt)| intent != receipt)
+        if receipt
+            .channel
+            .as_ref()
+            .is_some_and(|channel| channel.id != "telegram")
+            || intent
+                .channel_ref
+                .as_ref()
+                .is_some_and(|channel| channel.id != "telegram")
+            || intent
+                .channel_ref
+                .as_ref()
+                .zip(receipt.channel.as_ref())
+                .is_some_and(|(intent, receipt)| intent != receipt)
             || intent.conversation_id != conversation.id
-            || intent.conversation_ref.as_ref().is_some_and(|target| target != conversation)
+            || intent
+                .conversation_ref
+                .as_ref()
+                .is_some_and(|target| target != conversation)
         {
             return Err(anyhow::Error::new(TelegramPreDispatchError));
         }
@@ -1436,7 +1454,12 @@ impl TelegramChannel {
             .conversation
             .as_ref()
             .ok_or_else(|| anyhow::Error::new(TelegramPreDispatchError))?;
-        if receipt.channel.as_ref().is_some_and(|channel| channel.id != "telegram") || conversation.id.trim().is_empty() {
+        if receipt
+            .channel
+            .as_ref()
+            .is_some_and(|channel| channel.id != "telegram")
+            || conversation.id.trim().is_empty()
+        {
             return Err(anyhow::Error::new(TelegramPreDispatchError));
         }
         let provider_message_id = receipt

@@ -795,15 +795,21 @@ async fn telegram_ingress_preserves_location_venue_and_contact_as_typed_parts() 
             .expect("structured location/contact update is accepted");
         let envelope = TelegramChannel::inbound_envelope_from_update(update, &message, None);
         match index {
-            0 => assert!(matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Location {
+            0 => assert!(
+                matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Location {
                 latitude, longitude, accuracy_meters: Some(12.5), live_until_unix_ms: Some(1_700_000_060_000), ..
-            }] if *latitude == 29.3 && *longitude == 47.9)),
-            1 => assert!(matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Location {
+            }] if *latitude == 29.3 && *longitude == 47.9)
+            ),
+            1 => assert!(
+                matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Location {
                 latitude, longitude, label: Some(label), address: Some(address), ..
-            }] if *latitude == 1.0 && *longitude == 2.0 && label == "Office" && address == "Main Street")),
-            2 => assert!(matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Contact {
+            }] if *latitude == 1.0 && *longitude == 2.0 && label == "Office" && address == "Main Street")
+            ),
+            2 => assert!(
+                matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Contact {
                 display_name, phone_numbers, ..
-            }] if display_name == "Ada Lovelace" && phone_numbers[0].value == "+1234")),
+            }] if display_name == "Ada Lovelace" && phone_numbers[0].value == "+1234")
+            ),
             _ => unreachable!(),
         }
     }

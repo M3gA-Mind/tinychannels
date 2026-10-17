@@ -265,16 +265,27 @@ impl TelegramChannel {
         let body = Self::typing_body_for_recipient(recipient);
         let has_thread_id = body.get("message_thread_id").is_some();
         let send = |body: serde_json::Value| async move {
-            let response = self.http_client().post(self.api_url("sendChatAction"))
-                .json(&body).send().await.map_err(|_| anyhow::Error::new(super::channel_ops::TelegramAttemptedError))?;
+            let response = self
+                .http_client()
+                .post(self.api_url("sendChatAction"))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|_| anyhow::Error::new(super::channel_ops::TelegramAttemptedError))?;
             let status = response.status();
             let value = match response.json::<serde_json::Value>().await {
                 Ok(value) => value,
                 Err(_) if status.is_client_error() => return Ok(false),
-                Err(_) => return Err(anyhow::Error::new(super::channel_ops::TelegramAttemptedError)),
+                Err(_) => {
+                    return Err(anyhow::Error::new(
+                        super::channel_ops::TelegramAttemptedError,
+                    ));
+                }
             };
             if status.is_server_error() {
-                return Err(anyhow::Error::new(super::channel_ops::TelegramAttemptedError));
+                return Err(anyhow::Error::new(
+                    super::channel_ops::TelegramAttemptedError,
+                ));
             }
             Ok(status.is_success() && super::channel_ops::response_status_ok(&value))
         };
@@ -792,17 +803,10 @@ impl TelegramChannel {
         let has_voice = message.and_then(|message| message.get("voice")).is_some();
         let has_media = message.is_some_and(|message| {
             [
-                "photo",
-                "document",
-                "video",
-                "audio",
-                "sticker",
-                "location",
-                "venue",
-                "contact",
+                "photo", "document", "video", "audio", "sticker", "location", "venue", "contact",
             ]
-                .iter()
-                .any(|field| message.get(field).is_some())
+            .iter()
+            .any(|field| message.get(field).is_some())
         });
 
         tracing::debug!(
