@@ -32,6 +32,7 @@ struct Callback {
     transcriptions_started: Arc<AtomicUsize>,
     transcription_started: Arc<tokio::sync::Notify>,
     transcription_gate: Arc<tokio::sync::Notify>,
+    voice_scopes: Arc<Mutex<Vec<tinychannels_bus::HostVoiceScope>>>,
     controller_blocked: Arc<AtomicBool>,
     controllers_started: Arc<AtomicUsize>,
     controller_started: Arc<tokio::sync::Notify>,
@@ -73,6 +74,49 @@ impl Callback {
             text: "spoken words".into(),
             language: request.language,
             duration_secs: Some(1.25),
+        })
+    }
+
+    async fn transcribe_voice(
+        &self,
+        request: tinychannels_bus::HostVoiceTranscriptionRequest,
+    ) -> Result<tinychannels_bus::HostTranscriptionResult> {
+        self.voice_scopes.lock().await.push(request.scope.clone());
+        self.transcriptions_started.fetch_add(1, Ordering::SeqCst);
+        self.events
+            .lock()
+            .await
+            .push("transcription:complete".into());
+        Ok(tinychannels_bus::HostTranscriptionResult {
+            text: "spoken words".into(),
+            language: request.language,
+            duration_secs: Some(1.25),
+        })
+    }
+
+    async fn synthesize_speech(
+        &self,
+        request: tinychannels_bus::HostSpeechSynthesisRequest,
+    ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
+        self.voice_scopes.lock().await.push(request.scope);
+        Ok(tinychannels_bus::HostSpeechSynthesisResult {
+            audio_base64: "UklGRg==".into(),
+            mime_type: "audio/wav".into(),
+            duration_ms: Some(1_250),
+        })
+    }
+
+    async fn store_voice_media(
+        &self,
+        request: tinychannels_bus::HostStoreVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        self.voice_scopes.lock().await.push(request.scope);
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media: tinychannels_bus::MediaReference {
+                url: Some("https://media.example.test/authorized/voice-1".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            },
         })
     }
 

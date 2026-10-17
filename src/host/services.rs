@@ -61,6 +61,17 @@ pub trait Transcriber: Send + Sync {
         &self,
         request: TranscriptionRequest,
     ) -> anyhow::Result<TranscriptionResult>;
+
+    /// Context-aware transcription used by the shared voice pipeline. Legacy
+    /// hosts inherit the unscoped adapter; module hosts bind the context to
+    /// the configured account before crossing TinyBus.
+    async fn transcribe_scoped(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        request: TranscriptionRequest,
+    ) -> anyhow::Result<TranscriptionResult> {
+        self.transcribe(request).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -92,6 +103,15 @@ pub struct SpeechResult {
 #[async_trait]
 pub trait SpeechSynthesizer: Send + Sync {
     async fn synthesize(&self, request: SpeechRequest) -> anyhow::Result<SpeechResult>;
+
+    /// Context-aware synthesis used by channel reply policy.
+    async fn synthesize_scoped(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        request: SpeechRequest,
+    ) -> anyhow::Result<SpeechResult> {
+        self.synthesize(request).await
+    }
 }
 
 // ---------------------------------------------------------------------------

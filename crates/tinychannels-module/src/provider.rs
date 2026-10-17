@@ -7,7 +7,7 @@ use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::host::{LifecycleRegistry, ShutdownHook};
 use tinychannels::{Channel, ChannelHostBuilder, SendMessage};
-use tinychannels_bus::{ChannelSupervisionPolicy, HostEventPublication, HostTranscriptionRequest};
+use tinychannels_bus::{ChannelSupervisionPolicy, HostEventPublication};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
@@ -164,7 +164,18 @@ impl Hooks {
             .unwrap_or_else(|e| e.into_inner()) = Some(configured_instance.clone());
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
-            .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
+            .transcriber(Arc::new(ModuleTranscriber(
+                callbacks.clone(),
+                configured_instance.clone(),
+            )))
+            .synthesizer(Arc::new(ModuleSynthesizer(
+                callbacks.clone(),
+                configured_instance.clone(),
+            )))
+            .voice_media_store(Arc::new(ModuleVoiceMediaStore(
+                callbacks.clone(),
+                configured_instance.clone(),
+            )))
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
                 configured_instance,
@@ -205,7 +216,7 @@ impl tinychannels::host::AllowlistStore for ModuleAllowlist {
     }
 }
 
-struct ModuleTranscriber(HostChannels);
+struct ModuleTranscriber(HostChannels, String);
 
 #[async_trait::async_trait]
 impl tinychannels::host::Transcriber for ModuleTranscriber {
@@ -217,9 +228,22 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
         &self,
         request: tinychannels::host::TranscriptionRequest,
     ) -> anyhow::Result<tinychannels::host::TranscriptionResult> {
+        self.transcribe_scoped(tinychannels_bus::HostVoiceScope::default(), request)
+            .await
+    }
+
+    async fn transcribe_scoped(
+        &self,
+        mut scope: tinychannels_bus::HostVoiceScope,
+        request: tinychannels::host::TranscriptionRequest,
+    ) -> anyhow::Result<tinychannels::host::TranscriptionResult> {
+        scope.configured_instance.clone_from(&self.1);
+        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        scope.channel.account_id = Some(self.1.clone());
         let result = self
             .0
-            .transcribe(HostTranscriptionRequest {
+            .transcribe_voice(tinychannels_bus::HostVoiceTranscriptionRequest {
+                scope,
                 audio_base64: request.audio_base64,
                 mime_type: request.mime_type,
                 file_name: request.file_name,
@@ -232,6 +256,85 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
             language: result.language,
             duration_secs: result.duration_secs,
         })
+    }
+}
+
+struct ModuleSynthesizer(HostChannels, String);
+
+#[async_trait::async_trait]
+impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
+    async fn synthesize(
+        &self,
+        request: tinychannels::host::SpeechRequest,
+    ) -> anyhow::Result<tinychannels::host::SpeechResult> {
+        self.synthesize_scoped(tinychannels_bus::HostVoiceScope::default(), request)
+            .await
+    }
+
+    async fn synthesize_scoped(
+        &self,
+        mut scope: tinychannels_bus::HostVoiceScope,
+        request: tinychannels::host::SpeechRequest,
+    ) -> anyhow::Result<tinychannels::host::SpeechResult> {
+        scope.configured_instance.clone_from(&self.1);
+        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        scope.channel.account_id = Some(self.1.clone());
+        let result = self
+            .0
+            .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
+                scope,
+                text: request.text,
+                voice: request.voice,
+                format: request.format,
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(tinychannels::host::SpeechResult {
+            audio_base64: result.audio_base64,
+            mime_type: result.mime_type,
+            visemes: None,
+        })
+    }
+}
+
+struct ModuleVoiceMediaStore(HostChannels, String);
+
+#[async_trait::async_trait]
+impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
+    async fn store_voice(
+        &self,
+        mut request: tinychannels::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        request.scope.configured_instance.clone_from(&self.1);
+        request.scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        request.scope.channel.account_id = Some(self.1.clone());
+        let result = self
+            .0
+            .store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
+                scope: request.scope,
+                direction: request.direction,
+                audio_base64: request.audio_base64,
+                mime_type: request.mime_type,
+                codec: request.codec,
+                duration_ms: request.duration_ms,
+                file_name: request.file_name,
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let has_durable_reference = result
+            .media
+            .url
+            .as_deref()
+            .is_some_and(|url| !url.trim().is_empty())
+            || result
+                .media
+                .path
+                .as_deref()
+                .is_some_and(|path| !path.trim().is_empty());
+        if !has_durable_reference {
+            anyhow::bail!("host did not return a durable voice media reference");
+        }
+        Ok(result.media)
     }
 }
 

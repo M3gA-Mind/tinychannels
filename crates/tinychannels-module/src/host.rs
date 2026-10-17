@@ -59,8 +59,12 @@ use tokio::task::JoinHandle;
 const OUTBOX_CAPACITY: usize = 256;
 const MAX_CALLBACK_BYTES: usize = 128 * 1024;
 const MAX_TRANSCRIPTION_REQUEST_BYTES: usize = 12 * 1024 * 1024;
+// Base64 expands audio by 4/3. A 12 MiB serialized callback remains below
+// TinyBus's 16 MiB frame limit in both directions, including JSON overhead.
+const MAX_VOICE_CALLBACK_BYTES: usize = 12 * 1024 * 1024;
 const MAX_ACTIVE_HOST_CALLBACKS: usize = 16;
 const MAX_CONTROLLER_PAYLOAD_BYTES: usize = 1024 * 1024;
+const HOST_VOICE_CALLBACK_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[path = "host_dispatch.rs"]
 mod dispatch;
@@ -383,6 +387,80 @@ impl HostChannels {
         });
         wait.await
             .map_err(|_| Error::failed("transcription callback was interrupted"))?
+    }
+
+    /// Run a scoped voice callback with symmetric frame bounds, bounded
+    /// lifetime, and shutdown ownership. The spawned callback remains tracked
+    /// if the caller cancels its waiter.
+    async fn voice_callback<Request, Response>(
+        &self,
+        method: &'static str,
+        request: Request,
+    ) -> Result<Response>
+    where
+        Request: serde::Serialize + Send + 'static,
+        Response: serde::de::DeserializeOwned + serde::Serialize + Send + 'static,
+    {
+        if serde_json::to_vec(&request)
+            .map_or(true, |bytes| bytes.len() > MAX_VOICE_CALLBACK_BYTES)
+        {
+            return Err(Error::failed("voice callback request exceeds byte limit"));
+        }
+        let publication = self.owner.publication.lock().await;
+        if self.owner.terminal.load(Ordering::SeqCst) {
+            return Err(Error::failed("callback consumer is closed"));
+        }
+        if self.owner.active_callbacks.fetch_add(1, Ordering::SeqCst) >= MAX_ACTIVE_HOST_CALLBACKS {
+            self.owner.active_callbacks.fetch_sub(1, Ordering::SeqCst);
+            return Err(Error::failed("too many active voice callbacks"));
+        }
+        let owner = self.owner.clone();
+        let connection = self.connection.clone();
+        let object_path = self.object_path.clone();
+        let (reply, wait) = oneshot::channel();
+        drop(publication);
+        tokio::spawn(async move {
+            let _active = ActiveHostCallback(owner);
+            let result = tokio::time::timeout(HOST_VOICE_CALLBACK_TIMEOUT, async {
+                let proxy = connection.proxy(HOST_BUS_NAME, object_path.as_ref(), HOST_BUS_NAME)?;
+                let response: Response = proxy.call(method, request).await?;
+                if serde_json::to_vec(&response)
+                    .map_or(true, |bytes| bytes.len() > MAX_VOICE_CALLBACK_BYTES)
+                {
+                    return Err(Error::failed("voice callback response exceeds byte limit"));
+                }
+                Ok(response)
+            })
+            .await
+            .unwrap_or_else(|_| Err(Error::failed("voice callback timed out")));
+            let _ = reply.send(result);
+        });
+        wait.await
+            .map_err(|_| Error::failed("voice callback was interrupted"))?
+    }
+
+    /// Request scoped speech transcription from the host.
+    pub async fn transcribe_voice(
+        &self,
+        request: tinychannels_bus::HostVoiceTranscriptionRequest,
+    ) -> Result<HostTranscriptionResult> {
+        self.voice_callback(host_methods::TRANSCRIBE_VOICE, request).await
+    }
+
+    /// Request scoped speech synthesis from the host.
+    pub async fn synthesize_speech(
+        &self,
+        request: tinychannels_bus::HostSpeechSynthesisRequest,
+    ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
+        self.voice_callback(host_methods::SYNTHESIZE_SPEECH, request).await
+    }
+
+    /// Persist audio through the host and receive its opaque durable reference.
+    pub async fn store_voice_media(
+        &self,
+        request: tinychannels_bus::HostStoreVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        self.voice_callback(host_methods::STORE_VOICE_MEDIA, request).await
     }
 
     /// Invoke one bounded host-owned credential, persistence, or managed API
