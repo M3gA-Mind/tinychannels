@@ -676,11 +676,7 @@ async fn thinking_partial_edit_keeps_bubble_for_cleanup_and_stops_editing() {
     };
     FakeSender::script(
         &sender.edits,
-        Outcome::Err(|| {
-            ProgressiveSendError::PartialOutcome(Box::new(
-                tinychannels_bus::channel::ChannelSendOutcome::default(),
-            ))
-        }),
+        Outcome::Err(|| ProgressiveSendError::PartialOutcome(Box::default())),
     );
 
     reply.edit_tick().await;
