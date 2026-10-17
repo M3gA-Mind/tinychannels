@@ -82,7 +82,6 @@ fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> Chann
             parent_id: Some("chat-parent".into()),
             thread_id: Some("thread-8".into()),
             topic_id: Some("topic-9".into()),
-            ..Default::default()
         },
         parts: vec![ContentPart::VoiceNote {
             voice_note: tinychannels_bus::VoiceNote {
