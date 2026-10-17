@@ -492,10 +492,10 @@ async fn send_typed_part(
                 // A link fallback is host-owned media and does not advertise
                 // provider codec support. Store one bounded WAV in that case.
                 let link_codec = ["wav_pcm16".to_owned()];
-                let accepted_codecs = if native_voice {
+                let accepted_codecs: &[String] = if native_voice {
                     &sender.capabilities.voice_out.accepted_codecs
                 } else if audio_file {
-                    &audio_codecs
+                    audio_codecs.as_slice()
                 } else {
                     &link_codec
                 };
