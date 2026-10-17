@@ -1107,6 +1107,82 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
     assert!(!error.retryable);
 }
 
+async fn send_configured_outcome(
+    outcome: tinychannels_bus::channel::ChannelSendOutcome,
+) -> tinychannels_bus::channel::ChannelSendOutcome {
+    let (send, mut commands) = mpsc::channel::<SendCommand>(1);
+    let (cancel, _) = watch::channel(false);
+    let running = Arc::new(Running {
+        channel: Arc::new(InteractionChannel::default()),
+        configured_instance: "interaction-fixture:account-a".into(),
+        send,
+        cancel,
+        worker: Mutex::new(None),
+        finished: Arc::new(AtomicBool::new(false)),
+    });
+    let adapter = running.adapter_handle();
+    let task = tokio::spawn(async move {
+        adapter
+            .send(tinychannels_bus::ChannelOutboundIntent {
+                channel_id: "interaction-fixture".into(),
+                channel_ref: Some(tinychannels_bus::ChannelRef {
+                    id: "interaction-fixture".into(),
+                    account_id: Some("interaction-fixture:account-a".into()),
+                }),
+                conversation_id: "chat-1".into(),
+                conversation_ref: Some(tinychannels_bus::ConversationRef {
+                    id: "chat-1".into(),
+                    ..Default::default()
+                }),
+                payload: tinychannels_bus::OutboundPayload::Text {
+                    text: "hello".into(),
+                },
+                ..Default::default()
+            })
+            .await
+    });
+    let command = commands.recv().await.expect("adapter dispatch");
+    command.started.send(()).unwrap();
+    command
+        .reply
+        .send(Ok(
+            tinychannels_bus::module_interaction::ChannelInteractionResult::Sent(Box::new(outcome)),
+        ))
+        .unwrap();
+    task.await.unwrap().unwrap()
+}
+
+#[tokio::test]
+async fn configured_adapter_disables_retry_for_continuation_only_and_unknown_outcomes() {
+    let continuation_only =
+        send_configured_outcome(tinychannels_bus::channel::ChannelSendOutcome {
+            error: Some(tinychannels_bus::channel::ChannelSendError {
+                continuation_message_ids: vec!["continuation-2".into()],
+                retryable: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await;
+    let error = continuation_only.error.unwrap();
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+
+    let unknown_without_id =
+        send_configured_outcome(tinychannels_bus::channel::ChannelSendOutcome {
+            error: Some(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels::channel::SendErrorKind::Unknown,
+                message: "platform outcome unknown".into(),
+                retryable: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await;
+    let error = unknown_without_id.error.unwrap();
+    assert!(!error.retryable);
+}
+
 #[test]
 fn raw_voice_synthesis_requires_the_configured_native_synthesis_capability() {
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
