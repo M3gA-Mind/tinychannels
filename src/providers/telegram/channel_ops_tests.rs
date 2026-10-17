@@ -158,6 +158,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
 }
 
 struct VoiceReadFixture;
+struct TypedMediaReadFixture;
 struct LargeVoiceReadFixture {
     expected_scope: tinychannels_bus::HostVoiceScope,
 }
@@ -266,6 +267,47 @@ impl crate::host::VoiceMediaStore for VoiceReadFixture {
             audio_base64: "AQIDBA==".into(),
             mime_type: "audio/ogg".into(),
             file_name: Some("reply.ogg".into()),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::host::MediaRepository for TypedMediaReadFixture {
+    async fn store_media(
+        &self,
+        _request: crate::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        unreachable!("outbound media fixture only resolves stored media")
+    }
+
+    async fn read_media(
+        &self,
+        scope: crate::host::MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<crate::host::StoredMedia> {
+        assert_eq!(scope.configured_instance, "telegram-main");
+        assert_eq!(scope.channel.account_id.as_deref(), Some("telegram-main"));
+        assert_eq!(scope.conversation.id, "-10042");
+        assert_eq!(scope.conversation.topic_id.as_deref(), Some("topic-77"));
+        assert_eq!(scope.turn_id, "turn-42");
+        assert_eq!(opaque_id, "stored-photo-1");
+        let bytes = BASE64
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
+            .unwrap();
+        assert!(bytes.len() as u64 <= max_bytes);
+        Ok(crate::host::StoredMedia {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some(opaque_id),
+                kind: tinychannels_bus::MediaKind::Image,
+                content_type: Some("image/png".into()),
+                file_name: Some("photo.png".into()),
+                size_bytes: Some(bytes.len() as u64),
+                ..Default::default()
+            },
+            content_type: "image/png".into(),
+            file_name: Some("photo.png".into()),
+            bytes,
         })
     }
 }
@@ -779,6 +821,80 @@ fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessag
             },
         }],
     }
+}
+
+#[tokio::test]
+async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({"message_id": 11})),
+    )
+    .await;
+    mount_post(
+        &server,
+        "sendPhoto",
+        ok_with(serde_json::json!({"message_id": 22})),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"])
+        .with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("ordered-image", "before".into());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "before".into(),
+                markdown_dialect: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-photo-1".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: Some("photo caption".into()),
+                alt_text: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "after".into(),
+                markdown_dialect: None,
+            },
+        },
+    ];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["11", "22", "11"]);
+    assert_eq!(outcome.receipt.parts.len(), 3);
+    assert_eq!(outcome.receipt.parts[1].kind, tinychannels_bus::channel::MessageReceiptPartKind::Media);
+    assert_eq!(outcome.receipt.parts[1].thread_id.as_deref(), Some("topic-77"));
+    assert_eq!(outcome.receipt.parts[1].reply_to_id.as_deref(), Some("5"));
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].url.path(), "/botTEST_TOKEN/sendMessage");
+    assert_eq!(requests[1].url.path(), "/botTEST_TOKEN/sendPhoto");
+    assert_eq!(requests[2].url.path(), "/botTEST_TOKEN/sendMessage");
+    let multipart = String::from_utf8_lossy(&requests[1].body);
+    assert!(multipart.contains("photo caption"));
+    assert!(multipart.contains("reply_parameters"));
+    assert!(multipart.contains("message_thread_id"));
+    assert!(multipart.contains("photo.png"));
 }
 
 #[tokio::test]
