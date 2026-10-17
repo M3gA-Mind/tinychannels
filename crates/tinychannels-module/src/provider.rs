@@ -481,10 +481,18 @@ fn bind_configured_media_scope(
 ) -> anyhow::Result<()> {
     let account_scope = media_account_scope
         .ok_or_else(|| anyhow::anyhow!("configured account has no stable media identity"))?;
-    scope.configured_instance = instance.to_owned();
-    scope.channel.id = tinychannels_bus::provider_id(instance).to_owned();
+    bind_configured_voice_callback_scope(scope, instance);
     scope.channel.account_id = Some(account_scope.to_owned());
     Ok(())
+}
+
+fn bind_configured_voice_callback_scope(
+    scope: &mut tinychannels_bus::HostVoiceScope,
+    instance: &str,
+) {
+    scope.configured_instance = instance.to_owned();
+    scope.channel.id = tinychannels_bus::provider_id(instance).to_owned();
+    scope.channel.account_id = Some(instance.to_owned());
 }
 
 impl ModuleMediaRepository {
@@ -593,6 +601,8 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
         request: tinychannels::host::TranscriptionRequest,
     ) -> anyhow::Result<tinychannels::host::TranscriptionResult> {
         validate_voice_scope(&scope)?;
+        let mut scope = scope;
+        bind_configured_voice_callback_scope(&mut scope, &self.1);
         let result = self
             .0
             .transcribe_voice(tinychannels_bus::HostVoiceTranscriptionRequest {
@@ -629,6 +639,8 @@ impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
         request: tinychannels::host::SpeechRequest,
     ) -> anyhow::Result<tinychannels::host::SpeechResult> {
         validate_voice_scope(&scope)?;
+        let mut scope = scope;
+        bind_configured_voice_callback_scope(&mut scope, &self.1);
         let result = self
             .0
             .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
@@ -661,8 +673,9 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         request: tinychannels::host::VoiceMediaRequest,
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         validate_voice_scope(&request.scope)?;
-        let projection_scope = request.scope.clone();
-        let mut storage_scope = request.scope;
+        let mut projection_scope = request.scope;
+        bind_configured_voice_callback_scope(&mut projection_scope, &self.1);
+        let mut storage_scope = projection_scope.clone();
         bind_configured_media_scope(&mut storage_scope, &self.1, self.2.as_deref())?;
         use base64::Engine;
         let audio = base64::engine::general_purpose::STANDARD
@@ -743,8 +756,12 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         if opaque_id.trim().is_empty() {
             anyhow::bail!("voice media reference is empty");
         }
+        bind_configured_voice_callback_scope(&mut scope, &self.1);
         if opaque_id.starts_with("tinychannels_media_v1_") {
-            bind_configured_media_scope(&mut scope, &self.1, self.2.as_deref())?;
+            let mut storage_scope = scope;
+            bind_configured_media_scope(&mut storage_scope, &self.1, self.2.as_deref())?;
+            return read_scoped_voice_media(&self.0, storage_scope, opaque_id, 8 * 1024 * 1024)
+                .await;
         }
         read_scoped_voice_media(&self.0, scope, opaque_id, 8 * 1024 * 1024).await
     }
