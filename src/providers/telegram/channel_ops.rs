@@ -151,6 +151,33 @@ impl Channel for TelegramChannel {
         capabilities.chat_approvals = true;
         capabilities.history_key_ignores_thread = true;
         capabilities.reactions = true;
+        capabilities.progressive_edits = self.supports_progressive_edits();
+        capabilities.streaming_reply_pipeline = self.supports_draft_updates();
+        capabilities.addressing.reply_to_id = self.supports_reply_to_id();
+        capabilities.addressing.thread_id = self.supports_thread_id();
+        capabilities.content.parts = vec!["text".into()];
+        capabilities.content.text = tinychannels_bus::ContentCapability {
+            inbound: true,
+            outbound: true,
+            ..Default::default()
+        };
+        capabilities.actions.supported = vec!["send".into()];
+        if capabilities.progressive_edits {
+            capabilities.actions.supported.push("draft-update".into());
+        }
+        if self.supports_edit() {
+            capabilities.actions.supported.push("edit".into());
+        }
+        if capabilities.addressing.reply_to_id || capabilities.addressing.thread_id {
+            capabilities.actions.supported.push("reply".into());
+        }
+        if capabilities.addressing.thread_id {
+            capabilities.actions.supported.push("thread-reply".into());
+        }
+        capabilities
+            .actions
+            .supported
+            .extend(["react".into(), "reactions".into()]);
         if self.voice_media_store.is_some() {
             capabilities.voice_in.supported = true;
             capabilities.voice_in.max_size_bytes = Some(8 * 1024 * 1024);

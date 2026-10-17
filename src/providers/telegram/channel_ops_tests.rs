@@ -33,6 +33,26 @@ fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() 
     assert!(with_all_ports.voice_out.synthesis);
 }
 
+#[test]
+fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
+    let off = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
+        .with_voice_media_store(Arc::new(VoiceReadFixture))
+        .capabilities();
+    assert!(off.content.text.inbound && off.content.text.outbound);
+    assert_eq!(off.content.parts, ["text"]);
+    assert!(off.actions.supported.contains(&"send".into()));
+    assert!(!off.progressive_edits);
+    assert!(!off.streaming_reply_pipeline);
+
+    let on = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
+        .with_streaming(StreamMode::Partial, 100, true)
+        .with_voice_media_store(Arc::new(VoiceReadFixture))
+        .capabilities();
+    assert!(on.progressive_edits);
+    assert!(on.streaming_reply_pipeline);
+    assert!(on.actions.supported.contains(&"draft-update".into()));
+}
+
 #[async_trait::async_trait]
 impl crate::host::VoiceMediaStore for VoiceReadFixture {
     async fn store_voice(
