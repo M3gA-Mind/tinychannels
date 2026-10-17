@@ -1151,8 +1151,12 @@ impl Channels {
         let media = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             async move {
-                repository
-                    .read_media(scope, media_id, max_bytes)
+                <crate::provider::ModuleMediaRepository as tinychannels::host::MediaRepository>::read_media(
+                    &repository,
+                    scope,
+                    media_id,
+                    max_bytes,
+                )
                     .await
             },
         )

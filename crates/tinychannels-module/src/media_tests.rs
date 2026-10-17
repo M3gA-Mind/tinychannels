@@ -14,7 +14,7 @@ fn stored(bytes: Vec<u8>) -> tinychannels::host::StoredMedia {
     }
 }
 
-fn request() -> tinychannels_bus::MediaReadBegin {
+fn read_request_fixture() -> tinychannels_bus::MediaReadBegin {
     tinychannels_bus::MediaReadBegin {
         instance: "telegram:primary".into(),
         scope: tinychannels_bus::HostVoiceScope {
@@ -48,7 +48,7 @@ async fn media_reads_reserve_capacity_before_resolution_and_release_it_on_cancel
 #[tokio::test]
 async fn media_reads_return_bounded_ordered_retryable_chunks_and_release_bytes() {
     let reads = MediaReads::default();
-    let mut begin = request();
+    let mut begin = read_request_fixture();
     let bytes = vec![0x5a; tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES + 7];
     begin.max_bytes = bytes.len() as u64;
     let info = reads
@@ -97,7 +97,7 @@ async fn media_reads_reject_claimed_size_mismatch_without_retaining_the_slot() {
     let mut wrong = stored(vec![1, 2, 3]);
     wrong.media.size_bytes = Some(4);
     assert!(reads
-        .complete(request(), "activation".into(), wrong, reads.reserve().await.unwrap())
+        .complete(read_request_fixture(), "activation".into(), wrong, reads.reserve().await.unwrap())
         .await
         .is_err());
     assert!(reads.reserve().await.is_ok());
@@ -133,7 +133,7 @@ async fn oversized_resolved_metadata_drops_the_reserved_capacity() {
         tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES + 1,
     ));
     assert!(reads
-        .complete(request(), "activation".into(), media, reads.reserve().await.unwrap())
+        .complete(read_request_fixture(), "activation".into(), media, reads.reserve().await.unwrap())
         .await
         .is_err());
     assert!(reads.reserve().await.is_ok());
