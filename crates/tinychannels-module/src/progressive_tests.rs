@@ -789,11 +789,16 @@ async fn typed_transport_outcome_error_stops_later_batch_delivery() {
         })
         .await
         .unwrap();
-    let ProgressiveResult::Delivery(outcome) = result else {
-        panic!("expected delivery outcome");
+    let ProgressiveResult::DeliveryBatch {
+        outcomes, failure, ..
+    } = result
+    else {
+        panic!("expected ordered delivery batch");
     };
-    assert!(outcome.error.is_some());
-    assert_eq!(outcome.receipts, vec![partial.receipt]);
+    assert!(failure.is_some());
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0].receipt, partial.receipt);
+    assert!(outcomes[0].error.is_some());
     assert_eq!(callback.sends.lock().await.len(), 1);
     replies.shutdown().await.unwrap();
 }
