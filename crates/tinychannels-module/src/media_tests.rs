@@ -261,6 +261,7 @@ async fn cancelling_the_bus_waiter_does_not_cancel_or_duplicate_finalize() {
     );
     repository.release.notify_one();
     let replay = uploads
+        .clone()
         .finish(
             MediaUploadFinish(handle),
             "activation-a".into(),

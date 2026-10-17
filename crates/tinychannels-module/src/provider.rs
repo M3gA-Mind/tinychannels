@@ -269,7 +269,7 @@ impl tinychannels::host::StorageProvider for ModuleStorage {
 }
 
 #[derive(Clone)]
-pub(crate) struct ModuleMediaRepository(HostChannels, String);
+pub(crate) struct ModuleMediaRepository(pub(crate) HostChannels, pub(crate) String);
 
 impl ModuleMediaRepository {
     async fn scoped_store(&self) -> anyhow::Result<tinychannels::host::ScopedMediaStore> {

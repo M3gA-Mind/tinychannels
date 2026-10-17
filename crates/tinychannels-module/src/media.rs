@@ -81,7 +81,7 @@ impl MediaUploads {
                 state
                     .terminal
                     .get(&request.0.0)
-                    .map(|entry| (entry.instance.clone(), entry.activation))
+                    .map(|entry| (entry.instance.clone(), entry.activation.clone()))
             })
             .ok_or_else(|| Error::failed("media upload is unknown or expired"))
     }
@@ -239,7 +239,7 @@ impl MediaUploads {
         let activation_for_terminal = upload.activation.clone();
         let request_metadata = upload.request.clone();
         let chunks = upload.chunks.clone();
-        let bytes: Vec<u8> = chunks.into_iter().flatten().collect();
+        let bytes: Vec<u8> = chunks.into_iter().flatten().flatten().collect();
         if bytes.len() != request_metadata.byte_count {
             if let Some(upload) = state.uploads.get_mut(&request.0.0) {
                 upload.finalizing.store(false, Ordering::SeqCst);
