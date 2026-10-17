@@ -226,6 +226,7 @@ enum Command {
         oneshot::Sender<Result<ProgressiveResult>>,
     ),
     Finish(String, oneshot::Sender<()>),
+    Abort(oneshot::Sender<()>),
 }
 
 struct Closing {
@@ -294,7 +295,7 @@ impl Replies {
             ProgressiveCommand::Close { handle } => {
                 let entry = self.state.lock().await.entries.get(&handle).cloned();
                 if let Some(entry) = entry {
-                    close_entry(entry, "Cancelled.".into(), true).await?;
+                    abort_entry(entry).await?;
                 }
                 Ok(ProgressiveResult::Closed)
             }
@@ -465,7 +466,7 @@ impl Replies {
         // delivery must not prevent unrelated reply workers from draining.
         let mut closes = tokio::task::JoinSet::new();
         for entry in entries {
-            closes.spawn(close_entry(entry, "Cancelled.".into(), true));
+            closes.spawn(abort_entry(entry));
         }
         let mut failure = None;
         while let Some(result) = closes.join_next().await {
@@ -571,6 +572,37 @@ async fn close_entry(entry: Arc<Entry>, text: String, retain_existing: bool) -> 
         .map_err(|_| Error::failed("progressive cleanup failed"))
 }
 
+async fn abort_entry(entry: Arc<Entry>) -> Result<()> {
+    let fingerprint: [u8; 32] = Sha256::digest(b"abort").into();
+    let mut closing = entry.closing.lock().await;
+    if closing.is_none() {
+        let retained = entry.clone();
+        let task = tokio::spawn(async move {
+            let (reply, wait) = oneshot::channel();
+            if retained.commands.send(Command::Abort(reply)).await.is_ok() {
+                let _ = wait.await;
+            }
+            if let Some(worker) = retained.worker.lock().await.take() {
+                worker.await.map_err(|_| "progressive worker failed".to_string())?;
+            }
+            Ok(())
+        });
+        *closing = Some(Closing { fingerprint, task: Some(task), outcome: None });
+    }
+    let closing = closing.as_mut().expect("abort work was installed");
+    if closing.outcome.is_none() {
+        let task = closing.task.as_mut().expect("unfinished abort task is retained");
+        let result = tokio::time::timeout(Duration::from_secs(10), task)
+            .await
+            .map_err(|_| Error::failed("progressive cleanup is pending"))?
+            .map_err(|_| Error::failed("progressive cleanup worker failed"))?;
+        closing.outcome = Some(result);
+        closing.task = None;
+    }
+    closing.outcome.clone().expect("abort result was retained")
+        .map_err(|_| Error::failed("progressive cleanup failed"))
+}
+
 async fn run(
     host: HostChannels,
     channel: String,
@@ -664,6 +696,11 @@ async fn run(
                 }
                 Some(Command::Finish(text, response)) => {
                     reply.finalize(&text).await;
+                    let _ = response.send(());
+                    break;
+                }
+                Some(Command::Abort(response)) => {
+                    reply.abort().await;
                     let _ = response.send(());
                     break;
                 }
