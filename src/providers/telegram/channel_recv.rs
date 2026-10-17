@@ -824,7 +824,7 @@ impl TelegramChannel {
                             _ => tinychannels_bus::ConversationKind::Unknown,
                         },
                         id: chat_id,
-                    thread_id: None,
+                        thread_id: None,
                         topic_id,
                         ..Default::default()
                     },

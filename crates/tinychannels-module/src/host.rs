@@ -471,7 +471,8 @@ impl HostChannels {
         &self,
         request: tinychannels_bus::HostReadVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
-        self.voice_callback(host_methods::READ_VOICE_MEDIA, request).await
+        self.voice_callback(host_methods::READ_VOICE_MEDIA, request)
+            .await
     }
 
     /// Invoke one bounded host-owned credential, persistence, or managed API

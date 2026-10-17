@@ -326,7 +326,10 @@ fn voice_ingress_keeps_audio_part_beside_provider_transcript() {
 
     assert_eq!(envelope.text, "recognized words");
     assert_eq!(envelope.parts.len(), 2);
-    assert!(matches!(envelope.parts[0], tinychannels_bus::ContentPart::Text { .. }));
+    assert!(matches!(
+        envelope.parts[0],
+        tinychannels_bus::ContentPart::Text { .. }
+    ));
     let tinychannels_bus::ContentPart::VoiceNote { voice_note } = &envelope.parts[1] else {
         panic!("voice ingress must retain a typed audio part")
     };

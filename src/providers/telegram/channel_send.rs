@@ -43,10 +43,16 @@ impl TelegramChannel {
         if let Some(thread) = thread_id {
             form = form.text("message_thread_id", thread.to_owned());
         }
-        let response = self.http_client().post(self.api_url(method)).multipart(form).send().await?;
+        let response = self
+            .http_client()
+            .post(self.api_url(method))
+            .multipart(form)
+            .send()
+            .await?;
         let status = response.status();
         let body: serde_json::Value = response.json().await?;
-        if !status.is_success() || body.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        if !status.is_success() || body.get("ok").and_then(serde_json::Value::as_bool) != Some(true)
+        {
             anyhow::bail!("Telegram {method} returned an unsuccessful or unknown receipt");
         }
         body.get("result")
