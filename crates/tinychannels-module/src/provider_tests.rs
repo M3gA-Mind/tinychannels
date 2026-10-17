@@ -1981,7 +1981,6 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
             }
             ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true, "result": result}))
         })
-        .with_priority(1)
         .mount(&server)
         .await;
     let updates_sent = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1999,6 +1998,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
             };
             ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true,"result":result}))
         })
+        .with_priority(1)
         .mount(&server)
         .await;
     Mock::given(method("GET"))
