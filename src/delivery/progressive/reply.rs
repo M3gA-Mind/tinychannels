@@ -19,6 +19,7 @@ pub struct ProgressiveReply {
     sender: Arc<dyn ProgressiveSender>,
     channel: String,
     progressive_ui: bool,
+    native_approval: bool,
     pub(super) state: StreamingState,
     typing: TypingState,
     output_context: Option<ProgressiveOutputContext>,
@@ -37,6 +38,7 @@ impl ProgressiveReply {
     ) -> Self {
         let channel = channel.into();
         let progressive_ui = channel_supports_progressive_ui(&capabilities);
+        let native_approval = capabilities.chat_approvals;
         tracing::debug!(
             "[channel-inbound] progressive reply channel='{}' progressive_ui={}",
             channel,
@@ -46,6 +48,7 @@ impl ProgressiveReply {
             sender,
             channel,
             progressive_ui,
+            native_approval,
             state: StreamingState::default(),
             typing: TypingState::default(),
             output_context: None,
@@ -124,10 +127,33 @@ impl ProgressiveReply {
                 ..
             } => self.on_tool_result(display_label.as_deref().unwrap_or(tool_name), *success),
             Event::ApprovalRequest {
-                id: _,
+                id,
                 prompt,
                 choices,
             } if deliver_typed_content => {
+                if self.native_approval {
+                    let part = tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Presentation {
+                            blocks: serde_json::json!({
+                                "kind": "approval",
+                                "id": id,
+                                "prompt": prompt,
+                                "choices": choices,
+                            }),
+                        },
+                    };
+                    match self
+                        .send_content_parts(std::slice::from_ref(&part), prompt)
+                        .await
+                    {
+                        Ok(outcome) => dispatch.push_outcome(outcome),
+                        Err(super::ProgressiveSendError::UnsupportedContent) => {
+                            dispatch.unsupported.push(part)
+                        }
+                        Err(error) => return Err(error),
+                    }
+                    return Ok(dispatch);
+                }
                 let mut text = format!("Approval requested: {prompt}");
                 if !choices.is_empty() {
                     text.push_str("\nChoices: ");

@@ -1869,7 +1869,10 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
         Running::start(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
-                capabilities: tinychannels_bus::ChannelCapabilities::default(),
+                capabilities: tinychannels_bus::ChannelCapabilities {
+                    chat_approvals: true,
+                    ..Default::default()
+                },
             }),
             Arc::new(crate::provider::Hooks::default()),
             base.host.clone(),
@@ -2679,12 +2682,24 @@ async fn native_approval_and_clarification_events_deliver_prompts() {
     assert!(
         delivered
             .iter()
-            .any(|text| text.contains("May I run the command?"))
+            .all(|text| !text.contains("Approval requested:")),
+        "native approval delivery must not degrade to a text-only prompt"
     );
     assert!(
-        delivered
-            .iter()
-            .any(|text| text.contains("Allow once, Deny"))
+        requests.iter().any(|request| matches!(request,
+            ProgressiveTransportRequest::SendTyped { parts, .. }
+                if parts.iter().any(|part| matches!(part,
+                    tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Presentation { blocks }
+                    } if blocks == &serde_json::json!({
+                        "kind": "approval",
+                        "id": "approval-7",
+                        "prompt": "May I run the command?",
+                        "choices": ["Allow once", "Deny"]
+                    })
+                ))
+        )),
+        "native approval request must reach provider as the shared typed presentation shape"
     );
     assert!(
         delivered
