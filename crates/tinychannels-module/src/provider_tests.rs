@@ -401,6 +401,12 @@ use tinychannels::host::EventSink as _;
 use tinychannels_bus::{ChannelInboundEnvelope, ContentPart, ConversationKind, ConversationRef};
 use tinychannels_conformance::AdapterFixture as _;
 
+type TelegramMessageContextMap = Arc<
+    std::sync::Mutex<
+        std::collections::HashMap<String, (ConversationRef, Option<String>)>,
+    >,
+>;
+
 struct RunningTelegramConformance {
     adapter: ConfiguredAdapterHandle,
     running: Arc<Running>,
@@ -416,8 +422,7 @@ struct RunningTelegramConformance {
     request_cursor: std::sync::Mutex<usize>,
     response_cursor: std::sync::Mutex<usize>,
     response_ids: Arc<std::sync::Mutex<Vec<(String, String)>>>,
-    message_contexts:
-        Arc<std::sync::Mutex<std::collections::HashMap<String, (ConversationRef, Option<String>)>>>,
+    message_contexts: TelegramMessageContextMap,
 }
 
 #[async_trait::async_trait]
@@ -2349,8 +2354,9 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
                 } else { None };
                 let id = requested_edit_id.unwrap_or_else(|| next_id_for_mock.fetch_add(1, Ordering::SeqCst).to_string());
                 response_ids_for_mock.lock().unwrap().push((endpoint.to_owned(), id.clone()));
-                if endpoint != "editMessageText" {
-                    if let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body) {
+                if endpoint != "editMessageText"
+                    && let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body)
+                {
                         let field = |name: &str| body.get(name).and_then(|value| value.as_i64().map(|n| n.to_string()).or_else(|| value.as_str().map(str::to_owned)));
                         let chat = field("chat_id").unwrap_or_default();
                         let thread = field("message_thread_id");
@@ -2812,9 +2818,7 @@ async fn configured_telegram_native_optional_ports_share_ordered_queue_and_rejec
         "deleteMessage",
         "setMessageReaction",
     ] {
-        let result = if endpoint == "deleteMessage" {
-            serde_json::json!(true)
-        } else if endpoint == "setMessageReaction" {
+        let result = if endpoint == "deleteMessage" || endpoint == "setMessageReaction" {
             serde_json::json!(true)
         } else {
             serde_json::json!({ "message_id": 321, "chat": {"id": -100} })
