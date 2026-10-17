@@ -159,6 +159,8 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
 
 struct VoiceReadFixture;
 struct TypedMediaReadFixture;
+
+struct UncheckedMediaReadFixture;
 struct LargeVoiceReadFixture {
     expected_scope: tinychannels_bus::HostVoiceScope,
 }
@@ -375,6 +377,40 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
             },
             content_type: content_type.into(),
             file_name: Some(file_name.into()),
+            bytes,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::host::MediaRepository for UncheckedMediaReadFixture {
+    async fn store_media(
+        &self,
+        _request: crate::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        unreachable!("outbound media fixture only resolves stored media")
+    }
+
+    async fn read_media(
+        &self,
+        _scope: crate::host::MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<crate::host::StoredMedia> {
+        let bytes = BASE64
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
+            .unwrap();
+        assert!(bytes.len() as u64 <= max_bytes);
+        Ok(crate::host::StoredMedia {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some(opaque_id),
+                kind: tinychannels_bus::MediaKind::Image,
+                content_type: Some("image/png".into()),
+                size_bytes: Some(bytes.len() as u64),
+                ..Default::default()
+            },
+            content_type: "image/png".into(),
+            file_name: Some("photo.png".into()),
             bytes,
         })
     }
@@ -907,7 +943,7 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
     )
     .await;
     let channel =
-        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(UncheckedMediaReadFixture));
     let mut message = typed_text("ordered-image", "before".into());
     message.channel_ref = Some(tinychannels_bus::ChannelRef {
         id: "telegram".into(),
@@ -1002,9 +1038,8 @@ async fn typed_image_rejects_non_numeric_platform_thread_before_upload() {
     message.turn_id = Some("turn-42".into());
     message.conversation_ref = Some(tinychannels_bus::ConversationRef {
         id: "-10042".into(),
-        scope_id: Some("scope-42".into()),
-        parent_id: Some("parent-42".into()),
-        thread_id: Some("topic-77".into()),
+        thread_id: None,
+        topic_id: Some("topic-77".into()),
         ..Default::default()
     });
     message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
