@@ -146,7 +146,8 @@ impl ProgressiveSender for Sender {
         context: Option<&ProgressiveOutputContext>,
         sequence: u64,
         segment_index: u32,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
+    {
         send_typed_part(self, channel, parts, text, context, sequence, segment_index).await
     }
 

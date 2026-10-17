@@ -135,11 +135,18 @@ pub fn extract_message_id(resp: &serde_json::Value) -> Option<String> {
 /// response shapes, preserving provider order and removing duplicates.
 pub fn extract_message_ids(resp: &serde_json::Value) -> Vec<String> {
     let mut ids = Vec::new();
-    if let Some(values) = resp.get("platformMessageIds").and_then(serde_json::Value::as_array) {
+    if let Some(values) = resp
+        .get("platformMessageIds")
+        .and_then(serde_json::Value::as_array)
+    {
         ids.extend(values.iter().filter_map(receipt_id_value));
     }
     if let Some(parts) = resp.get("parts").and_then(serde_json::Value::as_array) {
-        ids.extend(parts.iter().filter_map(|part| part.get("platformMessageId").and_then(receipt_id_value)));
+        ids.extend(
+            parts
+                .iter()
+                .filter_map(|part| part.get("platformMessageId").and_then(receipt_id_value)),
+        );
     }
     if let Some(receipt) = resp.get("receipt") {
         ids.extend(extract_message_ids(receipt));

@@ -51,7 +51,10 @@ impl ProgressiveReply {
             output_context: None,
             output_sequence: 0,
             use_global_edit_latch: true,
-            text_limit: capabilities.text.text_limit.map(|limit| (limit, capabilities.text.length_unit)),
+            text_limit: capabilities
+                .text
+                .text_limit
+                .map(|limit| (limit, capabilities.text.length_unit)),
         }
     }
 
@@ -249,19 +252,24 @@ impl ProgressiveReply {
         parts: &[tinychannels_bus::OutboundContentPart],
         text: &str,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, super::ProgressiveSendError> {
-        let text_only = parts.iter().all(|part| matches!(
-            part,
-            tinychannels_bus::OutboundContentPart::Content {
-                part: tinychannels_bus::ContentPart::Text { .. }
-            }
-        ));
+        let text_only = parts.iter().all(|part| {
+            matches!(
+                part,
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { .. }
+                }
+            )
+        });
         let segments = match self.text_limit.filter(|_| text_only) {
             Some((limit, unit)) => split_text_by_limit(text, limit, unit)?,
             None => vec![text.to_owned()],
         };
         let dialect = parts.iter().find_map(|part| match part {
             tinychannels_bus::OutboundContentPart::Content {
-                part: tinychannels_bus::ContentPart::Text { markdown_dialect, .. },
+                part:
+                    tinychannels_bus::ContentPart::Text {
+                        markdown_dialect, ..
+                    },
             } => *markdown_dialect,
             _ => None,
         });
@@ -277,14 +285,18 @@ impl ProgressiveReply {
             } else {
                 parts.to_vec()
             };
-            let next = match self.sender.send_parts_with_segment(
-                &self.channel,
-                &segment_parts,
-                segment,
-                self.output_context.as_ref(),
-                self.output_sequence,
-                index as u32,
-            ).await {
+            let next = match self
+                .sender
+                .send_parts_with_segment(
+                    &self.channel,
+                    &segment_parts,
+                    segment,
+                    self.output_context.as_ref(),
+                    self.output_sequence,
+                    index as u32,
+                )
+                .await
+            {
                 Ok(next) => next,
                 Err(super::ProgressiveSendError::PartialOutcome(next)) => next,
                 Err(error) if index > 0 => {
@@ -394,14 +406,16 @@ fn merge_receipt(
     }
     if next.parts.is_empty() && (next.edit_token.is_some() || next.delete_token.is_some()) {
         for (offset, platform_message_id) in next.platform_message_ids.iter().enumerate() {
-            aggregate.parts.push(tinychannels_bus::channel::MessageReceiptPart {
-                platform_message_id: platform_message_id.clone(),
-                kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
-                index: segment_index + offset,
-                edit_token: next.edit_token.clone(),
-                delete_token: next.delete_token.clone(),
-                ..Default::default()
-            });
+            aggregate
+                .parts
+                .push(tinychannels_bus::channel::MessageReceiptPart {
+                    platform_message_id: platform_message_id.clone(),
+                    kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                    index: segment_index + offset,
+                    edit_token: next.edit_token.clone(),
+                    delete_token: next.delete_token.clone(),
+                    ..Default::default()
+                });
         }
     }
     aggregate
