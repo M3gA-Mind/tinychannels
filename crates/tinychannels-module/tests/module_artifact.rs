@@ -1185,7 +1185,7 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
                 "telegram",
                 ChannelsConfig {
                     telegram: Some(tinychannels_bus::config::TelegramConfig {
-                        bot_token: "456:other-fixture".into(),
+                    bot_token: "123:other-fixture".into(),
                         chat_id: None,
                         allowed_users: vec!["42".into()],
                         stream_mode: Default::default(),

@@ -151,10 +151,10 @@ impl Channels {
     }
 
     async fn media_activation(&self, instance: &str) -> BusResult<ProviderActivation> {
-        if self
-            .running
-            .lock()
-            .await
+        // Keep the running provider and its immutable account binding paired
+        // with the same generation while lifecycle transitions hold this lock.
+        let running = self.running.lock().await;
+        if running
             .get(instance)
             .is_none_or(|provider| provider.is_finished())
         {

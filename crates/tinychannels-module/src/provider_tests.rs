@@ -1,4 +1,35 @@
 use super::*;
+
+#[test]
+fn media_account_scope_hashes_credentials_but_ignores_mutable_policy() {
+    let mut config = tinychannels_bus::ChannelsConfig {
+        telegram: Some(tinychannels_bus::config::TelegramConfig {
+            bot_token: "123:secret-one".into(),
+            chat_id: Some("room-a".into()),
+            allowed_users: vec!["one".into()],
+            stream_mode: Default::default(),
+            draft_update_interval_ms: 1000,
+            silent_streaming: true,
+            mention_only: false,
+        }),
+        ..Default::default()
+    };
+    let original = configured_media_account_scope("telegram", &config).unwrap();
+
+    config.telegram.as_mut().unwrap().allowed_users = vec!["two".into()];
+    config.telegram.as_mut().unwrap().chat_id = Some("room-b".into());
+    assert_eq!(
+        configured_media_account_scope("telegram", &config).as_deref(),
+        Some(original.as_str())
+    );
+
+    config.telegram.as_mut().unwrap().bot_token = "123:secret-two".into();
+    assert_ne!(
+        configured_media_account_scope("telegram", &config).as_deref(),
+        Some(original.as_str()),
+        "a matching unverified token prefix cannot cross configured accounts"
+    );
+}
 use base64::Engine as _;
 use sha2::Digest as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
