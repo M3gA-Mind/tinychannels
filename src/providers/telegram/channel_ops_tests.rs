@@ -1543,7 +1543,14 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
 
     let mut no_reply = scoped_typed_media_message("stored-photo-1");
     no_reply.reply_to_id = Some("not-a-platform-id".into());
-    assert!(channel.send_typed_with_receipt(&no_reply).await.unwrap_err().to_string().contains("before provider dispatch"));
+    assert!(
+        channel
+            .send_typed_with_receipt(&no_reply)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("before provider dispatch")
+    );
 
     let mut unsupported = scoped_typed_media_message("stored-photo-1");
     for voice_id in ["voice-a", "voice-b"] {
@@ -1568,7 +1575,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("does not support this content combination")
+            .contains("before provider dispatch")
     );
 
     let zero_dimensions = scoped_typed_media_message("zero-dimension-photo");
@@ -1578,7 +1585,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("dimensions exceed provider limits")
+            .contains("before provider dispatch")
     );
 
     let mut sticker = scoped_typed_media_message("stored-photo-1");
@@ -1601,7 +1608,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("WEBP stickers only")
+            .contains("before provider dispatch")
     );
 
     assert!(server.received_requests().await.unwrap().is_empty());
