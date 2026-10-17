@@ -163,6 +163,8 @@ impl ScopedMediaStore {
                 && existing.content_type == record.content_type
                 && existing.media.duration_ms == record.media.duration_ms
                 && existing.file_name == record.file_name
+                && existing.codec == record.codec
+                && existing.voice_direction == record.voice_direction
             {
                 return Ok(existing.media);
             }
@@ -495,7 +497,7 @@ fn validate_scope(scope: &MediaScope) -> anyhow::Result<()> {
             .channel
             .account_id
             .as_deref()
-            .is_none_or(str::is_empty)
+            .is_none_or(|account_id| account_id.trim().is_empty())
         || scope.conversation.id.trim().is_empty()
         || scope.turn_id.trim().is_empty()
     {

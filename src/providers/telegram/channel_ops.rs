@@ -1509,6 +1509,12 @@ async fn send_typed_media_with_receipt(
         .or(conversation.topic_id.as_deref())
         .or(message.thread_id.as_deref())
         .map(str::to_owned);
+    if thread_id
+        .as_deref()
+        .is_some_and(|thread_id| thread_id.parse::<i64>().is_err())
+    {
+        anyhow::bail!("Telegram thread_id must be a numeric message thread ID");
+    }
     if let Some(reply_to) = message.reply_to_id.as_deref() {
         reply_to
             .parse::<i64>()

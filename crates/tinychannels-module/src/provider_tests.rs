@@ -60,7 +60,6 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
                     message: "fixture does not expose this operation".into(),
                     unsupported: true,
-                    ..Default::default()
                 });
             }
         };
