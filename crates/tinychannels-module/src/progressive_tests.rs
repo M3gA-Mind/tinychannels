@@ -818,13 +818,31 @@ async fn scoped_open_rejects_missing_identity_invalid_leases_and_unconfigured_ac
         (scoped("discord", Some("discord:one"), "", "turn", 1), "invalid scoped"),
         (scoped("discord", Some("discord:one"), "room", "", 1), "invalid scoped"),
         (scoped("discord", Some("discord:one"), "room", "turn", 0), "invalid scoped"),
-        (scoped("discord", Some("discord:one"), "room", "turn", u64::MAX), "not configured"),
         (scoped("discord", Some("slack:one"), "room", "turn", 10), "does not match"),
         (scoped("discord", Some("discord:missing"), "room", "turn", 10), "not configured"),
     ] {
         let error = replies.execute(request).await.unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
     }
+    let max_lease_is_representable = tokio::time::Instant::now()
+        .checked_add(tokio::time::Duration::from_millis(u64::MAX))
+        .is_some();
+    let max_lease_error = replies
+        .execute(scoped(
+            "discord",
+            Some("discord:one"),
+            "room",
+            "turn",
+            u64::MAX,
+        ))
+        .await
+        .unwrap_err();
+    let expected = if max_lease_is_representable {
+        "not configured"
+    } else {
+        "out of range"
+    };
+    assert!(max_lease_error.to_string().contains(expected));
     assert!(replies.state.lock().await.entries.is_empty());
     replies.shutdown().await.unwrap();
 }
@@ -2696,6 +2714,96 @@ async fn unsupported_media_is_retained_with_later_final_receipt_in_same_batch() 
             failure: None,
         }
     );
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unsupported_and_successful_media_facts_survive_later_provider_failure() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    let unsupported_part = tinychannels_bus::ContentPart::Image {
+        media: tinychannels_bus::MediaReference {
+            kind: tinychannels_bus::MediaKind::Image,
+            url: Some("https://media.invalid/first.png".into()),
+            ..Default::default()
+        },
+        caption: None,
+        alt_text: None,
+    };
+    let accepted = tinychannels_bus::channel::ChannelSendOutcome {
+        receipt: tinychannels_bus::channel::MessageReceipt {
+            platform_message_ids: vec!["accepted-media".into()],
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let failed = tinychannels_bus::channel::ChannelSendOutcome {
+        error: Some(tinychannels_bus::channel::ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+            message: "provider failed after dispatch".into(),
+            sent_before_error: true,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    callback.send_queue.lock().await.extend([
+        ProgressiveTransportResult::UnsupportedContent,
+        ProgressiveTransportResult::Outcome(Box::new(accepted.clone())),
+        ProgressiveTransportResult::Outcome(Box::new(failed.clone())),
+    ]);
+
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![
+                ChannelOutputEvent::Media {
+                    text: None,
+                    parts: vec![unsupported_part.clone()],
+                },
+                ChannelOutputEvent::Media {
+                    text: Some("accepted caption".into()),
+                    parts: vec![],
+                },
+                ChannelOutputEvent::Media {
+                    text: None,
+                    parts: vec![tinychannels_bus::ContentPart::Image {
+                        media: tinychannels_bus::MediaReference {
+                            kind: tinychannels_bus::MediaKind::Image,
+                            url: Some("https://media.invalid/third.png".into()),
+                            ..Default::default()
+                        },
+                        caption: None,
+                        alt_text: None,
+                    }],
+                },
+                ChannelOutputEvent::FinalMessage {
+                    text: "must not retry after provider failure".into(),
+                    parts: vec![],
+                    receipt: None,
+                },
+            ],
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result,
+        ProgressiveResult::DeliveryBatch {
+            outcomes: vec![accepted, failed],
+            unsupported: vec![tinychannels_bus::OutboundContentPart::Content {
+                part: unsupported_part,
+            }],
+            failure: Some(ProgressiveOutputFailure::ProviderTransport),
+        }
+    );
+    let sent = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+        .count();
+    assert_eq!(sent, 3, "the failed send is not repeated or followed by final");
     replies.shutdown().await.unwrap();
 }
 
