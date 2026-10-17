@@ -341,7 +341,7 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
                 tinychannels_bus::MediaKind::Image,
                 "image/webp",
                 "sticker.webp",
-                b"RIFF\x0c\0\0\0WEBPVP8 \x04\0\0\0\0\0\0\0".to_vec(),
+                include_bytes!("fixtures/sticker-512.webp").to_vec(),
             ),
             "stored-photo-1" => (
                 tinychannels_bus::MediaKind::Image,
