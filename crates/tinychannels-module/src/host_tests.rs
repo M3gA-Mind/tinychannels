@@ -588,6 +588,14 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         assert_eq!(observed.configured_instance, "telegram");
         assert_eq!(observed.channel.id, "telegram");
         assert_eq!(observed.channel.account_id.as_deref(), Some("telegram"));
+        assert!(
+            !observed
+                .channel
+                .account_id
+                .as_deref()
+                .unwrap()
+                .contains("media-v1")
+        );
     }
     for observed in &scopes[1..] {
         assert_eq!(observed.conversation.id, "conversation-1");
