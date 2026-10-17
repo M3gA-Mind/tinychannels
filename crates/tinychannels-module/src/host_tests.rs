@@ -559,6 +559,21 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         assert_eq!(observed.turn_id, "message-4");
     }
     drop(scopes);
+    let voice_requests = callback.voice_requests.lock().await;
+    let publication = voice_requests
+        .iter()
+        .find(|request| request["kind"] == "store")
+        .unwrap();
+    assert_eq!(publication["direction"], "inbound");
+    assert_eq!(publication["codec"], "wav_pcm16");
+    assert_eq!(
+        publication["mediaReference"]["opaque_id"],
+        opaque_id
+    );
+    assert!(voice_requests.iter().any(|request| {
+        request["kind"] == "read" && request["opaqueId"] == legacy_id
+    }));
+    drop(voice_requests);
 
     provider_host
         .events()
