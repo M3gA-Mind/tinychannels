@@ -247,6 +247,68 @@ async fn prepare_voice_reply_enforces_size_duration_and_durable_reference() {
 }
 
 #[tokio::test]
+async fn prepare_voice_reply_uses_provider_codec_and_encoded_duration_metadata() {
+    let (synth, codec, store) =
+        voice_pipeline_stubs("audio/mp4", "AQIDBA==", Some(800), Some("media-2"));
+    let accepted = vec!["mp3".into(), "m4a_aac".into()];
+    let prepared = prepare_voice_reply(
+        scope(),
+        "hello".into(),
+        None,
+        &synth,
+        &codec,
+        &store,
+        VoiceReplyConstraints {
+            accepted_codecs: &accepted,
+            max_size_bytes: Some(4),
+            max_duration_ms: Some(800),
+        },
+    )
+    .await
+    .unwrap();
+
+    let codec_request = codec.requests.lock().unwrap()[0].clone();
+    assert_eq!((codec_request.from.as_str(), codec_request.target.as_str()), ("m4a_aac", "m4a_aac"));
+    let stored = &store.requests.lock().unwrap()[0];
+    assert_eq!(stored.mime_type, "audio/mp4");
+    assert_eq!(stored.file_name.as_deref(), Some("voice.m4a"));
+    assert_eq!(stored.duration_ms, Some(800));
+    assert_eq!(prepared.note.media.opaque_id.as_deref(), Some("media-2"));
+    assert_eq!(prepared.note.media.content_type.as_deref(), Some("audio/mp4"));
+    assert_eq!(prepared.note.media.codec.as_deref(), Some("m4a_aac"));
+    assert_eq!(prepared.note.duration_ms, Some(800));
+    assert_eq!(prepared.accessible_url.as_deref(), Some("https://authorized.example/voice"));
+}
+
+#[tokio::test]
+async fn prepare_voice_reply_stops_before_storage_when_host_pipeline_cannot_proceed() {
+    let accepted = vec!["ogg_opus".into()];
+    let (synth, codec, store) = voice_pipeline_stubs("audio/aac", "AQIDBA==", None, Some("id"));
+    let error = prepare_voice_reply(
+        scope(), "reply".into(), None, &synth, &codec, &store, constraints(&accepted),
+    ).await.unwrap_err();
+    assert!(error.to_string().contains("unsupported audio format"));
+    assert!(codec.requests.lock().unwrap().is_empty());
+    assert!(store.requests.lock().unwrap().is_empty());
+
+    let (synth, codec, store) = voice_pipeline_stubs("audio/wav", "AQIDBA==", None, Some("id"));
+    let error = prepare_voice_reply(
+        scope(), "reply".into(), None, &synth, &codec, &store, constraints(&[]),
+    ).await.unwrap_err();
+    assert!(error.to_string().contains("no supported voice codec"));
+    assert!(codec.requests.lock().unwrap().is_empty());
+    assert!(store.requests.lock().unwrap().is_empty());
+
+    let (synth, codec, mut store) = voice_pipeline_stubs("audio/wav", "AQIDBA==", None, Some("id"));
+    store.result = Err(anyhow::anyhow!("fixture"));
+    let error = prepare_voice_reply(
+        scope(), "reply".into(), None, &synth, &codec, &store, constraints(&accepted),
+    ).await.unwrap_err();
+    assert!(error.to_string().contains("fixture storage failure"));
+    assert_eq!(store.requests.lock().unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn voice_enrichment_keeps_durable_audio_when_transcription_fails() {
     let mut note = stored_voice();
     let media = note.media.clone();
