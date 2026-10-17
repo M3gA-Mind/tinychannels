@@ -9,7 +9,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tinystoragedrivers_core::{
-    BlobReader, BlobStore, CollectionSpec, DocumentStore, Precondition, Query,
+    BlobReader, BlobStore, CollectionSpec, DocumentStore, Filter, Precondition, Query,
 };
 use tokio::io::AsyncReadExt;
 
@@ -374,9 +374,28 @@ impl ScopedMediaStore {
         limit: usize,
     ) -> anyhow::Result<usize> {
         validate_scope(&scope)?;
+        let filter = Filter::And {
+            filters: vec![
+                Filter::eq("scope", serde_json::to_value(&scope)?),
+                Filter::In {
+                    field: "state".into(),
+                    values: vec![serde_json::json!("writing"), serde_json::json!("deleting")],
+                },
+                Filter::Range {
+                    field: "created_at_unix_ms".into(),
+                    gt: None,
+                    gte: None,
+                    lt: None,
+                    lte: Some(serde_json::json!(created_before_unix_ms)),
+                },
+            ],
+        };
         let page = self
             .documents
-            .query(MEDIA_COLLECTION, &Query::all().limit(limit.clamp(1, 1000)))
+            .query(
+                MEDIA_COLLECTION,
+                &Query::filter(filter).limit(limit.clamp(1, 1000)),
+            )
             .await
             .map_err(|_| anyhow::anyhow!("media cleanup scan failed"))?;
         let mut cleaned = 0;
@@ -384,12 +403,6 @@ impl ScopedMediaStore {
             let Ok(mut record) = serde_json::from_value::<MediaRecord>(document.doc.clone()) else {
                 continue;
             };
-            if record.scope != scope
-                || record.created_at_unix_ms > created_before_unix_ms
-                || record.state == MediaRecordState::Ready
-            {
-                continue;
-            }
             let tombstone_version = if record.state == MediaRecordState::Deleting {
                 document.version
             } else {
