@@ -788,7 +788,7 @@ async fn scoped_voice_callbacks_round_trip_scope_and_enforce_media_limits() {
     assert_eq!(calls[2]["direction"], "inbound");
     assert_eq!(
         calls[3],
-        serde_json::json!({"kind":"read","opaqueId":"voice-1","maxBytes":4})
+        serde_json::json!({"kind":"read","opaqueId":"voice-1","maxBytes":12})
     );
     assert_eq!(calls[4]["kind"], "read");
     assert_eq!(calls[5]["kind"], "policy");

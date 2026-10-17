@@ -4527,16 +4527,22 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
             } if turn_id == "stub-codec-turn" => Some(parts),
             _ => None,
         });
-        assert!(send.is_some_and(|parts| parts.iter().any(|part| matches!(
-            part,
-            tinychannels_bus::OutboundContentPart::Voice {
-                voice: tinychannels_bus::OutboundVoice::Media {
-                    media,
-                    codec: Some(codec),
-                    ..
-                }
-            } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
-        ))), "captured outbound parts: {send:?}");
+        assert!(
+            send.is_some_and(|parts| parts.iter().any(|part| matches!(
+                part,
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media {
+                        media,
+                        codec: Some(codec),
+                        ..
+                    }
+                } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
+            ))),
+            "captured outbound parts: {send:?}; synthesis calls {}; store calls {}; host requests {:?}",
+            callback.synthesis_calls.load(Ordering::SeqCst),
+            callback.voice_store_calls.load(Ordering::SeqCst),
+            callback.voice_requests.lock().await.as_slice()
+        );
     }
     assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
     assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 1);
