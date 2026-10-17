@@ -162,14 +162,23 @@ impl TelegramChannel {
             },
             turn_id: message.id.clone(),
         };
-        let file_name = file_name.or_else(|| downloaded.file_name.clone());
+        let source_file_name = file_name;
+        let file_name = source_file_name
+            .clone()
+            .or_else(|| downloaded.file_name.clone());
+        let inferred_source_mime = source_file_name
+            .as_deref()
+            .and_then(super::attachments::infer_attachment_mime);
         let typed_mime_hint = mime_hint
             .as_deref()
             .filter(|mime| !mime.eq_ignore_ascii_case("application/octet-stream"));
-        let hint = file_name
-            .as_deref()
-            .and_then(super::attachments::infer_attachment_mime)
+        let hint = inferred_source_mime
             .or(typed_mime_hint)
+            .or_else(|| {
+                file_name
+                    .as_deref()
+                    .and_then(super::attachments::infer_attachment_mime)
+            })
             .or(mime_hint.as_deref())
             .or(downloaded.content_type.as_deref())
             .unwrap_or("");
