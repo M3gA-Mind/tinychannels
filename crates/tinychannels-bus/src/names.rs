@@ -170,7 +170,7 @@ macro_rules! channel_method_registry {
             "PrepareChannelControl",
             "StartRuntimeWithDispatch",
             "PrepareRuntimeCommand"
-        ])
+        ]);
     };
 }
 
