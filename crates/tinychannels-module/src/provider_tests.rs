@@ -1887,7 +1887,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         turn_id: "turn-kit".into(),
     };
     let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=").unwrap();
-    let media_inputs: [(ConformanceFeature, tinychannels_bus::MediaKind, &str, &str, &[u8]); 7] = [
+    let media_inputs: [(ConformanceFeature, tinychannels_bus::MediaKind, &str, &str, &[u8]); 6] = [
         (ConformanceFeature::Image, tinychannels_bus::MediaKind::Image, "image/png", "fixture.png", &png),
         (ConformanceFeature::Video, tinychannels_bus::MediaKind::Video, "video/mp4", "fixture.mp4", include_bytes!("../../../src/providers/telegram/fixtures/cc0-flower.mp4")),
         (ConformanceFeature::Audio, tinychannels_bus::MediaKind::Audio, "audio/mpeg", "fixture.mp3", include_bytes!("../../../../tinyvoice/crates/tinyvoice/tests/fixtures/mp3-test.bit")),
