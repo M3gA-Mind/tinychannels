@@ -295,6 +295,65 @@ async fn typed_voice_sends_long_transcript_as_receipted_followup_text() {
 }
 
 #[tokio::test]
+async fn long_voice_transcript_failure_retains_partial_receipts_without_retry() {
+    let server = mock_api().await;
+    mount_post(&server, "sendVoice", ok_with(serde_json::json!({"message_id": 56}))).await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .respond_with(ok_with(serde_json::json!({"message_id": 57})))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    mount_post(&server, "sendMessage", ResponseTemplate::new(400).set_body_string("rejected"))
+        .await;
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
+    let transcript = "long transcript ".repeat(400);
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: None,
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            ..Default::default()
+        }),
+        reply_to_id: Some("42".into()),
+        thread_id: None,
+        turn_id: Some("turn-7".into()),
+        idempotency_key: "send-key-hash".into(),
+        parts: vec![
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: transcript,
+                    markdown_dialect: None,
+                },
+            },
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("host-media-1".into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    audio_base64: None,
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: Some(1000),
+                },
+            },
+        ],
+    };
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    assert_eq!(outcome.receipt.platform_message_ids, ["56", "57"]);
+    let error = outcome.error.expect("later transcript chunk failure stays visible");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    assert_eq!(json_bodies(&server, "sendMessage").await.len(), 2,
+        "the operation makes one pass and preserves the accepted text chunk");
+    assert_eq!(raw_bodies(&server, "sendVoice").await.len(), 1,
+        "ambiguous transcript failure must not repeat the voice upload");
+}
+
+#[tokio::test]
 async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() {
     let server = mock_api().await;
     mount_post(
