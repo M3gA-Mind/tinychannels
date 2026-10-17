@@ -1,5 +1,11 @@
 use super::*;
 
+type ProviderMediaScopeCase = (
+    &'static str,
+    tinychannels_bus::ChannelsConfig,
+    fn(&mut tinychannels_bus::ChannelsConfig),
+);
+
 #[test]
 fn media_account_scope_hashes_credentials_but_ignores_mutable_policy() {
     let mut config = tinychannels_bus::ChannelsConfig {
@@ -35,11 +41,7 @@ fn media_account_scope_hashes_credentials_but_ignores_mutable_policy() {
 fn configured_media_scope_requires_each_supported_providers_authentication_material() {
     use tinychannels_bus::config::*;
 
-    let cases: Vec<(
-        &str,
-        tinychannels_bus::ChannelsConfig,
-        fn(&mut tinychannels_bus::ChannelsConfig),
-    )> = vec![
+    let cases: Vec<ProviderMediaScopeCase> = vec![
         (
             "telegram",
             tinychannels_bus::ChannelsConfig {
