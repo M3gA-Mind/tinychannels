@@ -89,13 +89,8 @@ pub(super) async fn delete_ephemeral_messages(
                 continue;
             }
             let part_receipt = receipt_for_part(&receipt, &message_id);
-            delete_channel_message_with_receipt(
-                sender,
-                channel,
-                &message_id,
-                Some(&part_receipt),
-            )
-            .await;
+            delete_channel_message_with_receipt(sender, channel, &message_id, Some(&part_receipt))
+                .await;
             deleted.push(message_id);
         }
     }

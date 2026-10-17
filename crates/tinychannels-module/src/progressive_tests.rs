@@ -1745,23 +1745,34 @@ async fn thinking_multipart_receipt_drives_per_part_token_cleanup() {
     );
     reply.on_thinking_delta("reasoning");
     reply.edit_tick().await;
-    assert_eq!(reply.state().thinking_message_ids, ["thinking-1", "thinking-2"]);
+    assert_eq!(
+        reply.state().thinking_message_ids,
+        ["thinking-1", "thinking-2"]
+    );
     reply.abort().await;
     let requests = callback.requests.lock().await;
     let deletes: Vec<_> = requests
         .iter()
         .filter_map(|request| match request {
-            ProgressiveTransportRequest::Delete { receipt, message_id, .. } => {
-                Some((message_id.as_str(), receipt.as_ref()?))
-            }
+            ProgressiveTransportRequest::Delete {
+                receipt,
+                message_id,
+                ..
+            } => Some((message_id.as_str(), receipt.as_ref()?)),
             _ => None,
         })
         .collect();
     assert_eq!(deletes.len(), 2);
     assert_eq!(deletes[0].0, "thinking-1");
-    assert_eq!(deletes[0].1.parts[0].delete_token.as_deref(), Some("delete-1"));
+    assert_eq!(
+        deletes[0].1.parts[0].delete_token.as_deref(),
+        Some("delete-1")
+    );
     assert_eq!(deletes[1].0, "thinking-2");
-    assert_eq!(deletes[1].1.parts[0].delete_token.as_deref(), Some("delete-2"));
+    assert_eq!(
+        deletes[1].1.parts[0].delete_token.as_deref(),
+        Some("delete-2")
+    );
     replies.shutdown().await.unwrap();
 }
 
@@ -1794,9 +1805,13 @@ async fn filler_callback_error_after_acceptance_is_not_retried() {
     reply.filler_tick().await;
     assert!(reply.state().filler_delivery_uncertain);
     assert!(reply.state().filler_disabled);
-    let sends = callback.requests.lock().await.iter().filter(|request| {
-        matches!(request, ProgressiveTransportRequest::Send { .. })
-    }).count();
+    let sends = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .filter(|request| matches!(request, ProgressiveTransportRequest::Send { .. }))
+        .count();
     assert_eq!(sends, 1, "accepted-then-error filler must not be retried");
     replies.shutdown().await.unwrap();
 }

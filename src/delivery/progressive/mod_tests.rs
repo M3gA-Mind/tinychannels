@@ -459,7 +459,7 @@ async fn thinking_send_failure_or_missing_id_stops_thinking_flushes() {
 }
 
 #[tokio::test]
-async fn filler_failures_disable_fillers() {
+async fn uncertain_filler_send_disables_retries_immediately() {
     let (sender, mut reply) = turn("telegram:12");
     FakeSender::script(&sender.sends, Outcome::Err(other));
     FakeSender::script(&sender.sends, Outcome::Err(other));
@@ -467,7 +467,8 @@ async fn filler_failures_disable_fillers() {
     reply.filler_tick().await;
     reply.filler_tick().await;
     assert!(reply.state().filler_disabled);
-    assert_eq!(sender.calls().len(), 2);
+    assert!(reply.state().filler_delivery_uncertain);
+    assert_eq!(sender.calls().len(), 1);
 }
 
 #[tokio::test]
