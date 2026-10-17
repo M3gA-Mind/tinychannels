@@ -1949,6 +1949,20 @@ impl tracing::Subscriber for DeliveryDiagnostics {
 async fn uncertain_send_diagnostics_report_only_shape_counts_without_message_or_receipt_secrets() {
     let diagnostics = DeliveryDiagnostics::default();
     let _guard = tracing::subscriber::set_default(diagnostics.clone());
+    std::thread::spawn(|| {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let (_, mut reply) = turn("telegram:unobserved-edit-diagnostics");
+                reply.on_text_delta("unobserved");
+                reply.edit_tick().await;
+                reply.on_text_delta(" update");
+                reply.edit_tick().await;
+            });
+    })
+    .join()
+    .unwrap();
     let (sender, mut reply) = turn("telegram:redacted-diagnostics");
     let receipt = MessageReceipt {
         idempotency_key: Some("private-idempotency-key".into()),
@@ -2000,8 +2014,11 @@ async fn uncertain_send_diagnostics_report_only_shape_counts_without_message_or_
     assert!(messages.contains("response_fields="));
     assert!(
         messages.contains("edit ok"),
-        "captured diagnostics: {messages}; edit calls: {:?}",
-        sender.calls()
+        "captured diagnostics: {messages}; edit calls: {:?}; static maximum: {:?}; runtime maximum: {:?}; debug enabled: {}",
+        sender.calls(),
+        tracing::level_filters::STATIC_MAX_LEVEL,
+        tracing::level_filters::LevelFilter::current(),
+        tracing::enabled!(tracing::Level::DEBUG)
     );
     for secret in [
         "private-idempotency-key",
