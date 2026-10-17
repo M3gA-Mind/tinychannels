@@ -159,7 +159,10 @@ pub async fn prepare_voice_reply(
         &encoded.audio_base64,
     )?
     .len() as u64;
-    if constraints.max_size_bytes.is_some_and(|limit| size_bytes > limit) {
+    if constraints
+        .max_size_bytes
+        .is_some_and(|limit| size_bytes > limit)
+    {
         anyhow::bail!("synthesized voice exceeds provider size limit");
     }
     let duration_ms = encoded.duration_ms.or(synthesized.duration_ms);

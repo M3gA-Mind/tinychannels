@@ -9,12 +9,14 @@ host transcripts survive replay. A failed or unavailable STT callback marks
 the transcript unavailable without removing the stored audio.
 
 For completed assistant turns, the module asks the host's scoped
-`GetVoiceReplyPolicy` callback for its mode and verified turn facts. Mirror,
-always, never, and speak-reply are applied only to final messages. The provider's
-advertised output codecs and size/duration limits constrain synthesis. Speech
-is converted and probed by the loaded TinyVoice module through `tinyvoice-bus`,
-then persisted by `StoreVoiceMedia`. The durable opaque ID remains the intent
-identity. A separate `accessibleUrl` is retained only when the host has
+`GetVoiceReplyPolicy` callback for its mode and verified turn facts. Automatic
+mirror, always, never, and speak-reply decisions apply only to final messages;
+explicit `Synthesize` parts are honored when sent through the typed transport.
+Approval, tool, and clarification prompts are not automatically voiced. The
+provider's advertised output codecs and size/duration limits constrain
+synthesis. Speech is converted and probed by the loaded TinyVoice module
+through `tinyvoice-bus`, then persisted by `StoreVoiceMedia`. The durable opaque
+ID remains the intent identity. A separate `accessibleUrl` is retained only when the host has
 authorized a link that the recipient can open; it must not be a local path,
 provider token URL, or temporary cache location. Hosts own access checks for
 opaque IDs and link expiry/revocation.

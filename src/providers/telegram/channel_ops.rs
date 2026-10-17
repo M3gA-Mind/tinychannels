@@ -628,22 +628,20 @@ impl Channel for TelegramChannel {
                 };
             let (chat_id, thread_id) = Self::parse_reply_target(&conversation.id);
             let message_id = self
-                .send_voice_bytes_with_id(
-                    super::channel_send::TelegramVoiceUpload {
-                        method,
-                        field,
-                        chat_id: &chat_id,
-                        thread_id: thread_id
-                            .as_deref()
-                            .or(conversation.topic_id.as_deref())
-                            .or(conversation.thread_id.as_deref()),
-                        reply_to_id: message.reply_to_id.as_deref(),
-                        caption: (!transcript_fallback && !caption.trim().is_empty())
-                            .then_some(caption.as_str()),
-                        bytes: audio,
-                        file_name: resolved.file_name.as_deref().unwrap_or("voice.ogg"),
-                    },
-                )
+                .send_voice_bytes_with_id(super::channel_send::TelegramVoiceUpload {
+                    method,
+                    field,
+                    chat_id: &chat_id,
+                    thread_id: thread_id
+                        .as_deref()
+                        .or(conversation.topic_id.as_deref())
+                        .or(conversation.thread_id.as_deref()),
+                    reply_to_id: message.reply_to_id.as_deref(),
+                    caption: (!transcript_fallback && !caption.trim().is_empty())
+                        .then_some(caption.as_str()),
+                    bytes: audio,
+                    file_name: resolved.file_name.as_deref().unwrap_or("voice.ogg"),
+                })
                 .await?;
             let kind = tinychannels_bus::channel::MessageReceiptPartKind::Voice;
             let receipt_part = tinychannels_bus::channel::MessageReceiptPart {
