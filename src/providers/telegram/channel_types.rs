@@ -80,6 +80,8 @@ pub struct TelegramChannel {
     /// [`TelegramChannel::with_transcriber`].
     pub(crate) transcriber: Option<Arc<dyn crate::host::Transcriber>>,
     pub(crate) voice_media_store: Option<Arc<dyn crate::host::VoiceMediaStore>>,
+    pub(crate) synthesizer: Option<Arc<dyn crate::host::SpeechSynthesizer>>,
+    pub(crate) voice_codec: Option<Arc<dyn crate::host::VoiceCodec>>,
     /// Injected persisted-allowlist store. On first-run bind/pairing the paired
     /// identity is promoted through this so it survives restarts. `None` ⇒
     /// runtime-only allowlisting. Set via [`TelegramChannel::with_allowlist`].
