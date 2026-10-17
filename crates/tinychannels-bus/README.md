@@ -80,9 +80,17 @@ Chunk retries are idempotent only when bytes match; conflicting retries fail.
 The implementation validates media kind, MIME type, body and size through
 `ScopedMediaStore` before returning a reference. This contract adds no host
 implementation-library dependency or host-side media metadata schema.
-Durable media scope intentionally uses the stable configured provider identity
-and full logical conversation/turn, not a runtime activation ID: a resumed
-conversation can keep using its opaque reference after provider/runtime restart.
+Durable media scope binds the full logical conversation/turn to a versioned,
+private authority derived from the configured provider's authentication and
+endpoint fields, not to a runtime activation ID. Mutable policy is excluded, so
+policy edits and Slack's optional Socket Mode app token do not change the
+authority. Credential or endpoint changes conservatively create a new scope;
+transparent credential rotation requires a provider-authenticated stable
+identity. Existing records are retained, but provider-only legacy records that
+cannot be unambiguously bound fail closed and are never re-scoped to a caller.
+Signal and iMessage, and WhatsApp configurations with only a local session
+path, currently lack an authenticated identity source and fail closed for this
+media scope until one is supplied.
 In-flight upload handles remain activation-bound and cannot authorize against a
 replacement provider activation.
 
