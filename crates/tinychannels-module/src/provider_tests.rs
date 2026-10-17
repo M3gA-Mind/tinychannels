@@ -452,7 +452,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
         use tinychannels_bus::{ContentPart as Part, OutboundContentPart as OutPart};
         let media = || self.media.get(&feature).cloned().unwrap_or_else(|| {
             let (kind, content_type, file_name) = match feature {
-                Feature::Image => (tinychannels_bus::MediaKind::Image, "image/png", "fixture.png"),
+                Feature::Image => (tinychannels_bus::MediaKind::Image, "image/webp", "fixture.webp"),
                 Feature::Video => (tinychannels_bus::MediaKind::Video, "video/mp4", "fixture.mp4"),
                 Feature::Audio | Feature::VoiceOut => (tinychannels_bus::MediaKind::Audio, "audio/ogg", "fixture.ogg"),
                 Feature::Sticker => (tinychannels_bus::MediaKind::Image, "image/webp", "sticker-512.webp"),
@@ -475,7 +475,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             }
             Feature::Image => content(Part::Image { media: media(), caption: Some("image case".into()), alt_text: None }),
             Feature::Video => content(Part::Video { media: media(), caption: Some("video case".into()), duration_ms: Some(1000), thumbnail: None }),
-            Feature::Audio => content(Part::Audio { media: media(), codec: Some("mp3".into()), duration_ms: Some(1000), title: Some("audio case".into()), transcript: None }),
+            Feature::Audio => content(Part::Audio { media: media(), codec: Some("ogg_opus".into()), duration_ms: Some(200), title: Some("audio case".into()), transcript: None }),
             Feature::File => content(Part::File { media: media(), file_name: Some("fixture.pdf".into()), caption: Some("file case".into()) }),
             Feature::Sticker => content(Part::Sticker { media: media(), pack_id: None, sticker_id: None, emoji: Some("🙂".into()), alt_text: None }),
             Feature::Location => content(Part::Location { latitude: 29.3759, longitude: 47.9774, label: None, address: None, accuracy_meters: Some(10.0), live_until_unix_ms: None }),
@@ -1801,10 +1801,16 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
                 "sendMessage" | "sendPhoto" | "sendVideo" | "sendAudio" | "sendVoice"
                 | "sendDocument" | "sendSticker" | "sendLocation" | "sendVenue"
                 | "sendContact" | "sendPoll" | "editMessageText");
-            let mut result = serde_json::json!({});
+            let mut result = serde_json::json!(true);
             if has_message {
-                let id = next_id_for_mock.fetch_add(1, Ordering::SeqCst).to_string();
+                let requested_edit_id = if endpoint == "editMessageText" {
+                    serde_json::from_slice::<serde_json::Value>(&request.body).ok()
+                        .and_then(|body| body.get("message_id").and_then(|value| value.as_i64()))
+                        .map(|value| value.to_string())
+                } else { None };
+                let id = requested_edit_id.unwrap_or_else(|| next_id_for_mock.fetch_add(1, Ordering::SeqCst).to_string());
                 response_ids_for_mock.lock().unwrap().push((endpoint.to_owned(), id.clone()));
+                result = serde_json::json!({});
                 result["message_id"] = serde_json::Value::Number(id.parse::<u64>().unwrap().into());
             }
             ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true, "result": result}))
@@ -1852,13 +1858,12 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         conversation: ConversationRef { kind: ConversationKind::Group, id: "-100".into(), thread_id: Some("77".into()), topic_id: Some("77".into()), ..Default::default() },
         turn_id: "turn-kit".into(),
     };
-    let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=").unwrap();
     let media_inputs: [(ConformanceFeature, tinychannels_bus::MediaKind, &str, &str, &[u8]); 6] = [
-        (ConformanceFeature::Image, tinychannels_bus::MediaKind::Image, "image/png", "fixture.png", &png),
-        (ConformanceFeature::Video, tinychannels_bus::MediaKind::Video, "video/mp4", "fixture.mp4", b"telegram conformance mp4 fixture"),
+        (ConformanceFeature::Image, tinychannels_bus::MediaKind::Image, "image/webp", "fixture.webp", include_bytes!("../../../src/providers/telegram/fixtures/sticker-512.webp")),
+        (ConformanceFeature::Video, tinychannels_bus::MediaKind::Video, "video/mp4", "fixture.mp4", b"\0\0\0\x18ftypisom\0\0\x02\0isomiso2mp41"),
         (ConformanceFeature::Audio, tinychannels_bus::MediaKind::Audio, "audio/ogg", "fixture.ogg", include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
         (ConformanceFeature::VoiceOut, tinychannels_bus::MediaKind::Audio, "audio/ogg", "voice.ogg", include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
-        (ConformanceFeature::File, tinychannels_bus::MediaKind::Document, "application/pdf", "fixture.pdf", b"%PDF-1.4\nfixture"),
+        (ConformanceFeature::File, tinychannels_bus::MediaKind::Document, "text/plain", "fixture.txt", b"Telegram module conformance document\n"),
         (ConformanceFeature::Sticker, tinychannels_bus::MediaKind::Image, "image/webp", "sticker-512.webp", include_bytes!("../../../src/providers/telegram/fixtures/sticker-512.webp")),
     ];
     let mut media = std::collections::HashMap::new();
