@@ -450,7 +450,22 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
     > {
         use tinychannels_conformance::ConformanceFeature as Feature;
         use tinychannels_bus::{ContentPart as Part, OutboundContentPart as OutPart};
-        let media = || self.media.get(&feature).cloned().unwrap_or_default();
+        let media = || self.media.get(&feature).cloned().unwrap_or_else(|| {
+            let (kind, content_type, file_name) = match feature {
+                Feature::Image => (tinychannels_bus::MediaKind::Image, "image/png", "fixture.png"),
+                Feature::Video => (tinychannels_bus::MediaKind::Video, "video/mp4", "fixture.mp4"),
+                Feature::Audio | Feature::VoiceOut => (tinychannels_bus::MediaKind::Audio, "audio/ogg", "fixture.ogg"),
+                Feature::Sticker => (tinychannels_bus::MediaKind::Image, "image/webp", "sticker-512.webp"),
+                _ => (tinychannels_bus::MediaKind::Document, "application/pdf", "fixture.pdf"),
+            };
+            tinychannels_bus::MediaReference {
+                url: Some(format!("https://fixtures.invalid/{file_name}")),
+                content_type: Some(content_type.into()),
+                file_name: Some(file_name.into()),
+                kind,
+                ..Default::default()
+            }
+        });
         let content = |part| tinychannels_bus::OutboundPayload::Parts {
             parts: vec![OutPart::Content { part }],
         };
