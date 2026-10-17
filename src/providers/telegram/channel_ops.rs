@@ -9,6 +9,88 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
 
 impl TelegramChannel {
+    fn callback_event(update: &serde_json::Value) -> Option<tinychannels_bus::ChannelEvent> {
+        let query = update.get("callback_query")?;
+        let query_id = query.get("id")?.as_str()?.to_owned();
+        let action_id = query.get("data")?.as_str()?.to_owned();
+        if action_id.is_empty() || action_id.len() > 64 {
+            return None;
+        }
+        let user = query.get("from")?;
+        let actor_id = user.get("id")?.as_i64()?.to_string();
+        let message = query.get("message")?;
+        let chat = message.get("chat")?;
+        let conversation_id = chat.get("id")?.as_i64()?.to_string();
+        let message_id = message.get("message_id")?.as_i64()?.to_string();
+        let update_id = update
+            .get("update_id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
+        let topic_id = message
+            .get("message_thread_id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
+        let kind = match chat.get("type").and_then(serde_json::Value::as_str) {
+            Some("private") => tinychannels_bus::ConversationKind::Dm,
+            Some("group" | "supergroup") => tinychannels_bus::ConversationKind::Group,
+            Some("channel") => tinychannels_bus::ConversationKind::Channel,
+            _ => tinychannels_bus::ConversationKind::Unknown,
+        };
+        Some(tinychannels_bus::ChannelEvent {
+            version: 2,
+            event_id: update_id
+                .as_ref()
+                .map(|id| format!("telegram:update:{id}:callback:{query_id}"))
+                .unwrap_or_else(|| format!("telegram:callback:{query_id}")),
+            source_event_id: update_id,
+            source_timestamp: None,
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: None,
+            },
+            conversation: Some(tinychannels_bus::ConversationRef {
+                kind,
+                id: conversation_id,
+                topic_id,
+                ..Default::default()
+            }),
+            event: tinychannels_bus::ChannelEventKind::ButtonCallback {
+                query_id,
+                action_id,
+                provider_message_id: Some(message_id),
+                actor: tinychannels_bus::SenderRef {
+                    id: actor_id,
+                    name: user
+                        .get("username")
+                        .or_else(|| user.get("first_name"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                    is_bot: user
+                        .get("is_bot")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false),
+                    ..Default::default()
+                },
+            },
+        })
+    }
+
+    async fn acknowledge_callback(&self, query_id: &str) {
+        let Ok(response) = self
+            .http_client()
+            .post(self.api_url("answerCallbackQuery"))
+            .json(&serde_json::json!({ "callback_query_id": query_id }))
+            .send()
+            .await
+        else {
+            tracing::debug!("Telegram callback acknowledgment request failed");
+            return;
+        };
+        if !Self::telegram_api_ok(response).await {
+            tracing::debug!("Telegram callback acknowledgment was rejected");
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn inbound_envelope_from_update(
         update: &serde_json::Value,
@@ -954,7 +1036,7 @@ impl Channel for TelegramChannel {
             let body = serde_json::json!({
                 "offset": offset,
                 "timeout": 30,
-                "allowed_updates": ["message", "edited_message", "message_reaction"]
+                "allowed_updates": ["message", "edited_message", "message_reaction", "callback_query"]
             });
 
             let resp = match self.http_client().post(&url).json(&body).send().await {
@@ -1030,6 +1112,23 @@ Ensure only one `openhuman` process is using this bot token."
                     // Advance offset past this update
                     if let Some(uid) = update.get("update_id").and_then(serde_json::Value::as_i64) {
                         offset = uid + 1;
+                    }
+
+                    if let Some(query_id) = update
+                        .get("callback_query")
+                        .and_then(|query| query.get("id"))
+                        .and_then(serde_json::Value::as_str)
+                    {
+                        self.acknowledge_callback(query_id).await;
+                        if let (Some(event), Some(events)) =
+                            (Self::callback_event(update), &self.events)
+                            && let Err(error) = events
+                                .publish_ingress(tinychannels_bus::ChannelIngress::Event(event))
+                                .await
+                        {
+                            tracing::debug!(%error, "failed to deliver Telegram button callback");
+                        }
+                        continue;
                     }
 
                     let reactions = self.parse_update_reactions(update);

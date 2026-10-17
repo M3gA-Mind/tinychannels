@@ -2566,6 +2566,54 @@ async fn legacy_reaction_marker_is_plain_text_not_a_telegram_operation() {
     assert_eq!(sent_texts(&server).await, ["\\[REACTION:🔥\\] hello"]);
 }
 
+#[test]
+fn callback_event_keeps_authenticated_actor_message_and_topic_identity() {
+    let update = serde_json::json!({
+        "update_id": 12,
+        "callback_query": {
+            "id": "query-5",
+            "data": "approval:opaque-id",
+            "from": { "id": 31, "username": "alice", "is_bot": false },
+            "message": {
+                "message_id": 81,
+                "message_thread_id": 6,
+                "chat": { "id": -100, "type": "supergroup" }
+            }
+        }
+    });
+
+    let event = TelegramChannel::callback_event(&update).unwrap();
+    assert_eq!(event.channel.id, "telegram");
+    assert_eq!(event.conversation.as_ref().unwrap().id, "-100");
+    assert_eq!(event.conversation.as_ref().unwrap().topic_id.as_deref(), Some("6"));
+    assert!(matches!(event.event, tinychannels_bus::ChannelEventKind::ButtonCallback {
+        ref query_id,
+        ref action_id,
+        provider_message_id: Some(ref message_id),
+        ref actor,
+    } if query_id == "query-5" && action_id == "approval:opaque-id" && message_id == "81" && actor.id == "31" && actor.name.as_deref() == Some("alice")));
+}
+
+#[test]
+fn callback_event_rejects_oversized_or_unscoped_callback_data() {
+    let oversized = serde_json::json!({
+        "callback_query": {
+            "id": "query",
+            "data": "x".repeat(65),
+            "from": { "id": 1 },
+            "message": { "message_id": 2, "chat": { "id": 3, "type": "private" } }
+        }
+    });
+    assert!(TelegramChannel::callback_event(&oversized).is_none());
+    let inline = serde_json::json!({
+        "callback_query": {
+            "id": "query", "data": "action", "from": { "id": 1 },
+            "inline_message_id": "inline"
+        }
+    });
+    assert!(TelegramChannel::callback_event(&inline).is_none());
+}
+
 #[tokio::test]
 async fn send_bare_existing_path_uploads_it_as_attachment() {
     let server = mock_api().await;
