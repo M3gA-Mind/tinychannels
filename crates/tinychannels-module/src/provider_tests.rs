@@ -1387,9 +1387,11 @@ async fn configured_running_telegram_adapter_uploads_media_from_host_storage() {
     assert!(body.contains("name=\"message_thread_id\"\r\n\r\n31"));
     assert!(body.contains("name=\"reply_parameters\"\r\n\r\n{\"message_id\":19}"));
     assert!(body.contains("host-owned.png"));
-    assert!(requests[0]
-        .body
-        .windows(bytes.len())
-        .any(|window| window == bytes));
+    assert!(
+        requests[0]
+            .body
+            .windows(bytes.len())
+            .any(|window| window == bytes)
+    );
     running.stop().await.unwrap();
 }

@@ -87,7 +87,10 @@ impl TelegramChannel {
         if let Some(duration_ms) = upload.duration_ms {
             form = form.text(
                 "duration",
-                duration_ms.saturating_add(999).saturating_div(1000).to_string(),
+                duration_ms
+                    .saturating_add(999)
+                    .saturating_div(1000)
+                    .to_string(),
             );
         }
         let response = self
