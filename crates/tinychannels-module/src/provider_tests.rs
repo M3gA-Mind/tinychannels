@@ -410,6 +410,7 @@ struct RunningTelegramConformance {
     callbacks: IngressVoiceCallback,
     observed: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
     request_cursor: std::sync::Mutex<usize>,
+    response_ids: Arc<Mutex<Vec<(String, String)>>>,
 }
 
 #[async_trait::async_trait]
