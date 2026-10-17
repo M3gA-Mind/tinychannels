@@ -15,6 +15,15 @@ impl TelegramChannel {
         message: &ChannelMessage,
         voice_note: Option<tinychannels_bus::VoiceNote>,
     ) -> tinychannels_bus::ChannelInboundEnvelope {
+        Self::inbound_envelope_with_media(update, message, voice_note, Vec::new())
+    }
+
+    pub(crate) fn inbound_envelope_with_media(
+        update: &serde_json::Value,
+        message: &ChannelMessage,
+        voice_note: Option<tinychannels_bus::VoiceNote>,
+        media_parts: Vec<tinychannels_bus::ContentPart>,
+    ) -> tinychannels_bus::ChannelInboundEnvelope {
         let source = update
             .get("message")
             .or_else(|| update.get("edited_message"))
@@ -104,7 +113,7 @@ impl TelegramChannel {
                     parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
                     parts
                 },
-            ),
+            ).into_iter().chain(media_parts).collect(),
             raw: Some(serde_json::json!({"providerMessageId": provider_message_id})),
             ..Default::default()
         }
@@ -1177,7 +1186,19 @@ Ensure only one `openhuman` process is using this bot token."
                         }
                         Err(error) => return Err(error),
                     };
-                    let ingress = Self::inbound_envelope_from_update(update, &msg, voice_note);
+                    let media_parts = match self.media_parts_for_ingress(update, &msg).await {
+                        Ok(parts) => parts,
+                        Err(_) => {
+                            tracing::warn!("Telegram attachment could not be persisted as typed media");
+                            Vec::new()
+                        }
+                    };
+                    let ingress = Self::inbound_envelope_with_media(
+                        update,
+                        &msg,
+                        voice_note,
+                        media_parts,
+                    );
                     let delivered_by_event_sink = if let Some(events) = &self.events {
                         match events
                             .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(ingress))

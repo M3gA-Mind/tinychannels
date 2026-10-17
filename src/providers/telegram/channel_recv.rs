@@ -21,6 +21,201 @@ pub(crate) struct TelegramIncomingMessageContext {
 }
 
 impl TelegramChannel {
+    fn update_media_attachment(
+        update: &serde_json::Value,
+    ) -> Option<(
+        tinychannels_bus::MediaKind,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<u64>,
+        &'static str,
+    )> {
+        let message = update
+            .get("message")
+            .or_else(|| update.get("edited_message"))?;
+        if let Some(photo) = message.get("photo").and_then(serde_json::Value::as_array) {
+            let photo = photo.last()?;
+            let file_id = photo.get("file_id")?.as_str()?.to_owned();
+            return Some((
+                tinychannels_bus::MediaKind::Image,
+                file_id,
+                photo
+                    .get("file_unique_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                None,
+                None,
+                "photo",
+            ));
+        }
+        for (field, kind, default_mime) in [
+            ("document", tinychannels_bus::MediaKind::Document, "application/octet-stream"),
+            ("video", tinychannels_bus::MediaKind::Video, "video/mp4"),
+            ("audio", tinychannels_bus::MediaKind::Audio, "audio/mpeg"),
+            ("sticker", tinychannels_bus::MediaKind::Image, "image/webp"),
+        ] {
+            let Some(attachment) = message.get(field) else {
+                continue;
+            };
+            let Some(file_id) = attachment
+                .get("file_id")
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            let mime = attachment
+                .get("mime_type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(default_mime)
+                .to_owned();
+            return Some((
+                kind,
+                file_id.to_owned(),
+                attachment
+                    .get("file_unique_id")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                attachment
+                    .get("file_name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                attachment
+                    .get("duration")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|seconds| seconds.saturating_mul(1000)),
+                field,
+            ));
+        }
+        None
+    }
+
+    pub(crate) async fn media_parts_for_ingress(
+        &self,
+        update: &serde_json::Value,
+        message: &ChannelMessage,
+    ) -> anyhow::Result<Vec<tinychannels_bus::ContentPart>> {
+        let Some((kind, file_id, unique_id, file_name, duration_ms, field)) =
+            Self::update_media_attachment(update)
+        else {
+            return Ok(Vec::new());
+        };
+        let repository = self
+            .media_repository
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("host media storage is unavailable"))?;
+        let (bytes, response_mime, downloaded_name) = self
+            .download_telegram_media_file(&file_id, TELEGRAM_MAX_VOICE_FILE_BYTES)
+            .await?;
+        let source = update
+            .get("message")
+            .or_else(|| update.get("edited_message"))
+            .unwrap_or(&serde_json::Value::Null);
+        let chat = source.get("chat").unwrap_or(&serde_json::Value::Null);
+        let chat_id = chat
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| message.reply_target.split(':').next().unwrap_or_default().to_owned());
+        let topic_id = source
+            .get("message_thread_id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
+        let scope = tinychannels_bus::HostVoiceScope {
+            configured_instance: String::new(),
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: None,
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: match chat.get("type").and_then(serde_json::Value::as_str) {
+                    Some("private") => tinychannels_bus::ConversationKind::Dm,
+                    Some("group" | "supergroup") => tinychannels_bus::ConversationKind::Group,
+                    Some("channel") => tinychannels_bus::ConversationKind::Channel,
+                    _ => tinychannels_bus::ConversationKind::Unknown,
+                },
+                id: chat_id,
+                thread_id: topic_id.clone(),
+                topic_id,
+                ..Default::default()
+            },
+            turn_id: message.id.clone(),
+        };
+        let hint = file_name
+            .as_deref()
+            .and_then(super::attachments::infer_attachment_mime)
+            .unwrap_or_else(|| match kind {
+                tinychannels_bus::MediaKind::Image => "image/jpeg",
+                tinychannels_bus::MediaKind::Video => "video/mp4",
+                tinychannels_bus::MediaKind::Audio => "audio/mpeg",
+                tinychannels_bus::MediaKind::Document => response_mime.as_deref().unwrap_or(""),
+                tinychannels_bus::MediaKind::Unknown => "",
+            });
+        if let Some(actual) = response_mime.as_deref()
+            && !actual.eq_ignore_ascii_case(hint)
+        {
+            anyhow::bail!("Telegram media response MIME does not match its declared type");
+        }
+        let dedupe_key = format!("telegram:{}:{field}", message.id);
+        let media = repository
+            .store_media(crate::host::MediaStoreRequest {
+                metadata: crate::host::MediaMetadata {
+                    scope,
+                    kind,
+                    content_type: hint.to_owned(),
+                    file_name: file_name.or(downloaded_name),
+                    duration_ms,
+                    codec: None,
+                    voice_direction: None,
+                    dedupe_key: Some(dedupe_key),
+                    max_bytes: TELEGRAM_MAX_VOICE_FILE_BYTES,
+                },
+                bytes,
+            })
+            .await?;
+        let part = match kind {
+            tinychannels_bus::MediaKind::Image if field == "sticker" => {
+                tinychannels_bus::ContentPart::Sticker {
+                    media,
+                    pack_id: None,
+                    sticker_id: unique_id,
+                    emoji: source
+                        .get("sticker")
+                        .and_then(|sticker| sticker.get("emoji"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                    alt_text: None,
+                }
+            }
+            tinychannels_bus::MediaKind::Image => tinychannels_bus::ContentPart::Image {
+                media,
+                caption: None,
+                alt_text: None,
+            },
+            tinychannels_bus::MediaKind::Video => tinychannels_bus::ContentPart::Video {
+                media,
+                caption: None,
+                duration_ms,
+                thumbnail: None,
+            },
+            tinychannels_bus::MediaKind::Audio => tinychannels_bus::ContentPart::Audio {
+                media,
+                codec: None,
+                duration_ms,
+                title: None,
+                transcript: None,
+            },
+            tinychannels_bus::MediaKind::Document | tinychannels_bus::MediaKind::Unknown => {
+                tinychannels_bus::ContentPart::File {
+                    media,
+                    file_name,
+                    caption: None,
+                }
+            }
+        };
+        Ok(vec![part])
+    }
+
     pub(crate) fn typing_body_for_recipient(recipient: &str) -> serde_json::Value {
         let (chat_id, thread_id) = Self::parse_reply_target(recipient);
         let mut body = serde_json::json!({
@@ -949,6 +1144,79 @@ impl TelegramChannel {
             return value.as_ref().to_string();
         }
         value.as_ref().replace(&self.bot_token, "<redacted>")
+    }
+
+    pub(crate) async fn download_telegram_media_file(
+        &self,
+        file_id: &str,
+        max_bytes: u64,
+    ) -> anyhow::Result<(Vec<u8>, Option<String>, Option<String>)> {
+        let file_response = self
+            .http_client()
+            .post(self.api_url("getFile"))
+            .json(&serde_json::json!({ "file_id": file_id }))
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("Telegram getFile request failed"))?;
+        let file_response: serde_json::Value = file_response
+            .json()
+            .await
+            .map_err(|_| anyhow::anyhow!("Telegram getFile response was invalid"))?;
+        if !file_response
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            anyhow::bail!("Telegram getFile rejected the media request");
+        }
+        let result = file_response
+            .get("result")
+            .ok_or_else(|| anyhow::anyhow!("Telegram getFile response omitted its result"))?;
+        let file_path = result
+            .get("file_path")
+            .and_then(serde_json::Value::as_str)
+            .filter(|path| !path.is_empty() && !path.starts_with('/') && !path.contains(".."))
+            .ok_or_else(|| anyhow::anyhow!("Telegram getFile response had an invalid path"))?;
+        if result
+            .get("file_size")
+            .and_then(serde_json::Value::as_u64)
+            .is_some_and(|size| size > max_bytes)
+        {
+            anyhow::bail!("Telegram media exceeds the configured size limit");
+        }
+        let file_name = file_path.rsplit('/').next().map(str::to_owned);
+        let url = format!("{}/file/bot{}/{}", self.api_base, self.bot_token, file_path);
+        let mut response = self
+            .http_client()
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| anyhow::anyhow!("Telegram media download failed"))?;
+        if !response.status().is_success()
+            || response.content_length().is_some_and(|length| length > max_bytes)
+        {
+            anyhow::bail!("Telegram media download was rejected");
+        }
+        let response_mime = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(|value| value.split(';').next().unwrap_or_default().trim().to_ascii_lowercase());
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|_| anyhow::anyhow!("Telegram media download failed"))?
+        {
+            if bytes.len() as u64 + chunk.len() as u64 > max_bytes {
+                anyhow::bail!("Telegram media exceeds the configured size limit");
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if bytes.is_empty() {
+            anyhow::bail!("Telegram returned an empty media body");
+        }
+        Ok((bytes, file_name, response_mime))
     }
 
     pub(crate) async fn download_telegram_voice_file(
