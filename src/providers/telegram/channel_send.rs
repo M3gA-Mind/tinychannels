@@ -955,7 +955,7 @@ fn is_markdown_parse_rejection(status: reqwest::StatusCode, body: &[u8]) -> bool
         || description.contains("entity beginning")
 }
 
-fn partial_text_send_error(
+pub(crate) fn partial_text_send_error(
     message_ids: Vec<String>,
     message: String,
     retryable: bool,
