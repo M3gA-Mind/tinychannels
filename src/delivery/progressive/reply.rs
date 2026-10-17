@@ -297,7 +297,10 @@ impl ProgressiveReply {
                 markdown_dialect: None,
             },
         };
-        match self.send_content_parts(std::slice::from_ref(&part), text).await {
+        match self
+            .send_content_parts(std::slice::from_ref(&part), text)
+            .await
+        {
             Ok(outcome) => dispatch.push_outcome(outcome),
             Err(super::ProgressiveSendError::UnsupportedContent) => dispatch.unsupported.push(part),
             Err(error) => return Err(error),
@@ -453,38 +456,30 @@ impl ProgressiveReply {
             Err(error) => {
                 let mut outcome = match error {
                     super::ProgressiveSendError::PartialOutcome(outcome) => *outcome,
-                    super::ProgressiveSendError::Unavailable => {
-                        progressive_edit_error(
-                            tinychannels_bus::channel::SendErrorKind::Transient,
-                            "progressive edit was unavailable",
-                            true,
-                            false,
-                        )
-                    }
-                    super::ProgressiveSendError::EditUnsupported => {
-                        progressive_edit_error(
-                            tinychannels_bus::channel::SendErrorKind::Unknown,
-                            "progressive edit is unsupported",
-                            false,
-                            false,
-                        )
-                    }
-                    super::ProgressiveSendError::MessageGone => {
-                        progressive_edit_error(
-                            tinychannels_bus::channel::SendErrorKind::NotFound,
-                            "progressive draft no longer exists",
-                            false,
-                            false,
-                        )
-                    }
-                    _ => {
-                        progressive_edit_error(
-                            tinychannels_bus::channel::SendErrorKind::Unknown,
-                            "progressive edit outcome is uncertain",
-                            false,
-                            true,
-                        )
-                    }
+                    super::ProgressiveSendError::Unavailable => progressive_edit_error(
+                        tinychannels_bus::channel::SendErrorKind::Transient,
+                        "progressive edit was unavailable",
+                        true,
+                        false,
+                    ),
+                    super::ProgressiveSendError::EditUnsupported => progressive_edit_error(
+                        tinychannels_bus::channel::SendErrorKind::Unknown,
+                        "progressive edit is unsupported",
+                        false,
+                        false,
+                    ),
+                    super::ProgressiveSendError::MessageGone => progressive_edit_error(
+                        tinychannels_bus::channel::SendErrorKind::NotFound,
+                        "progressive draft no longer exists",
+                        false,
+                        false,
+                    ),
+                    _ => progressive_edit_error(
+                        tinychannels_bus::channel::SendErrorKind::Unknown,
+                        "progressive edit outcome is uncertain",
+                        false,
+                        true,
+                    ),
                 };
                 let mut retained = self.state.message_receipt.clone().unwrap_or_default();
                 if retained.primary_platform_message_id.is_none() {
@@ -783,5 +778,23 @@ fn merge_receipt(
     aggregate.sent_at = aggregate.sent_at.max(next.sent_at);
     if let Some(mut raw) = next.raw {
         aggregate.raw.get_or_insert_with(Vec::new).append(&mut raw);
+    }
+}
+
+fn progressive_edit_error(
+    kind: tinychannels_bus::channel::SendErrorKind,
+    message: &str,
+    retryable: bool,
+    sent_before_error: bool,
+) -> tinychannels_bus::channel::ChannelSendOutcome {
+    tinychannels_bus::channel::ChannelSendOutcome {
+        error: Some(tinychannels_bus::channel::ChannelSendError {
+            kind,
+            message: message.to_owned(),
+            retryable,
+            sent_before_error,
+            ..Default::default()
+        }),
+        ..Default::default()
     }
 }
