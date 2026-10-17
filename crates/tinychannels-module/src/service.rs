@@ -1144,11 +1144,13 @@ impl Channels {
             request.instance.clone(),
         );
         let media_id = request.media.opaque_id.clone().expect("validated opaque id");
+        let scope = request.scope.clone();
+        let max_bytes = request.max_bytes;
         let media = tokio::time::timeout(
             std::time::Duration::from_secs(30),
             async move {
                 repository
-                    .read_media(request.scope.clone(), media_id, request.max_bytes)
+                    .read_media(scope, media_id, max_bytes)
                     .await
             },
         )
