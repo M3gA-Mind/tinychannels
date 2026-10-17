@@ -80,6 +80,11 @@ Chunk retries are idempotent only when bytes match; conflicting retries fail.
 The implementation validates media kind, MIME type, body and size through
 `ScopedMediaStore` before returning a reference. This contract adds no host
 implementation-library dependency or host-side media metadata schema.
+Durable media scope intentionally uses the stable configured provider identity
+and full logical conversation/turn, not a runtime activation ID: a resumed
+conversation can keep using its opaque reference after provider/runtime restart.
+In-flight upload handles remain activation-bound and cannot authorize against a
+replacement provider activation.
 
 This source contract still requires a compatible published native module before
 a downstream host can claim released composition.

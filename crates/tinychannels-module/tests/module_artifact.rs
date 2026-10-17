@@ -1375,36 +1375,16 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     wrong_account.channel_ref.as_mut().unwrap().account_id = Some("telegram:other".into());
     let mut wrong_conversation = send.clone();
     wrong_conversation.conversation_id = "43".into();
-    wrong_conversation
-        .conversation_ref
-        .as_mut()
-        .unwrap()
-        .id = "43".into();
+    wrong_conversation.conversation_ref.as_mut().unwrap().id = "43".into();
     let mut wrong_scope = send.clone();
-    wrong_scope
-        .conversation_ref
-        .as_mut()
-        .unwrap()
-        .scope_id = Some("other-room".into());
+    wrong_scope.conversation_ref.as_mut().unwrap().scope_id = Some("other-room".into());
     let mut wrong_parent = send.clone();
-    wrong_parent
-        .conversation_ref
-        .as_mut()
-        .unwrap()
-        .parent_id = Some("other-parent".into());
+    wrong_parent.conversation_ref.as_mut().unwrap().parent_id = Some("other-parent".into());
     let mut wrong_thread = send.clone();
     wrong_thread.thread_id = Some("18".into());
-    wrong_thread
-        .conversation_ref
-        .as_mut()
-        .unwrap()
-        .thread_id = Some("18".into());
+    wrong_thread.conversation_ref.as_mut().unwrap().thread_id = Some("18".into());
     let mut wrong_topic = send.clone();
-    wrong_topic
-        .conversation_ref
-        .as_mut()
-        .unwrap()
-        .topic_id = Some("other-topic".into());
+    wrong_topic.conversation_ref.as_mut().unwrap().topic_id = Some("other-topic".into());
     let mut wrong_turn = send.clone();
     wrong_turn.turn_id = Some("turn-from-another-message".into());
     let invalid_scopes = [
@@ -1424,13 +1404,15 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
             .iter()
             .filter(|request| request.url.path().ends_with("/sendPhoto"))
             .count();
-        assert!(runtime_proxy
-            .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
-                "SendChannelIntent",
-                ("telegram", invalid),
-            )
-            .await
-            .is_err());
+        assert!(
+            runtime_proxy
+                .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                    "SendChannelIntent",
+                    ("telegram", invalid),
+                )
+                .await
+                .is_err()
+        );
         let after = telegram_api
             .received_requests()
             .await
