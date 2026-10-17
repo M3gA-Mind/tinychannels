@@ -24,6 +24,15 @@ be an actual path produced by host storage after its protected-path and symlink
 guards, never a blob key or provider URL. The OpenHuman guarded cache projection
 is likewise downstream work.
 
+The current module exposes this store to provider and shared voice routes, but
+the TinyChannels bus has no host-to-module operation for creating a general
+typed-media reference. Host applications must not link the implementation
+crate or duplicate its metadata schema to upload media. A bounded, scope-bound
+module operation for host media ingestion is required before host artifact or
+frontend upload consumers can use this namespace; it must return the same
+opaque reference and keep configured account, full conversation, and origin
+turn validation inside the module.
+
 For completed assistant turns, the module asks the host's scoped
 `GetVoiceReplyPolicy` callback for its mode and verified turn facts. Automatic
 mirror, always, never, and speak-reply decisions apply only to final messages;

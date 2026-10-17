@@ -259,6 +259,19 @@ fn telegram_advertises_typed_media_only_with_scoped_storage() {
     assert!(configured.content.audio.inbound && configured.content.audio.outbound);
     assert!(configured.content.file.inbound && configured.content.file.outbound);
     assert!(configured.content.sticker.inbound && configured.content.sticker.outbound);
+    assert_eq!(
+        configured.content.image.accepted_types,
+        ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    );
+    assert_eq!(configured.content.sticker.accepted_types, ["image/webp"]);
+    assert_eq!(
+        configured.content.video.max_size_bytes,
+        Some(20 * 1024 * 1024)
+    );
+    assert_eq!(
+        configured.content.file.max_size_bytes,
+        Some(20 * 1024 * 1024)
+    );
 }
 
 #[async_trait::async_trait]
