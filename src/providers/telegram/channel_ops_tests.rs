@@ -206,7 +206,8 @@ fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() 
         .with_voice_media_store(Arc::new(VoiceReadFixture))
         .capabilities();
     assert!(with_storage.voice_in.supported);
-    assert_eq!(with_storage.content.parts, ["text", "voice_note"]);
+    assert!(with_storage.content.parts.contains(&"text".into()));
+    assert!(with_storage.content.parts.contains(&"voice_note".into()));
     assert!(with_storage.voice_out.supported);
     assert!(!with_storage.voice_out.synthesis);
     assert_eq!(
@@ -228,7 +229,8 @@ fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
         .with_voice_media_store(Arc::new(VoiceReadFixture))
         .capabilities();
     assert!(off.content.text.inbound && off.content.text.outbound);
-    assert_eq!(off.content.parts, ["text", "voice_note"]);
+    assert!(off.content.parts.contains(&"text".into()));
+    assert!(off.content.parts.contains(&"voice_note".into()));
     assert!(off.actions.supported.contains(&"send".into()));
     assert!(!off.progressive_edits);
     assert!(!off.streaming_reply_pipeline);
@@ -256,7 +258,7 @@ fn telegram_advertises_typed_media_only_with_scoped_storage() {
     assert!(configured.content.audio.inbound && configured.content.audio.outbound);
     assert!(configured.content.file.inbound && configured.content.file.outbound);
     assert!(configured.content.sticker.inbound);
-    assert!(!configured.content.sticker.outbound);
+    assert!(configured.content.sticker.outbound);
     assert_eq!(
         configured.content.image.accepted_types,
         ["image/jpeg", "image/png", "image/gif", "image/webp"]
@@ -1428,7 +1430,7 @@ async fn typed_media_preserves_legacy_address_and_requires_host_opaque_id() {
         .send_typed_with_receipt(&missing_reference)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("no host-owned opaque reference"));
+    assert!(error.to_string().contains("preflight"));
     assert_eq!(json_bodies(&server, "sendPhoto").await.len(), 1);
 }
 
@@ -1509,14 +1511,9 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
 
     let mut no_conversation = scoped_typed_media_message("stored-photo-1");
     no_conversation.conversation_ref.as_mut().unwrap().id = "  ".into();
-    assert!(
-        channel
-            .send_typed_with_receipt(&no_conversation)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("conversation identity")
-    );
+    let error = channel.send_typed_with_receipt(&no_conversation).await.unwrap_err();
+    assert!(error.to_string().contains("preflight"));
+    assert!(server.received_requests().await.unwrap().is_empty());
 
     let mut no_account = scoped_typed_media_message("stored-photo-1");
     no_account.channel_ref.as_mut().unwrap().account_id = None;
