@@ -50,7 +50,8 @@ fn text_delta_uses_draft_when_editing_supported() {
             ..Default::default()
         },
         BridgeTranslationOptions::default(),
-    );
+    )
+    .unwrap();
     assert!(matches!(
         intents[0].payload,
         OutboundPayload::NativeChannelData { .. }
@@ -68,7 +69,8 @@ fn text_delta_degrades_to_segment_send_without_editing() {
         &ChannelStaticCapabilities::default(),
         &ChannelPresentationCapabilities::default(),
         BridgeTranslationOptions::default(),
-    );
+    )
+    .unwrap();
     assert!(matches!(intents[0].payload, OutboundPayload::Text { .. }));
 }
 
@@ -84,7 +86,8 @@ fn approval_degrades_to_text_when_native_actions_unavailable() {
         &ChannelStaticCapabilities::default(),
         &ChannelPresentationCapabilities::default(),
         BridgeTranslationOptions::default(),
-    );
+    )
+    .unwrap();
     let OutboundPayload::Text { text } = &intents[0].payload else {
         panic!("expected text fallback");
     };
@@ -110,7 +113,8 @@ fn media_event_preserves_ordered_typed_content_parts() {
         &ChannelStaticCapabilities::default(),
         &ChannelPresentationCapabilities::default(),
         BridgeTranslationOptions::default(),
-    );
+    )
+    .unwrap();
     let OutboundPayload::NativeChannelData { data } = &intents[0].payload else {
         panic!("expected typed media projection");
     };
@@ -144,7 +148,8 @@ fn harness_outbound_intent_preserves_full_turn_address() {
         &ChannelStaticCapabilities::default(),
         &ChannelPresentationCapabilities::default(),
         BridgeTranslationOptions::default(),
-    );
+    )
+    .unwrap();
     let intent = &intents[0];
     assert_eq!(intent.channel_ref, Some(turn.envelope.channel.clone()));
     assert_eq!(
@@ -207,7 +212,8 @@ fn harness_events_preserve_text_and_routing_metadata() {
             &Default::default(),
             &Default::default(),
             BridgeTranslationOptions::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(intents.len(), 1);
         assert_eq!(
             intents[0].payload,
@@ -243,7 +249,8 @@ fn native_approval_requires_enough_actions_and_a_nonempty_row() {
                 ..Default::default()
             },
             BridgeTranslationOptions::default(),
-        );
+        )
+        .unwrap();
         if native {
             assert_eq!(
                 intents[0].payload,
@@ -292,7 +299,8 @@ fn lifecycle_and_native_events_preserve_structured_data() {
             &Default::default(),
             &Default::default(),
             BridgeTranslationOptions::default(),
-        );
+        )
+        .unwrap();
         assert_eq!(
             intents[0].payload,
             OutboundPayload::NativeChannelData { data }
@@ -318,7 +326,8 @@ fn blocked_streaming_uses_text_even_when_edits_are_available() {
             ..Default::default()
         },
         BridgeTranslationOptions::default(),
-    );
+    )
+    .unwrap();
     assert_eq!(
         intents[0].payload,
         OutboundPayload::Text {
@@ -349,7 +358,8 @@ fn tool_progress_projection_preserves_call_identity_arguments_and_result() {
         &ChannelStaticCapabilities::default(),
         &ChannelPresentationCapabilities::default(),
         BridgeTranslationOptions::default(),
-    );
+    )
+    .unwrap();
     let OutboundPayload::NativeChannelData { data } = &intents[0].payload else {
         panic!("rich progress must remain typed data until the host projects it")
     };
