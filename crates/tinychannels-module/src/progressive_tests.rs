@@ -3727,6 +3727,50 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         inbound_has_voice: false,
         explicitly_requested: false,
     });
+    capabilities.voice_out.max_size_bytes = Some(1);
+    let sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut too_long = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        sender,
+        "telegram:bot-1",
+        capabilities.clone(),
+        context.clone(),
+    );
+    let stores_before = callback.voice_store_calls.load(Ordering::SeqCst);
+    too_long
+        .send_parts(
+            &[tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "spoken words".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            "spoken words",
+        )
+        .await
+        .expect("oversized voice falls back to the text response");
+    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), stores_before);
+    let requests = callback.requests.lock().await;
+    let too_long_request = requests.iter().rev().find_map(|request| match request {
+        ProgressiveTransportRequest::SendTyped { parts, text, .. } => Some((parts, text)),
+        _ => None,
+    }).unwrap();
+    assert!(!too_long_request.0.iter().any(|part| matches!(part,
+        tinychannels_bus::OutboundContentPart::Voice { .. }
+    )));
+    assert_eq!(too_long_request.1, "spoken words");
+    drop(requests);
+
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
     let sender = Arc::new(Sender {
         host,
         context: Some(context.clone()),
