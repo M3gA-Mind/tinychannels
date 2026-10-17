@@ -312,3 +312,112 @@ async fn a_storage_outage_is_a_store_error_not_a_missing_record() {
         Err(DeliveryQueueError::Store(_))
     ));
 }
+
+#[tokio::test]
+async fn deliveries_are_written_as_snake_case_ms_bodies_under_key_ids() {
+    let docs = docs();
+    let store = DocumentDeliveryStore::new(Arc::clone(&docs));
+    let mut queued = entry("a/b", 5);
+    queued.last_attempt_at_unix_ms = Some(7);
+    store.save_pending(queued.clone()).await.unwrap();
+    store.save_failed(queued.clone()).await.unwrap();
+
+    let stored = docs
+        .get(PENDING_COLLECTION, "a%2Fb")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.meta.schema, SCHEMA_VERSION);
+    assert_eq!(
+        stored.doc,
+        serde_json::json!({
+            "intent": {
+                "idempotency_key": "a/b",
+                "channel_id": "telegram",
+                "conversation_id": "room",
+                "reply_to_id": null,
+                "thread_id": null,
+                "durability": "required",
+                "payload": { "kind": "text", "text": "body" },
+            },
+            "enqueued_ms": 5,
+            "retry_count": 0,
+            "last_attempt_ms": 7,
+        })
+    );
+    assert!(docs.get(PENDING_COLLECTION, "a/b").await.unwrap().is_none());
+    assert_eq!(store.load_failed("a/b").await.unwrap(), Some(queued));
+}
+
+#[tokio::test]
+async fn a_delivery_stored_under_the_wrong_id_is_unreadable_not_returned() {
+    let docs = docs();
+    let store = DocumentDeliveryStore::new(Arc::clone(&docs));
+    store.save_pending(entry("real", 1)).await.unwrap();
+    let stored = docs.get(PENDING_COLLECTION, "real").await.unwrap().unwrap();
+    docs.put(
+        PENDING_COLLECTION,
+        "other",
+        stored.doc,
+        Precondition::Absent,
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        store.load_pending("other").await,
+        Err(DeliveryQueueError::Store(message)) if message.contains("unreadable")
+    ));
+}
+
+#[tokio::test]
+async fn a_result_stored_under_the_wrong_id_is_unreadable_not_returned() {
+    let docs = docs();
+    let store = DocumentDeliveryStore::new(Arc::clone(&docs));
+    store
+        .save_result(result("real", now_unix_ms()))
+        .await
+        .unwrap();
+    let stored = docs.get(RESULTS_COLLECTION, "real").await.unwrap().unwrap();
+    docs.put(
+        RESULTS_COLLECTION,
+        "other",
+        stored.doc,
+        Precondition::Absent,
+    )
+    .await
+    .unwrap();
+
+    assert!(matches!(
+        store.load_result("other").await,
+        Err(DeliveryQueueError::Store(message)) if message.contains("unreadable")
+    ));
+    assert!(store.load_result("real").await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn a_result_expires_through_record_metadata_and_keeps_no_time_but_completion() {
+    let docs = docs();
+    let store = DocumentDeliveryStore::new(Arc::clone(&docs));
+    let completed = now_unix_ms();
+    store.save_result(result("r", completed)).await.unwrap();
+
+    let stored = docs.get(RESULTS_COLLECTION, "r").await.unwrap().unwrap();
+    assert_eq!(
+        stored.doc,
+        serde_json::json!({
+            "id": "r",
+            "intent_fingerprint": "a".repeat(64),
+            "completed_ms": completed,
+        })
+    );
+    assert_eq!(
+        stored.meta.expires_ms,
+        Some((completed + DELIVERY_RESULT_TTL_SECONDS * 1000) as i64)
+    );
+    assert_eq!(stored.meta.schema, SCHEMA_VERSION);
+    assert_eq!(
+        store.load_result("r").await.unwrap(),
+        Some(result("r", completed))
+    );
+}

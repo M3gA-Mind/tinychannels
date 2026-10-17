@@ -6,9 +6,12 @@
 //!
 //! | collection | id | document |
 //! | --- | --- | --- |
-//! | `channels_delivery_pending` | idempotency key | the [`QueuedDelivery`] |
-//! | `channels_delivery_failed` | idempotency key | the [`QueuedDelivery`] |
-//! | `channels_delivery_results` | idempotency key | terminal result + expiry |
+//! | `channels.delivery_pending` | `Key::of([idempotency key])` | the [`QueuedDelivery`] |
+//! | `channels.delivery_failed` | `Key::of([idempotency key])` | the [`QueuedDelivery`] |
+//! | `channels.delivery_results` | `Key::of([idempotency key])` | terminal result, expiring through record metadata |
+//!
+//! Bodies are the storage DTOs of [`super::records`] (snake_case, `*_ms`), not
+//! the camelCase bus types, which are unchanged on the wire.
 //!
 //! Writes that must not race use the port's preconditions: a new key is
 //! inserted with `Absent`, an update is a compare-and-swap on the version read.
@@ -19,7 +22,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tinychannels_bus::DeliveryTerminalResult;
 use tinychannels_bus::module_delivery::{
@@ -27,10 +29,12 @@ use tinychannels_bus::module_delivery::{
     DELIVERY_RESULT_TTL_SECONDS,
 };
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, ErrorKind, Filter, Precondition, Query, Sort,
-    StorageError,
+    CollectionSpec, DocumentStore, DocumentStoreExt, EXPIRES_FIELD, ErrorKind, Filter, Key,
+    Precondition, Query, Sort, StorageError, Versioned, WriteOptions,
 };
 
+use super::records::{StoredDelivery, StoredResult, to_stored_ms};
+use super::schema::{self, SCHEMA_VERSION};
 use crate::delivery::{
     DeliveryQueueError, DeliveryQueueStore, DeliveryResultStore, QueuedDelivery,
 };
@@ -38,11 +42,11 @@ use crate::delivery::{
 const LOG_PREFIX: &str = "[channel-delivery-store]";
 
 /// Collection of entries awaiting a terminal outcome.
-pub const PENDING_COLLECTION: &str = "channels_delivery_pending";
+pub const PENDING_COLLECTION: &str = schema::DELIVERY_PENDING;
 /// Collection of permanently failed entries.
-pub const FAILED_COLLECTION: &str = "channels_delivery_failed";
+pub const FAILED_COLLECTION: &str = schema::DELIVERY_FAILED;
 /// Collection of idempotent terminal results.
-pub const RESULTS_COLLECTION: &str = "channels_delivery_results";
+pub const RESULTS_COLLECTION: &str = schema::DELIVERY_RESULTS;
 
 /// Compare-and-swap attempts before an update reports contention.
 const CAS_ATTEMPTS: usize = 4;
@@ -53,14 +57,6 @@ const MAX_ID_BYTES: usize = 256;
 /// check and overshoot [`DELIVERY_PENDING_CAPACITY`]. The module is the single
 /// writer of its scope, so an in-process lock is the reservation.
 static PENDING_INSERT: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-#[derive(Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ResultRecord {
-    result: DeliveryTerminalResult,
-    completed_at_unix_ms: u64,
-    expires_at_unix_ms: u64,
-}
 
 /// [`DeliveryQueueStore`] and [`DeliveryResultStore`] over a [`DocumentStore`].
 #[derive(Clone, Debug)]
@@ -127,15 +123,34 @@ fn validate_entry(entry: &QueuedDelivery) -> Result<(), DeliveryQueueError> {
     Ok(())
 }
 
-fn decode_entry(doc: Value) -> Result<QueuedDelivery, DeliveryQueueError> {
-    let entry: QueuedDelivery =
-        serde_json::from_value(doc).map_err(|_| invalid("stored delivery record is unreadable"))?;
+/// The document id of a delivery: [`Key::of`] over its idempotency key.
+fn doc_id(id: &str) -> Result<String, DeliveryQueueError> {
+    validate_id(id)?;
+    Key::of([id])
+        .map(|key| key.as_str().to_owned())
+        .map_err(|_| invalid("delivery id is invalid"))
+}
+
+/// The write options of every delivery document.
+fn write_options() -> WriteOptions {
+    WriteOptions::new().schema(SCHEMA_VERSION)
+}
+
+fn decode_entry(found: Versioned<Value>) -> Result<QueuedDelivery, DeliveryQueueError> {
+    let stored: StoredDelivery = serde_json::from_value(found.doc)
+        .map_err(|_| invalid("stored delivery record is unreadable"))?;
+    let entry = QueuedDelivery::from(stored);
+    // The id is derived from the intent, so the document must sit under it.
+    if doc_id(&entry.id).ok().as_deref() != Some(found.id.as_str()) {
+        return Err(invalid("stored delivery record is unreadable"));
+    }
     validate_entry(&entry)?;
     Ok(entry)
 }
 
 fn encode_entry(entry: &QueuedDelivery) -> Result<Value, DeliveryQueueError> {
-    serde_json::to_value(entry).map_err(|_| invalid("delivery record could not be encoded"))
+    serde_json::to_value(StoredDelivery::from(entry))
+        .map_err(|_| invalid("delivery record could not be encoded"))
 }
 
 #[async_trait]
@@ -144,18 +159,20 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
         validate_entry(&entry)?;
         let docs = self.docs().await;
         let doc = encode_entry(&entry)?;
+        let id = doc_id(&entry.id)?;
         let _reservation = PENDING_INSERT.lock().await;
         for _ in 0..CAS_ATTEMPTS {
             let existing = docs
-                .get(PENDING_COLLECTION, &entry.id)
+                .get(PENDING_COLLECTION, &id)
                 .await
                 .map_err(store_error)?;
             let precondition = match existing {
                 Some(found) => {
-                    if decode_entry(found.doc)?.intent != entry.intent {
+                    let version = found.version;
+                    if decode_entry(found)?.intent != entry.intent {
                         return Err(invalid("delivery key conflicts with a different intent"));
                     }
-                    Precondition::Version(found.version)
+                    Precondition::Version(version)
                 }
                 None => {
                     let pending = docs
@@ -169,7 +186,13 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
                 }
             };
             match docs
-                .put(PENDING_COLLECTION, &entry.id, doc.clone(), precondition)
+                .put_with(
+                    PENDING_COLLECTION,
+                    &id,
+                    doc.clone(),
+                    precondition,
+                    write_options(),
+                )
                 .await
             {
                 Ok(_) => return Ok(()),
@@ -185,18 +208,18 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
     }
 
     async fn load_pending(&self, id: &str) -> Result<Option<QueuedDelivery>, DeliveryQueueError> {
-        validate_id(id)?;
+        let id = doc_id(id)?;
         self.docs()
             .await
-            .get(PENDING_COLLECTION, id)
+            .get(PENDING_COLLECTION, &id)
             .await
             .map_err(store_error)?
-            .map(|found| decode_entry(found.doc))
+            .map(decode_entry)
             .transpose()
     }
 
     async fn load_pending_all(&self) -> Result<Vec<QueuedDelivery>, DeliveryQueueError> {
-        let query = Query::all().sort(Sort::asc("enqueuedAtUnixMs"));
+        let query = Query::all().sort(Sort::asc("enqueued_ms"));
         let found = self
             .docs()
             .await
@@ -206,14 +229,14 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
         if found.len() > DELIVERY_PENDING_CAPACITY {
             return Err(invalid("stored pending queue is oversized"));
         }
-        found.into_iter().map(|v| decode_entry(v.doc)).collect()
+        found.into_iter().map(decode_entry).collect()
     }
 
     async fn remove_pending(&self, id: &str) -> Result<(), DeliveryQueueError> {
-        validate_id(id)?;
+        let id = doc_id(id)?;
         self.docs()
             .await
-            .delete(PENDING_COLLECTION, id, Precondition::None)
+            .delete(PENDING_COLLECTION, &id, Precondition::None)
             .await
             .map(|_| ())
             .map_err(store_error)
@@ -222,9 +245,16 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
     async fn save_failed(&self, entry: QueuedDelivery) -> Result<(), DeliveryQueueError> {
         validate_entry(&entry)?;
         let doc = encode_entry(&entry)?;
+        let id = doc_id(&entry.id)?;
         self.docs()
             .await
-            .put(FAILED_COLLECTION, &entry.id, doc, Precondition::None)
+            .put_with(
+                FAILED_COLLECTION,
+                &id,
+                doc,
+                Precondition::None,
+                write_options(),
+            )
             .await
             .map(|_| ())
             .map_err(store_error)
@@ -234,13 +264,13 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
 #[async_trait]
 impl DeliveryResultStore for DocumentDeliveryStore {
     async fn load_failed(&self, id: &str) -> Result<Option<QueuedDelivery>, DeliveryQueueError> {
-        validate_id(id)?;
+        let id = doc_id(id)?;
         self.docs()
             .await
-            .get(FAILED_COLLECTION, id)
+            .get(FAILED_COLLECTION, &id)
             .await
             .map_err(store_error)?
-            .map(|found| decode_entry(found.doc))
+            .map(decode_entry)
             .transpose()
     }
 
@@ -248,19 +278,24 @@ impl DeliveryResultStore for DocumentDeliveryStore {
         &self,
         id: &str,
     ) -> Result<Option<DeliveryTerminalResult>, DeliveryQueueError> {
-        validate_id(id)?;
+        let id = doc_id(id)?;
+        // A result past its `expires_ms` reads as absent.
         let Some(found) = self
             .docs()
             .await
-            .get(RESULTS_COLLECTION, id)
+            .get(RESULTS_COLLECTION, &id)
             .await
             .map_err(store_error)?
         else {
             return Ok(None);
         };
-        let record: ResultRecord = serde_json::from_value(found.doc)
+        let record: StoredResult = serde_json::from_value(found.doc.clone())
             .map_err(|_| invalid("stored delivery result is unreadable"))?;
-        Ok((record.expires_at_unix_ms > now_unix_ms()).then_some(record.result))
+        // The result sits under the id it was saved for; any other id is a stray copy.
+        if doc_id(&record.id).ok().as_deref() != Some(found.id.as_str()) {
+            return Err(invalid("stored delivery result is unreadable"));
+        }
+        Ok(Some(record.into()))
     }
 
     async fn save_result(&self, result: DeliveryTerminalResult) -> Result<(), DeliveryQueueError> {
@@ -269,19 +304,23 @@ impl DeliveryResultStore for DocumentDeliveryStore {
             return Err(invalid("delivery result exceeds the record limit"));
         }
         let docs = self.docs().await;
-        let record = ResultRecord {
-            completed_at_unix_ms: result.completed_at_unix_ms,
-            expires_at_unix_ms: result
+        let expires_ms = to_stored_ms(
+            result
                 .completed_at_unix_ms
                 .saturating_add(DELIVERY_RESULT_TTL_SECONDS.saturating_mul(1000)),
-            result,
-        };
-        let id = record.result.id.clone();
-        let doc =
-            serde_json::to_value(&record).map_err(|_| invalid("result could not be encoded"))?;
-        docs.put(RESULTS_COLLECTION, &id, doc, Precondition::None)
-            .await
-            .map_err(store_error)?;
+        );
+        let id = doc_id(&result.id)?;
+        let doc = serde_json::to_value(StoredResult::from(&result))
+            .map_err(|_| invalid("result could not be encoded"))?;
+        docs.put_with(
+            RESULTS_COLLECTION,
+            &id,
+            doc,
+            Precondition::None,
+            write_options().expires_ms(expires_ms),
+        )
+        .await
+        .map_err(store_error)?;
         self.trim_results(&id).await
     }
 }
@@ -293,11 +332,11 @@ impl DocumentDeliveryStore {
         let docs = self.docs().await;
         docs.delete_where(
             RESULTS_COLLECTION,
-            &Filter::lte("expiresAtUnixMs", now_unix_ms()),
+            &Filter::lte(EXPIRES_FIELD, to_stored_ms(now_unix_ms())),
         )
         .await
         .map_err(store_error)?;
-        let query = Query::all().sort(Sort::asc("completedAtUnixMs"));
+        let query = Query::all().sort(Sort::asc("completed_ms"));
         let results = docs
             .query_all(RESULTS_COLLECTION, &query)
             .await

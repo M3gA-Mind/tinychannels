@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use super::session_store::{BINDINGS_COLLECTION, BUSY_COLLECTION};
 use super::session_store::{RemoteSessionStore, chat_key};
 use super::*;
 use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
@@ -337,7 +338,7 @@ async fn corrupt_legacy_file_is_skipped_instead_of_failing() {
     let sessions = store();
     assert_eq!(sessions.adopt_legacy(dir.path()).await.unwrap(), 0);
     assert!(sessions.binding("telegram", "x").await.unwrap().is_none());
-    assert_eq!(chat_key("slack", "C1"), "slack:C1");
+    assert_eq!(chat_key("slack", "C1"), "slack/C1");
 }
 
 #[tokio::test]
@@ -438,4 +439,31 @@ async fn two_concurrent_imports_leave_one_binding_and_both_succeed() {
 async fn marking_a_turn_on_unavailable_storage_is_advisory_and_never_panics() {
     super::session_store::mark_turn(&RemoteSessionStore::unavailable(), "telegram", "c", true)
         .await;
+}
+
+#[tokio::test]
+async fn bindings_and_busy_flags_are_stored_in_the_v2_shape_under_key_ids() {
+    let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+    let docs = std::sync::Arc::clone(storage.documents());
+    let sessions = RemoteSessionStore::new(std::sync::Arc::clone(&docs));
+    sessions
+        .set_binding("discord", "room/1:2", "th".into(), "sk".into(), None)
+        .await
+        .unwrap();
+    sessions
+        .set_busy("discord", "room/1:2", true)
+        .await
+        .unwrap();
+
+    let id = chat_key("discord", "room/1:2");
+    assert_eq!(id, "discord/room%2F1:2");
+    let binding = docs.get(BINDINGS_COLLECTION, &id).await.unwrap().unwrap();
+    assert_eq!(
+        binding.doc,
+        serde_json::json!({ "thread_id": "th", "sender_key": "sk", "title": null })
+    );
+    assert_eq!(binding.meta.schema, 2);
+    let busy = docs.get(BUSY_COLLECTION, &id).await.unwrap().unwrap();
+    assert_eq!(busy.doc, serde_json::json!({ "busy": true }));
+    assert!(sessions.is_busy("discord", "room/1:2").await.unwrap());
 }
