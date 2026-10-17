@@ -103,12 +103,6 @@ impl Callback {
         request: tinychannels_bus::HostSpeechSynthesisRequest,
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
         self.voice_scopes.lock().await.push(request.scope);
-        self.projected_voice_media_ids.lock().await.push(
-            request
-                .media_reference
-                .as_ref()
-                .and_then(|media| media.opaque_id.clone()),
-        );
         self.voice_requests.lock().await.push(
             serde_json::json!({"kind":"synthesize","text":request.text,"format":request.format}),
         );
@@ -128,6 +122,12 @@ impl Callback {
         request: tinychannels_bus::HostStoreVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         self.voice_scopes.lock().await.push(request.scope);
+        self.projected_voice_media_ids.lock().await.push(
+            request
+                .media_reference
+                .as_ref()
+                .and_then(|media| media.opaque_id.clone()),
+        );
         self.voice_requests.lock().await.push(serde_json::json!({"kind":"store","direction":request.direction,"codec":request.codec,"durationMs":request.duration_ms,"mediaReference":request.media_reference}));
         if consume_failure(&self.voice_publication_failures) {
             return Err(tinybus::Error::failed("fixture publication denial"));
