@@ -550,7 +550,11 @@ fn lifecycle_projection_retains_iteration_budget_and_stop_reason() {
         message: Some("iteration limit".into()),
         iteration: Some(4),
         max_iterations: Some(4),
-        stop: Some(serde_json::json!({"kind": "budget", "remaining": 0})),
+        stop: Some(tinychannels_bus::module_progressive::TurnStopSummary {
+            kind: "budget".into(),
+            failure_class: Some("limit".into()),
+            operation: Some("run".into()),
+        }),
     };
     let intents = translate_output_event(
         &turn(),
@@ -566,7 +570,7 @@ fn lifecycle_projection_retains_iteration_budget_and_stop_reason() {
             data: serde_json::json!({"lifecycle": {
                 "stage": "stopped", "message": "iteration limit",
                 "iteration": 4, "maxIterations": 4,
-                "stop": {"kind": "budget", "remaining": 0},
+                "stop": {"kind": "budget", "failureClass": "limit", "operation": "run"},
             }}),
         }
     );
