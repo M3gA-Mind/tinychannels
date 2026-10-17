@@ -249,6 +249,9 @@ pub fn build_channels(
         if let Some(transcriber) = host.transcriber() {
             telegram = telegram.with_transcriber(transcriber);
         }
+        if let Some(store) = host.voice_media_store() {
+            telegram = telegram.with_voice_media_store(store);
+        }
         if let Some(allowlist) = host.allowlist() {
             telegram = telegram.with_allowlist(allowlist);
         }
