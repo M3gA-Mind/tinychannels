@@ -1,0 +1,1 @@
+{"event":"chat_error","client_id":"client-7","thread_id":"thread-9","request_id":"request-2","message":"This request was blocked.","error_type":"guardrail","copy_key":"chat_error.guardrail","copy_params":{"detail":"sensitive content removed"},"guardrail":{"verdict":"blocked","score":0.97,"reasons":[{"code":"policy","message":"Request not allowed"}]}}
