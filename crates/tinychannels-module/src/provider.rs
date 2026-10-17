@@ -471,6 +471,44 @@ impl tinychannels::host::EventSink for ModuleEvents {
             tinychannels_bus::ChannelIngress::Inbound(mut envelope) => {
                 envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
                 envelope.channel.account_id = Some(self.1.clone());
+                for part in &mut envelope.parts {
+                    let tinychannels_bus::ContentPart::VoiceNote { voice_note } = part else {
+                        continue;
+                    };
+                    let scope = tinychannels_bus::HostVoiceScope {
+                        configured_instance: self.1.clone(),
+                        channel: envelope.channel.clone(),
+                        conversation: envelope.conversation.clone(),
+                        turn_id: envelope.message_id.clone(),
+                    };
+                    let request = if let Some(opaque_id) = voice_note.media.opaque_id.clone() {
+                        match self
+                            .0
+                            .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
+                                scope: scope.clone(),
+                                opaque_id,
+                            })
+                            .await
+                        {
+                            Ok(audio) => Some(tinychannels::host::TranscriptionRequest {
+                                audio_base64: audio.audio_base64,
+                                mime_type: Some(audio.mime_type),
+                                file_name: audio.file_name,
+                                language: None,
+                            }),
+                            Err(_) => None,
+                        }
+                    } else {
+                        None
+                    };
+                    tinychannels::host::enrich_voice_note(
+                        voice_note,
+                        scope,
+                        request,
+                        Some(Arc::new(ModuleTranscriber(self.0.clone(), self.1.clone()))),
+                    )
+                    .await;
+                }
                 self.0.deliver_inbound(&self.1, envelope).await;
                 Ok(true)
             }

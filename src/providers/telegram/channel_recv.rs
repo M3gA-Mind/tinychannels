@@ -642,7 +642,9 @@ impl TelegramChannel {
         &self,
         update: &serde_json::Value,
     ) -> Option<ChannelMessage> {
-        let message = update.get("message").or_else(|| update.get("edited_message"))?;
+        let message = update
+            .get("message")
+            .or_else(|| update.get("edited_message"))?;
         Self::parse_update_voice_attachment(update)?;
         let caption = message.get("caption").and_then(serde_json::Value::as_str);
         let ctx = self.parse_incoming_message_context(message, caption)?;
@@ -869,20 +871,13 @@ impl TelegramChannel {
                 .as_u64()
                 .map(|s| s.saturating_mul(1000))
         });
-        let transcript =
-            (!message.content.trim().is_empty()).then(|| tinychannels_bus::VoiceTranscript {
-                text: message.content.clone(),
-                language: None,
-                state: tinychannels_bus::VoiceTranscriptState::Complete,
-                source: tinychannels_bus::VoiceTranscriptSource::HostStt,
-            });
         Ok(Some(tinychannels_bus::VoiceNote {
             media,
             codec: Some("ogg_opus".into()),
             duration_ms,
             waveform: None,
             push_to_talk: true,
-            transcript,
+            transcript: None,
         }))
     }
 
