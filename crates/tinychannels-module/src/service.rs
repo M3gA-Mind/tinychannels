@@ -852,14 +852,13 @@ impl Channels {
                     message: format!("channel {name} is not running"),
                 })?
         };
-        let outcome = entry
-            .send_typed(tinychannels_bus::ChannelOutboundMessage::from_intent(
-                &intent,
-            ))
+        let adapter = entry.adapter_handle();
+        let outcome = adapter
+            .send(intent)
             .await
             .map_err(|error| BusError::MethodFailed {
                 name: SEND_FAILED_ERROR.to_owned(),
-                message: error.to_string(),
+                message: error.message,
             })?;
         let has_provider_receipt = outcome.receipt.primary_platform_message_id.is_some()
             || !outcome.receipt.platform_message_ids.is_empty()

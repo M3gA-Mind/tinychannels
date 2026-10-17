@@ -635,6 +635,10 @@ pub(crate) struct ConfiguredAdapterHandle {
 
 impl ConfiguredAdapterHandle {
     pub(crate) fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
+        debug_assert_eq!(
+            self.adapter.descriptor().account_id.as_deref(),
+            Some(self.configured_instance.as_str())
+        );
         self.adapter.descriptor()
     }
 
@@ -649,6 +653,7 @@ impl ConfiguredAdapterHandle {
         tinychannels::channel::ChannelSendOutcome,
         tinychannels::channel::ChannelSendError,
     > {
+        debug_assert_eq!(self.mode, AdapterMode::LegacyBacked);
         self.adapter.send(intent).await
     }
 }
