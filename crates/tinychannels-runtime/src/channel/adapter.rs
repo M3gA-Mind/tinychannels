@@ -2,7 +2,6 @@
 
 use crate::channel::{
     ChannelDescriptor, ChannelInboundEnvelope, ChannelOutboundIntent, ChannelSendError,
-    MessageReceipt,
 };
 use crate::controllers::ChannelAccountSnapshot;
 use async_trait::async_trait;
@@ -33,7 +32,7 @@ pub trait ChannelAdapter: Send + Sync {
     async fn stop(&self) -> Result<(), ChannelSendError>;
 
     async fn send(&self, intent: ChannelOutboundIntent)
-    -> Result<MessageReceipt, ChannelSendError>;
+    -> Result<crate::channel::ChannelSendOutcome, ChannelSendError>;
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError>;
 }
