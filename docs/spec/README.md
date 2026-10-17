@@ -34,6 +34,8 @@ state remain outside this crate until they can be split behind transport traits.
 
 - [Channel Contract v2](contract-v2.md) — normative target and v21-to-v22
   compatibility plan.
+- [Harness progress output](progress-output.md) — canonical progress events,
+  module operations, delivery results, and the TinyAgents conformance map.
 - [OpenClaw and Hermes channel porting](openclaw-hermes-channel-porting.md) —
   historical source-level audit of both upstreams (verified against pinned
   2026-07-04 checkouts).

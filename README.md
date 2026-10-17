@@ -158,8 +158,11 @@ cargo test --features email,lark
 - `src/lib.rs` exports the crate surface and re-exports the contract.
 - `src/providers/` holds the provider transports.
 - `src/delivery/` holds the durable outbound queue and `progressive/`, the
-  streaming reply driver (draft, thinking and filler bubbles) over a
-  host-supplied `ProgressiveSender`. The reply splitter
+  shared turn-progress engine (event projection, draft/edit or configured-limit
+  segmentation, typed content, receipt retention, and ephemeral cleanup) over
+  a host-supplied `ProgressiveSender`. See
+  [`src/delivery/progressive/README.md`](src/delivery/progressive/README.md).
+  The legacy reply splitter
   (`segment_for_delivery`) lives in `tinychannels-runtime` (`delivery::segment`) and
   is re-exported here.
 - `src/remote/` implements `/status`, `/sessions`, `/new` and `/help` for every
