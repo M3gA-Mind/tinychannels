@@ -6,6 +6,10 @@ use tokio::sync::Notify;
 struct ConfiguredChannel(&'static str);
 
 #[async_trait::async_trait]
+#[allow(
+    deprecated,
+    reason = "test fake implements the required v21 compatibility methods"
+)]
 impl tinychannels::Channel for ConfiguredChannel {
     fn name(&self) -> &str {
         self.0
@@ -704,6 +708,17 @@ async fn canonical_final_and_cancellation_events_end_the_worker() {
         })
         .await
         .unwrap();
+    let late = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: final_handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "late".into(),
+                iteration: Some(2),
+            }],
+        })
+        .await
+        .unwrap_err();
+    assert!(late.to_string().contains("terminal"));
     let cancellation_handle = open(&replies).await;
     replies
         .execute(ProgressiveCommand::FeedOutput {

@@ -6,6 +6,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::delivery::progressive::{
@@ -238,6 +239,7 @@ struct Entry {
     commands: mpsc::Sender<Command>,
     worker: Mutex<Option<JoinHandle<()>>>,
     closing: Mutex<Option<Closing>>,
+    terminal_feed: AtomicBool,
 }
 struct State {
     terminal: bool,
@@ -311,7 +313,45 @@ impl Replies {
         if events.len() > 32 {
             return Err(Error::failed("too many progressive events"));
         }
+        let terminal_positions = events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| {
+                matches!(
+                    event,
+                    ChannelOutputEvent::FinalMessage { .. }
+                        | ChannelOutputEvent::Cancellation { .. }
+                )
+                .then_some(index)
+            })
+            .collect::<Vec<_>>();
+        if terminal_positions.len() > 1
+            || terminal_positions
+                .first()
+                .is_some_and(|position| *position + 1 != events.len())
+        {
+            return Err(Error::failed(
+                "terminal progressive event must be unique and last",
+            ));
+        }
         let entry = self.entry(&handle).await?;
+        let terminal = events.iter().any(|event| {
+            matches!(
+                event,
+                ChannelOutputEvent::FinalMessage { .. } | ChannelOutputEvent::Cancellation { .. }
+            )
+        });
+        if entry.terminal_feed.load(Ordering::Acquire) {
+            return Err(Error::failed("progressive reply is terminal"));
+        }
+        if terminal
+            && entry
+                .terminal_feed
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+        {
+            return Err(Error::failed("progressive reply is terminal"));
+        }
         let closing = entry.closing.lock().await;
         if closing.is_some() {
             return Err(Error::failed("progressive reply is closed"));
@@ -450,6 +490,7 @@ impl Replies {
                 commands,
                 worker: Mutex::new(Some(worker)),
                 closing: Mutex::new(None),
+                terminal_feed: AtomicBool::new(false),
             }),
         );
         Ok(ProgressiveResult::Opened { handle })
@@ -583,15 +624,24 @@ async fn abort_entry(entry: Arc<Entry>) -> Result<()> {
                 let _ = wait.await;
             }
             if let Some(worker) = retained.worker.lock().await.take() {
-                worker.await.map_err(|_| "progressive worker failed".to_string())?;
+                worker
+                    .await
+                    .map_err(|_| "progressive worker failed".to_string())?;
             }
             Ok(())
         });
-        *closing = Some(Closing { fingerprint, task: Some(task), outcome: None });
+        *closing = Some(Closing {
+            fingerprint,
+            task: Some(task),
+            outcome: None,
+        });
     }
     let closing = closing.as_mut().expect("abort work was installed");
     if closing.outcome.is_none() {
-        let task = closing.task.as_mut().expect("unfinished abort task is retained");
+        let task = closing
+            .task
+            .as_mut()
+            .expect("unfinished abort task is retained");
         let result = tokio::time::timeout(Duration::from_secs(10), task)
             .await
             .map_err(|_| Error::failed("progressive cleanup is pending"))?
@@ -599,7 +649,10 @@ async fn abort_entry(entry: Arc<Entry>) -> Result<()> {
         closing.outcome = Some(result);
         closing.task = None;
     }
-    closing.outcome.clone().expect("abort result was retained")
+    closing
+        .outcome
+        .clone()
+        .expect("abort result was retained")
         .map_err(|_| Error::failed("progressive cleanup failed"))
 }
 
