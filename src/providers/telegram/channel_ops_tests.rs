@@ -370,7 +370,7 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
                 b"\0\0\0\x18ftypisom\0\0\0\0isom".to_vec(),
             ),
             "stored-document-pdf" => (
-                tinychannels_bus::MediaKind::File,
+                tinychannels_bus::MediaKind::Document,
                 "application/pdf",
                 "report.pdf",
                 b"%PDF-1.7\nfixture".to_vec(),
@@ -1304,7 +1304,7 @@ async fn typed_video_and_file_upload_use_native_multipart_with_real_receipts() {
             part: tinychannels_bus::ContentPart::File {
                 media: tinychannels_bus::MediaReference {
                     opaque_id: Some("stored-document-pdf".into()),
-                    kind: tinychannels_bus::MediaKind::File,
+                    kind: tinychannels_bus::MediaKind::Document,
                     ..Default::default()
                 },
                 file_name: Some("report.pdf".into()),
