@@ -834,6 +834,8 @@ async fn open_output_uses_configured_account_and_preserves_full_conversation_sco
         turn_id,
         channel_ref: sent_channel,
         conversation: sent_conversation,
+        sequence,
+        idempotency_key,
         ..
     } = requests.last().unwrap()
     else {
@@ -842,6 +844,8 @@ async fn open_output_uses_configured_account_and_preserves_full_conversation_sco
     assert_eq!(turn_id.as_deref(), Some("turn-topic-9"));
     assert_eq!(sent_channel.as_ref(), Some(&channel_ref));
     assert_eq!(sent_conversation.as_ref(), Some(&conversation));
+    assert_eq!(*sequence, Some(1));
+    assert_eq!(idempotency_key.as_ref().map(String::len), Some(64));
     replies.shutdown().await.unwrap();
 }
 
