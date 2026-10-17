@@ -421,9 +421,16 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
 
     fn expected_scope(
         &self,
-        _feature: tinychannels_conformance::ConformanceFeature,
+        feature: tinychannels_conformance::ConformanceFeature,
     ) -> tinychannels_conformance::ExpectedScope {
-        self.scope.clone()
+        let mut scope = self.scope.clone();
+        if matches!(feature, tinychannels_conformance::ConformanceFeature::InboundReactions) {
+            // Telegram MessageReactionUpdated has no message_thread_id field.
+            scope.conversation.thread_id = None;
+            scope.conversation.topic_id = None;
+            scope.thread_id = None;
+        }
+        scope
     }
 
     fn clear_observations(&self) {
@@ -477,6 +484,9 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 unsupported: true,
                 ..Default::default()
             }),
+            Feature::NativeData => tinychannels_bus::OutboundPayload::NativeChannelData {
+                data: serde_json::json!({"kind":"opaque-provider-data"}),
+            },
             _ => return Err(tinychannels_bus::channel::ChannelSendError {
                 kind: tinychannels_bus::channel::SendErrorKind::Unsupported,
                 message: format!("{feature:?} fixture operation has not been invoked"),
@@ -495,7 +505,56 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             payload,
             ..Default::default()
         };
-        let result = self.adapter.send(intent).await;
+        let result = match feature {
+            Feature::Typing => {
+                self.running.interact(tinychannels_bus::ChannelInteraction::StartTyping {
+                    recipient: self.scope.conversation.id.clone(),
+                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                Ok(tinychannels_bus::channel::ChannelSendOutcome::default())
+            }
+            Feature::Reactions => {
+                self.running.interact(tinychannels_bus::ChannelInteraction::SendReaction {
+                    channel: self.scope.channel.clone(),
+                    conversation: self.scope.conversation.clone(),
+                    provider_message_id: "5".into(),
+                    reaction: tinychannels_bus::channel::ChannelReaction { value: "👍".into(), custom_emoji_id: None },
+                    remove: false,
+                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                Ok(tinychannels_bus::channel::ChannelSendOutcome::default())
+            }
+            Feature::Edit | Feature::Delete | Feature::StreamingDraft => {
+                let sent = self.adapter.send(intent.clone()).await?;
+                let receipt = sent.receipt;
+                *self.request_cursor.lock().unwrap() = self.server.received_requests().await.unwrap_or_default().len();
+                match feature {
+                    Feature::Edit => {
+                        let edit = tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "edited kit".into() }, ..intent.clone() };
+                        self.running.interact(tinychannels_bus::ChannelInteraction::EditMessage { receipt, intent: edit }).await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                    }
+                    Feature::Delete => {
+                        self.running.interact(tinychannels_bus::ChannelInteraction::DeleteMessage { receipt }).await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                    }
+                    Feature::StreamingDraft => {
+                        let created = self.running.interact(tinychannels_bus::ChannelInteraction::UpsertDraft { previous: None, intent: intent.clone() }).await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        let tinychannels_bus::ChannelInteractionResult::Sent(created) = created else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
+                        let updated_intent = tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "updated draft".into() }, ..intent.clone() };
+                        let updated = self.running.interact(tinychannels_bus::ChannelInteraction::UpsertDraft { previous: Some(created.receipt), intent: updated_intent.clone() }).await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        let tinychannels_bus::ChannelInteractionResult::Sent(updated) = updated else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
+                        self.running.interact(tinychannels_bus::ChannelInteraction::EditMessage { receipt: updated.receipt.clone(), intent: tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "final draft".into() }, ..updated_intent } }).await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        self.running.interact(tinychannels_bus::ChannelInteraction::DeleteMessage { receipt: updated.receipt }).await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                    }
+                    _ => unreachable!(),
+                }
+                Ok(sent)
+            }
+            _ => self.adapter.send(intent).await,
+        };
         let requests = self.server.received_requests().await.unwrap_or_default();
         let mut cursor = self.request_cursor.lock().unwrap();
         for request in requests.iter().skip(*cursor) {
@@ -1800,15 +1859,11 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         Some("native-v2")
     );
     assert_eq!(fixture.adapter.mode, AdapterMode::TelegramNativeV2);
-    check_feature(&fixture, ConformanceFeature::Text)
-        .await
-        .unwrap();
-    let observation = fixture.observations().pop().unwrap();
-    assert_eq!(observation.request["chat_id"], "-100");
-    assert_eq!(observation.request["text"], "module\\-kit");
-    assert_eq!(observation.platform_message_ids, ["321"]);
-    assert_eq!(observation.reply_to_id.as_deref(), Some("5"));
-    assert_eq!(observation.thread_id.as_deref(), Some("77"));
+    let results = tinychannels_conformance::check_all_features(&fixture).await;
+    for (feature, result) in &results {
+        assert!(result.is_ok(), "{feature:?}: {}", result.as_ref().unwrap_err());
+    }
+    assert_eq!(results.len(), ConformanceFeature::ALL.len());
     running.stop().await.unwrap();
 }
 
