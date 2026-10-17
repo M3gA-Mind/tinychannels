@@ -326,6 +326,20 @@ async fn invalid_stream_scope_is_rejected_before_reading_body() {
 }
 
 #[tokio::test]
+async fn unsupported_stream_mime_is_rejected_before_reading_body() {
+    let store = store();
+    let mut metadata = media_request(Vec::new(), None, None).metadata;
+    metadata.content_type = "image/svg+xml".into();
+    let result = store
+        .store_stream(MediaStreamRequest {
+            metadata,
+            reader: Box::pin(PanicReader),
+        })
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
 async fn media_store_rejects_spoofed_mime_and_truncated_image_bodies() {
     let store = store();
     for (content_type, bytes) in [
