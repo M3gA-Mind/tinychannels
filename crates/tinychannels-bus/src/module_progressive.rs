@@ -136,9 +136,13 @@ pub enum ChannelOutputEvent {
     },
     Lifecycle {
         stage: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         iteration: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         max_iterations: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         stop: Option<TurnStopSummary>,
     },
     Native {
