@@ -720,7 +720,11 @@ async fn read_scoped_voice_media(
     })
 }
 
-pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String, Option<String>);
+pub(crate) struct ModuleEvents(
+    pub(crate) HostChannels,
+    pub(crate) String,
+    pub(crate) Option<String>,
+);
 
 #[async_trait::async_trait]
 impl tinychannels::host::EventSink for ModuleEvents {
