@@ -6,6 +6,7 @@ use tinychannels_bus::{
     MediaUploadBegin, MediaUploadChunk, MediaUploadFinish, MediaUploadHandle, MediaUploadResult,
 };
 use tokio::sync::Mutex;
+use tokio::sync::Notify;
 use tokio::time::Instant;
 
 const UPLOAD_LIFETIME: Duration = Duration::from_secs(60);
@@ -14,9 +15,12 @@ const TERMINAL_CAPACITY: usize = 128;
 
 struct Upload {
     request: MediaUploadBegin,
+    activation: usize,
     expires: Instant,
     chunks: Vec<Option<Vec<u8>>>,
     next_sequence: usize,
+    finalizing: bool,
+    changed: std::sync::Arc<Notify>,
 }
 
 enum Terminal {
@@ -27,6 +31,7 @@ enum Terminal {
 struct TerminalEntry {
     value: Terminal,
     instance: String,
+    activation: usize,
     expires: Instant,
 }
 
@@ -44,18 +49,45 @@ pub(crate) struct MediaUploads {
 }
 
 impl MediaUploads {
-    pub(crate) async fn instance(&self, request: &MediaUploadFinish) -> Result<String> {
+    pub(crate) async fn binding_handle(
+        &self,
+        handle: &MediaUploadHandle,
+    ) -> Result<(String, usize)> {
         let mut state = self.state.lock().await;
         Self::prune(&mut state);
         state
             .uploads
-            .get(&request.0.0)
-            .map(|upload| upload.request.instance.clone())
-            .or_else(|| state.terminal.get(&request.0.0).map(|entry| entry.instance.clone()))
+            .get(&handle.0)
+            .map(|upload| (upload.request.instance.clone(), upload.activation))
             .ok_or_else(|| Error::failed("media upload is unknown or expired"))
     }
 
-    pub(crate) async fn begin(&self, request: MediaUploadBegin) -> Result<MediaUploadHandle> {
+    pub(crate) async fn binding(&self, request: &MediaUploadFinish) -> Result<(String, usize)> {
+        let mut state = self.state.lock().await;
+        state.uploads.retain(|_, upload| {
+            upload.finalizing
+                || upload.request.instance != request.instance
+                || upload.activation == activation
+        });
+        Self::prune(&mut state);
+        state
+            .uploads
+            .get(&request.0.0)
+            .map(|upload| (upload.request.instance.clone(), upload.activation))
+            .or_else(|| {
+                state
+                    .terminal
+                    .get(&request.0.0)
+                    .map(|entry| (entry.instance.clone(), entry.activation))
+            })
+            .ok_or_else(|| Error::failed("media upload is unknown or expired"))
+    }
+
+    pub(crate) async fn begin(
+        &self,
+        request: MediaUploadBegin,
+        activation: usize,
+    ) -> Result<MediaUploadHandle> {
         let max = tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES;
         if request.instance.trim().is_empty()
             || request.scope.conversation.id.trim().is_empty()
@@ -64,6 +96,11 @@ impl MediaUploads {
             || request.byte_count > max
         {
             return Err(Error::failed("media upload metadata is invalid"));
+        }
+        let metadata_bytes = serde_json::to_vec(&request)
+            .map_err(|_| Error::failed("media upload metadata is invalid"))?;
+        if metadata_bytes.len() > tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES {
+            return Err(Error::failed("media upload metadata exceeds its limit"));
         }
         let count = request
             .byte_count
@@ -86,9 +123,12 @@ impl MediaUploads {
             handle.clone(),
             Upload {
                 request,
+                activation,
                 expires: Instant::now() + UPLOAD_LIFETIME,
                 chunks: (0..count).map(|_| None).collect(),
                 next_sequence: 0,
+                finalizing: false,
+                changed: std::sync::Arc::new(Notify::new()),
             },
         );
         Ok(MediaUploadHandle(handle))
@@ -139,20 +179,33 @@ impl MediaUploads {
     pub(crate) async fn finish(
         &self,
         request: MediaUploadFinish,
+        activation: usize,
         repository: &ModuleMediaRepository,
     ) -> Result<MediaUploadResult> {
         let mut state = self.state.lock().await;
         Self::prune(&mut state);
         if let Some(entry) = state.terminal.get(&request.0.0) {
+            if entry.activation != activation {
+                return Err(Error::failed("media upload belongs to another provider activation"));
+            }
             return match &entry.value {
                 Terminal::Finished(media) => Ok(media.clone()),
                 Terminal::Aborted => Err(Error::failed("media upload was aborted")),
             };
         }
-        let upload = state
-            .uploads
-            .get(&request.0.0)
-            .ok_or_else(|| Error::failed("media upload is unknown or expired"))?;
+        let Some(upload) = state.uploads.get_mut(&request.0.0) else {
+            return Err(Error::failed("media upload is unknown or expired"));
+        };
+        if upload.activation != activation {
+            return Err(Error::failed("media upload belongs to another provider activation"));
+        }
+        if upload.finalizing {
+            let changed = upload.changed.clone();
+            let notified = changed.notified();
+            drop(state);
+            notified.await;
+            return Box::pin(self.finish(request, repository)).await;
+        }
         if upload.expires <= Instant::now() {
             state.uploads.remove(&request.0.0);
             return Err(Error::failed("media upload is unknown or expired"));
@@ -160,21 +213,29 @@ impl MediaUploads {
         if upload.next_sequence != upload.chunks.len() {
             return Err(Error::failed("media upload is incomplete"));
         }
-        let upload = state.uploads.remove(&request.0.0).expect("checked above");
-        let bytes: Vec<u8> = upload.chunks.into_iter().flatten().flatten().collect();
-        if bytes.len() != upload.request.byte_count {
+        upload.finalizing = true;
+        let instance = upload.request.instance.clone();
+        let activation = upload.activation;
+        let request_metadata = upload.request.clone();
+        let chunks = upload.chunks.clone();
+        let bytes: Vec<u8> = chunks.into_iter().flatten().collect();
+        if bytes.len() != request_metadata.byte_count {
+            if let Some(upload) = state.uploads.get_mut(&request.0.0) {
+                upload.finalizing = false;
+                upload.changed.notify_waiters();
+            }
             return Err(Error::failed("media upload byte count does not match"));
         }
         drop(state);
         let media = repository
             .store_public_media(tinychannels::host::MediaStoreRequest {
                 metadata: tinychannels::host::MediaMetadata {
-                    scope: upload.request.scope,
-                    kind: upload.request.kind,
-                    content_type: upload.request.content_type,
-                    file_name: upload.request.file_name,
-                    duration_ms: upload.request.duration_ms,
-                    codec: upload.request.codec,
+                    scope: request_metadata.scope,
+                    kind: request_metadata.kind,
+                    content_type: request_metadata.content_type,
+                    file_name: request_metadata.file_name,
+                    duration_ms: request_metadata.duration_ms,
+                    codec: request_metadata.codec,
                     voice_direction: None,
                     dedupe_key: None,
                     max_bytes: tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES as u64,
@@ -182,14 +243,29 @@ impl MediaUploads {
                 bytes,
             })
             .await
-            .map_err(|_| Error::failed("media could not be stored"))?;
+            .map_err(|_| Error::failed("media could not be stored"));
         let mut state = self.state.lock().await;
         Self::prune(&mut state);
+        let Some(upload) = state.uploads.remove(&request.0.0) else {
+            return Err(Error::failed("media upload is no longer active"));
+        };
+        let media = match media {
+            Ok(media) => media,
+            Err(error) => {
+                let mut upload = upload;
+                upload.finalizing = false;
+                upload.expires = Instant::now() + UPLOAD_LIFETIME;
+                upload.changed.notify_waiters();
+                state.uploads.insert(request.0.0, upload);
+                return Err(error);
+            }
+        };
         state.terminal.insert(
             request.0.0,
             TerminalEntry {
                 value: Terminal::Finished(media.clone()),
-                instance: upload.request.instance,
+                instance,
+                activation,
                 expires: Instant::now() + TERMINAL_LIFETIME,
             },
         );
@@ -206,14 +282,19 @@ impl MediaUploads {
                 Terminal::Finished(_) => Err(Error::failed("media upload is already finalized")),
             };
         }
-        let Some(upload) = state.uploads.remove(&request.0.0) else {
+        let Some(upload) = state.uploads.get(&request.0.0) else {
             return Err(Error::failed("media upload is unknown or expired"));
         };
+        if upload.finalizing {
+            return Err(Error::failed("media upload is already finalizing"));
+        }
+        let upload = state.uploads.remove(&request.0.0).expect("checked above");
         state.terminal.insert(
             request.0.0,
             TerminalEntry {
                 value: Terminal::Aborted,
                 instance: upload.request.instance,
+                activation: upload.activation,
                 expires: Instant::now() + TERMINAL_LIFETIME,
             },
         );
@@ -223,7 +304,9 @@ impl MediaUploads {
 
     fn prune(state: &mut State) {
         let now = Instant::now();
-        state.uploads.retain(|_, upload| upload.expires > now);
+        state
+            .uploads
+            .retain(|_, upload| upload.finalizing || upload.expires > now);
         state.terminal.retain(|_, entry| entry.expires > now);
     }
 
