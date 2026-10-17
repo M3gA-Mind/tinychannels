@@ -976,9 +976,25 @@ async fn configured_progressive_channel_posts_and_edits_one_draft() {
         ProgressiveTransportRequest::Send { message, .. }
             if message["text"] == "hello"
     )));
+    drop(requests);
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "!".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    let requests = callback.requests.lock().await;
     assert!(requests.iter().any(|request| matches!(request,
         ProgressiveTransportRequest::Edit { text, message_id, .. }
-            if text == "hello" && message_id == "fixture-message"
+            if text == "hello!" && message_id == "fixture-message"
     )));
     drop(requests);
     replies
