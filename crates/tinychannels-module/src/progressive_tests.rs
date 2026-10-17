@@ -3966,7 +3966,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             explicitly_requested: explicit,
         });
         let sender = Arc::new(Sender {
-            media_account_scope: None,
+            media_account_scope: Some("telegram:media-v1:fixture".into()),
             host: host.clone(),
             context: Some(context.clone()),
             capabilities: capabilities.clone(),
@@ -4242,7 +4242,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     audio_caps.content.audio.max_size_bytes = Some(8 * 1024 * 1024);
     audio_caps.content.audio.max_duration_ms = Some(10_000);
     let audio_sender = Arc::new(Sender {
-        media_account_scope: None,
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(audio_turn.clone()),
         capabilities: audio_caps.clone(),
@@ -4299,7 +4299,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     let mut link_caps = tinychannels_bus::ChannelCapabilities::default();
     link_caps.voice_out.synthesis = true;
     let link_sender = Arc::new(Sender {
-        media_account_scope: None,
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(link_turn.clone()),
         capabilities: link_caps.clone(),
