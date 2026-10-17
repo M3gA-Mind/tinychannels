@@ -291,7 +291,7 @@ async fn typed_voice_sends_long_transcript_as_receipted_followup_text() {
     assert_eq!(text.len(), 1);
     assert!(text[0]["text"].as_str().unwrap().contains("transcript"));
     assert_eq!(text[0]["message_thread_id"], "77");
-    assert_eq!(text[0]["reply_parameters"]["message_id"], 42);
+    assert_eq!(text[0]["reply_to_message_id"], 42);
 }
 
 #[tokio::test]
