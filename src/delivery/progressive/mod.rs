@@ -67,7 +67,7 @@ impl ProgressiveOutputDispatch {
         ) {
             (0, true, None) => Result::Updated,
             (1, true, None) => Result::DeliveryOutcome {
-                outcome: self.outcomes.into_iter().next().expect("one outcome"),
+                outcome: Box::new(self.outcomes.into_iter().next().expect("one outcome")),
             },
             (0, false, None) => Result::DeliveryUnsupported {
                 parts: self.unsupported,
@@ -88,7 +88,7 @@ impl ProgressiveOutputDispatch {
         use tinychannels_bus::module_progressive::ProgressiveResult as Result;
         match result {
             Result::DeliveryOutcome { outcome } => Self {
-                outcomes: vec![outcome.clone()],
+                outcomes: vec![(**outcome).clone()],
                 ..Default::default()
             },
             Result::DeliveryOutcomes { outcomes } => Self {
