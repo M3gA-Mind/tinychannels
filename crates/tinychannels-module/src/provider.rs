@@ -311,7 +311,11 @@ pub(crate) fn configured_media_account_scope(
         }
         "matrix" => {
             let c = config.matrix.as_ref()?;
-            vec![c.homeserver.as_str(), c.user_id.as_deref().unwrap_or(""), c.access_token.as_str()]
+            vec![
+                c.homeserver.as_str(),
+                c.user_id.as_deref().unwrap_or(""),
+                c.access_token.as_str(),
+            ]
         }
         "signal" => {
             let c = config.signal.as_ref()?;
@@ -319,7 +323,11 @@ pub(crate) fn configured_media_account_scope(
         }
         "email" => {
             let c = config.email.as_ref()?;
-            vec![c.imap_host.as_str(), c.username.as_str(), c.password.as_str()]
+            vec![
+                c.imap_host.as_str(),
+                c.username.as_str(),
+                c.password.as_str(),
+            ]
         }
         "whatsapp" => {
             let c = config.whatsapp.as_ref()?;
@@ -359,7 +367,11 @@ pub(crate) fn configured_media_account_scope(
         }
         "yuanbao" => {
             let c = config.yuanbao.as_ref()?;
-            vec![c.api_domain.as_str(), c.app_key.as_str(), c.app_secret.as_str()]
+            vec![
+                c.api_domain.as_str(),
+                c.app_key.as_str(),
+                c.app_secret.as_str(),
+            ]
         }
         // The current iMessage configuration has no stable account identity.
         // Do not silently turn a provider name into cross-runtime authority.
@@ -377,15 +389,14 @@ pub(crate) fn configured_media_account_scope(
         digest.update((part.len() as u64).to_le_bytes());
         digest.update(part.as_bytes());
     }
-    Some(format!("{provider}:media-v1:{}", hex::encode(digest.finalize())))
+    Some(format!(
+        "{provider}:media-v1:{}",
+        hex::encode(digest.finalize())
+    ))
 }
 
 #[derive(Clone)]
-pub(crate) struct ModuleMediaRepository(
-    pub(crate) HostChannels,
-    pub(crate) String,
-    Option<String>,
-);
+pub(crate) struct ModuleMediaRepository(pub(crate) HostChannels, pub(crate) String, Option<String>);
 
 fn bind_configured_media_scope(
     scope: &mut tinychannels_bus::HostVoiceScope,
@@ -705,11 +716,7 @@ async fn read_scoped_voice_media(
     })
 }
 
-pub(crate) struct ModuleEvents(
-    pub(crate) HostChannels,
-    pub(crate) String,
-    Option<String>,
-);
+pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String, Option<String>);
 
 #[async_trait::async_trait]
 impl tinychannels::host::EventSink for ModuleEvents {

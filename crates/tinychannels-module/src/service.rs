@@ -228,16 +228,13 @@ impl Channels {
             None => Running::start(channel, hooks, self.host.clone()),
         };
         running.insert(name.clone(), provider);
-        self.provider_activations
-            .lock()
-            .await
-            .insert(
-                name.clone(),
-                ProviderActivation {
-                    generation: uuid::Uuid::new_v4().simple().to_string(),
-                    media_account_scope,
-                },
-            );
+        self.provider_activations.lock().await.insert(
+            name.clone(),
+            ProviderActivation {
+                generation: uuid::Uuid::new_v4().simple().to_string(),
+                media_account_scope,
+            },
+        );
         drop(running);
         finish_start_admission(
             &self.host,
