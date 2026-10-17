@@ -542,3 +542,111 @@ fn tool_progress_projection_preserves_call_identity_arguments_and_result() {
     };
     assert_eq!(*data, serde_json::to_value(event).unwrap());
 }
+
+#[test]
+fn lifecycle_projection_retains_iteration_budget_and_stop_reason() {
+    let event = ChannelOutputEvent::Lifecycle {
+        stage: "stopped".into(),
+        message: Some("iteration limit".into()),
+        iteration: Some(4),
+        max_iterations: Some(4),
+        stop: Some(serde_json::json!({"kind": "budget", "remaining": 0})),
+    };
+    let intents = translate_output_event(
+        &turn(),
+        event,
+        &Default::default(),
+        &Default::default(),
+        BridgeTranslationOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        intents[0].payload,
+        OutboundPayload::NativeChannelData {
+            data: serde_json::json!({"lifecycle": {
+                "stage": "stopped", "message": "iteration limit",
+                "iteration": 4, "maxIterations": 4,
+                "stop": {"kind": "budget", "remaining": 0},
+            }}),
+        }
+    );
+}
+
+#[test]
+fn voice_without_transcript_is_an_audio_part_without_an_invented_caption() {
+    let voice = tinychannels_bus::VoiceNote {
+        media: MediaReference {
+            kind: MediaKind::Audio,
+            url: Some("https://example.test/voice.ogg".into()),
+            ..Default::default()
+        },
+        codec: Some("opus".into()),
+        duration_ms: Some(42),
+        ..Default::default()
+    };
+    let intents = translate_output_event(
+        &turn(),
+        ChannelOutputEvent::VoiceNote {
+            text: None,
+            voice: voice.clone(),
+        },
+        &Default::default(),
+        &Default::default(),
+        BridgeTranslationOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(
+        intents[0].payload,
+        OutboundPayload::Parts {
+            parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: voice.media,
+                    codec: voice.codec,
+                    duration_ms: voice.duration_ms,
+                },
+            }],
+        }
+    );
+}
+
+#[test]
+fn intent_replay_keys_distinguish_accounts_topics_and_turns() {
+    let original = turn();
+    let project = |turn: &ChannelTurn| {
+        translate_output_event(
+            turn,
+            ChannelOutputEvent::Clarification {
+                prompt: "which?".into(),
+            },
+            &Default::default(),
+            &Default::default(),
+            BridgeTranslationOptions::default(),
+        )
+        .unwrap()
+        .remove(0)
+    };
+    let baseline = project(&original);
+    assert_eq!(baseline.idempotency_key, project(&original).idempotency_key);
+    for changed in [
+        {
+            let mut changed = original.clone();
+            changed.envelope.channel.account_id = Some("another-account".into());
+            changed
+        },
+        {
+            let mut changed = original.clone();
+            changed.envelope.conversation.topic_id = Some("another-topic".into());
+            changed
+        },
+        {
+            let mut changed = original.clone();
+            changed.id = "another-turn".into();
+            changed
+        },
+    ] {
+        let intent = project(&changed);
+        assert_ne!(baseline.idempotency_key, intent.idempotency_key);
+        assert_eq!(intent.channel_ref, Some(changed.envelope.channel));
+        assert_eq!(intent.conversation_ref, Some(changed.envelope.conversation));
+    }
+}

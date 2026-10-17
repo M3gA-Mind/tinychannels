@@ -633,21 +633,24 @@ async fn draft_uncertain_edit_retains_authority_and_never_posts_a_replacement() 
         message_ids: vec!["draft-1".into(), "draft-2".into()],
         ..Default::default()
     };
-    FakeSender::script(&sender.edits, Outcome::Err(|| {
-        ProgressiveSendError::PartialOutcome(Box::new(
-            tinychannels_bus::channel::ChannelSendOutcome {
-                receipt: tinychannels_bus::channel::MessageReceipt {
-                    platform_message_ids: vec!["draft-1".into(), "draft-2".into()],
-                    ..Default::default()
+    FakeSender::script(
+        &sender.edits,
+        Outcome::Err(|| {
+            ProgressiveSendError::PartialOutcome(Box::new(
+                tinychannels_bus::channel::ChannelSendOutcome {
+                    receipt: tinychannels_bus::channel::MessageReceipt {
+                        platform_message_ids: vec!["draft-1".into(), "draft-2".into()],
+                        ..Default::default()
+                    },
+                    error: Some(tinychannels_bus::channel::ChannelSendError {
+                        kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                        sent_before_error: true,
+                        ..Default::default()
+                    }),
                 },
-                error: Some(tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                    sent_before_error: true,
-                    ..Default::default()
-                }),
-            },
-        ))
-    }));
+            ))
+        }),
+    );
 
     flush_streaming_edit(&sender, "telegram:receipt", &mut state, false).await;
     flush_streaming_edit(&sender, "telegram:receipt", &mut state, false).await;
@@ -655,7 +658,10 @@ async fn draft_uncertain_edit_retains_authority_and_never_posts_a_replacement() 
     assert!(state.edit_disabled);
     assert_eq!(state.message_id.as_deref(), Some("draft-1"));
     assert_eq!(state.message_ids, ["draft-1", "draft-2"]);
-    assert_eq!(sender.calls(), [Call::Edit("draft-1".into(), "updated draft".into())]);
+    assert_eq!(
+        sender.calls(),
+        [Call::Edit("draft-1".into(), "updated draft".into())]
+    );
 }
 
 #[tokio::test]
@@ -668,19 +674,28 @@ async fn thinking_partial_edit_keeps_bubble_for_cleanup_and_stops_editing() {
         thinking_dirty: true,
         ..Default::default()
     };
-    FakeSender::script(&sender.edits, Outcome::Err(|| {
-        ProgressiveSendError::PartialOutcome(Box::new(
-            tinychannels_bus::channel::ChannelSendOutcome::default(),
-        ))
-    }));
+    FakeSender::script(
+        &sender.edits,
+        Outcome::Err(|| {
+            ProgressiveSendError::PartialOutcome(Box::new(
+                tinychannels_bus::channel::ChannelSendOutcome::default(),
+            ))
+        }),
+    );
 
     reply.edit_tick().await;
     reply.state.thinking_dirty = true;
     reply.edit_tick().await;
 
     assert!(reply.state.thinking_edit_disabled);
-    assert_eq!(reply.state.thinking_message_id.as_deref(), Some("thinking-1"));
-    assert_eq!(reply.state.thinking_message_ids, ["thinking-1", "thinking-2"]);
+    assert_eq!(
+        reply.state.thinking_message_id.as_deref(),
+        Some("thinking-1")
+    );
+    assert_eq!(
+        reply.state.thinking_message_ids,
+        ["thinking-1", "thinking-2"]
+    );
     assert_eq!(sender.calls().len(), 1);
 }
 
@@ -771,4 +786,535 @@ fn ordered_text_parts_keep_dialects_and_do_not_duplicate_projection() {
     )
     .unwrap();
     assert_eq!(projected, vec![(projected_parts, "ab".into())]);
+}
+
+use tinychannels_bus::channel::{ChannelSendOutcome, MessageReceipt, MessageReceiptPart};
+use tinychannels_bus::module_progressive::{ChannelOutputEvent as Event, ProgressiveResult};
+use tinychannels_bus::{ContentPart, OutboundContentPart};
+
+fn text_part(text: &str) -> OutboundContentPart {
+    OutboundContentPart::Content {
+        part: ContentPart::Text {
+            text: text.into(),
+            markdown_dialect: Some("commonmark".into()),
+        },
+    }
+}
+
+fn delivered(id: &str) -> ChannelSendOutcome {
+    ChannelSendOutcome {
+        receipt: MessageReceipt {
+            primary_platform_message_id: Some(id.into()),
+            platform_message_ids: vec![id.into()],
+            edit_token: Some(format!("edit-{id}")),
+            delete_token: Some(format!("delete-{id}")),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[derive(Clone, Debug)]
+struct TypedCall {
+    parts: Vec<OutboundContentPart>,
+    text: String,
+    turn_id: Option<String>,
+    sequence: u64,
+    segment: u32,
+}
+
+#[derive(Default)]
+struct TypedSender {
+    legacy: FakeSender,
+    sent: Mutex<Vec<TypedCall>>,
+    outcomes: Mutex<VecDeque<Result<ChannelSendOutcome, ProgressiveSendError>>>,
+}
+
+#[async_trait]
+impl ProgressiveSender for TypedSender {
+    async fn send(&self, channel: &str, text: &str) -> Result<Value, ProgressiveSendError> {
+        self.legacy.send(channel, text).await
+    }
+    async fn send_parts_with_segment(
+        &self,
+        _channel: &str,
+        parts: &[OutboundContentPart],
+        text: &str,
+        context: Option<&ProgressiveOutputContext>,
+        sequence: u64,
+        segment: u32,
+    ) -> Result<ChannelSendOutcome, ProgressiveSendError> {
+        let mut sent = self.sent.lock().unwrap();
+        sent.push(TypedCall {
+            parts: parts.to_vec(),
+            text: text.into(),
+            turn_id: context.map(|context| context.turn_id.clone()),
+            sequence,
+            segment,
+        });
+        self.outcomes
+            .lock()
+            .unwrap()
+            .pop_front()
+            .unwrap_or_else(|| Ok(delivered(&format!("typed-{}", sent.len()))))
+    }
+    async fn edit(&self, channel: &str, id: &str, text: &str) -> Result<(), ProgressiveSendError> {
+        self.legacy.edit(channel, id, text).await
+    }
+    async fn delete(&self, channel: &str, id: &str) -> Result<(), ProgressiveSendError> {
+        self.legacy.delete(channel, id).await
+    }
+    async fn typing(&self, channel: &str) -> Result<(), ProgressiveSendError> {
+        self.legacy.typing(channel).await
+    }
+}
+
+fn typed_turn(
+    limit: Option<(u64, tinychannels_bus::LengthUnit)>,
+) -> (Arc<TypedSender>, ProgressiveReply) {
+    let sender = Arc::new(TypedSender::default());
+    let mut capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
+    if let Some((limit, unit)) = limit {
+        capabilities.text.text_limit = Some(limit);
+        capabilities.text.length_unit = unit;
+    }
+    let reply = ProgressiveReply::new_scoped(
+        sender.clone(),
+        "telegram:typed",
+        capabilities,
+        ProgressiveOutputContext {
+            turn_id: "turn-typed".into(),
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some("bot".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                id: "chat".into(),
+                ..Default::default()
+            },
+        },
+    );
+    (sender, reply)
+}
+
+#[tokio::test]
+async fn typed_final_segments_unicode_with_scoped_sequence_and_retains_every_receipt() {
+    for (unit, limit, expected) in [
+        (
+            tinychannels_bus::LengthUnit::Characters,
+            2,
+            vec!["a😀", "éz"],
+        ),
+        (
+            tinychannels_bus::LengthUnit::Utf8Bytes,
+            4,
+            vec!["a", "😀", "éz"],
+        ),
+        (
+            tinychannels_bus::LengthUnit::Utf16Units,
+            2,
+            vec!["a", "😀", "éz"],
+        ),
+    ] {
+        let (sender, mut reply) = typed_turn(Some((limit, unit)));
+        let event = Event::FinalMessage {
+            text: "projection must not be sent twice".into(),
+            parts: vec![text_part("a😀éz")],
+            receipt: None,
+        };
+        reply.on_output_event(&event).await.unwrap();
+        let dispatch = reply.finalize_output_event(&event).await.unwrap();
+        assert_eq!(dispatch.outcomes.len(), 1);
+        let sent = sender.sent.lock().unwrap();
+        assert_eq!(
+            sent.iter()
+                .map(|call| call.text.as_str())
+                .collect::<Vec<_>>(),
+            expected
+        );
+        for (index, call) in sent.iter().enumerate() {
+            assert_eq!(call.parts, vec![text_part(expected[index])]);
+            assert_eq!(call.sequence, 1);
+            assert_eq!(call.segment, index as u32);
+            assert_eq!(call.turn_id.as_deref(), Some("turn-typed"));
+        }
+        let receipt = &dispatch.outcomes[0].receipt;
+        assert_eq!(receipt.platform_message_ids.len(), expected.len());
+        assert_eq!(
+            receipt.primary_platform_message_id.as_deref(),
+            Some("typed-1")
+        );
+        for (index, part) in receipt.parts.iter().enumerate() {
+            let id = format!("typed-{}", index + 2);
+            assert_eq!(part.platform_message_id, id);
+            assert_eq!(part.edit_token, Some(format!("edit-{id}")));
+            assert_eq!(part.delete_token, Some(format!("delete-{id}")));
+        }
+    }
+}
+
+#[tokio::test]
+async fn segmented_send_stops_after_partial_failure_and_retains_delivered_prefix() {
+    for failure in [
+        Err(other()),
+        Err(ProgressiveSendError::PartialOutcome(Box::new(
+            ChannelSendOutcome {
+                receipt: delivered("partial").receipt,
+                error: Some(tinychannels_bus::channel::ChannelSendError {
+                    sent_before_error: true,
+                    ..Default::default()
+                }),
+            },
+        ))),
+        Ok(ChannelSendOutcome::default()),
+    ] {
+        let (sender, mut reply) = typed_turn(Some((2, tinychannels_bus::LengthUnit::Characters)));
+        sender
+            .outcomes
+            .lock()
+            .unwrap()
+            .extend([Ok(delivered("first")), failure]);
+        let outcome = reply
+            .send_parts(&[text_part("abcdef")], "abcdef")
+            .await
+            .unwrap();
+        assert_eq!(
+            sender.sent.lock().unwrap().len(),
+            2,
+            "never attempt the remaining tail"
+        );
+        assert_eq!(
+            outcome.receipt.primary_platform_message_id.as_deref(),
+            Some("first")
+        );
+        assert!(
+            outcome
+                .receipt
+                .platform_message_ids
+                .contains(&"first".into())
+        );
+        assert!(outcome.error.unwrap().sent_before_error);
+    }
+}
+
+#[tokio::test]
+async fn unsupported_notice_and_media_remain_ordered_when_later_final_succeeds() {
+    let (sender, mut reply) = typed_turn(None);
+    sender.outcomes.lock().unwrap().extend([
+        Err(ProgressiveSendError::UnsupportedContent),
+        Err(ProgressiveSendError::UnsupportedContent),
+        Ok(delivered("final")),
+    ]);
+    let mut batch = reply
+        .apply_output_event(
+            &Event::Clarification {
+                prompt: "which?".into(),
+            },
+            true,
+        )
+        .await
+        .unwrap();
+    let media = ContentPart::Text {
+        text: "caption".into(),
+        markdown_dialect: Some("plain".into()),
+    };
+    batch.absorb(
+        reply
+            .apply_output_event(
+                &Event::Media {
+                    text: Some("intro".into()),
+                    parts: vec![media.clone()],
+                },
+                true,
+            )
+            .await
+            .unwrap(),
+    );
+    batch.absorb(
+        reply
+            .finalize_output_event(&Event::FinalMessage {
+                text: "done".into(),
+                parts: vec![],
+                receipt: None,
+            })
+            .await
+            .unwrap(),
+    );
+    let result = batch.into_result();
+    let ProgressiveResult::DeliveryBatch {
+        outcomes,
+        unsupported,
+        failure,
+    } = &result
+    else {
+        panic!("mixed facts need a batch")
+    };
+    assert_eq!(failure, &None);
+    assert_eq!(outcomes, &vec![delivered("final")]);
+    assert_eq!(
+        unsupported,
+        &vec![
+            OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "which?".into(),
+                    markdown_dialect: None
+                }
+            },
+            OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "intro".into(),
+                    markdown_dialect: None
+                }
+            },
+            OutboundContentPart::Content { part: media },
+        ]
+    );
+    let restored = ProgressiveOutputDispatch::from_result(&result);
+    assert_eq!(
+        serde_json::to_value(restored.into_result()).unwrap(),
+        serde_json::to_value(result).unwrap()
+    );
+}
+
+#[test]
+fn public_result_roundtrips_preserve_receipts_unsupported_parts_and_transport_failures() {
+    let cases = [
+        ProgressiveOutputDispatch::default(),
+        ProgressiveOutputDispatch {
+            outcomes: vec![delivered("a")],
+            ..Default::default()
+        },
+        ProgressiveOutputDispatch {
+            outcomes: vec![delivered("a"), delivered("b")],
+            ..Default::default()
+        },
+        ProgressiveOutputDispatch {
+            unsupported: vec![text_part("unsupported")],
+            ..Default::default()
+        },
+    ];
+    for dispatch in cases {
+        let result = dispatch.into_result();
+        assert_eq!(
+            serde_json::to_value(ProgressiveOutputDispatch::from_result(&result).into_result())
+                .unwrap(),
+            serde_json::to_value(result).unwrap()
+        );
+    }
+    let mut batch = ProgressiveOutputDispatch {
+        unsupported: vec![text_part("keep")],
+        ..Default::default()
+    };
+    let mut failed = delivered("partial");
+    failed.error = Some(tinychannels_bus::channel::ChannelSendError {
+        sent_before_error: true,
+        ..Default::default()
+    });
+    batch.push_outcome(failed.clone());
+    batch.absorb(ProgressiveOutputDispatch {
+        outcomes: vec![delivered("later")],
+        ..Default::default()
+    });
+    let ProgressiveResult::DeliveryBatch {
+        outcomes,
+        unsupported,
+        failure,
+    } = batch.into_result()
+    else {
+        panic!("expected batch")
+    };
+    assert_eq!(outcomes, vec![failed, delivered("later")]);
+    assert_eq!(unsupported, vec![text_part("keep")]);
+    assert_eq!(
+        failure,
+        Some(tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport)
+    );
+    assert!(
+        ProgressiveOutputDispatch::from_result(&ProgressiveResult::Updated)
+            .outcomes
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn legacy_sender_receipt_operations_require_primary_id_and_delegate_exactly_once() {
+    let sender = FakeSender::default();
+    let receipt = delivered("provider-id").receipt;
+    sender
+        .edit_with_receipt("channel", &receipt, "updated")
+        .await
+        .unwrap();
+    sender
+        .delete_with_receipt("channel", &receipt)
+        .await
+        .unwrap();
+    assert!(
+        sender
+            .edit_with_receipt("channel", &MessageReceipt::default(), "bad")
+            .await
+            .is_err()
+    );
+    assert!(
+        sender
+            .delete_with_receipt("channel", &MessageReceipt::default())
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        sender
+            .send_parts_with_segment("channel", &[text_part("rich")], "", None, 1, 0)
+            .await,
+        Err(ProgressiveSendError::UnsupportedContent)
+    ));
+    assert_eq!(
+        sender.calls(),
+        vec![
+            Call::Edit("provider-id".into(), "updated".into()),
+            Call::Delete("provider-id".into())
+        ]
+    );
+}
+
+fn partial_bubble() -> ProgressiveSendError {
+    ProgressiveSendError::PartialOutcome(Box::new(ChannelSendOutcome {
+        receipt: MessageReceipt {
+            primary_platform_message_id: Some("part-1".into()),
+            platform_message_ids: vec!["part-1".into()],
+            parts: vec![MessageReceiptPart {
+                platform_message_id: "part-2".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        error: Some(tinychannels_bus::channel::ChannelSendError {
+            sent_before_error: true,
+            ..Default::default()
+        }),
+    }))
+}
+
+#[tokio::test]
+async fn partial_ephemeral_sends_retain_all_cleanup_ids_and_do_not_fence_final_content() {
+    let (sender, mut reply) = turn("telegram:partial-bubbles");
+    FakeSender::script(&sender.sends, Outcome::Err(partial_bubble));
+    reply.on_thinking_delta("reason");
+    reply.edit_tick().await;
+    FakeSender::script(&sender.sends, Outcome::Err(partial_bubble));
+    reply.filler_tick().await;
+    reply.on_thinking_delta(" more");
+    reply.edit_tick().await;
+    reply.filler_tick().await;
+    assert_eq!(
+        sender.calls().len(),
+        2,
+        "uncertain bubbles must not be retried"
+    );
+    assert!(!reply.state.delivery_uncertain);
+    assert!(reply.state.thinking_delivery_uncertain && reply.state.filler_delivery_uncertain);
+    assert_eq!(reply.state.thinking_message_ids, ["part-1", "part-2"]);
+    assert_eq!(reply.state.filler_message_ids, ["part-1", "part-2"]);
+    reply.abort().await;
+    assert!(sender.calls().contains(&Call::Delete("part-1".into())));
+    assert!(sender.calls().contains(&Call::Delete("part-2".into())));
+}
+
+#[tokio::test]
+async fn partial_initial_draft_blocks_terminal_replacement_and_returns_the_original_receipt() {
+    let (sender, mut reply) = turn("telegram:partial-draft");
+    FakeSender::script(&sender.sends, Outcome::Err(partial_bubble));
+    reply.on_text_delta("draft");
+    reply.edit_tick().await;
+    reply.on_text_delta(" more");
+    reply.edit_tick().await;
+    let error = reply
+        .finalize_output_event(&Event::FinalMessage {
+            text: "final".into(),
+            parts: vec![],
+            receipt: None,
+        })
+        .await
+        .unwrap_err();
+    let ProgressiveSendError::PartialOutcome(outcome) = error else {
+        panic!("must retain partial receipt")
+    };
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("part-1")
+    );
+    assert_eq!(outcome.receipt.parts[0].platform_message_id, "part-2");
+    assert!(outcome.error.unwrap().sent_before_error);
+    assert_eq!(sender.calls(), vec![Call::Send("draft".into())]);
+}
+
+#[tokio::test]
+async fn terminal_edit_failures_retain_existing_receipt_and_never_send_replacements() {
+    for make in [unavailable, unsupported, gone, other] {
+        let (sender, mut reply) = turn("telegram:terminal-edit");
+        reply.on_text_delta("draft");
+        reply.edit_tick().await;
+        FakeSender::script(&sender.edits, Outcome::Err(make));
+        let error = reply
+            .finalize_output_event(&Event::FinalMessage {
+                text: "final".into(),
+                parts: vec![],
+                receipt: None,
+            })
+            .await
+            .unwrap_err();
+        let ProgressiveSendError::PartialOutcome(outcome) = error else {
+            panic!("must retain receipt")
+        };
+        assert_eq!(
+            outcome.receipt.primary_platform_message_id.as_deref(),
+            Some("m1")
+        );
+        assert!(outcome.error.is_some());
+        assert_eq!(
+            sender
+                .calls()
+                .iter()
+                .filter(|call| matches!(call, Call::Send(_)))
+                .count(),
+            1
+        );
+    }
+}
+
+#[tokio::test]
+async fn final_text_edit_reuses_draft_receipt_and_removes_all_ephemeral_messages() {
+    let (sender, mut reply) = turn("telegram:terminal-success");
+    reply.on_text_delta("draft");
+    reply.edit_tick().await;
+    reply.on_thinking_delta("reason");
+    reply.edit_tick().await;
+    reply.filler_tick().await;
+    let dispatch = reply
+        .finalize_output_event(&Event::FinalMessage {
+            text: "finished".into(),
+            parts: vec![],
+            receipt: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        dispatch.outcomes[0]
+            .receipt
+            .primary_platform_message_id
+            .as_deref(),
+        Some("m1")
+    );
+    assert_eq!(
+        sender.calls(),
+        vec![
+            Call::Send("draft".into()),
+            Call::Send("💭 Thinking:\n_reason_".into()),
+            Call::Send("💭 _reason…_".into()),
+            Call::Edit("m1".into(), "finished".into()),
+            Call::Delete("m3".into()),
+            Call::Delete("m2".into()),
+        ]
+    );
 }
