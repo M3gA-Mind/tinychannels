@@ -34,6 +34,7 @@ struct Callback {
     transcription_gate: Arc<tokio::sync::Notify>,
     voice_scopes: Arc<Mutex<Vec<tinychannels_bus::HostVoiceScope>>>,
     voice_requests: Arc<Mutex<Vec<serde_json::Value>>>,
+    projected_voice_media_ids: Arc<Mutex<Vec<Option<String>>>>,
     voice_publication_failures: Arc<AtomicUsize>,
     controller_blocked: Arc<AtomicBool>,
     controllers_started: Arc<AtomicUsize>,
@@ -102,6 +103,10 @@ impl Callback {
         request: tinychannels_bus::HostSpeechSynthesisRequest,
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
         self.voice_scopes.lock().await.push(request.scope);
+        self.projected_voice_media_ids
+            .lock()
+            .await
+            .push(request.media_reference.as_ref().and_then(|media| media.opaque_id.clone()));
         self.voice_requests.lock().await.push(
             serde_json::json!({"kind":"synthesize","text":request.text,"format":request.format}),
         );
@@ -267,6 +272,7 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         transcription_gate: Arc::new(tokio::sync::Notify::new()),
         voice_scopes: Arc::new(Mutex::new(Vec::new())),
         voice_requests: Arc::new(Mutex::new(Vec::new())),
+        projected_voice_media_ids: Arc::new(Mutex::new(Vec::new())),
         voice_publication_failures: Arc::new(AtomicUsize::new(0)),
         controller_blocked: Arc::new(AtomicBool::new(false)),
         controllers_started: Arc::new(AtomicUsize::new(0)),
@@ -637,16 +643,9 @@ async fn denied_voice_publication_removes_unclaimed_shared_media() {
             .await
             .is_err()
     );
-    let requests = callback.voice_requests.lock().await;
-    let publication = requests
-        .iter()
-        .find(|request| request["kind"] == "store")
+    let opaque_id = callback.projected_voice_media_ids.lock().await[0]
+        .clone()
         .unwrap();
-    let opaque_id = publication["mediaReference"]["opaque_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    drop(requests);
     assert!(store.read_voice(scope, opaque_id).await.is_err());
     host.shutdown().await.unwrap();
 }
