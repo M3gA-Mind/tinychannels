@@ -9,9 +9,9 @@ pub(super) async fn send_channel_reply(sender: &dyn ProgressiveSender, channel: 
     match sender.send(channel, text).await {
         Ok(resp) => {
             tracing::info!(
-                "[channel-inbound] reply sent to channel='{}' response={:?}",
+                "[channel-inbound] reply sent to channel='{}' response_fields={}",
                 channel,
-                resp
+                resp.as_object().map_or(0, serde_json::Map::len)
             );
         }
         Err(ProgressiveSendError::Unavailable) => {

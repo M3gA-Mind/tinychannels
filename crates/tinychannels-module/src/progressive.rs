@@ -366,7 +366,16 @@ async fn send_typed_part(
             },
         ))
         .await
-        .map_err(|_| ProgressiveSendError::Unavailable)?
+        .map_err(|_| {
+            let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+            outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                message: "typed progressive callback failed after an unknown side effect".into(),
+                sent_before_error: true,
+                ..Default::default()
+            });
+            ProgressiveSendError::PartialOutcome(outcome)
+        })?
     {
         ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Outcome(
             outcome,
@@ -382,7 +391,16 @@ async fn send_typed_part(
         ChannelBackendResult::ProgressiveTransport(
             ProgressiveTransportResult::UnsupportedContent,
         ) => Err(ProgressiveSendError::UnsupportedContent),
-        _ => Err(ProgressiveSendError::UnsupportedContent),
+        _ => {
+            let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+            outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                message: "typed progressive callback returned an invalid acknowledgement".into(),
+                sent_before_error: true,
+                ..Default::default()
+            });
+            Err(ProgressiveSendError::PartialOutcome(outcome))
+        }
     }
 }
 

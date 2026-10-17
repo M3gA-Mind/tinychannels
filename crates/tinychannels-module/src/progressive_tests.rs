@@ -1638,6 +1638,9 @@ async fn callback_error_after_accepting_draft_is_not_retried_or_resent() {
         .filter_map(|request| match request {
             ProgressiveTransportRequest::Send {
                 idempotency_key, ..
+            }
+            | ProgressiveTransportRequest::SendTyped {
+                idempotency_key, ..
             } => Some(idempotency_key),
             _ => None,
         })
