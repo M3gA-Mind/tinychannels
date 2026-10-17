@@ -68,7 +68,7 @@ The TinyAgents `AgentProgress` source variants map as follows:
 | `TurnCostUpdated` | `Usage`, preserving cumulative model and token/cost totals. |
 | `ModelCallCompleted` | No channel event. Its captured model input/output remains in the observability path. Usage already has a dedicated projection. |
 | `TurnContent` | No channel event. It duplicates user/model content captured for observability, not channel output. |
-| `TurnCompleted` | `FinalMessage` when canonical final content is available, followed by lifecycle completion; early-stop metadata belongs in lifecycle state. |
+| `TurnCompleted` | Lifecycle completion precedes `FinalMessage` in the same batch, when canonical final content is available; terminal content closes the progressive handle. Early-stop metadata belongs in lifecycle state. A host-only lifecycle notification may occur outside the closed progressive stream. |
 
 This table is the conformance checklist for the OpenHuman adapter. Fields
 marked as allowed are still subject to OpenHuman's current capture gates and
