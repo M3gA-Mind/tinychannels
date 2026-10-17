@@ -417,7 +417,8 @@ impl TelegramChannel {
             .topic_id
             .as_deref()
             .or(conversation.thread_id.as_deref())
-            .or(message.thread_id.as_deref());
+            .or(message.thread_id.as_deref())
+            .map(str::to_owned);
         let mut body = serde_json::json!({"chat_id": conversation.id});
         let mut method = "sendMessage";
         let kind = match structured[0] {
@@ -607,7 +608,7 @@ impl TelegramChannel {
             ContentPart::Native { .. } => return Err(anyhow::Error::new(TelegramUnsupportedError)),
             _ => unreachable!(),
         };
-        if let Some(thread) = thread_id {
+        if let Some(thread) = thread_id.as_deref() {
             body["message_thread_id"] = serde_json::json!(thread);
         }
         if let Some(reply) = message.reply_to_id.as_deref() {
@@ -668,7 +669,7 @@ impl TelegramChannel {
             platform_message_id: id.clone(),
             kind,
             index: 0,
-            thread_id: thread_id.map(str::to_owned),
+            thread_id: thread_id.clone(),
             reply_to_id: message.reply_to_id.clone(),
             edit_token: Some(id.clone()),
             delete_token: Some(id.clone()),
@@ -681,7 +682,7 @@ impl TelegramChannel {
             primary_platform_message_id: Some(id.clone()),
             platform_message_ids: vec![id],
             parts: vec![part],
-            thread_id: thread_id.map(str::to_owned),
+            thread_id,
             reply_to_id: message.reply_to_id.clone(),
             sent_at: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
