@@ -83,6 +83,7 @@ impl Callback {
         request: tinychannels_bus::HostVoiceTranscriptionRequest,
     ) -> Result<tinychannels_bus::HostTranscriptionResult> {
         self.voice_scopes.lock().await.push(request.scope.clone());
+        self.voice_requests.lock().await.push(serde_json::json!({"kind":"transcribe","mimeType":request.mime_type,"fileName":request.file_name,"language":request.language}));
         self.transcriptions_started.fetch_add(1, Ordering::SeqCst);
         self.events
             .lock()
@@ -100,9 +101,15 @@ impl Callback {
         request: tinychannels_bus::HostSpeechSynthesisRequest,
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
         self.voice_scopes.lock().await.push(request.scope);
-        self.voice_requests.lock().await.push(serde_json::json!({"kind":"synthesize","text":request.text,"format":request.format}));
+        self.voice_requests.lock().await.push(
+            serde_json::json!({"kind":"synthesize","text":request.text,"format":request.format}),
+        );
         Ok(tinychannels_bus::HostSpeechSynthesisResult {
-            audio_base64: if request.text == "oversized-response" { "x".repeat(super::MAX_VOICE_CALLBACK_BYTES + 1) } else { "UklGRg==".into() },
+            audio_base64: if request.text == "oversized-response" {
+                "x".repeat(super::MAX_VOICE_CALLBACK_BYTES + 1)
+            } else {
+                "UklGRg==".into()
+            },
             mime_type: "audio/wav".into(),
             duration_ms: Some(1_250),
         })
@@ -142,7 +149,10 @@ impl Callback {
         request: tinychannels_bus::HostVoiceReplyPolicyRequest,
     ) -> Result<tinychannels_bus::HostVoiceReplyPolicy> {
         self.voice_scopes.lock().await.push(request.scope);
-        self.voice_requests.lock().await.push(serde_json::json!({"kind":"policy"}));
+        self.voice_requests
+            .lock()
+            .await
+            .push(serde_json::json!({"kind":"policy"}));
         Ok(tinychannels_bus::HostVoiceReplyPolicy {
             mode: tinychannels_bus::HostVoiceReplyMode::SpeakReply,
             inbound_has_voice: true,
@@ -534,6 +544,140 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         callback.events.lock().await.as_slice(),
         ["transcription:complete", "event:channel:reaction_sent"]
     );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn scoped_voice_callbacks_round_trip_scope_and_enforce_media_limits() {
+    let (host, callback, _server) = connected_host().await;
+    let scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "telegram-primary".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("bot-7".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Group,
+            id: "group-42".into(),
+            thread_id: Some("thread-9".into()),
+            topic_id: Some("topic-3".into()),
+            ..Default::default()
+        },
+        turn_id: "message-88".into(),
+        ..Default::default()
+    };
+    let transcription = host
+        .transcribe_voice(tinychannels_bus::HostVoiceTranscriptionRequest {
+            scope: scope.clone(),
+            audio_base64: "UklGRg==".into(),
+            mime_type: Some("audio/wav".into()),
+            file_name: Some("voice.wav".into()),
+            language: Some("en".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(transcription.text, "spoken words");
+
+    let speech = host
+        .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
+            scope: scope.clone(),
+            text: "hello".into(),
+            voice: Some("alloy".into()),
+            format: Some("wav".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(speech.mime_type, "audio/wav");
+    assert_eq!(speech.audio_base64, "UklGRg==");
+
+    let stored = host
+        .store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
+            scope: scope.clone(),
+            direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
+            audio_base64: "UklGRg==".into(),
+            mime_type: "audio/wav".into(),
+            codec: Some("wav_pcm16".into()),
+            duration_ms: Some(1_250),
+            file_name: Some("voice.wav".into()),
+        })
+        .await
+        .unwrap();
+    assert_eq!(stored.media.opaque_id.as_deref(), Some("voice-1"));
+
+    let read = host
+        .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
+            scope: scope.clone(),
+            opaque_id: "voice-1".into(),
+            max_bytes: 4,
+        })
+        .await
+        .unwrap();
+    assert_eq!(read.file_name.as_deref(), Some("voice.wav"));
+    assert!(
+        host.read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
+            scope: scope.clone(),
+            opaque_id: "voice-1".into(),
+            max_bytes: 2,
+        })
+        .await
+        .is_err(),
+        "decoded bytes must respect the caller's requested maximum"
+    );
+
+    let policy = host
+        .voice_reply_policy(tinychannels_bus::HostVoiceReplyPolicyRequest {
+            scope: scope.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        policy.mode,
+        tinychannels_bus::HostVoiceReplyMode::SpeakReply
+    );
+    assert!(policy.inbound_has_voice);
+
+    assert!(
+        host.synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
+            scope: scope.clone(),
+            text: "oversized-response".into(),
+            voice: None,
+            format: None,
+        })
+        .await
+        .is_err(),
+        "oversized callback results must be rejected after deserialization"
+    );
+    assert!(
+        host.synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
+            scope: scope.clone(),
+            text: "x".repeat(super::MAX_VOICE_CALLBACK_BYTES),
+            voice: None,
+            format: None,
+        })
+        .await
+        .is_err(),
+        "oversized callback requests must fail before reaching the host"
+    );
+
+    let scopes = callback.voice_scopes.lock().await;
+    assert_eq!(scopes.len(), 7);
+    assert!(scopes.iter().all(|observed| observed == &scope));
+    drop(scopes);
+    let calls = callback.voice_requests.lock().await;
+    assert_eq!(calls[0]["kind"], "transcribe");
+    assert_eq!(
+        calls[1],
+        serde_json::json!({"kind":"synthesize","text":"hello","format":"wav"})
+    );
+    assert_eq!(calls[2]["direction"], "inbound");
+    assert_eq!(
+        calls[3],
+        serde_json::json!({"kind":"read","opaqueId":"voice-1","maxBytes":4})
+    );
+    assert_eq!(calls[4]["kind"], "read");
+    assert_eq!(calls[5]["kind"], "policy");
+    assert_eq!(calls[6]["text"], "oversized-response");
+    drop(calls);
     host.shutdown().await.unwrap();
 }
 
