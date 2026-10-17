@@ -3,6 +3,8 @@ use crate::providers::telegram::fixtures::*;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use tinychannels_conformance::AdapterFixture;
+use tinychannels_runtime::channel::ChannelAdapter;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -13,13 +15,13 @@ impl tinychannels_runtime::adapters::LocalOutboundSink for TelegramConformanceSi
     async fn send(
         &self,
         intent: tinychannels_bus::ChannelOutboundIntent,
-    ) -> Result<tinychannels_bus::MessageReceipt, tinychannels_bus::ChannelSendError> {
+    ) -> Result<tinychannels_bus::channel::MessageReceipt, tinychannels_bus::channel::ChannelSendError> {
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
         let outcome = self
             .0
             .send_typed_with_receipt(&message)
             .await
-            .map_err(|error| tinychannels_bus::ChannelSendError {
+            .map_err(|error| tinychannels_bus::channel::ChannelSendError {
                 kind: tinychannels_bus::channel::SendErrorKind::Unknown,
                 message: error.to_string(),
                 ..Default::default()
@@ -62,7 +64,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
     async fn exercise(
         &self,
         feature: tinychannels_conformance::ConformanceFeature,
-    ) -> Result<Option<tinychannels_bus::ChannelSendOutcome>, tinychannels_bus::ChannelSendError>
+    ) -> Result<Option<tinychannels_bus::channel::ChannelSendOutcome>, tinychannels_bus::channel::ChannelSendError>
     {
         use tinychannels_conformance::ConformanceFeature as Feature;
         let payload = match feature {
@@ -74,7 +76,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 media_urls: vec!["https://example.invalid/image.png".into()],
             },
             _ => {
-                return Err(tinychannels_bus::ChannelSendError {
+                return Err(tinychannels_bus::channel::ChannelSendError {
                     kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
                     message: "fixture does not implement this operation".into(),
                     unsupported: true,
@@ -823,7 +825,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         thread_id: None,
     };
     let adapter = tinychannels_runtime::adapters::LocalChannelAdapter::new(
-        tinychannels_bus::ChannelDescriptor {
+        tinychannels_bus::channel::ChannelDescriptor {
             id: scope.channel.id.clone(),
             display_name: "Telegram test account".into(),
             account_id: scope.channel.account_id.clone(),
