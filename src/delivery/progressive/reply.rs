@@ -164,7 +164,7 @@ impl ProgressiveReply {
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, super::ProgressiveSendError> {
         let outcome = self
             .sender
-            .send_parts(&self.channel, parts, text, self.output_context.as_ref())
+            .send_parts(&self.channel, parts, text, self.output_context.as_ref(), self.output_sequence)
             .await?;
         abort_channel_reply(self.sender.as_ref(), &self.channel, &mut self.state).await;
         Ok(outcome)
@@ -177,7 +177,7 @@ impl ProgressiveReply {
         text: &str,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, super::ProgressiveSendError> {
         self.sender
-            .send_parts(&self.channel, parts, text, self.output_context.as_ref())
+            .send_parts(&self.channel, parts, text, self.output_context.as_ref(), self.output_sequence)
             .await
     }
 

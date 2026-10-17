@@ -133,8 +133,19 @@ impl ProgressiveSender for Sender {
         parts: &[tinychannels_bus::OutboundContentPart],
         text: &str,
         context: Option<&ProgressiveOutputContext>,
+        sequence: u64,
     ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
     {
+        let idempotency_key = context.map(|context| {
+            let scope = serde_json::to_vec(&(
+                &context.turn_id,
+                &context.channel,
+                &context.conversation,
+                sequence,
+                "provider_send",
+            )).expect("scoped channel identity serializes");
+            hex::encode(Sha256::digest(scope))
+        });
         match self
             .host
             .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(
@@ -143,6 +154,8 @@ impl ProgressiveSender for Sender {
                     turn_id: context.map(|context| context.turn_id.clone()),
                     channel_ref: context.map(|context| context.channel.clone()),
                     conversation: context.map(|context| context.conversation.clone()),
+                    sequence: context.map(|_| sequence),
+                    idempotency_key,
                     parts: parts.to_vec(),
                     text: text.into(),
                 },
