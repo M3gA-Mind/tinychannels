@@ -936,6 +936,53 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
 }
 
 #[tokio::test]
+async fn typed_media_failure_after_text_keeps_real_partial_ids_and_forbids_retry() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({"message_id": 11})),
+    )
+    .await;
+    mount_post(
+        &server,
+        "sendPhoto",
+        ResponseTemplate::new(400).set_body_string("rejected"),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"])
+        .with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("partial-image", "before".into());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.parts.push(tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-photo-1".into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    });
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["11"]);
+    let error = outcome.error.expect("partial delivery must be explicit");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].url.path().ends_with("/sendMessage"));
+    assert!(requests[1].url.path().ends_with("/sendPhoto"));
+}
+
+#[tokio::test]
 async fn typed_send_receipt_uses_actual_telegram_ids_and_full_address() {
     let server = mock_api().await;
     mount_post(
