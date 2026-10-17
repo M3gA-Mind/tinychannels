@@ -1167,7 +1167,12 @@ async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts
         })
         .await
         .unwrap();
-    let ProgressiveResult::DeliveryBatch { outcomes, failure: Some(_), .. } = result else {
+    let ProgressiveResult::DeliveryBatch {
+        outcomes,
+        failure: Some(_),
+        ..
+    } = result
+    else {
         panic!("expected retained delivery outcome")
     };
     let outcome = &outcomes[0];
@@ -1606,9 +1611,13 @@ async fn typed_callback_error_after_acceptance_is_unknown_and_stops_batch() {
         ProgressiveResult::DeliveryBatch { outcomes, failure: Some(_), .. }
             if outcomes.len() == 1 && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
     ));
-    let sends = callback.requests.lock().await.iter().filter(|request| {
-        matches!(request, ProgressiveTransportRequest::SendTyped { .. })
-    }).count();
+    let sends = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+        .count();
     assert_eq!(sends, 1);
     replies.shutdown().await.unwrap();
 }
@@ -1894,13 +1903,7 @@ async fn scoped_draft_keys_differ_for_identical_text_across_turns_and_accounts()
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
     capabilities.progressive_edits = true;
     for (account, turn) in [("discord:key-a", "turn-a"), ("discord:key-b", "turn-b")] {
-        let handle = open_scoped(
-            &replies,
-            account,
-            turn,
-            capabilities.clone(),
-        )
-        .await;
+        let handle = open_scoped(&replies, account, turn, capabilities.clone()).await;
         replies
             .execute(ProgressiveCommand::FeedOutput {
                 handle: handle.clone(),

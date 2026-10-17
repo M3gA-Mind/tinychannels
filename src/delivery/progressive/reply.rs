@@ -519,7 +519,8 @@ impl ProgressiveReply {
         parts: &[tinychannels_bus::OutboundContentPart],
         text: &str,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, super::ProgressiveSendError> {
-        let mut outcome = self.sender
+        let mut outcome = self
+            .sender
             .send_parts_with_segment(
                 &self.channel,
                 parts,

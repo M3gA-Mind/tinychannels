@@ -1,4 +1,7 @@
-//! Capability-driven bridge from harness output events to outbound intents.
+//! Legacy capability-driven bridge from harness output events to outbound intents.
+//!
+//! Progressive module dispatch uses `delivery::progressive`; this bridge remains
+//! a compatibility projection for callers that already own channel intents.
 
 use crate::channel::{
     ChannelOutboundIntent, ChannelPresentationCapabilities, ChannelStaticCapabilities,

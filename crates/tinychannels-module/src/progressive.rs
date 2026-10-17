@@ -375,8 +375,7 @@ async fn send_typed_part(
                 ..Default::default()
             });
             ProgressiveSendError::PartialOutcome(outcome)
-        })?
-    {
+        })? {
         ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Outcome(
             outcome,
         )) => Ok(outcome),

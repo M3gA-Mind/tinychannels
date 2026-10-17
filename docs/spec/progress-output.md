@@ -37,7 +37,12 @@ Typed provider sends include a stable per-turn scoped sequence key. A terminal
 feed is fingerprinted before dispatch; an identical retry waits for or returns
 the retained terminal result without sending again, while changed terminal
 content is rejected. `Close` and shutdown remove ephemeral state without
-sending a synthetic cancellation message. Scoped opens currently resolve a
+sending a synthetic cancellation message. Nonterminal `FeedOutput` has no
+caller-supplied batch identity or retained replay contract: a repeated call
+after a lost reply is a new delivery and must not be blindly retried. A host
+may retry the exact typed transport request with its stable key, but it must
+reconcile ambiguous nonterminal feed results before resubmitting events. This
+is in-process terminal retention, not crash recovery. Scoped opens currently resolve a
 local configured channel instance. Managed/relay provider descriptors and web
 surface registration are supplied by their owning host integrations.
 
