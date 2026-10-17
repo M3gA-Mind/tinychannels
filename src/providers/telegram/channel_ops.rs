@@ -12,6 +12,7 @@ impl TelegramChannel {
     pub(crate) fn inbound_envelope_from_update(
         update: &serde_json::Value,
         message: &ChannelMessage,
+        voice_note: Option<tinychannels_bus::VoiceNote>,
     ) -> tinychannels_bus::ChannelInboundEnvelope {
         let source = update
             .get("message")
@@ -84,10 +85,23 @@ impl TelegramChannel {
                 ..Default::default()
             },
             text: message.content.clone(),
-            parts: vec![tinychannels_bus::ContentPart::Text {
-                text: message.content.clone(),
-                markdown_dialect: None,
-            }],
+            parts: voice_note.map_or_else(
+                || vec![tinychannels_bus::ContentPart::Text {
+                    text: message.content.clone(),
+                    markdown_dialect: None,
+                }],
+                |voice_note| {
+                    let mut parts = Vec::new();
+                    if !message.content.trim().is_empty() {
+                        parts.push(tinychannels_bus::ContentPart::Text {
+                            text: message.content.clone(),
+                            markdown_dialect: None,
+                        });
+                    }
+                    parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
+                    parts
+                },
+            ),
             raw: Some(serde_json::json!({"providerMessageId": provider_message_id})),
             ..Default::default()
         }
