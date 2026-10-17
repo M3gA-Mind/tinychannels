@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
 use tinystoragedrivers_core::{
-    Blob, BlobMeta, BlobReader, BlobStore, MemoryStorage, Result as StorageResult, Scope,
-    DocumentStore, Precondition, StorageBackend, StorageError,
+    Blob, BlobMeta, BlobReader, BlobStore, DocumentStore, MemoryStorage, Precondition,
+    Result as StorageResult, Scope, StorageBackend, StorageError,
 };
 
 fn media_scope() -> MediaScope {
@@ -461,12 +461,12 @@ async fn failed_blob_cleanup_can_be_retried_after_reopening_the_store() {
 
 #[tokio::test]
 async fn pending_cleanup_filters_scope_state_and_age_before_applying_its_limit() {
-    let store = store();
-    let target = store
+    let main_store = store();
+    let target = main_store
         .store(media_request(valid_png(), None, Some("cleanup-target")))
         .await
         .unwrap();
-    let ready = store
+    let ready = main_store
         .store(media_request(valid_png(), None, Some("cleanup-ready")))
         .await
         .unwrap();
@@ -479,11 +479,16 @@ async fn pending_cleanup_filters_scope_state_and_age_before_applying_its_limit()
         (target.opaque_id.as_deref().unwrap(), 1, "writing"),
         (foreign.opaque_id.as_deref().unwrap(), 1, "writing"),
     ] {
-        let found = store.documents.get(MEDIA_COLLECTION, id).await.unwrap().unwrap();
-        let mut document = found.value;
+        let found = main_store
+            .documents
+            .get(MEDIA_COLLECTION, id)
+            .await
+            .unwrap()
+            .unwrap();
+        let mut document = found.doc;
         document["created_at_unix_ms"] = serde_json::json!(age);
         document["state"] = serde_json::json!(state);
-        store
+        main_store
             .documents
             .put(
                 MEDIA_COLLECTION,
@@ -495,23 +500,35 @@ async fn pending_cleanup_filters_scope_state_and_age_before_applying_its_limit()
             .unwrap();
     }
 
-    assert_eq!(store.cleanup_pending(media_scope(), 2, 1).await.unwrap(), 1);
-    assert!(store
-        .documents
-        .get(MEDIA_COLLECTION, target.opaque_id.as_deref().unwrap())
-        .await
-        .unwrap()
-        .is_none());
-    assert!(store
-        .documents
-        .get(MEDIA_COLLECTION, foreign.opaque_id.as_deref().unwrap())
-        .await
-        .unwrap()
-        .is_some());
-    assert!(store
-        .documents
-        .get(MEDIA_COLLECTION, ready.opaque_id.as_deref().unwrap())
-        .await
-        .unwrap()
-        .is_some());
+    assert_eq!(
+        main_store
+            .cleanup_pending(media_scope(), 2, 1)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        main_store
+            .documents
+            .get(MEDIA_COLLECTION, target.opaque_id.as_deref().unwrap())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        main_store
+            .documents
+            .get(MEDIA_COLLECTION, foreign.opaque_id.as_deref().unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        main_store
+            .documents
+            .get(MEDIA_COLLECTION, ready.opaque_id.as_deref().unwrap())
+            .await
+            .unwrap()
+            .is_some()
+    );
 }
