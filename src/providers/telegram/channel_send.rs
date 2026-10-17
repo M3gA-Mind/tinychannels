@@ -34,7 +34,92 @@ pub(crate) struct TelegramVoiceUpload<'a> {
     pub(crate) file_name: &'a str,
 }
 
+pub(crate) struct TelegramMediaUpload<'a> {
+    pub(crate) method: &'a str,
+    pub(crate) field: &'a str,
+    pub(crate) chat_id: &'a str,
+    pub(crate) thread_id: Option<&'a str>,
+    pub(crate) reply_to_id: Option<&'a str>,
+    pub(crate) caption: Option<&'a str>,
+    pub(crate) title: Option<&'a str>,
+    pub(crate) duration_ms: Option<u64>,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) content_type: &'a str,
+    pub(crate) file_name: &'a str,
+}
+
 impl TelegramChannel {
+    pub(crate) async fn send_media_bytes_with_id(
+        &self,
+        upload: TelegramMediaUpload<'_>,
+    ) -> anyhow::Result<String> {
+        if upload.bytes.is_empty() || upload.bytes.len() > 20 * 1024 * 1024 {
+            anyhow::bail!("media upload exceeds the supported inline limit");
+        }
+        let mime = upload
+            .content_type
+            .parse::<mime::Mime>()
+            .map_err(|_| anyhow::anyhow!("Telegram media has an invalid content type"))?;
+        let part = Part::bytes(upload.bytes)
+            .file_name(upload.file_name.to_owned())
+            .mime_str(mime.as_ref())?;
+        let mut form = Form::new()
+            .text("chat_id", upload.chat_id.to_owned())
+            .part(upload.field.to_owned(), part);
+        if let Some(thread) = upload.thread_id {
+            form = form.text("message_thread_id", thread.to_owned());
+        }
+        if let Some(reply_to) = upload.reply_to_id {
+            let message_id = reply_to
+                .parse::<i64>()
+                .map_err(|_| anyhow::anyhow!("Telegram reply target is invalid"))?;
+            form = form.text(
+                "reply_parameters",
+                serde_json::json!({"message_id": message_id}).to_string(),
+            );
+        }
+        if let Some(caption) = upload.caption {
+            form = form.text("caption", caption.to_owned());
+        }
+        if let Some(title) = upload.title {
+            form = form.text("title", title.to_owned());
+        }
+        if let Some(duration_ms) = upload.duration_ms {
+            form = form.text(
+                "duration",
+                duration_ms
+                    .saturating_add(999)
+                    .saturating_div(1000)
+                    .to_string(),
+            );
+        }
+        let response = self
+            .http_client()
+            .post(self.api_url(upload.method))
+            .multipart(form)
+            .send()
+            .await?;
+        let status = response.status();
+        let body: serde_json::Value = response.json().await?;
+        if !status.is_success() || body.get("ok").and_then(serde_json::Value::as_bool) != Some(true)
+        {
+            anyhow::bail!(
+                "Telegram {} returned an unsuccessful or unknown receipt",
+                upload.method
+            );
+        }
+        body.get("result")
+            .and_then(|result| result.get("message_id"))
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Telegram {} response omitted message receipt",
+                    upload.method
+                )
+            })
+    }
+
     pub(crate) async fn send_voice_bytes_with_id(
         &self,
         upload: TelegramVoiceUpload<'_>,

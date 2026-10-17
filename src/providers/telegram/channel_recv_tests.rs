@@ -1,6 +1,9 @@
 use super::*;
+use crate::host::MediaRepository as _;
 use crate::providers::telegram::fixtures::*;
+use base64::Engine;
 use std::sync::Arc;
+use tinystoragedrivers_core::StorageBackend as _;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -82,6 +85,87 @@ impl crate::host::VoiceMediaStore for RecordingVoiceStore {
         _opaque_id: String,
     ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
         unreachable!("inbound voice fixture only stores media")
+    }
+}
+
+#[derive(Clone, Default)]
+struct RecordingMediaRepository(Arc<std::sync::Mutex<Vec<crate::host::MediaStoreRequest>>>);
+
+#[async_trait::async_trait]
+impl crate::host::MediaRepository for RecordingMediaRepository {
+    async fn store_media(
+        &self,
+        request: crate::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        let reference = tinychannels_bus::MediaReference {
+            opaque_id: Some("tinychannels_media_v1_fixture".into()),
+            content_type: Some(request.metadata.content_type.clone()),
+            file_name: request.metadata.file_name.clone(),
+            size_bytes: Some(request.bytes.len() as u64),
+            duration_ms: request.metadata.duration_ms,
+            kind: request.metadata.kind,
+            ..Default::default()
+        };
+        self.0.lock().unwrap().push(request);
+        Ok(reference)
+    }
+
+    async fn read_media(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        _opaque_id: String,
+        _max_bytes: u64,
+    ) -> anyhow::Result<crate::host::StoredMedia> {
+        unreachable!("Telegram ingress fixture only stores media")
+    }
+}
+
+#[derive(Clone)]
+struct ScopedMediaRepository {
+    store: Arc<crate::host::ScopedMediaStore>,
+    scopes: Arc<std::sync::Mutex<Vec<crate::host::MediaScope>>>,
+}
+
+impl ScopedMediaRepository {
+    fn new() -> Self {
+        let storage = tinystoragedrivers_core::MemoryStorage::new()
+            .for_scope(
+                &tinystoragedrivers_core::Scope::new("module:tinychannels@telegram").unwrap(),
+            )
+            .unwrap();
+        Self {
+            store: Arc::new(crate::host::ScopedMediaStore::new(
+                Arc::clone(storage.documents()),
+                Arc::clone(storage.blobs()),
+            )),
+            scopes: Arc::default(),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::host::MediaRepository for ScopedMediaRepository {
+    async fn store_media(
+        &self,
+        mut request: crate::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        request.metadata.scope.configured_instance = "telegram-main".into();
+        request.metadata.scope.channel.id = "telegram".into();
+        request.metadata.scope.channel.account_id = Some("telegram-main".into());
+        self.scopes
+            .lock()
+            .unwrap()
+            .push(request.metadata.scope.clone());
+        self.store.store(request).await
+    }
+
+    async fn read_media(
+        &self,
+        scope: crate::host::MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<crate::host::StoredMedia> {
+        self.store.read(scope, &opaque_id, max_bytes).await
     }
 }
 
@@ -587,6 +671,279 @@ async fn stored_voice_scope_matches_normalized_ingress_turn_and_conversation() {
     assert_eq!(scope.conversation, envelope.conversation);
     assert_eq!(scope.turn_id, envelope.message_id);
     assert_eq!(scope.turn_id, "telegram_888_60");
+}
+
+#[tokio::test]
+async fn telegram_photo_download_enters_ordered_typed_media_ingress() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "getFile",
+        ok_with(serde_json::json!({
+            "file_path": "photos/p.jpg",
+            "file_size": 3
+        })),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/file/bot{TOKEN}/photos/p.jpg")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "image/jpeg")
+                .set_body_bytes(vec![0xff, 0xd8, 0xff]),
+        )
+        .mount(&server)
+        .await;
+    let repository = RecordingMediaRepository::default();
+    let channel =
+        channel_for(&server, &["alice"]).with_media_repository(Arc::new(repository.clone()));
+    let update = serde_json::json!({
+        "update_id": 9,
+        "message": {
+            "message_id": 60,
+            "chat": { "id": 888, "type": "supergroup" },
+            "from": { "id": 9, "username": "alice" },
+            "caption": "look",
+            "photo": [{
+                "file_id": "photo-file",
+                "file_unique_id": "photo-unique",
+                "file_size": 3
+            }]
+        }
+    });
+    let message = channel
+        .parse_update_message_or_voice(&update)
+        .await
+        .expect("photo update should parse as a channel message");
+    let media = channel
+        .media_parts_for_ingress(&update, &message)
+        .await
+        .unwrap();
+    let envelope = TelegramChannel::inbound_envelope_with_media(&update, &message, None, media);
+    assert!(matches!(
+        envelope.parts.as_slice(),
+        [
+            tinychannels_bus::ContentPart::Text { text, .. },
+            tinychannels_bus::ContentPart::Image { media, .. }
+        ] if text == "look" && media.content_type.as_deref() == Some("image/jpeg")
+    ));
+    let stored = repository.0.lock().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].bytes, vec![0xff, 0xd8, 0xff]);
+    assert_eq!(stored[0].metadata.scope.conversation.id, "888");
+    assert_eq!(stored[0].metadata.scope.conversation.topic_id, None);
+    assert_eq!(stored[0].metadata.scope.turn_id, "telegram_888_60");
+    assert_eq!(
+        stored[0].metadata.dedupe_key.as_deref(),
+        Some("telegram:telegram_888_60:photo")
+    );
+}
+
+#[tokio::test]
+async fn telegram_media_only_update_persists_into_scoped_blobs() {
+    let server = mock_api().await;
+    let png = base64::engine::general_purpose::STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
+        .unwrap();
+    mount_post(
+        &server,
+        "getFile",
+        ok_with(serde_json::json!({
+            "file_path": "photos/one.png",
+            "file_size": png.len()
+        })),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/file/bot{TOKEN}/photos/one.png")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/octet-stream")
+                .set_body_bytes(png.clone()),
+        )
+        .mount(&server)
+        .await;
+
+    let repository = ScopedMediaRepository::new();
+    let channel =
+        channel_for(&server, &["alice"]).with_media_repository(Arc::new(repository.clone()));
+    let update = serde_json::json!({
+        "update_id": 10,
+        "message": {
+            "message_id": 61,
+            "chat": { "id": 888, "type": "supergroup" },
+            "message_thread_id": 42,
+            "from": { "id": 9, "username": "alice" },
+            "photo": [{
+                "file_id": "photo-file",
+                "file_unique_id": "photo-unique",
+                "file_size": png.len()
+            }]
+        }
+    });
+    let message = channel
+        .parse_update_message_or_voice(&update)
+        .await
+        .expect("media-only update should become a channel message");
+    let parts = channel
+        .media_parts_for_ingress(&update, &message)
+        .await
+        .unwrap();
+    let envelope = TelegramChannel::inbound_envelope_with_media(&update, &message, None, parts);
+    let [tinychannels_bus::ContentPart::Image { media, .. }] = envelope.parts.as_slice() else {
+        panic!("media-only update should emit its typed image part");
+    };
+    assert!(envelope.text.is_empty());
+    assert!(
+        media
+            .opaque_id
+            .as_deref()
+            .unwrap()
+            .starts_with("tinychannels_media_v1_")
+    );
+    assert_eq!(envelope.media.as_slice(), std::slice::from_ref(media));
+    assert_eq!(media.path, None);
+    assert_eq!(media.url, None);
+    assert!(!media.opaque_id.as_deref().unwrap().contains("/file/bot"));
+
+    let scope = repository.scopes.lock().unwrap()[0].clone();
+    assert_eq!(scope.configured_instance, "telegram-main");
+    assert_eq!(scope.channel.account_id.as_deref(), Some("telegram-main"));
+    assert_eq!(scope.conversation.topic_id.as_deref(), Some("42"));
+    assert_eq!(scope.turn_id, envelope.message_id);
+    let stored = repository
+        .read_media(scope, media.opaque_id.clone().unwrap(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(stored.bytes, png);
+    assert_eq!(stored.content_type, "image/png");
+}
+
+#[tokio::test]
+async fn telegram_document_download_infers_type_and_name_from_getfile_path() {
+    let server = mock_api().await;
+    let pdf = b"%PDF-1.7\n1 0 obj\nfixture".to_vec();
+    mount_post(
+        &server,
+        "getFile",
+        ok_with(serde_json::json!({
+            "file_path": "documents/spec.pdf",
+            "file_size": pdf.len()
+        })),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/file/bot{TOKEN}/documents/spec.pdf")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/octet-stream")
+                .set_body_bytes(pdf.clone()),
+        )
+        .mount(&server)
+        .await;
+
+    let repository = ScopedMediaRepository::new();
+    let channel =
+        channel_for(&server, &["alice"]).with_media_repository(Arc::new(repository.clone()));
+    let update = serde_json::json!({
+        "update_id": 12,
+        "message": {
+            "message_id": 62,
+            "chat": { "id": 888, "type": "supergroup" },
+            "from": { "id": 9, "username": "alice" },
+            "document": { "file_id": "document-file", "file_unique_id": "document-unique" }
+        }
+    });
+    let message = channel
+        .parse_update_message_or_voice(&update)
+        .await
+        .expect("document-only update is accepted");
+    let parts = channel
+        .media_parts_for_ingress(&update, &message)
+        .await
+        .unwrap();
+    let envelope = TelegramChannel::inbound_envelope_with_media(&update, &message, None, parts);
+    let [
+        tinychannels_bus::ContentPart::File {
+            media, file_name, ..
+        },
+    ] = envelope.parts.as_slice()
+    else {
+        panic!("downloaded Telegram document should be retained as a typed file");
+    };
+    assert_eq!(file_name.as_deref(), Some("spec.pdf"));
+    assert_eq!(media.file_name.as_deref(), Some("spec.pdf"));
+    assert_eq!(media.content_type.as_deref(), Some("application/pdf"));
+
+    let scope = repository.scopes.lock().unwrap()[0].clone();
+    let stored = repository
+        .read_media(scope, media.opaque_id.clone().unwrap(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(stored.bytes, pdf);
+    assert_eq!(stored.content_type, "application/pdf");
+}
+
+#[tokio::test]
+async fn telegram_audio_mime_hint_precedes_ambiguous_download_extension() {
+    let server = mock_api().await;
+    let mp4_audio = b"\0\0\0\x18ftypM4A \0\0\0\0fixture".to_vec();
+    mount_post(
+        &server,
+        "getFile",
+        ok_with(serde_json::json!({
+            "file_path": "audio/recording.mp4",
+            "file_size": mp4_audio.len()
+        })),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/file/bot{TOKEN}/audio/recording.mp4")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/octet-stream")
+                .set_body_bytes(mp4_audio.clone()),
+        )
+        .mount(&server)
+        .await;
+
+    let repository = ScopedMediaRepository::new();
+    let channel =
+        channel_for(&server, &["alice"]).with_media_repository(Arc::new(repository.clone()));
+    let update = serde_json::json!({
+        "update_id": 13,
+        "message": {
+            "message_id": 63,
+            "chat": { "id": 888, "type": "supergroup" },
+            "from": { "id": 9, "username": "alice" },
+            "audio": {
+                "file_id": "audio-file",
+                "file_unique_id": "audio-unique",
+                "mime_type": "audio/mp4"
+            }
+        }
+    });
+    let message = channel
+        .parse_update_message_or_voice(&update)
+        .await
+        .expect("audio-only update is accepted");
+    let parts = channel
+        .media_parts_for_ingress(&update, &message)
+        .await
+        .unwrap();
+    let envelope = TelegramChannel::inbound_envelope_with_media(&update, &message, None, parts);
+    let [tinychannels_bus::ContentPart::Audio { media, .. }] = envelope.parts.as_slice() else {
+        panic!("audio update should remain typed audio");
+    };
+    assert_eq!(media.file_name.as_deref(), Some("recording.mp4"));
+    assert_eq!(media.content_type.as_deref(), Some("audio/mp4"));
+    let scope = repository.scopes.lock().unwrap()[0].clone();
+    let stored = repository
+        .read_media(scope, media.opaque_id.clone().unwrap(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(stored.bytes, mp4_audio);
+    assert_eq!(stored.content_type, "audio/mp4");
 }
 
 #[tokio::test]

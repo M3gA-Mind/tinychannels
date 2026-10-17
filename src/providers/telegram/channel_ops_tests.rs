@@ -158,6 +158,9 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
 }
 
 struct VoiceReadFixture;
+struct TypedMediaReadFixture;
+
+struct UncheckedMediaReadFixture;
 struct LargeVoiceReadFixture {
     expected_scope: tinychannels_bus::HostVoiceScope,
 }
@@ -244,6 +247,45 @@ fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
     assert!(on.actions.supported.contains(&"draft-update".into()));
 }
 
+#[test]
+fn telegram_advertises_typed_media_only_with_scoped_storage() {
+    let unavailable = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).capabilities();
+    assert!(!unavailable.content.image.outbound);
+    assert!(!unavailable.content.file.inbound);
+
+    let configured = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
+        .with_media_repository(Arc::new(TypedMediaReadFixture))
+        .capabilities();
+    assert!(configured.content.image.inbound && configured.content.image.outbound);
+    assert!(configured.content.video.inbound && configured.content.video.outbound);
+    assert!(configured.content.audio.inbound && configured.content.audio.outbound);
+    assert!(configured.content.file.inbound && configured.content.file.outbound);
+    assert!(configured.content.sticker.inbound);
+    assert!(!configured.content.sticker.outbound);
+    assert_eq!(
+        configured.content.image.accepted_types,
+        ["image/jpeg", "image/png", "image/gif", "image/webp"]
+    );
+    assert_eq!(configured.content.sticker.accepted_types, ["image/webp"]);
+    assert_eq!(
+        configured.content.image.max_size_bytes,
+        Some(10 * 1024 * 1024)
+    );
+    assert_eq!(
+        configured.content.video.max_size_bytes,
+        Some(20 * 1024 * 1024)
+    );
+    assert_eq!(
+        configured.content.file.max_size_bytes,
+        Some(20 * 1024 * 1024)
+    );
+    assert_eq!(
+        configured.content.audio.emitted_types,
+        ["audio/mpeg", "audio/mp4"]
+    );
+    assert_eq!(configured.content.video.emitted_types, ["video/mp4"]);
+}
+
 #[async_trait::async_trait]
 impl crate::host::VoiceMediaStore for VoiceReadFixture {
     async fn store_voice(
@@ -266,6 +308,146 @@ impl crate::host::VoiceMediaStore for VoiceReadFixture {
             audio_base64: "AQIDBA==".into(),
             mime_type: "audio/ogg".into(),
             file_name: Some("reply.ogg".into()),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::host::MediaRepository for TypedMediaReadFixture {
+    async fn store_media(
+        &self,
+        _request: crate::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        unreachable!("outbound media fixture only resolves stored media")
+    }
+
+    async fn read_media(
+        &self,
+        scope: crate::host::MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<crate::host::StoredMedia> {
+        assert_eq!(scope.configured_instance, "telegram-main");
+        assert_eq!(scope.channel.id, "telegram");
+        assert_eq!(scope.channel.account_id.as_deref(), Some("telegram-main"));
+        assert_eq!(scope.conversation.id, "-10042");
+        assert_eq!(scope.conversation.scope_id.as_deref(), Some("scope-42"));
+        assert_eq!(scope.conversation.parent_id.as_deref(), Some("parent-42"));
+        assert_eq!(scope.conversation.thread_id.as_deref(), Some("77"));
+        assert_eq!(scope.conversation.topic_id.as_deref(), Some("topic-77"));
+        assert_eq!(scope.turn_id, "turn-42");
+        let (kind, content_type, file_name, bytes) = match opaque_id.as_str() {
+            "stored-photo-1" => (
+                tinychannels_bus::MediaKind::Image,
+                "image/png",
+                "photo.png",
+                BASE64
+                    .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
+                    .unwrap(),
+            ),
+            "oversized-photo" => (
+                tinychannels_bus::MediaKind::Image,
+                "image/jpeg",
+                "large.jpg",
+                oversized_jpeg_with_dimensions(),
+            ),
+            "stored-audio-1" => (
+                tinychannels_bus::MediaKind::Audio,
+                "audio/mpeg",
+                "audio.mp3",
+                valid_mp3_frame(),
+            ),
+            "stored-wav-1" => (
+                tinychannels_bus::MediaKind::Audio,
+                "audio/wav",
+                "audio.wav",
+                BASE64.decode("UklGRgAAAABXQVZF").unwrap(),
+            ),
+            "stored-video-mp4" => (
+                tinychannels_bus::MediaKind::Video,
+                "video/mp4",
+                "clip.mp4",
+                b"\0\0\0\x18ftypisom\0\0\0\0isom".to_vec(),
+            ),
+            "stored-document-pdf" => (
+                tinychannels_bus::MediaKind::Document,
+                "application/pdf",
+                "report.pdf",
+                b"%PDF-1.7\nfixture".to_vec(),
+            ),
+            "stored-video-webm" => (
+                tinychannels_bus::MediaKind::Video,
+                "video/webm",
+                "clip.webm",
+                b"\x1a\x45\xdf\xa3fixture".to_vec(),
+            ),
+            "stored-image-gif" => (
+                tinychannels_bus::MediaKind::Image,
+                "image/gif",
+                "image.gif",
+                b"GIF89a".to_vec(),
+            ),
+            "zero-dimension-photo" => {
+                let mut bytes = vec![0; 24];
+                bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+                bytes[16..20].copy_from_slice(&0_u32.to_be_bytes());
+                bytes[20..24].copy_from_slice(&1_u32.to_be_bytes());
+                (
+                    tinychannels_bus::MediaKind::Image,
+                    "image/png",
+                    "zero.png",
+                    bytes,
+                )
+            }
+            _ => panic!("unexpected typed media id: {opaque_id}"),
+        };
+        assert!(bytes.len() as u64 <= max_bytes);
+        Ok(crate::host::StoredMedia {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some(opaque_id),
+                kind,
+                content_type: Some(content_type.into()),
+                file_name: Some(file_name.into()),
+                size_bytes: Some(bytes.len() as u64),
+                ..Default::default()
+            },
+            content_type: content_type.into(),
+            file_name: Some(file_name.into()),
+            bytes,
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::host::MediaRepository for UncheckedMediaReadFixture {
+    async fn store_media(
+        &self,
+        _request: crate::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        unreachable!("outbound media fixture only resolves stored media")
+    }
+
+    async fn read_media(
+        &self,
+        _scope: crate::host::MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<crate::host::StoredMedia> {
+        let bytes = BASE64
+            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
+            .unwrap();
+        assert!(bytes.len() as u64 <= max_bytes);
+        Ok(crate::host::StoredMedia {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some(opaque_id),
+                kind: tinychannels_bus::MediaKind::Image,
+                content_type: Some("image/png".into()),
+                size_bytes: Some(bytes.len() as u64),
+                ..Default::default()
+            },
+            content_type: "image/png".into(),
+            file_name: Some("photo.png".into()),
+            bytes,
         })
     }
 }
@@ -779,6 +961,901 @@ fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessag
             },
         }],
     }
+}
+
+#[tokio::test]
+async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({"message_id": 11})),
+    )
+    .await;
+    mount_post(
+        &server,
+        "sendPhoto",
+        ok_with(serde_json::json!({"message_id": 22})),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("ordered-image", "before".into());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "before".into(),
+                markdown_dialect: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-photo-1".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: Some("photo caption".into()),
+                alt_text: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "after".into(),
+                markdown_dialect: None,
+            },
+        },
+    ];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["11", "22", "11"]);
+    assert_eq!(outcome.receipt.parts.len(), 3);
+    assert_eq!(
+        outcome.receipt.parts[1].kind,
+        tinychannels_bus::channel::MessageReceiptPartKind::Media
+    );
+    assert_eq!(outcome.receipt.parts[1].thread_id.as_deref(), Some("77"));
+    assert_eq!(
+        outcome
+            .receipt
+            .conversation
+            .as_ref()
+            .and_then(|conversation| conversation.topic_id.as_deref()),
+        Some("topic-77")
+    );
+    assert_eq!(outcome.receipt.parts[1].reply_to_id.as_deref(), Some("5"));
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].url.path(), "/bottest-token/sendMessage");
+    assert_eq!(requests[1].url.path(), "/bottest-token/sendPhoto");
+    assert_eq!(requests[2].url.path(), "/bottest-token/sendMessage");
+    let multipart = String::from_utf8_lossy(&requests[1].body);
+    assert!(multipart.contains("photo caption"));
+    assert!(multipart.contains("name=\"chat_id\"\r\n\r\n-10042"));
+    assert!(multipart.contains("name=\"reply_parameters\"\r\n\r\n{\"message_id\":5}"));
+    assert!(multipart.contains("name=\"message_thread_id\"\r\n\r\n77"));
+    assert!(multipart.contains("photo.png"));
+    assert!(multipart.contains("Content-Type: image/png"));
+    let expected_bytes = BASE64
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
+        .unwrap();
+    assert!(
+        requests[1]
+            .body
+            .windows(expected_bytes.len())
+            .any(|window| window == expected_bytes)
+    );
+}
+
+#[tokio::test]
+async fn typed_image_rejects_non_numeric_platform_thread_before_upload() {
+    let server = mock_api().await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(UncheckedMediaReadFixture));
+    let mut message = typed_text("invalid-thread", "caption".into());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        thread_id: None,
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-photo-1".into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    }];
+
+    assert!(channel.send_typed_with_receipt(&message).await.is_err());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn typed_media_preserves_legacy_address_and_requires_host_opaque_id() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendPhoto",
+        ok_with(serde_json::json!({ "message_id": 701 })),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(UncheckedMediaReadFixture));
+    let mut message = typed_text("legacy-address", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-legacy".into());
+    message.thread_id = Some("77".into());
+    message.conversation_ref = None;
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-photo-1".into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    }];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    assert_eq!(outcome.receipt.platform_message_ids, ["701"]);
+    assert_eq!(outcome.receipt.thread_id.as_deref(), Some("77"));
+
+    let mut missing_reference = scoped_typed_media_message("stored-photo-1");
+    if let tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image { media, .. },
+    } = &mut missing_reference.parts[0]
+    {
+        media.opaque_id = None;
+    }
+    let error = channel
+        .send_typed_with_receipt(&missing_reference)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("no host-owned opaque reference"));
+    assert_eq!(json_bodies(&server, "sendPhoto").await.len(), 1);
+}
+
+#[tokio::test]
+async fn typed_text_partial_failure_keeps_real_ids_and_stops_before_media() {
+    let server = mock_api().await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .respond_with(ok_with(serde_json::json!({ "message_id": 702 })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .respond_with(ResponseTemplate::new(500).set_body_string("temporary failure"))
+        .mount(&server)
+        .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = scoped_typed_media_message("stored-photo-1");
+    let image = message.parts.remove(0);
+    message.parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "x".repeat(5_000),
+                markdown_dialect: None,
+            },
+        },
+        image,
+    ];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["702"]);
+    assert_eq!(outcome.receipt.parts.len(), 1);
+    let error = outcome.error.expect("second text chunk failed");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    assert!(error.message.contains("only part"));
+    assert!(json_bodies(&server, "sendPhoto").await.is_empty());
+    assert_eq!(json_bodies(&server, "sendMessage").await.len(), 2);
+}
+
+fn scoped_typed_media_message(id: &str) -> tinychannels_bus::ChannelOutboundMessage {
+    let mut message = typed_text(id, String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Group,
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+    });
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some(id.into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    }];
+    message
+}
+
+#[tokio::test]
+async fn typed_media_scope_and_provider_validation_fail_before_upload() {
+    let server = mock_api().await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+
+    let mut no_conversation = scoped_typed_media_message("stored-photo-1");
+    no_conversation.conversation_ref.as_mut().unwrap().id = "  ".into();
+    assert!(
+        channel
+            .send_typed_with_receipt(&no_conversation)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("conversation identity")
+    );
+
+    let mut no_account = scoped_typed_media_message("stored-photo-1");
+    no_account.channel_ref.as_mut().unwrap().account_id = None;
+    assert!(
+        channel
+            .send_typed_with_receipt(&no_account)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("configured account")
+    );
+
+    let mut no_turn = scoped_typed_media_message("stored-photo-1");
+    no_turn.turn_id = None;
+    assert!(
+        channel
+            .send_typed_with_receipt(&no_turn)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("originating turn")
+    );
+
+    let mut no_reply = scoped_typed_media_message("stored-photo-1");
+    no_reply.reply_to_id = Some("not-a-platform-id".into());
+    assert!(
+        channel
+            .send_typed_with_receipt(&no_reply)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("reply_to_id")
+    );
+
+    let mut unsupported = scoped_typed_media_message("stored-photo-1");
+    for voice_id in ["voice-a", "voice-b"] {
+        unsupported
+            .parts
+            .push(tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some(voice_id.into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    audio_base64: None,
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: Some(1_000),
+                },
+            });
+    }
+    assert!(
+        channel
+            .send_typed_with_receipt(&unsupported)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("does not support this content combination")
+    );
+
+    let zero_dimensions = scoped_typed_media_message("zero-dimension-photo");
+    assert!(
+        channel
+            .send_typed_with_receipt(&zero_dimensions)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("dimensions exceed provider limits")
+    );
+
+    let mut sticker = scoped_typed_media_message("stored-photo-1");
+    sticker.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Sticker {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-photo-1".into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            pack_id: None,
+            sticker_id: None,
+            emoji: None,
+            alt_text: None,
+        },
+    }];
+    assert!(
+        channel
+            .send_typed_with_receipt(&sticker)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("sticker upload is not enabled")
+    );
+
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn typed_media_caption_failure_after_text_keeps_receipt_and_forbids_retry() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({"message_id": 700})),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = scoped_typed_media_message("stored-photo-1");
+    message.parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "delivered before media".into(),
+                markdown_dialect: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-photo-1".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: Some("caption ".repeat(129)),
+                alt_text: None,
+            },
+        },
+    ];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["700"]);
+    assert_eq!(outcome.receipt.parts.len(), 1);
+    let error = outcome.error.expect("partial typed send is reported");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    assert_eq!(json_bodies(&server, "sendPhoto").await.len(), 0);
+}
+
+#[tokio::test]
+async fn typed_media_failure_after_text_keeps_real_partial_ids_and_forbids_retry() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({"message_id": 11})),
+    )
+    .await;
+    mount_post(
+        &server,
+        "sendPhoto",
+        ResponseTemplate::new(400).set_body_string("rejected"),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("partial-image", "before".into());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message
+        .parts
+        .push(tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-photo-1".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+        });
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["11"]);
+    let error = outcome.error.expect("partial delivery must be explicit");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].url.path().ends_with("/sendMessage"));
+    assert!(requests[1].url.path().ends_with("/sendPhoto"));
+}
+
+#[tokio::test]
+async fn configured_local_adapter_accepts_and_delivers_typed_telegram_media() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendPhoto",
+        ok_with(serde_json::json!({"message_id": 22})),
+    )
+    .await;
+    let channel = Arc::new(
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture)),
+    );
+    let account = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    };
+    let adapter = tinychannels_runtime::adapters::LocalChannelAdapter::new(
+        tinychannels_bus::channel::ChannelDescriptor {
+            id: account.id.clone(),
+            account_id: account.account_id.clone(),
+            ..Default::default()
+        },
+        channel.capabilities(),
+        Arc::new(TelegramConformanceSink(channel)),
+    );
+    let outcome = adapter
+        .send(tinychannels_bus::ChannelOutboundIntent {
+            idempotency_key: "adapter-photo".into(),
+            channel_id: account.id.clone(),
+            conversation_id: conversation.id.clone(),
+            channel_ref: Some(account.clone()),
+            conversation_ref: Some(conversation.clone()),
+            turn_id: Some("turn-42".into()),
+            payload: tinychannels_bus::OutboundPayload::Parts {
+                parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Image {
+                        media: tinychannels_bus::MediaReference {
+                            opaque_id: Some("stored-photo-1".into()),
+                            kind: tinychannels_bus::MediaKind::Image,
+                            ..Default::default()
+                        },
+                        caption: Some("caption".into()),
+                        alt_text: None,
+                    },
+                }],
+            },
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(outcome.receipt.platform_message_ids, ["22"]);
+    assert!(outcome.error.is_none());
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].url.path().ends_with("/sendPhoto"));
+}
+
+#[tokio::test]
+async fn typed_audio_upload_preserves_caption_title_and_duration() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendAudio",
+        ok_with(serde_json::json!({"message_id": 44})),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("audio-metadata", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        topic_id: Some("topic-77".into()),
+        thread_id: Some("77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Audio {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-audio-1".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            },
+            codec: Some("mp3".into()),
+            duration_ms: Some(1_250),
+            title: Some("Original title".into()),
+            transcript: Some("spoken words".into()),
+        },
+    }];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["44"]);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].url.path().ends_with("/sendAudio"));
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(body.contains("name=\"caption\"\r\n\r\nspoken words"));
+    assert!(body.contains("name=\"title\"\r\n\r\nOriginal title"));
+    assert!(body.contains("name=\"duration\"\r\n\r\n2"));
+    assert!(body.contains("Content-Type: audio/mpeg"));
+}
+
+#[tokio::test]
+async fn typed_video_and_file_upload_use_native_multipart_with_real_receipts() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVideo",
+        ok_with(serde_json::json!({"message_id": 51})),
+    )
+    .await;
+    mount_post(
+        &server,
+        "sendDocument",
+        ok_with(serde_json::json!({"message_id": 52})),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("video-and-file", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Video {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-video-mp4".into()),
+                    kind: tinychannels_bus::MediaKind::Video,
+                    ..Default::default()
+                },
+                caption: Some("video caption".into()),
+                duration_ms: Some(2_200),
+                thumbnail: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::File {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-document-pdf".into()),
+                    kind: tinychannels_bus::MediaKind::Document,
+                    ..Default::default()
+                },
+                file_name: Some("report.pdf".into()),
+                caption: Some("file caption".into()),
+            },
+        },
+    ];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["51", "52"]);
+    assert_eq!(outcome.receipt.parts.len(), 2);
+    assert_eq!(outcome.receipt.parts[0].thread_id.as_deref(), Some("77"));
+    assert_eq!(outcome.receipt.parts[1].thread_id.as_deref(), Some("77"));
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].url.path().ends_with("/sendVideo"));
+    assert!(requests[1].url.path().ends_with("/sendDocument"));
+    let video = String::from_utf8_lossy(&requests[0].body);
+    assert!(video.contains("Content-Type: video/mp4"));
+    assert!(video.contains("name=\"caption\"\r\n\r\nvideo caption"));
+    assert!(video.contains("name=\"duration\"\r\n\r\n3"));
+    assert!(video.contains("name=\"message_thread_id\"\r\n\r\n77"));
+    assert!(
+        requests[0]
+            .body
+            .windows(8)
+            .any(|window| window == b"ftypisom")
+    );
+    let file = String::from_utf8_lossy(&requests[1].body);
+    assert!(file.contains("Content-Type: application/pdf"));
+    assert!(file.contains("report.pdf"));
+    assert!(file.contains("name=\"caption\"\r\n\r\nfile caption"));
+    assert!(
+        requests[1]
+            .body
+            .windows(8)
+            .any(|window| window == b"%PDF-1.7")
+    );
+}
+
+#[tokio::test]
+async fn unsupported_native_video_and_image_formats_fall_back_to_documents() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    let server = mock_api().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendDocument"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {"message_id": 61}
+        })))
+        .up_to_n_times(1)
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendDocument"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {"message_id": 62}
+        })))
+        .mount(&server)
+        .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("document-fallbacks", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Video {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-video-webm".into()),
+                    kind: tinychannels_bus::MediaKind::Video,
+                    ..Default::default()
+                },
+                caption: Some("webm fallback".into()),
+                duration_ms: None,
+                thumbnail: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-image-gif".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: Some("gif fallback".into()),
+                alt_text: None,
+            },
+        },
+    ];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["61", "62"]);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert!(request.url.path().ends_with("/sendDocument"));
+        let body = String::from_utf8_lossy(&request.body);
+        assert!(body.contains("name=\"message_thread_id\"\r\n\r\n77"));
+    }
+    let webm = String::from_utf8_lossy(&requests[0].body);
+    assert!(webm.contains("Content-Type: video/webm"));
+    assert!(webm.contains("webm fallback"));
+    assert!(
+        requests[0]
+            .body
+            .windows(4)
+            .any(|window| window == b"\x1a\x45\xdf\xa3")
+    );
+    let gif = String::from_utf8_lossy(&requests[1].body);
+    assert!(gif.contains("Content-Type: image/gif"));
+    assert!(gif.contains("gif fallback"));
+    assert!(
+        requests[1]
+            .body
+            .windows(6)
+            .any(|window| window == b"GIF89a")
+    );
+}
+
+#[tokio::test]
+async fn telegram_rejects_wav_audio_before_native_upload() {
+    let server = mock_api().await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("unsupported-wav", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Audio {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-wav-1".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            },
+            codec: Some("wav_pcm16".into()),
+            duration_ms: None,
+            title: None,
+            transcript: None,
+        },
+    }];
+
+    let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
+
+    assert!(error.to_string().contains("MP3 or M4A"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn telegram_photo_over_ten_megabytes_is_rejected_before_http() {
+    let server = mock_api().await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("oversized-photo", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("oversized-photo".into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    }];
+
+    let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
+
+    assert!(error.to_string().contains("upload method limit"));
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+fn valid_mp3_frame() -> Vec<u8> {
+    // MPEG-1 Layer III, 128 kbps, 44.1 kHz frame (417 bytes).
+    let mut bytes = vec![0_u8; 417];
+    bytes[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
+    bytes
+}
+
+fn oversized_jpeg_with_dimensions() -> Vec<u8> {
+    let mut bytes = vec![0_u8; 10 * 1024 * 1024 + 1];
+    bytes[..11].copy_from_slice(&[
+        0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01,
+    ]);
+    bytes
+}
+
+#[test]
+fn telegram_image_dimensions_reads_png_and_jpeg_headers_safely() {
+    let mut png = vec![0; 24];
+    png[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+    png[16..20].copy_from_slice(&640_u32.to_be_bytes());
+    png[20..24].copy_from_slice(&480_u32.to_be_bytes());
+    assert_eq!(
+        telegram_image_dimensions("image/png", &png),
+        Some((640, 480))
+    );
+    assert_eq!(telegram_image_dimensions("image/gif", &png), None);
+    assert_eq!(telegram_image_dimensions("image/png", b"not png"), None);
+
+    let mut jpeg = vec![0xff, 0xd8, 0x00, 0xff, 0xff, 0xd8, 0xff, 0xd9, 0xff, 0x01];
+    jpeg.extend_from_slice(&[0xff, 0xd0, 0xff, 0xe0, 0x00, 0x02]);
+    jpeg.extend_from_slice(&[0xff, 0xc0, 0x00, 0x11, 0x08, 0x01, 0xe0, 0x02, 0x80]);
+    jpeg.extend_from_slice(&[0; 10]);
+    assert_eq!(
+        telegram_image_dimensions("image/jpeg", &jpeg),
+        Some((640, 480))
+    );
+
+    assert_eq!(
+        telegram_image_dimensions("image/jpeg", &[0xff, 0xd8, 0xff]),
+        None
+    );
+    assert_eq!(
+        telegram_image_dimensions("image/jpeg", &[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x01]),
+        None
+    );
+    assert_eq!(
+        telegram_image_dimensions("image/jpeg", &[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]),
+        None
+    );
+    assert_eq!(
+        telegram_image_dimensions("image/jpeg", &[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x02]),
+        None
+    );
 }
 
 #[tokio::test]

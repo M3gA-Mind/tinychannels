@@ -176,6 +176,10 @@ impl Hooks {
                 callbacks.clone(),
                 configured_instance.clone(),
             )))
+            .media_repository(Arc::new(ModuleMediaRepository(
+                callbacks.clone(),
+                configured_instance.clone(),
+            )))
             .voice_codec(Arc::new(ModuleVoiceCodec(callbacks.clone())))
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
@@ -257,6 +261,59 @@ impl tinychannels::host::StorageProvider for ModuleStorage {
             .documents()
             .await
             .map_err(|error| anyhow::anyhow!("host storage: {:?}", error.kind()))
+    }
+
+    async fn blobs(&self) -> anyhow::Result<Arc<dyn tinystoragedrivers_core::BlobStore>> {
+        Ok(Arc::clone(self.0.storage().await?.blobs()))
+    }
+}
+
+struct ModuleMediaRepository(HostChannels, String);
+
+impl ModuleMediaRepository {
+    async fn scoped_store(&self) -> anyhow::Result<tinychannels::host::ScopedMediaStore> {
+        let storage = self.0.storage().await.map_err(|error| {
+            anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind())
+        })?;
+        Ok(tinychannels::host::ScopedMediaStore::new(
+            Arc::clone(storage.documents()),
+            Arc::clone(storage.blobs()),
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl tinychannels::host::MediaRepository for ModuleMediaRepository {
+    async fn store_media(
+        &self,
+        mut request: tinychannels::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        let scope = &mut request.metadata.scope;
+        if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
+            anyhow::bail!("media storage requires a conversation and turn identity");
+        }
+        scope.configured_instance.clone_from(&self.1);
+        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        scope.channel.account_id = Some(self.1.clone());
+        self.scoped_store().await?.store(request).await
+    }
+
+    async fn read_media(
+        &self,
+        mut scope: tinychannels::host::MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<tinychannels::host::StoredMedia> {
+        if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
+            anyhow::bail!("media resolution requires a conversation and turn identity");
+        }
+        scope.configured_instance.clone_from(&self.1);
+        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        scope.channel.account_id = Some(self.1.clone());
+        self.scoped_store()
+            .await?
+            .read(scope, &opaque_id, max_bytes)
+            .await
     }
 }
 
@@ -380,39 +437,75 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         request.scope.configured_instance.clone_from(&self.1);
         request.scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         request.scope.channel.account_id = Some(self.1.clone());
-        let result = self
+        let projection_scope = request.scope.clone();
+        use base64::Engine;
+        let audio = base64::engine::general_purpose::STANDARD
+            .decode(request.audio_base64.as_bytes())
+            .map_err(|_| anyhow::anyhow!("voice media payload is invalid"))?;
+        if audio.is_empty() || audio.len() > 8 * 1024 * 1024 {
+            anyhow::bail!("voice media exceeds the configured size limit");
+        }
+        let storage = self.0.storage().await.map_err(|error| {
+            anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind())
+        })?;
+        let media_store = tinychannels::host::ScopedMediaStore::new(
+            Arc::clone(storage.documents()),
+            Arc::clone(storage.blobs()),
+        );
+        let media = media_store
+            .store(tinychannels::host::MediaStoreRequest {
+                metadata: tinychannels::host::MediaMetadata {
+                    scope: request.scope,
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    content_type: request.mime_type,
+                    file_name: request.file_name,
+                    duration_ms: request.duration_ms,
+                    codec: request.codec,
+                    voice_direction: Some(request.direction),
+                    dedupe_key: None,
+                    max_bytes: 8 * 1024 * 1024,
+                },
+                bytes: audio,
+            })
+            .await?;
+        let projection = match self
             .0
             .store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
-                scope: request.scope,
+                scope: projection_scope.clone(),
                 direction: request.direction,
                 audio_base64: request.audio_base64,
-                mime_type: request.mime_type,
-                codec: request.codec,
-                duration_ms: request.duration_ms,
-                file_name: request.file_name,
+                mime_type: media.content_type.clone().unwrap_or_default(),
+                codec: media.codec.clone(),
+                duration_ms: media.duration_ms,
+                file_name: media.file_name.clone(),
+                media_reference: Some(media.clone()),
             })
             .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        let has_durable_reference = result
-            .media
-            .opaque_id
-            .as_deref()
-            .is_some_and(|id| !id.trim().is_empty());
-        if !has_durable_reference {
-            anyhow::bail!("host did not return a durable voice media reference");
-        }
-        let mut result = result;
-        result.media.path = None;
-        result.media.local_cache_path = None;
-        result.media.url = None;
-        if result
-            .accessible_url
-            .as_deref()
-            .is_some_and(|url| url.trim().is_empty())
         {
-            result.accessible_url = None;
+            Ok(projection) => projection,
+            Err(_) => {
+                // A denied publication must not strand a Ready blob that the caller never received.
+                // `delete` leaves its durable cleanup tombstone if the blob backend is transiently down.
+                let _ = media_store
+                    .delete(
+                        projection_scope,
+                        media.opaque_id.as_deref().unwrap_or_default(),
+                    )
+                    .await;
+                return Err(anyhow::anyhow!("host voice media publication failed"));
+            }
+        };
+        let accessible_url = projection
+            .accessible_url
+            .filter(|url| !url.trim().is_empty());
+        let mut media = media;
+        if projection.media.opaque_id == media.opaque_id {
+            media.local_cache_path = projection.media.local_cache_path;
         }
-        Ok(result)
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media,
+            accessible_url,
+        })
     }
 
     async fn read_voice(
@@ -427,16 +520,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         scope.configured_instance.clone_from(&self.1);
         scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         scope.channel.account_id = Some(self.1.clone());
-        let result = self
-            .0
-            .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
-                scope,
-                opaque_id,
-                max_bytes: 8 * 1024 * 1024,
-            })
-            .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        Ok(result)
+        read_scoped_voice_media(&self.0, scope, opaque_id, 8 * 1024 * 1024).await
     }
 }
 
@@ -445,6 +529,38 @@ fn validate_voice_scope(scope: &tinychannels_bus::HostVoiceScope) -> anyhow::Res
         anyhow::bail!("voice callback requires a conversation and turn identity");
     }
     Ok(())
+}
+
+async fn read_scoped_voice_media(
+    host: &HostChannels,
+    scope: tinychannels_bus::HostVoiceScope,
+    opaque_id: String,
+    max_bytes: u64,
+) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+    if !opaque_id.starts_with("tinychannels_media_v1_") {
+        return host
+            .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
+                scope,
+                opaque_id,
+                max_bytes,
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("legacy scoped voice media is unavailable"));
+    }
+    let storage = host.storage().await.map_err(|error| {
+        anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind())
+    })?;
+    let media_store = tinychannels::host::ScopedMediaStore::new(
+        Arc::clone(storage.documents()),
+        Arc::clone(storage.blobs()),
+    );
+    let stored = media_store.read(scope, &opaque_id, max_bytes).await?;
+    use base64::Engine;
+    Ok(tinychannels_bus::HostReadVoiceMediaResult {
+        audio_base64: base64::engine::general_purpose::STANDARD.encode(stored.bytes),
+        mime_type: stored.content_type,
+        file_name: stored.file_name,
+    })
 }
 
 pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String);
@@ -522,14 +638,13 @@ impl tinychannels::host::EventSink for ModuleEvents {
                         turn_id: envelope.message_id.clone(),
                     };
                     let request = if let Some(opaque_id) = voice_note.media.opaque_id.clone() {
-                        match self
-                            .0
-                            .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
-                                scope: scope.clone(),
-                                opaque_id,
-                                max_bytes: 8 * 1024 * 1024,
-                            })
-                            .await
+                        match read_scoped_voice_media(
+                            &self.0,
+                            scope.clone(),
+                            opaque_id,
+                            8 * 1024 * 1024,
+                        )
+                        .await
                         {
                             Ok(audio) => Some(tinychannels::host::TranscriptionRequest {
                                 audio_base64: audio.audio_base64,

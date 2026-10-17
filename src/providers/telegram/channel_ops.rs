@@ -10,10 +10,20 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
 
 impl TelegramChannel {
+    #[cfg(test)]
     pub(crate) fn inbound_envelope_from_update(
         update: &serde_json::Value,
         message: &ChannelMessage,
         voice_note: Option<tinychannels_bus::VoiceNote>,
+    ) -> tinychannels_bus::ChannelInboundEnvelope {
+        Self::inbound_envelope_with_media(update, message, voice_note, Vec::new())
+    }
+
+    pub(crate) fn inbound_envelope_with_media(
+        update: &serde_json::Value,
+        message: &ChannelMessage,
+        voice_note: Option<tinychannels_bus::VoiceNote>,
+        media_parts: Vec<tinychannels_bus::ContentPart>,
     ) -> tinychannels_bus::ChannelInboundEnvelope {
         let source = update
             .get("message")
@@ -66,6 +76,35 @@ impl TelegramChannel {
             .get("date")
             .and_then(serde_json::Value::as_u64)
             .map(|seconds| seconds.saturating_mul(1000));
+        let mut parts = Vec::new();
+        if !message.content.trim().is_empty() {
+            parts.push(tinychannels_bus::ContentPart::Text {
+                text: message.content.clone(),
+                markdown_dialect: None,
+            });
+        }
+        if let Some(voice_note) = voice_note {
+            parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
+        }
+        parts.extend(media_parts);
+        let media = parts
+            .iter()
+            .flat_map(|part| match part {
+                tinychannels_bus::ContentPart::Image { media, .. }
+                | tinychannels_bus::ContentPart::Audio { media, .. }
+                | tinychannels_bus::ContentPart::File { media, .. }
+                | tinychannels_bus::ContentPart::Sticker { media, .. } => vec![media.clone()],
+                tinychannels_bus::ContentPart::Video {
+                    media, thumbnail, ..
+                } => std::iter::once(media.clone())
+                    .chain(thumbnail.clone())
+                    .collect(),
+                tinychannels_bus::ContentPart::VoiceNote { voice_note } => {
+                    vec![voice_note.media.clone()]
+                }
+                _ => Vec::new(),
+            })
+            .collect();
         tinychannels_bus::ChannelInboundEnvelope {
             channel: tinychannels_bus::ChannelRef {
                 id: "telegram".into(),
@@ -86,25 +125,8 @@ impl TelegramChannel {
                 ..Default::default()
             },
             text: message.content.clone(),
-            parts: voice_note.map_or_else(
-                || {
-                    vec![tinychannels_bus::ContentPart::Text {
-                        text: message.content.clone(),
-                        markdown_dialect: None,
-                    }]
-                },
-                |voice_note| {
-                    let mut parts = Vec::new();
-                    if !message.content.trim().is_empty() {
-                        parts.push(tinychannels_bus::ContentPart::Text {
-                            text: message.content.clone(),
-                            markdown_dialect: None,
-                        });
-                    }
-                    parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
-                    parts
-                },
-            ),
+            parts,
+            media,
             raw: Some(serde_json::json!({"providerMessageId": provider_message_id})),
             ..Default::default()
         }
@@ -150,6 +172,7 @@ impl Channel for TelegramChannel {
         let streaming_reply_pipeline = self.supports_draft_updates();
         let reply_to_id = self.supports_reply_to_id();
         let thread_id = self.supports_thread_id();
+        let media_enabled = self.media_repository.is_some();
         let mut actions = vec!["send".into()];
         if progressive_edits {
             actions.push("draft-update".into());
@@ -165,6 +188,29 @@ impl Channel for TelegramChannel {
         }
         actions.extend(["react".into(), "reactions".into()]);
         let mut parts = vec!["text".into()];
+        let media_capability = |accepted: &[&str], emitted: &[&str], max_size_bytes: u64| {
+            if media_enabled {
+                tinychannels_bus::ContentCapability {
+                    inbound: true,
+                    outbound: true,
+                    accepted_types: accepted.iter().map(|kind| (*kind).to_owned()).collect(),
+                    emitted_types: emitted.iter().map(|kind| (*kind).to_owned()).collect(),
+                    max_size_bytes: Some(max_size_bytes),
+                    ..Default::default()
+                }
+            } else {
+                tinychannels_bus::ContentCapability::default()
+            }
+        };
+        if media_enabled {
+            parts.extend([
+                "image".into(),
+                "video".into(),
+                "audio".into(),
+                "file".into(),
+                "sticker".into(),
+            ]);
+        }
         let (voice_in, voice_out) = if self.voice_media_store.is_some() {
             parts.push("voice_note".into());
             (
@@ -209,6 +255,58 @@ impl Channel for TelegramChannel {
                     inbound: true,
                     outbound: true,
                     ..Default::default()
+                },
+                image: media_capability(
+                    &["image/jpeg", "image/png", "image/gif", "image/webp"],
+                    &["image/jpeg", "image/png"],
+                    10 * 1024 * 1024,
+                ),
+                video: media_capability(
+                    &["video/mp4", "video/quicktime", "video/webm"],
+                    &["video/mp4"],
+                    20 * 1024 * 1024,
+                ),
+                audio: media_capability(
+                    &[
+                        "audio/ogg",
+                        "audio/mpeg",
+                        "audio/mp4",
+                        "audio/wav",
+                        "audio/webm",
+                    ],
+                    &["audio/mpeg", "audio/mp4"],
+                    20 * 1024 * 1024,
+                ),
+                file: media_capability(
+                    &[
+                        "application/pdf",
+                        "text/plain",
+                        "text/csv",
+                        "application/json",
+                        "application/zip",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ],
+                    &[
+                        "application/pdf",
+                        "text/plain",
+                        "text/csv",
+                        "application/json",
+                        "application/zip",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ],
+                    20 * 1024 * 1024,
+                ),
+                sticker: if media_enabled {
+                    tinychannels_bus::ContentCapability {
+                        inbound: true,
+                        accepted_types: vec!["image/webp".into()],
+                        max_size_bytes: Some(20 * 1024 * 1024),
+                        ..Default::default()
+                    }
+                } else {
+                    tinychannels_bus::ContentCapability::default()
                 },
                 ..Default::default()
             },
@@ -775,6 +873,20 @@ impl Channel for TelegramChannel {
             }
             return Ok(tinychannels_bus::channel::ChannelSendOutcome { receipt, error });
         }
+        if message.parts.iter().any(|part| {
+            matches!(
+                part,
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Image { .. }
+                        | tinychannels_bus::ContentPart::Video { .. }
+                        | tinychannels_bus::ContentPart::Audio { .. }
+                        | tinychannels_bus::ContentPart::File { .. }
+                        | tinychannels_bus::ContentPart::Sticker { .. }
+                }
+            )
+        }) {
+            return send_typed_media_with_receipt(self, message).await;
+        }
         let text_parts = message
             .parts
             .iter()
@@ -1177,7 +1289,17 @@ Ensure only one `openhuman` process is using this bot token."
                         }
                         Err(error) => return Err(error),
                     };
-                    let ingress = Self::inbound_envelope_from_update(update, &msg, voice_note);
+                    let media_parts = match self.media_parts_for_ingress(update, &msg).await {
+                        Ok(parts) => parts,
+                        Err(_) => {
+                            tracing::warn!(
+                                "Telegram attachment could not be persisted as typed media"
+                            );
+                            return Err(anyhow::anyhow!("Telegram attachment persistence failed"));
+                        }
+                    };
+                    let ingress =
+                        Self::inbound_envelope_with_media(update, &msg, voice_note, media_parts);
                     let delivered_by_event_sink = if let Some(events) = &self.events {
                         match events
                             .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(ingress))
@@ -1268,6 +1390,479 @@ Ensure only one `openhuman` process is using this bot token."
         }
         Ok(())
     }
+}
+
+fn telegram_receipt_part(
+    id: &str,
+    kind: tinychannels_bus::channel::MessageReceiptPartKind,
+    index: usize,
+    conversation: &tinychannels_bus::ConversationRef,
+    thread_id: &Option<String>,
+    reply_to_id: Option<&str>,
+) -> tinychannels_bus::channel::MessageReceiptPart {
+    tinychannels_bus::channel::MessageReceiptPart {
+        platform_message_id: id.to_owned(),
+        kind,
+        index,
+        thread_id: thread_id.clone(),
+        reply_to_id: reply_to_id.map(str::to_owned),
+        edit_token: Some(id.to_owned()),
+        delete_token: Some(id.to_owned()),
+        raw: Some(tinychannels_bus::channel::MessageReceiptSourceResult {
+            channel: Some("telegram".into()),
+            message_id: Some(id.to_owned()),
+            chat_id: Some(conversation.id.clone()),
+            conversation_id: Some(conversation.id.clone()),
+            ..Default::default()
+        }),
+    }
+}
+
+fn telegram_image_dimensions(content_type: &str, bytes: &[u8]) -> Option<(u32, u32)> {
+    match content_type {
+        "image/png" if bytes.get(..8) == Some(b"\x89PNG\r\n\x1a\n") => Some((
+            u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?),
+            u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?),
+        )),
+        "image/jpeg" if bytes.starts_with(&[0xff, 0xd8]) => {
+            let mut offset = 2;
+            while offset + 4 <= bytes.len() {
+                if bytes[offset] != 0xff {
+                    offset += 1;
+                    continue;
+                }
+                while bytes.get(offset) == Some(&0xff) {
+                    offset += 1;
+                }
+                let marker = *bytes.get(offset)?;
+                offset += 1;
+                if matches!(marker, 0xd8 | 0xd9 | 0x01 | 0xd0..=0xd7) {
+                    continue;
+                }
+                let segment_len =
+                    u16::from_be_bytes(bytes.get(offset..offset + 2)?.try_into().ok()?) as usize;
+                if segment_len < 2 || offset + segment_len > bytes.len() {
+                    return None;
+                }
+                if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
+                    let height =
+                        u16::from_be_bytes(bytes.get(offset + 3..offset + 5)?.try_into().ok()?)
+                            as u32;
+                    let width =
+                        u16::from_be_bytes(bytes.get(offset + 5..offset + 7)?.try_into().ok()?)
+                            as u32;
+                    return Some((width, height));
+                }
+                offset += segment_len;
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+async fn send_typed_media_with_receipt(
+    channel: &TelegramChannel,
+    message: &tinychannels_bus::ChannelOutboundMessage,
+) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+    let mut conversation =
+        message
+            .conversation_ref
+            .clone()
+            .unwrap_or_else(|| tinychannels_bus::ConversationRef {
+                id: message.conversation_id.clone(),
+                thread_id: message.thread_id.clone(),
+                ..Default::default()
+            });
+    if conversation.thread_id.is_none() {
+        conversation.thread_id = message.thread_id.clone();
+    }
+    if conversation.id.trim().is_empty() {
+        anyhow::bail!("Telegram media send requires a conversation identity");
+    }
+    let channel_ref = message
+        .channel_ref
+        .clone()
+        .unwrap_or_else(|| tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: None,
+        });
+    let configured_instance = channel_ref
+        .account_id
+        .clone()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Telegram media send requires a configured account"))?;
+    let turn_id = message
+        .turn_id
+        .clone()
+        .filter(|turn_id| !turn_id.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("Telegram media send requires originating turn identity"))?;
+    let scope = tinychannels_bus::HostVoiceScope {
+        configured_instance,
+        channel: channel_ref.clone(),
+        conversation: conversation.clone(),
+        turn_id,
+    };
+    let thread_id = conversation
+        .thread_id
+        .as_deref()
+        .or(conversation.topic_id.as_deref())
+        .or(message.thread_id.as_deref())
+        .map(str::to_owned);
+    if thread_id
+        .as_deref()
+        .is_some_and(|thread_id| thread_id.parse::<i64>().is_err())
+    {
+        anyhow::bail!("Telegram thread_id must be a numeric message thread ID");
+    }
+    if let Some(reply_to) = message.reply_to_id.as_deref() {
+        reply_to
+            .parse::<i64>()
+            .map_err(|_| anyhow::anyhow!("Telegram reply_to_id must be a numeric message ID"))?;
+    }
+    let repository = channel
+        .media_repository
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("Telegram media upload requires scoped host storage"))?;
+
+    for part in &message.parts {
+        match part {
+            tinychannels_bus::OutboundContentPart::Content {
+                part:
+                    tinychannels_bus::ContentPart::Text { .. }
+                    | tinychannels_bus::ContentPart::Image { .. }
+                    | tinychannels_bus::ContentPart::Video { .. }
+                    | tinychannels_bus::ContentPart::Audio { .. }
+                    | tinychannels_bus::ContentPart::File { .. }
+                    | tinychannels_bus::ContentPart::Sticker { .. },
+            } => {}
+            _ => anyhow::bail!("Telegram media send does not support this content combination"),
+        }
+    }
+
+    let mut receipt_parts = Vec::new();
+    let mut failed = None;
+    for part in &message.parts {
+        let (method, media_kind, media, caption, title, duration_ms, fallback_name) = match part {
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. },
+            } => {
+                let text = strip_tool_call_tags(text);
+                match channel
+                    .send_text_chunks_with_ids(
+                        &text,
+                        &conversation.id,
+                        thread_id.as_deref(),
+                        message
+                            .reply_to_id
+                            .as_deref()
+                            .and_then(|id| id.parse::<i64>().ok()),
+                    )
+                    .await
+                {
+                    Ok(ids) => {
+                        for id in ids {
+                            receipt_parts.push(telegram_receipt_part(
+                                &id,
+                                tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                                receipt_parts.len(),
+                                &conversation,
+                                &thread_id,
+                                message.reply_to_id.as_deref(),
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(partial) =
+                            error.downcast_ref::<super::channel_send::PartialTextSendError>()
+                        {
+                            for id in &partial.message_ids {
+                                receipt_parts.push(telegram_receipt_part(
+                                    id,
+                                    tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                                    receipt_parts.len(),
+                                    &conversation,
+                                    &thread_id,
+                                    message.reply_to_id.as_deref(),
+                                ));
+                            }
+                        }
+                        failed = Some(error);
+                    }
+                }
+                if failed.is_some() {
+                    break;
+                }
+                continue;
+            }
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image { media, caption, .. },
+            } => (
+                "sendPhoto",
+                tinychannels_bus::MediaKind::Image,
+                media,
+                caption.as_deref(),
+                None,
+                None,
+                "photo",
+            ),
+            tinychannels_bus::OutboundContentPart::Content {
+                part:
+                    tinychannels_bus::ContentPart::Video {
+                        media,
+                        caption,
+                        duration_ms,
+                        ..
+                    },
+            } => (
+                "sendVideo",
+                tinychannels_bus::MediaKind::Video,
+                media,
+                caption.as_deref(),
+                None,
+                *duration_ms,
+                "video",
+            ),
+            tinychannels_bus::OutboundContentPart::Content {
+                part:
+                    tinychannels_bus::ContentPart::Audio {
+                        media,
+                        title,
+                        transcript,
+                        duration_ms,
+                        ..
+                    },
+            } => (
+                "sendAudio",
+                tinychannels_bus::MediaKind::Audio,
+                media,
+                transcript.as_deref(),
+                title.as_deref(),
+                *duration_ms,
+                "audio",
+            ),
+            tinychannels_bus::OutboundContentPart::Content {
+                part:
+                    tinychannels_bus::ContentPart::File {
+                        media,
+                        file_name,
+                        caption,
+                    },
+            } => (
+                "sendDocument",
+                tinychannels_bus::MediaKind::Document,
+                media,
+                caption.as_deref(),
+                None,
+                None,
+                file_name.as_deref().unwrap_or("file"),
+            ),
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Sticker { media, .. },
+            } => (
+                "sendSticker",
+                tinychannels_bus::MediaKind::Image,
+                media,
+                None,
+                None,
+                None,
+                "sticker",
+            ),
+            _ => unreachable!("content combination was validated above"),
+        };
+        let Some(opaque_id) = media
+            .opaque_id
+            .as_deref()
+            .filter(|id| !id.trim().is_empty())
+        else {
+            if receipt_parts.is_empty() {
+                anyhow::bail!("Telegram media has no host-owned opaque reference");
+            }
+            failed = Some(anyhow::anyhow!(
+                "Telegram media has no host-owned opaque reference"
+            ));
+            break;
+        };
+        let stored = match repository
+            .read_media(scope.clone(), opaque_id.to_owned(), 20 * 1024 * 1024)
+            .await
+        {
+            Ok(stored) => stored,
+            Err(error) if receipt_parts.is_empty() => return Err(error),
+            Err(_) => {
+                failed = Some(anyhow::anyhow!("Telegram scoped media could not be read"));
+                break;
+            }
+        };
+        if stored.media.kind != media_kind
+            || !crate::host::is_allowed_content_type(media_kind, &stored.content_type)
+            || stored.bytes.is_empty()
+            || stored.bytes.len() > 20 * 1024 * 1024
+        {
+            if receipt_parts.is_empty() {
+                anyhow::bail!("Telegram media failed upload validation");
+            }
+            failed = Some(anyhow::anyhow!("Telegram media failed upload validation"));
+            break;
+        }
+        let file_name = stored
+            .file_name
+            .as_deref()
+            .unwrap_or(fallback_name)
+            .to_owned();
+        let caption = caption.map(strip_tool_call_tags);
+        if caption
+            .as_ref()
+            .is_some_and(|text| text.chars().count() > 1024)
+        {
+            if receipt_parts.is_empty() {
+                anyhow::bail!("Telegram media caption exceeds the 1024-character limit");
+            }
+            failed = Some(anyhow::anyhow!(
+                "Telegram media caption exceeds the 1024-character limit"
+            ));
+            break;
+        }
+        let upload_plan = (|| -> anyhow::Result<(&str, &str, usize, Option<u64>)> {
+            Ok(match media_kind {
+                tinychannels_bus::MediaKind::Image if method == "sendSticker" => {
+                    anyhow::bail!("Telegram sticker upload is not enabled for this format")
+                }
+                tinychannels_bus::MediaKind::Image
+                    if matches!(stored.content_type.as_str(), "image/jpeg" | "image/png") =>
+                {
+                    let Some((width, height)) =
+                        telegram_image_dimensions(&stored.content_type, &stored.bytes)
+                    else {
+                        anyhow::bail!("Telegram photo dimensions could not be validated")
+                    };
+                    if width == 0
+                        || height == 0
+                        || width.saturating_add(height) > 10_000
+                        || width.max(height) > width.min(height).saturating_mul(20)
+                    {
+                        anyhow::bail!("Telegram photo dimensions exceed provider limits")
+                    }
+                    ("sendPhoto", "photo", 10 * 1024 * 1024, duration_ms)
+                }
+                tinychannels_bus::MediaKind::Image => {
+                    ("sendDocument", "document", 20 * 1024 * 1024, None)
+                }
+                tinychannels_bus::MediaKind::Video if stored.content_type == "video/mp4" => {
+                    ("sendVideo", "video", 20 * 1024 * 1024, duration_ms)
+                }
+                tinychannels_bus::MediaKind::Video => {
+                    ("sendDocument", "document", 20 * 1024 * 1024, None)
+                }
+                tinychannels_bus::MediaKind::Audio
+                    if matches!(stored.content_type.as_str(), "audio/mpeg" | "audio/mp4") =>
+                {
+                    ("sendAudio", "audio", 20 * 1024 * 1024, duration_ms)
+                }
+                tinychannels_bus::MediaKind::Audio => {
+                    anyhow::bail!("Telegram sendAudio accepts only MP3 or M4A media")
+                }
+                tinychannels_bus::MediaKind::Document => {
+                    ("sendDocument", "document", 20 * 1024 * 1024, None)
+                }
+                tinychannels_bus::MediaKind::Unknown => {
+                    anyhow::bail!("Telegram media kind is unsupported")
+                }
+            })
+        })();
+        let (upload_method, upload_field, upload_limit, upload_duration) = match upload_plan {
+            Ok(plan) => plan,
+            Err(error) if receipt_parts.is_empty() => return Err(error),
+            Err(error) => {
+                failed = Some(error);
+                break;
+            }
+        };
+        if stored.bytes.len() > upload_limit {
+            if receipt_parts.is_empty() {
+                anyhow::bail!("Telegram media exceeds the selected upload method limit");
+            }
+            failed = Some(anyhow::anyhow!(
+                "Telegram media exceeds the selected upload method limit"
+            ));
+            break;
+        }
+        let content_type = stored.content_type.clone();
+        let receipt_index = receipt_parts.len();
+        match channel
+            .send_media_bytes_with_id(super::channel_send::TelegramMediaUpload {
+                method: upload_method,
+                field: upload_field,
+                chat_id: &conversation.id,
+                thread_id: thread_id.as_deref(),
+                reply_to_id: message.reply_to_id.as_deref(),
+                caption: caption.as_deref(),
+                title,
+                duration_ms: upload_duration,
+                bytes: stored.bytes,
+                content_type: &content_type,
+                file_name: &file_name,
+            })
+            .await
+        {
+            Ok(id) => receipt_parts.push(telegram_receipt_part(
+                &id,
+                tinychannels_bus::channel::MessageReceiptPartKind::Media,
+                receipt_index,
+                &conversation,
+                &thread_id,
+                message.reply_to_id.as_deref(),
+            )),
+            Err(_) => {
+                failed = Some(anyhow::anyhow!(
+                    "Telegram media upload outcome is uncertain"
+                ));
+                break;
+            }
+        }
+    }
+    if receipt_parts.is_empty() {
+        return Err(
+            failed.unwrap_or_else(|| anyhow::anyhow!("Telegram media send produced no receipt"))
+        );
+    }
+    let ids = receipt_parts
+        .iter()
+        .map(|part| part.platform_message_id.clone())
+        .collect::<Vec<_>>();
+    let single = (ids.len() == 1).then(|| ids[0].clone());
+    let error = failed.map(|failure| tinychannels_bus::channel::ChannelSendError {
+        kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+        message: if failure
+            .downcast_ref::<super::channel_send::PartialTextSendError>()
+            .is_some()
+        {
+            "Telegram sent only part of the typed message; retry is unsafe".into()
+        } else {
+            "Telegram typed media send is partial or uncertain; retry is unsafe".into()
+        },
+        sent_before_error: true,
+        retryable: false,
+        ..Default::default()
+    });
+    let receipt = tinychannels_bus::channel::MessageReceipt {
+        idempotency_key: Some(message.idempotency_key.clone()),
+        channel: Some(channel_ref),
+        conversation: Some(conversation),
+        primary_platform_message_id: ids.first().cloned(),
+        platform_message_ids: ids,
+        parts: receipt_parts,
+        thread_id,
+        reply_to_id: message.reply_to_id.clone(),
+        edit_token: single.clone(),
+        delete_token: single,
+        sent_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        raw: None,
+    };
+    Ok(tinychannels_bus::channel::ChannelSendOutcome { receipt, error })
 }
 
 #[cfg(test)]

@@ -55,6 +55,7 @@ impl TelegramChannel {
             client: reqwest::Client::new(),
             transcriber: None,
             voice_media_store: None,
+            media_repository: None,
             voice_synthesis: false,
             allowlist: None,
             events: None,
@@ -115,6 +116,11 @@ impl TelegramChannel {
     /// Inject host-owned persistence for normalized voice media.
     pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
         self.voice_media_store = Some(store);
+        self
+    }
+
+    pub fn with_media_repository(mut self, store: Arc<dyn crate::host::MediaRepository>) -> Self {
+        self.media_repository = Some(store);
         self
     }
 

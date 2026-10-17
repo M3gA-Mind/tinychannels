@@ -36,13 +36,38 @@ message receipt; streaming drafts must report create, update, finalize, and
 cancel-cleanup operations.
 
 The module tests exercise account mismatch rejection before dispatch, partial
-receipt retry safety, raw voice-synthesis capability gating, and a real
-configured Running adapter that sends through Telegram's Bot API against a
-wiremock server. The conformance kit observes the actual `sendMessage` request
-and the fixture's configured response ID, then verifies the configured
-account and conversation scope. The same configured Telegram adapter rejects
-undeclared image content before any platform request. CI runs these tests and
-the conformance-kit self-tests through `scripts/test-adapter-conformance.sh`.
+receipt retry safety, raw voice-synthesis capability gating, and real
+configured Running adapters that send through Telegram's Bot API against
+wiremock servers. The conformance kit observes the actual `sendMessage`
+request and fixture response ID, then verifies configured account and
+conversation scope. An unconfigured Telegram channel rejects image content
+before platform I/O; a configured scoped-media repository enables typed media
+and the Running adapter is tested sending an image read from the module's
+host-granted storage bus. CI runs these tests and the conformance-kit
+self-tests through `scripts/test-adapter-conformance.sh`.
+
+The shared media foundation also tests a connected Telegram inbound photo
+flow: a wiremock `getFile` response and authenticated file download pass through
+MIME/body validation into the host-scoped blob store, then appear as an ordered
+typed image with scope-bound readback. The configured Running Telegram test
+also seeds that same host storage bus, reads the opaque reference through the
+configured repository, and verifies native `sendPhoto` multipart content and
+its actual receipt. Typed audio title/transcript/duration and partial-send
+receipt safety have focused wire tests. This foundation does not claim final
+conformance for other providers. Native upload request/receipt evidence remains
+required from each provider port before final issue acceptance.
+
+Telegram-specific preflight advertises MP3/M4A for native `sendAudio`, MPEG-4
+for native `sendVideo`, and a 10 MiB photo cap; unsupported audio containers are
+rejected before platform I/O and non-MPEG-4 video uses `sendDocument`. The
+Bot API's photo dimensions and caption constraints are checked before upload.
+See the [Telegram Bot API](https://core.telegram.org/bots/api#sendphoto),
+[sendAudio](https://core.telegram.org/bots/api#sendaudio), and
+[sendVideo](https://core.telegram.org/bots/api#sendvideo) limits.
+
+General host-to-module media ingestion is still missing from the TinyChannels
+bus. Host consumers must wait for the owning bus/module extension rather than
+linking TinyChannels implementation code or duplicating its metadata schema.
 
 | Behavior | Foundation status | Final provider coverage |
 | --- | --- | --- |

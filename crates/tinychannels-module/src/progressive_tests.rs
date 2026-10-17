@@ -130,6 +130,8 @@ struct Callback {
     voice_policy: Arc<Mutex<Option<tinychannels_bus::HostVoiceReplyPolicy>>>,
     synthesis_calls: Arc<AtomicUsize>,
     voice_store_calls: Arc<AtomicUsize>,
+    published_voice_media: Arc<Mutex<Vec<tinychannels_bus::MediaReference>>>,
+    published_voice_requests: Arc<Mutex<Vec<tinychannels_bus::HostStoreVoiceMediaRequest>>>,
 }
 
 #[derive(Clone, Default)]
@@ -142,17 +144,26 @@ impl StubTinyVoiceCodec {
         request: tinyvoice_bus::codec::CodecTranscodeRequest,
     ) -> tinybus::Result<tinyvoice_bus::codec::CodecOutput> {
         self.0.fetch_add(1, Ordering::SeqCst);
+        let bytes = match request.target {
+            tinyvoice_bus::codec::AudioCodec::OggOpus => progressive_test_ogg(),
+            tinyvoice_bus::codec::AudioCodec::WavPcm16 => progressive_test_wav(),
+            _ => return Err(tinybus::Error::failed("unsupported fixture target codec")),
+        };
         Ok(tinyvoice_bus::codec::CodecOutput {
-            audio_base64: request.audio_base64,
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(bytes),
         })
     }
 
     async fn codec_probe(
         &self,
-        _request: tinyvoice_bus::codec::CodecInput,
+        request: tinyvoice_bus::codec::CodecInput,
     ) -> tinybus::Result<tinyvoice_bus::codec::CodecInfo> {
         Ok(tinyvoice_bus::codec::CodecInfo {
-            codec: tinyvoice_bus::codec::AudioCodec::WavPcm16,
+            codec: if request.audio_base64.starts_with("T2dnUw") {
+                tinyvoice_bus::codec::AudioCodec::OggOpus
+            } else {
+                tinyvoice_bus::codec::AudioCodec::WavPcm16
+            },
             duration_ms: 1_500,
             sample_rate: 48_000,
             channels: 1,
@@ -204,15 +215,29 @@ impl Callback {
 
     async fn store_voice_media(
         &self,
-        _request: tinychannels_bus::HostStoreVoiceMediaRequest,
+        request: tinychannels_bus::HostStoreVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         self.voice_store_calls.fetch_add(1, Ordering::SeqCst);
-        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
-            media: tinychannels_bus::MediaReference {
+        self.published_voice_requests
+            .lock()
+            .await
+            .push(request.clone());
+        let media = request
+            .media_reference
+            .unwrap_or_else(|| tinychannels_bus::MediaReference {
                 opaque_id: Some("durable-host-voice".into()),
                 kind: tinychannels_bus::MediaKind::Audio,
                 ..Default::default()
-            },
+            });
+        if media
+            .opaque_id
+            .as_deref()
+            .is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
+        {
+            self.published_voice_media.lock().await.push(media.clone());
+        }
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media,
             accessible_url: Some("https://media.example/authorized/voice".into()),
         })
     }
@@ -3869,6 +3894,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         )
         .await
         .unwrap();
+    let _storage = crate::storage_fixture::StorageHost::serve(&connection, "voice-pipeline").await;
     let host = HostChannels::new(connection);
     let context = ProgressiveOutputContext {
         turn_id: "turn-voice-1".into(),
@@ -3972,7 +3998,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             matches!(part,
                 tinychannels_bus::OutboundContentPart::Voice {
                     voice: tinychannels_bus::OutboundVoice::Media { media, .. }
-                } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
             )
         });
         assert_eq!(has_media, expected_voice, "policy case {index}: {mode:?}");
@@ -3990,7 +4016,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
                                     media,
                                     ..
                                 }
-                            } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                            } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
                         )))
                     })
                     .unwrap(),
@@ -4090,7 +4116,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
                     if parts.iter().any(|part| matches!(part,
                         tinychannels_bus::OutboundContentPart::Voice {
                             voice: tinychannels_bus::OutboundVoice::Media { media, .. }
-                        } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                        } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
                     ))
                 )
             })
@@ -4126,6 +4152,72 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         drop(requests);
         replies.shutdown().await.expect("close scoped worker");
     }
+
+    let published = callback.published_voice_media.lock().await[0].clone();
+    let published_id = published.opaque_id.as_deref().expect("published voice id");
+    let publication = callback
+        .published_voice_requests
+        .lock()
+        .await
+        .iter()
+        .find(|request| {
+            request.scope.turn_id == context.turn_id
+                && request
+                    .media_reference
+                    .as_ref()
+                    .and_then(|media| media.opaque_id.as_deref())
+                    == Some(published_id)
+        })
+        .cloned()
+        .expect("voice publication captures its originating scope and bytes");
+    let sent_id = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                ..
+            } if turn_id == &context.turn_id => parts.iter().find_map(|part| match part {
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media { media, .. },
+                } if media.opaque_id.as_deref() == Some(published_id) => media.opaque_id.clone(),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("the actual final voice send carries its canonical media id");
+    assert_eq!(sent_id, published_id);
+    let scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "telegram:bot-1".into(),
+        channel: context.channel.clone(),
+        conversation: context.conversation.clone(),
+        turn_id: context.turn_id.clone(),
+    };
+    let storage = host
+        .storage()
+        .await
+        .expect("host-scoped storage is available");
+    let media_store = tinychannels::host::ScopedMediaStore::new(
+        Arc::clone(storage.documents()),
+        Arc::clone(storage.blobs()),
+    );
+    let stored = media_store
+        .read(scope.clone(), published_id, 1024 * 1024)
+        .await
+        .expect("progressive policy voice reference resolves in scoped storage");
+    assert_eq!(publication.scope, scope);
+    assert_eq!(publication.codec.as_deref(), Some("ogg_opus"));
+    assert_eq!(
+        stored.bytes,
+        base64::engine::general_purpose::STANDARD
+            .decode(publication.audio_base64)
+            .unwrap()
+    );
+    assert!(stored.bytes.starts_with(b"OggS"));
+    assert_eq!(stored.content_type, "audio/ogg");
 
     *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
         mode: tinychannels_bus::HostVoiceReplyMode::Always,
@@ -4184,7 +4276,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     assert!(audio_request.iter().any(|part| matches!(part,
         tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Audio { media, codec: Some(codec), .. }
-        } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
+        } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_")) && codec == "ogg_opus"
     )));
     assert!(
         !audio_request
@@ -4468,6 +4560,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         .await
         .unwrap();
     server.request_name(tinyvoice_bus::BUS_NAME).await.unwrap();
+    let _storage = crate::storage_fixture::StorageHost::serve(&server, "voice-pipeline").await;
     let client = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
@@ -4527,19 +4620,64 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
             } if turn_id == "stub-codec-turn" => Some(parts),
             _ => None,
         });
-        assert!(send.is_some_and(|parts| parts.iter().any(|part| matches!(
-            part,
-            tinychannels_bus::OutboundContentPart::Voice {
-                voice: tinychannels_bus::OutboundVoice::Media {
-                    media,
-                    codec: Some(codec),
-                    ..
-                }
-            } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
-        ))));
+        assert!(
+            send.is_some_and(|parts| parts.iter().any(|part| matches!(
+                part,
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media {
+                        media,
+                        codec: Some(codec),
+                        ..
+                    }
+                } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_")) && codec == "ogg_opus"
+            ))),
+            "captured outbound parts: {send:?}; synthesis calls {}; store calls {}",
+            callback.synthesis_calls.load(Ordering::SeqCst),
+            callback.voice_store_calls.load(Ordering::SeqCst)
+        );
     }
     assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
     assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 1);
+    let published = callback.published_voice_media.lock().await[0].clone();
+    let sent_id = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                ..
+            } if turn_id == "stub-codec-turn" => parts.iter().find_map(|part| match part {
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media { media, .. },
+                } => media.opaque_id.clone(),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("native voice part carries the published opaque reference");
+    assert_eq!(Some(sent_id.as_str()), published.opaque_id.as_deref());
+    let scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "telegram:bot-1".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:bot-1".into()),
+        },
+        conversation: context.conversation.clone(),
+        turn_id: "stub-codec-turn".into(),
+    };
+    let storage = host.storage().await.unwrap();
+    let media_store = tinychannels::host::ScopedMediaStore::new(
+        Arc::clone(storage.documents()),
+        Arc::clone(storage.blobs()),
+    );
+    let stored = media_store
+        .read(scope, &sent_id, 1024 * 1024)
+        .await
+        .expect("published voice reference resolves in host scoped storage");
+    assert_eq!(stored.bytes, progressive_test_ogg());
 
     // Mirror, Never, and SpeakReply are evaluated against the host's scoped
     // policy on each final turn. A denied policy sends the canonical text and
@@ -4764,6 +4902,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     audio_capabilities.content.audio.outbound = true;
     audio_capabilities.content.audio.accepted_types = vec!["audio/wav".into()];
     audio_capabilities.content.parts.push("audio".into());
+    let before_audio_publications = callback.published_voice_media.lock().await.len();
     let audio_parts = send_final_voice_case(
         &host,
         &callback,
@@ -4774,6 +4913,9 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         "audio fallback transcript",
     )
     .await;
+    let audio_media_id = callback.published_voice_media.lock().await[before_audio_publications]
+        .opaque_id
+        .clone();
     assert!(audio_parts.iter().any(|part| matches!(
         part,
         tinychannels_bus::OutboundContentPart::Content {
@@ -4783,7 +4925,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
                 transcript: Some(transcript),
                 ..
             }
-        } if media.opaque_id.as_deref() == Some("durable-host-voice")
+        } if media.opaque_id == audio_media_id
             && codec == "wav_pcm16"
             && transcript == "audio fallback transcript"
     )));
@@ -4951,4 +5093,10 @@ fn progressive_test_wav() -> Vec<u8> {
         wav.extend_from_slice(&sample.to_le_bytes());
     }
     wav
+}
+
+fn progressive_test_ogg() -> Vec<u8> {
+    // This unit stub validates the container/MIME handoff. Actual Opus decoding
+    // and encoding are exercised against the compiled TinyVoice artifact.
+    b"OggS\0\x02\0\0\0\0\0\0\0\0fixture".to_vec()
 }

@@ -141,6 +141,26 @@ async fn legacy_voice_ports_delegate_scoped_calls_and_media_resolution_fails_clo
     );
 }
 
+struct DocumentsOnlyStorage;
+
+#[async_trait]
+impl StorageProvider for DocumentsOnlyStorage {
+    async fn documents(
+        &self,
+    ) -> anyhow::Result<std::sync::Arc<dyn tinystoragedrivers_core::DocumentStore>> {
+        unreachable!("the blob fallback test does not request document storage")
+    }
+}
+
+#[tokio::test]
+async fn storage_provider_without_blob_port_fails_closed() {
+    let error = DocumentsOnlyStorage.blobs().await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "host scoped media blob storage is unavailable"
+    );
+}
+
 struct DefaultVoiceMediaStore;
 
 #[async_trait]

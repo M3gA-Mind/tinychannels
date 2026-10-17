@@ -2753,6 +2753,7 @@ dependencies = [
  "hmac 0.13.0",
  "lettre",
  "mail-parser",
+ "mime",
  "parking_lot",
  "prost",
  "rand 0.10.2",

@@ -374,6 +374,31 @@ pub trait StorageProvider: Send + Sync {
     async fn documents(
         &self,
     ) -> anyhow::Result<std::sync::Arc<dyn tinystoragedrivers_core::DocumentStore>>;
+
+    /// The scoped blob store used for media bytes; hosts grant only the
+    /// provider's media prefix, never general blob authority.
+    async fn blobs(
+        &self,
+    ) -> anyhow::Result<std::sync::Arc<dyn tinystoragedrivers_core::BlobStore>> {
+        anyhow::bail!("host scoped media blob storage is unavailable")
+    }
+}
+
+/// Shared durable media repository for providers that support typed
+/// attachments. The implementation is bound to host-granted scoped storage.
+#[async_trait]
+pub trait MediaRepository: Send + Sync {
+    async fn store_media(
+        &self,
+        request: super::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference>;
+
+    async fn read_media(
+        &self,
+        scope: super::MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<super::StoredMedia>;
 }
 
 // ---------------------------------------------------------------------------
