@@ -14,6 +14,7 @@ const THREAD_GOAL: &str = include_str!("fixtures/web/thread_goal_updated.json");
 const THREAD_TODOS: &str = include_str!("fixtures/web/thread_todos_changed.json");
 const TOOL_RESULT: &str = include_str!("fixtures/web/tool_result.json");
 const APPROVAL_DECIDED: &str = include_str!("fixtures/web/approval_decided.json");
+const WEB_SCHEMA: &str = include_str!("../schema/web-channel-event.schema.json");
 
 fn assert_historical_fixture_round_trips(fixture: &str) {
     let historical: serde_json::Value = serde_json::from_str(fixture).unwrap();
@@ -229,6 +230,7 @@ fn web_events_keep_ordered_typed_media_and_voice_parts() {
 fn schema_export_is_deterministic_and_contains_every_variant() {
     let schema = web_event_schema_json().unwrap();
     assert_eq!(schema, web_event_schema_json().unwrap());
+    assert_eq!(schema, WEB_SCHEMA.trim_end());
     let schema: serde_json::Value = serde_json::from_str(&schema).unwrap();
     let schema_text = schema.to_string();
     for event in HISTORICAL_EVENT_NAMES {

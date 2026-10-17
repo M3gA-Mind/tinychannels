@@ -92,9 +92,10 @@ remains a compatibility projection. Socket event aliases are transport names
 and never rewrite the payload discriminator. Alias generation suppresses
 parent and subagent stream deltas, matching the deployed socket server.
 
-Export the deterministic JSON Schema for TypeScript generation with
-`cargo run -p tinychannels-bus --example web_schema`; the public
-`web_event_schema_json()` function exposes the same schema to codegen tools.
+Regenerate the checked-in JSON Schema for TypeScript generation with
+`cargo run -p tinychannels-bus --example web_schema > crates/tinychannels-bus/schema/web-channel-event.schema.json`;
+the public `web_event_schema_json()` function exposes the same schema to
+codegen tools.
 The transport-free helpers also carry the web payload cap and timing
 calculations for migration into host adapters. Logging and clock acquisition
 remain host responsibilities. This contract does not claim that OpenHuman's
