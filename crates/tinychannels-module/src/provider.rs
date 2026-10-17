@@ -892,7 +892,9 @@ impl Running {
         if tinychannels_bus::provider_id(&intent.channel_id) != expected_channel
             || intent.channel_ref.as_ref().is_some_and(|reference| {
                 reference.id != expected_channel
-                    || reference.account_id.as_deref() != Some(self.configured_instance.as_str())
+                    || reference.account_id.as_deref().is_some_and(|account_id| {
+                        account_id != self.configured_instance.as_str()
+                    })
             })
         {
             return Err(adapter_scope_error(
@@ -1046,6 +1048,11 @@ impl tinychannels::channel::ChannelAdapter for Running {
                 id: expected_channel,
                 account_id: Some(self.configured_instance.clone()),
             });
+        if let Some(channel_ref) = &mut intent.channel_ref
+            && channel_ref.account_id.is_none()
+        {
+            channel_ref.account_id = Some(self.configured_instance.clone());
+        }
         intent
             .conversation_ref
             .get_or_insert_with(|| tinychannels_bus::ConversationRef {
