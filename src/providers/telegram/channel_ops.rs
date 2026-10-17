@@ -188,14 +188,14 @@ impl Channel for TelegramChannel {
         }
         actions.extend(["react".into(), "reactions".into()]);
         let mut parts = vec!["text".into()];
-        let media_capability = |types: &[&str]| {
+        let media_capability = |accepted: &[&str], emitted: &[&str], max_size_bytes: u64| {
             if media_enabled {
                 tinychannels_bus::ContentCapability {
                     inbound: true,
                     outbound: true,
-                    accepted_types: types.iter().map(|kind| (*kind).to_owned()).collect(),
-                    emitted_types: types.iter().map(|kind| (*kind).to_owned()).collect(),
-                    max_size_bytes: Some(20 * 1024 * 1024),
+                    accepted_types: accepted.iter().map(|kind| (*kind).to_owned()).collect(),
+                    emitted_types: emitted.iter().map(|kind| (*kind).to_owned()).collect(),
+                    max_size_bytes: Some(max_size_bytes),
                     ..Default::default()
                 }
             } else {
@@ -256,15 +256,21 @@ impl Channel for TelegramChannel {
                     outbound: true,
                     ..Default::default()
                 },
-                image: media_capability(&["image/jpeg", "image/png", "image/gif", "image/webp"]),
-                video: media_capability(&["video/mp4", "video/quicktime", "video/webm"]),
-                audio: media_capability(&[
-                    "audio/ogg",
-                    "audio/mpeg",
-                    "audio/mp4",
-                    "audio/wav",
-                    "audio/webm",
-                ]),
+                image: media_capability(
+                    &["image/jpeg", "image/png", "image/gif", "image/webp"],
+                    &["image/jpeg", "image/png"],
+                    10 * 1024 * 1024,
+                ),
+                video: media_capability(
+                    &["video/mp4", "video/quicktime", "video/webm"],
+                    &["video/mp4"],
+                    20 * 1024 * 1024,
+                ),
+                audio: media_capability(
+                    &["audio/ogg", "audio/mpeg", "audio/mp4", "audio/wav", "audio/webm"],
+                    &["audio/mpeg", "audio/mp4"],
+                    20 * 1024 * 1024,
+                ),
                 file: media_capability(&[
                     "application/pdf",
                     "text/plain",
@@ -273,8 +279,25 @@ impl Channel for TelegramChannel {
                     "application/zip",
                     "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                ]),
-                sticker: media_capability(&["image/webp"]),
+                ], &[
+                    "application/pdf",
+                    "text/plain",
+                    "text/csv",
+                    "application/json",
+                    "application/zip",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ], 20 * 1024 * 1024),
+                sticker: if media_enabled {
+                    tinychannels_bus::ContentCapability {
+                        inbound: true,
+                        accepted_types: vec!["image/webp".into()],
+                        max_size_bytes: Some(20 * 1024 * 1024),
+                        ..Default::default()
+                    }
+                } else {
+                    tinychannels_bus::ContentCapability::default()
+                },
                 ..Default::default()
             },
             actions: tinychannels_bus::ActionCapabilities {
@@ -1635,18 +1658,77 @@ async fn send_typed_media_with_receipt(
             .unwrap_or(fallback_name)
             .to_owned();
         let caption = caption.map(strip_tool_call_tags);
+        if caption.as_ref().is_some_and(|text| text.chars().count() > 1024) {
+            if receipt_parts.is_empty() {
+                anyhow::bail!("Telegram media caption exceeds the 1024-character limit");
+            }
+            failed = Some(anyhow::anyhow!(
+                "Telegram media caption exceeds the 1024-character limit"
+            ));
+            break;
+        }
+        let (upload_method, upload_field, upload_limit, upload_duration) = match media_kind {
+            tinychannels_bus::MediaKind::Image if method == "sendSticker" => {
+                anyhow::bail!("Telegram sticker upload is not enabled for this format")
+            }
+            tinychannels_bus::MediaKind::Image
+                if matches!(stored.content_type.as_str(), "image/jpeg" | "image/png") =>
+            {
+                let Some((width, height)) = telegram_image_dimensions(&stored.content_type, &stored.bytes) else {
+                    anyhow::bail!("Telegram photo dimensions could not be validated")
+                };
+                if width.saturating_add(height) > 10_000
+                    || width.max(height) > width.min(height).saturating_mul(20)
+                {
+                    anyhow::bail!("Telegram photo dimensions exceed provider limits")
+                }
+                ("sendPhoto", "photo", 10 * 1024 * 1024, duration_ms)
+            }
+            tinychannels_bus::MediaKind::Image => {
+                ("sendDocument", "document", 20 * 1024 * 1024, None)
+            }
+            tinychannels_bus::MediaKind::Video if stored.content_type == "video/mp4" => {
+                ("sendVideo", "video", 20 * 1024 * 1024, duration_ms)
+            }
+            tinychannels_bus::MediaKind::Video => {
+                ("sendDocument", "document", 20 * 1024 * 1024, None)
+            }
+            tinychannels_bus::MediaKind::Audio
+                if matches!(stored.content_type.as_str(), "audio/mpeg" | "audio/mp4") =>
+            {
+                ("sendAudio", "audio", 20 * 1024 * 1024, duration_ms)
+            }
+            tinychannels_bus::MediaKind::Audio => {
+                anyhow::bail!("Telegram sendAudio accepts only MP3 or M4A media")
+            }
+            tinychannels_bus::MediaKind::Document => {
+                ("sendDocument", "document", 20 * 1024 * 1024, None)
+            }
+            tinychannels_bus::MediaKind::Unknown => {
+                anyhow::bail!("Telegram media kind is unsupported")
+            }
+        };
+        if stored.bytes.len() > upload_limit {
+            if receipt_parts.is_empty() {
+                anyhow::bail!("Telegram media exceeds the selected upload method limit");
+            }
+            failed = Some(anyhow::anyhow!(
+                "Telegram media exceeds the selected upload method limit"
+            ));
+            break;
+        }
         let content_type = stored.content_type.clone();
         let receipt_index = receipt_parts.len();
         match channel
             .send_media_bytes_with_id(super::channel_send::TelegramMediaUpload {
-                method,
-                field,
+                method: upload_method,
+                field: upload_field,
                 chat_id: &conversation.id,
                 thread_id: thread_id.as_deref(),
                 reply_to_id: message.reply_to_id.as_deref(),
                 caption: caption.as_deref(),
                 title,
-                duration_ms,
+                duration_ms: upload_duration,
                 bytes: stored.bytes,
                 content_type: &content_type,
                 file_name: &file_name,
