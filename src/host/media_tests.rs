@@ -326,6 +326,45 @@ async fn invalid_stream_scope_is_rejected_before_reading_body() {
 }
 
 #[tokio::test]
+async fn whitespace_only_account_scope_is_rejected_before_reading_body() {
+    let store = store();
+    let mut metadata = media_request(Vec::new(), None, None).metadata;
+    metadata.scope.channel.account_id = Some("   ".into());
+    let result = store
+        .store_stream(MediaStreamRequest {
+            metadata,
+            reader: Box::pin(PanicReader),
+        })
+        .await;
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn deduplicated_media_rejects_changed_codec_or_voice_direction() {
+    let store = store();
+    let key = Some("voice-dedupe-metadata");
+    let first = store
+        .store(media_request(valid_png(), None, key))
+        .await
+        .unwrap();
+
+    let mut changed_codec = media_request(valid_png(), None, key);
+    changed_codec.metadata.codec = Some("codec-a".into());
+    assert!(store.store(changed_codec).await.is_err());
+
+    let mut changed_direction = media_request(valid_png(), None, key);
+    changed_direction.metadata.voice_direction =
+        Some(tinychannels_bus::HostVoiceMediaDirection::Inbound);
+    assert!(store.store(changed_direction).await.is_err());
+
+    let same = store
+        .store(media_request(valid_png(), None, key))
+        .await
+        .unwrap();
+    assert_eq!(same, first);
+}
+
+#[tokio::test]
 async fn unsupported_stream_mime_is_rejected_before_reading_body() {
     let store = store();
     let mut metadata = media_request(Vec::new(), None, None).metadata;
