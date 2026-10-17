@@ -1329,34 +1329,24 @@ fn delivery_store_error(error: DeliveryQueueError) -> BusError {
     reason = "generated C ABI symbols are documented by the TinyBus module SDK"
 )]
 pub(crate) mod exports {
-    tinybus_module::module_export_optional_static! {
+    macro_rules! declare_channel_exports {
+        ([$($method:literal),* $(,)?]) => {
+            tinybus_module::module_export_optional_static! {
         setup = super::setup,
         worker_threads = 4,
         provides = ["ai.tinyhumans.tinychannels.Channels"],
-        methods = [
-            "StartChannel",
-            "StopChannel",
-            "SendMessage",
-            "ListChannels",
-            "ChannelStatus",
-            "ReserveRelay", "StartRelay", "StartRelayV2", "StopRelay", "RelayStatus", "RelayCapabilitiesV2", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
-            "BeginEmailUpload", "AppendEmailUploadChunk", "SendEmailUpload", "AbortEmailUpload",
-            "StartChannelConfigured",
-            "ChannelController",
-            "ChannelInteraction",
-            "CheckChannelHealth",
-            "StartChannelSupervised",
-            "ReserveRuntime", "StartRuntime", "StopRuntime",
-            "DescribeConfiguredChannels", "StartOutboundChannel", "PrepareOutboundIntent",
-            "PrepareChannelInbound", "PrepareChannelIdentity", "ExecuteProgressive", "ExecuteRemote", "PrepareChannelControl", "StartRuntimeWithDispatch", "PrepareRuntimeCommand",
-        ],
+        methods = [$($method),*],
+        /* registry-generated membership */
         signals = [],
         // The host callback object is resolved per call, not required at load:
         // an outbound-only host that serves nothing is supported.
         requires = [],
         optional = ["ai.tinyhumans.tinychannels.ChannelsHost"],
         lazy = false,
+    
+        }
     }
+    tinychannels_bus::channel_method_registry!(declare_channel_exports);
 }
 
 #[cfg(test)]

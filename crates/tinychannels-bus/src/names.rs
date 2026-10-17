@@ -127,46 +127,33 @@ pub mod host_methods {
     pub const DISPATCH_CONTROLLER_BACKEND: &str = "DispatchControllerBackend";
 }
 
-/// All module method names in the declaration order used by the interface.
-pub const METHODS: [&str; 37] = [
-    methods::START_CHANNEL,
-    methods::STOP_CHANNEL,
-    methods::SEND_MESSAGE,
-    methods::LIST_CHANNELS,
-    methods::CHANNEL_STATUS,
-    methods::RESERVE_RELAY,
-    methods::START_RELAY,
-    methods::START_RELAY_V2,
-    methods::STOP_RELAY,
-    methods::RELAY_STATUS,
-    methods::RELAY_CAPABILITIES_V2,
-    methods::SEND_RELAY_INTENT,
-    methods::SHUTDOWN,
-    methods::SEND_CHANNEL_INTENT,
-    methods::SEND_EMAIL,
-    methods::BEGIN_EMAIL_UPLOAD,
-    methods::APPEND_EMAIL_UPLOAD_CHUNK,
-    methods::SEND_EMAIL_UPLOAD,
-    methods::ABORT_EMAIL_UPLOAD,
-    methods::START_CHANNEL_CONFIGURED,
-    methods::CHANNEL_CONTROLLER,
-    methods::CHANNEL_INTERACTION,
-    methods::CHECK_CHANNEL_HEALTH,
-    methods::START_CHANNEL_SUPERVISED,
-    methods::RESERVE_RUNTIME,
-    methods::START_RUNTIME,
-    methods::STOP_RUNTIME,
-    methods::DESCRIBE_CONFIGURED_CHANNELS,
-    methods::START_OUTBOUND_CHANNEL,
-    methods::PREPARE_OUTBOUND_INTENT,
-    methods::PREPARE_CHANNEL_INBOUND,
-    methods::PREPARE_CHANNEL_IDENTITY,
-    methods::EXECUTE_PROGRESSIVE,
-    methods::EXECUTE_REMOTE,
-    methods::PREPARE_CHANNEL_CONTROL,
-    methods::START_RUNTIME_WITH_DISPATCH,
-    methods::PREPARE_RUNTIME_COMMAND,
-];
+/// The source-of-truth module method registry, shared with the module export generator.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! channel_method_registry {
+    ($consumer:ident) => {
+        $consumer!([
+            "StartChannel", "StopChannel", "SendMessage", "ListChannels", "ChannelStatus",
+            "ReserveRelay", "StartRelay", "StartRelayV2", "StopRelay", "RelayStatus",
+            "RelayCapabilitiesV2", "SendRelayIntent", "Shutdown", "SendChannelIntent",
+            "SendEmail", "BeginEmailUpload", "AppendEmailUploadChunk", "SendEmailUpload",
+            "AbortEmailUpload", "StartChannelConfigured", "ChannelController",
+            "ChannelInteraction", "CheckChannelHealth", "StartChannelSupervised",
+            "ReserveRuntime", "StartRuntime", "StopRuntime", "DescribeConfiguredChannels",
+            "StartOutboundChannel", "PrepareOutboundIntent", "PrepareChannelInbound",
+            "PrepareChannelIdentity", "ExecuteProgressive", "ExecuteRemote",
+            "PrepareChannelControl", "StartRuntimeWithDispatch", "PrepareRuntimeCommand"
+        ])
+    };
+}
+
+macro_rules! define_method_table {
+    ([$($method:literal),* $(,)?]) => {
+        /// All module method names in the declaration order used by the interface.
+        pub const METHODS: [&str; <[&str]>::len(&[$($method),*])] = [$($method),*];
+    };
+}
+crate::channel_method_registry!(define_method_table);
 
 /// All host-callback method names in declaration order.
 pub const HOST_METHODS: [&str; 13] = [
