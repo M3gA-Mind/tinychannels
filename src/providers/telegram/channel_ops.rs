@@ -2404,3 +2404,21 @@ impl crate::channel::ChannelStreamingDraft for TelegramChannel {
 #[cfg(test)]
 #[path = "channel_ops_tests.rs"]
 mod tests;
+
+#[async_trait]
+impl crate::channel::ChannelTypedSend for TelegramChannel {
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
+        self.send_v2_with_receipt(message)
+            .await
+            .map_err(|_| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Unknown,
+                message: "Telegram typed send failed".into(),
+                retryable: false,
+                sent_before_error: true,
+                ..Default::default()
+            })
+    }
+}
