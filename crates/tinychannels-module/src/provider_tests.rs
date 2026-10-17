@@ -693,12 +693,15 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     })
             };
             let chat = field("chat_id").unwrap_or_default();
-            let mut conversation = self.scope.conversation.clone();
+            let message_id = field("message_id");
+            let mapped_context = message_id.as_ref().and_then(|id| self.message_contexts.lock().unwrap().get(id).cloned());
+            let mut conversation = mapped_context.as_ref().map(|(conversation, _)| conversation.clone()).unwrap_or_else(|| self.scope.conversation.clone());
             if !chat.is_empty() { conversation.id = chat.clone(); }
-            let thread_id = field("message_thread_id");
+            let thread_id = mapped_context.as_ref().and_then(|(conversation, _)| conversation.thread_id.clone().or_else(|| conversation.topic_id.clone())).or_else(|| field("message_thread_id"));
             conversation.thread_id = thread_id.clone();
             conversation.topic_id = thread_id.clone();
-            let (operation, endpoint_kind) = match endpoint {
+            let reply_to_id = mapped_context.as_ref().and_then(|(_, reply)| reply.clone()).or_else(|| field("reply_to_message_id"));
+            let (mut operation, endpoint_kind) = match endpoint {
                 "sendMessage" => ("send", "text"), "sendPhoto" => ("send", "image"),
                 "sendVideo" => ("send", "video"), "sendAudio" => ("send", "audio"),
                 "sendVoice" => ("send", "voice"), "sendDocument" => ("send", "file"),
@@ -708,9 +711,29 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 "setMessageReaction" => ("reaction_send", ""), "sendChatAction" => ("typing", ""),
                 _ => continue,
             };
-            let payload_kind = if feature == Feature::Buttons {
+            if feature == Feature::StreamingDraft {
+                operation = match endpoint {
+                    "sendMessage" if field("text").as_deref() == Some("operation fixture") => "draft_create",
+                    "sendMessage" => "draft_cancel_create",
+                    "editMessageText" if field("text").as_deref() == Some("draft update") => "draft_update",
+                    "editMessageText" => "draft_finalize",
+                    "deleteMessage" => "draft_cancel_cleanup",
+                    _ => operation,
+                };
+            }
+            let keyboard = body.get("reply_markup").and_then(|markup| markup.get("inline_keyboard"))
+                .and_then(serde_json::Value::as_array);
+            let has_action_button = keyboard.is_some_and(|rows| rows.iter().any(|row| {
+                row.as_array().is_some_and(|buttons| buttons.iter().any(|button| {
+                    button.get("callback_data").and_then(serde_json::Value::as_str).is_some_and(|data| !data.is_empty())
+                }))
+            }));
+            let payload_kind = if feature == Feature::Buttons && has_action_button {
                 "buttons"
-            } else if feature == Feature::Presentation {
+            } else if feature == Feature::Presentation
+                && has_action_button
+                && body.get("text").and_then(serde_json::Value::as_str).is_some_and(|text| !text.is_empty())
+            {
                 "presentation"
             } else {
                 endpoint_kind
@@ -729,8 +752,15 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 "multipart_fields": multipart_fields,
             });
             let ids = self.response_ids.lock().unwrap();
-            let platform_message_ids = ids.iter().rev().find(|(path, _)| path == endpoint)
-                .map(|(_, id)| vec![id.clone()]).unwrap_or_default();
+            let mut response_cursor = self.response_cursor.lock().unwrap();
+            let matched_response = ids.iter().enumerate().skip(*response_cursor).find(|(_, (path, _))| path == endpoint);
+            let platform_message_ids = if let Some((index, (_, id))) = matched_response {
+                *response_cursor = index + 1;
+                vec![id.clone()]
+            } else {
+                message_id.clone().into_iter().collect()
+            };
+            drop(response_cursor);
             drop(ids);
             self.observed
                 .lock()
@@ -740,7 +770,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     operation: operation.into(),
                     channel: self.scope.channel.clone(),
                     conversation,
-                    reply_to_id: field("reply_to_message_id"),
+                    reply_to_id,
                     thread_id,
                     payload_kinds: if payload_kind.is_empty() { vec![] } else { vec![payload_kind.into()] },
                     platform_message_ids,
