@@ -1533,6 +1533,36 @@ fn oversized_jpeg_with_dimensions() -> Vec<u8> {
     bytes
 }
 
+#[test]
+fn telegram_image_dimensions_reads_png_and_jpeg_headers_safely() {
+    let mut png = vec![0; 24];
+    png[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+    png[16..20].copy_from_slice(&640_u32.to_be_bytes());
+    png[20..24].copy_from_slice(&480_u32.to_be_bytes());
+    assert_eq!(telegram_image_dimensions("image/png", &png), Some((640, 480)));
+    assert_eq!(telegram_image_dimensions("image/gif", &png), None);
+    assert_eq!(telegram_image_dimensions("image/png", b"not png"), None);
+
+    let mut jpeg = vec![0xff, 0xd8, 0x00, 0xff, 0xff, 0xd8, 0xff, 0xd9, 0xff, 0x01];
+    jpeg.extend_from_slice(&[0xff, 0xd0, 0xff, 0xe0, 0x00, 0x02]);
+    jpeg.extend_from_slice(&[0xff, 0xc0, 0x00, 0x11, 0x08, 0x01, 0xe0, 0x02, 0x80]);
+    assert_eq!(telegram_image_dimensions("image/jpeg", &jpeg), Some((640, 480)));
+
+    assert_eq!(telegram_image_dimensions("image/jpeg", &[0xff, 0xd8, 0xff]), None);
+    assert_eq!(
+        telegram_image_dimensions("image/jpeg", &[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x01]),
+        None
+    );
+    assert_eq!(
+        telegram_image_dimensions("image/jpeg", &[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]),
+        None
+    );
+    assert_eq!(
+        telegram_image_dimensions("image/jpeg", &[0xff, 0xd8, 0xff, 0xe0, 0x00, 0x02]),
+        None
+    );
+}
+
 #[tokio::test]
 async fn typed_send_receipt_uses_actual_telegram_ids_and_full_address() {
     let server = mock_api().await;
