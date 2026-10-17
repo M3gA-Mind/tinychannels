@@ -76,6 +76,7 @@ pub enum MediaKind {
 pub struct MediaReference {
     /// Stable host-owned identifier for media stored outside the channel
     /// provider. It is safe to persist and does not imply a shared filesystem.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub opaque_id: Option<String>,
     pub path: Option<String>,
     pub url: Option<String>,

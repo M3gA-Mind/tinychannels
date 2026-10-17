@@ -124,6 +124,24 @@ async fn provider_transcript_wins_without_replacing_stored_audio() {
 }
 
 #[tokio::test]
+async fn completed_host_transcript_survives_replay_without_stt_port() {
+    let mut note = stored_voice();
+    note.transcript = Some(VoiceTranscript {
+        text: "persisted words".into(),
+        language: Some("en".into()),
+        state: VoiceTranscriptState::Complete,
+        source: VoiceTranscriptSource::HostStt,
+    });
+    let media = note.media.clone();
+
+    let status = enrich_voice_note(&mut note, scope(), None, None).await;
+
+    assert_eq!(status, VoiceEnrichmentStatus::HostTranscription);
+    assert_eq!(note.media, media);
+    assert_eq!(note.transcript.unwrap().text, "persisted words");
+}
+
+#[tokio::test]
 async fn host_transcription_attaches_text_to_the_existing_media_reference() {
     let mut note = stored_voice();
     let media = note.media.clone();

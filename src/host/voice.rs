@@ -7,9 +7,10 @@ use tinychannels_bus::{
 };
 
 /// Product voice mode supplied by the host for the active scoped turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum VoiceReplyMode {
     /// Reply with speech only when the inbound turn included a voice note.
+    #[default]
     Mirror,
     /// Always synthesize a spoken reply.
     Always,
@@ -35,12 +36,14 @@ pub async fn enrich_voice_note(
     request: Option<TranscriptionRequest>,
     transcriber: Option<Arc<dyn Transcriber>>,
 ) -> VoiceEnrichmentStatus {
-    if note.transcript.as_ref().is_some_and(|transcript| {
-        transcript.source == VoiceTranscriptSource::Provider
-            && transcript.state == VoiceTranscriptState::Complete
-            && !transcript.text.trim().is_empty()
+    if let Some(transcript) = note.transcript.as_ref().filter(|transcript| {
+        transcript.state == VoiceTranscriptState::Complete && !transcript.text.trim().is_empty()
     }) {
-        return VoiceEnrichmentStatus::ProviderTranscript;
+        return if transcript.source == VoiceTranscriptSource::Provider {
+            VoiceEnrichmentStatus::ProviderTranscript
+        } else {
+            VoiceEnrichmentStatus::HostTranscription
+        };
     }
 
     let Some((request, transcriber)) = request.zip(transcriber) else {
