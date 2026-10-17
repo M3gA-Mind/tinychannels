@@ -42,7 +42,7 @@ fn usage_defaults_and_unknown_costs_match_the_harness_wire_contract() {
     .unwrap();
     assert_eq!(usage.cost_source, WebCostSource::Charged);
     let serialized = serde_json::to_value(usage).unwrap();
-    assert!(serialized["cost_usd"].is_null());
+    assert_eq!(serialized.get("cost_usd"), Some(&serde_json::Value::Null));
     assert_eq!(serialized["cost_source"], "charged");
     let child = WebSubagentUsagePayload {
         task_id: "child".into(),
@@ -51,7 +51,8 @@ fn usage_defaults_and_unknown_costs_match_the_harness_wire_contract() {
         output_tokens: 0,
         cost_usd: None,
     };
-    assert!(serde_json::to_value(child).unwrap()["cost_usd"].is_null());
+    let child = serde_json::to_value(child).unwrap();
+    assert_eq!(child.get("cost_usd"), Some(&serde_json::Value::Null));
 }
 
 #[test]
@@ -143,6 +144,27 @@ fn timing_rate_is_finite_and_requires_a_positive_duration() {
 }
 
 #[test]
+fn timing_state_keeps_firsts_round_one_counts_snapshot_and_throttle() {
+    let mut timing = TurnTimingState::default();
+    assert!(!timing.text_delta(10, "  ", 1));
+    assert!(timing.text_delta(20, "hé", 1));
+    assert!(!timing.text_delta(25, "again", 1));
+    assert!(!timing.text_delta(30, "later", 2));
+    assert!(timing.tool_call(40));
+    assert!(!timing.tool_call(60));
+    let snapshot = timing.snapshot(100);
+    assert_eq!(snapshot.first_token_ms, Some(20));
+    assert_eq!(snapshot.first_tool_ms, Some(40));
+    assert_eq!(snapshot.round_one_narration_chars, 7);
+    assert_eq!(snapshot.into_payload(Some(4)).tokens_per_second, Some(40.0));
+
+    let mut throttle = TurnCostThrottle::default();
+    assert!(throttle.should_emit(0));
+    assert!(!throttle.should_emit(749));
+    assert!(throttle.should_emit(750));
+}
+
+#[test]
 fn web_events_keep_ordered_typed_media_and_voice_parts() {
     use crate::channel::{ContentPart, MediaKind, MediaReference, OutboundContentPart, VoiceNote};
 
@@ -193,20 +215,43 @@ fn web_events_keep_ordered_typed_media_and_voice_parts() {
 fn schema_export_is_deterministic_and_contains_every_variant() {
     let schema = web_event_schema_json().unwrap();
     assert_eq!(schema, web_event_schema_json().unwrap());
-    for event in [
-        "chat_done",
-        "chat_error",
-        "chat_cancelled",
-        "proactive_message",
-        "voice_speak",
-        "subagent_completed",
-        "approval_request",
-        "chat_message",
-        "chat_segment",
-    ] {
-        assert!(schema.contains(event), "schema omitted {event}");
+    let schema: serde_json::Value = serde_json::from_str(&schema).unwrap();
+    let schema_text = schema.to_string();
+    for event in HISTORICAL_EVENT_NAMES {
+        assert!(schema_text.contains(event), "schema omitted {event}");
     }
-    assert!(schema.contains("OutboundContentPart"));
+    for type_name in ["OutboundContentPart", "MediaReference", "VoiceNote"] {
+        assert!(schema_text.contains(type_name), "schema omitted {type_name}");
+    }
+}
+
+const HISTORICAL_EVENT_NAMES: &[&str] = &[
+    "chat_done", "chat_interim", "chat_suggestions", "chat_error", "chat_cancelled",
+    "text_delta", "thinking_delta", "tool_args_delta", "inference_start",
+    "inference_heartbeat", "iteration_start", "tool_call", "tool_progress", "tool_result",
+    "turn_cost", "subagent_spawned", "subagent_completed", "subagent_failed",
+    "subagent_awaiting_user", "subagent_iteration_start", "subagent_tool_call",
+    "subagent_tool_result", "subagent_text_delta", "subagent_thinking_delta",
+    "approval_request", "approval_decided", "plan_review_request", "plan_review_decided",
+    "queue_item_queued", "queue_item_delivered", "queue_item_removed", "thread_goal_updated",
+    "thread_goal_cleared", "thread_todos_changed", "run_mode_changed", "artifact_ready",
+    "artifact_failed", "artifact_pending", "memory_activity", "external_transfer_pending",
+    "proactive_message", "voice_speak", "user_error", "chat_message", "chat_segment",
+];
+
+#[test]
+fn every_historical_discriminator_has_a_strongly_tagged_variant() {
+    for name in HISTORICAL_EVENT_NAMES {
+        let fixture = serde_json::json!({
+            "event": name,
+            "client_id": "client",
+            "thread_id": "thread",
+            "request_id": "request"
+        });
+        let parsed: WebChannelEvent = serde_json::from_value(fixture)
+            .unwrap_or_else(|error| panic!("{name} rejected: {error}"));
+        assert_eq!(serde_json::to_value(parsed).unwrap()["event"], *name);
+    }
 }
 
 #[test]
