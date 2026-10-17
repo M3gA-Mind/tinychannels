@@ -167,7 +167,10 @@ fn declare_feature(fixture: &mut Fixture, feature: ConformanceFeature) {
         ConformanceFeature::Typing => capabilities.actions.supported.push("typing".into()),
         ConformanceFeature::Reactions => capabilities.reactions = true,
         ConformanceFeature::InboundReactions => {
-            capabilities.events.supported.push("reaction".into());
+            capabilities
+                .events
+                .supported
+                .extend(["reaction_added".into(), "reaction_removed".into()]);
         }
         ConformanceFeature::Edit => capabilities.actions.supported.push("edit".into()),
         ConformanceFeature::Delete => capabilities.actions.supported.push("delete".into()),
@@ -677,9 +680,10 @@ fn each_canonical_feature_uses_its_contract_capability() {
             ConformanceFeature::ThreadAddressing => capabilities.addressing.thread_id = true,
             ConformanceFeature::Typing => capabilities.actions.supported.push("typing".into()),
             ConformanceFeature::Reactions => capabilities.reactions = true,
-            ConformanceFeature::InboundReactions => {
-                capabilities.events.supported.push("reaction".into())
-            }
+            ConformanceFeature::InboundReactions => capabilities
+                .events
+                .supported
+                .extend(["reaction_added".into(), "reaction_removed".into()]),
             ConformanceFeature::Edit => capabilities.actions.supported.push("edit".into()),
             ConformanceFeature::Delete => capabilities.actions.supported.push("unsend".into()),
             ConformanceFeature::ReadReceipts => {

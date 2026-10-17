@@ -1187,7 +1187,6 @@ impl ConfiguredAdapterHandle {
             .as_deref()
             .map(|adapter| adapter as &dyn tinychannels::channel::ChannelDelete)
     }
-
 }
 
 pub(crate) struct ConfiguredAdapterFactory;
