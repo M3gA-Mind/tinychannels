@@ -89,6 +89,8 @@ pub(crate) fn infer_attachment_mime(target: &str) -> Option<&'static str> {
         "csv" => Some("text/csv"),
         "json" => Some("application/json"),
         "zip" => Some("application/zip"),
+        "docx" => Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        "xlsx" => Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
         _ => None,
     }
 }
