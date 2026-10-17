@@ -204,7 +204,19 @@ impl ProgressiveSender for Sender {
         sequence: u64,
     ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
     {
-        send_typed_part(self, channel, parts, text, context, sequence, 0, false).await
+        send_typed_part(
+            self,
+            TypedPartRequest {
+                channel,
+                parts,
+                text,
+                context,
+                sequence,
+                segment_index: 0,
+                final_phase: false,
+            },
+        )
+        .await
     }
 
     async fn should_synthesize_final(
@@ -250,13 +262,15 @@ impl ProgressiveSender for Sender {
     {
         send_typed_part(
             self,
-            channel,
-            parts,
-            text,
-            context,
-            sequence,
-            segment_index,
-            false,
+            TypedPartRequest {
+                channel,
+                parts,
+                text,
+                context,
+                sequence,
+                segment_index,
+                final_phase: false,
+            },
         )
         .await
     }
@@ -273,13 +287,15 @@ impl ProgressiveSender for Sender {
     {
         send_typed_part(
             self,
-            channel,
-            parts,
-            text,
-            context,
-            sequence,
-            segment_index,
-            true,
+            TypedPartRequest {
+                channel,
+                parts,
+                text,
+                context,
+                sequence,
+                segment_index,
+                final_phase: true,
+            },
         )
         .await
     }
@@ -393,16 +409,29 @@ impl ProgressiveSender for Sender {
     }
 }
 
-async fn send_typed_part(
-    sender: &Sender,
-    channel: &str,
-    parts: &[tinychannels_bus::OutboundContentPart],
-    text: &str,
-    context: Option<&ProgressiveOutputContext>,
+struct TypedPartRequest<'a> {
+    channel: &'a str,
+    parts: &'a [tinychannels_bus::OutboundContentPart],
+    text: &'a str,
+    context: Option<&'a ProgressiveOutputContext>,
     sequence: u64,
     segment_index: u32,
     final_phase: bool,
+}
+
+async fn send_typed_part(
+    sender: &Sender,
+    request: TypedPartRequest<'_>,
 ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
+    let TypedPartRequest {
+        channel,
+        parts,
+        text,
+        context,
+        sequence,
+        segment_index,
+        final_phase,
+    } = request;
     let mut prepared_parts = parts.to_vec();
     let mut prepared_text = text.to_owned();
     if let Some(context) = context {
@@ -555,7 +584,7 @@ async fn send_typed_part(
                         } else if let Some(url) =
                             prepared.accessible_url.filter(|url| !url.trim().is_empty())
                         {
-                            prepared_text.push_str("\n");
+                            prepared_text.push('\n');
                             prepared_text.push_str(&url);
                         } else {
                             prepared_text.push_str(
