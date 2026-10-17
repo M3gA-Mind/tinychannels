@@ -12,10 +12,6 @@ use serde_json::Value;
 /// A channel controller operation dispatched through TinyChannels' own
 /// `tinychannels::ChannelManager` inside the loaded module.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "backend request preserves complete transport DTOs without boxing"
-)]
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
 pub enum ChannelControllerRequest {
     /// Connect one channel after validating credentials in the module.
@@ -117,10 +113,6 @@ pub enum ChannelControllerRequest {
 
 /// Typed result from a module-dispatched channel controller operation.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[allow(
-    clippy::large_enum_variant,
-    reason = "backend result preserves complete typed transport facts without boxing"
-)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ChannelControllerResult {
     /// Result for a Connect request.
@@ -151,6 +143,10 @@ pub enum ChannelControllerResult {
 /// Provider validation and protocol calls stay in TinyChannels; the host only
 /// supplies config persistence and managed backend operations.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "backend request preserves complete transport DTOs without boxing"
+)]
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
 pub enum ChannelBackendRequest {
     /// Access only host-owned conversations, history, and session caches.
@@ -184,6 +180,10 @@ pub enum ChannelBackendRequest {
 
 /// Results from narrow host-owned controller capabilities.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "backend result preserves complete typed transport facts without boxing"
+)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ChannelBackendResult {
     RemoteControl(crate::module_remote::RemoteHostResult),
