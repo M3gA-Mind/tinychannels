@@ -252,6 +252,9 @@ pub fn build_channels(
         if let Some(store) = host.voice_media_store() {
             telegram = telegram.with_voice_media_store(store);
         }
+        if let Some(repository) = host.media_repository() {
+            telegram = telegram.with_media_repository(repository);
+        }
         telegram = telegram.with_voice_synthesis(
             host.synthesizer().is_some()
                 && host.voice_codec().is_some()

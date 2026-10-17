@@ -507,36 +507,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         scope.configured_instance.clone_from(&self.1);
         scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         scope.channel.account_id = Some(self.1.clone());
-        if !opaque_id.starts_with("tinychannels_media_v1_") {
-            return self
-                .0
-                .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
-                    scope,
-                    opaque_id,
-                    max_bytes: 8 * 1024 * 1024,
-                })
-                .await
-                .map_err(|error| {
-                    anyhow::anyhow!(
-                        "legacy scoped voice media is unavailable: {:?}",
-                        error.kind()
-                    )
-                });
-        }
-        let storage = self.0.storage().await.map_err(|error| {
-            anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind())
-        })?;
-        let media_store = tinychannels::host::ScopedMediaStore::new(
-            Arc::clone(storage.documents()),
-            Arc::clone(storage.blobs()),
-        );
-        let stored = media_store.read(scope, &opaque_id, 8 * 1024 * 1024).await?;
-        use base64::Engine;
-        Ok(tinychannels_bus::HostReadVoiceMediaResult {
-            audio_base64: base64::engine::general_purpose::STANDARD.encode(stored.bytes),
-            mime_type: stored.content_type,
-            file_name: stored.file_name,
-        })
+        read_scoped_voice_media(&self.0, scope, opaque_id, 8 * 1024 * 1024).await
     }
 }
 
@@ -545,6 +516,40 @@ fn validate_voice_scope(scope: &tinychannels_bus::HostVoiceScope) -> anyhow::Res
         anyhow::bail!("voice callback requires a conversation and turn identity");
     }
     Ok(())
+}
+
+async fn read_scoped_voice_media(
+    host: &HostChannels,
+    scope: tinychannels_bus::HostVoiceScope,
+    opaque_id: String,
+    max_bytes: u64,
+) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+    if !opaque_id.starts_with("tinychannels_media_v1_") {
+        return host
+            .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
+                scope,
+                opaque_id,
+                max_bytes,
+            })
+            .await
+            .map_err(|error| {
+                anyhow::anyhow!("legacy scoped voice media is unavailable: {:?}", error.kind())
+            });
+    }
+    let storage = host.storage().await.map_err(|error| {
+        anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind())
+    })?;
+    let media_store = tinychannels::host::ScopedMediaStore::new(
+        Arc::clone(storage.documents()),
+        Arc::clone(storage.blobs()),
+    );
+    let stored = media_store.read(scope, &opaque_id, max_bytes).await?;
+    use base64::Engine;
+    Ok(tinychannels_bus::HostReadVoiceMediaResult {
+        audio_base64: base64::engine::general_purpose::STANDARD.encode(stored.bytes),
+        mime_type: stored.content_type,
+        file_name: stored.file_name,
+    })
 }
 
 pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String);
@@ -622,14 +627,13 @@ impl tinychannels::host::EventSink for ModuleEvents {
                         turn_id: envelope.message_id.clone(),
                     };
                     let request = if let Some(opaque_id) = voice_note.media.opaque_id.clone() {
-                        match self
-                            .0
-                            .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
-                                scope: scope.clone(),
-                                opaque_id,
-                                max_bytes: 8 * 1024 * 1024,
-                            })
-                            .await
+                        match read_scoped_voice_media(
+                            &self.0,
+                            scope.clone(),
+                            opaque_id,
+                            8 * 1024 * 1024,
+                        )
+                        .await
                         {
                             Ok(audio) => Some(tinychannels::host::TranscriptionRequest {
                                 audio_base64: audio.audio_base64,
