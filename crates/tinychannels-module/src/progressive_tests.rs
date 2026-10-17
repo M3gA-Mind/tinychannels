@@ -1376,6 +1376,124 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
 }
 
 #[tokio::test]
+async fn media_without_receipt_is_unknown_and_stops_terminal_batch() {
+    let (base, callback) = fixture(false).await;
+    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(
+        tinychannels_bus::channel::ChannelSendOutcome::default(),
+    )]
+    .into();
+    let configured = Arc::new(Mutex::new(HashMap::new()));
+    configured.lock().await.insert(
+        "discord:no-receipt".to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities: tinychannels_bus::ChannelCapabilities::default(),
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            base.host.clone(),
+        ),
+    );
+    let replies = Replies::new(base.host.clone(), configured);
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:no-receipt".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "no-receipt-turn".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected opened output")
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![
+                ChannelOutputEvent::Media {
+                    text: None,
+                    parts: vec![],
+                },
+                ChannelOutputEvent::FinalMessage {
+                    text: "must not send".into(),
+                    parts: vec![],
+                    receipt: None,
+                },
+            ],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result,
+        ProgressiveResult::DeliveryBatch { outcomes, failure: Some(_), .. }
+            if outcomes.len() == 1 && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
+    ));
+    assert_eq!(callback.sends.lock().await.len(), 1);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancellation_retains_prior_media_receipt() {
+    let (base, callback) = fixture(false).await;
+    let configured = Arc::new(Mutex::new(HashMap::new()));
+    configured.lock().await.insert(
+        "discord:media-cancel".to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities: tinychannels_bus::ChannelCapabilities::default(),
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            base.host.clone(),
+        ),
+    );
+    let replies = Replies::new(base.host.clone(), configured);
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:media-cancel".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "media-cancel-turn".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected opened output")
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![
+                ChannelOutputEvent::Media {
+                    text: None,
+                    parts: vec![],
+                },
+                ChannelOutputEvent::Cancellation { reason: None },
+            ],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result,
+        ProgressiveResult::DeliveryOutcome { outcome }
+            if outcome.receipt.platform_message_ids == ["fixture-message"]
+    ));
+    assert_eq!(callback.sends.lock().await.len(), 1);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn native_approval_and_clarification_events_deliver_prompts() {
     let (base, callback) = fixture(false).await;
     let configured = Arc::new(Mutex::new(HashMap::new()));
