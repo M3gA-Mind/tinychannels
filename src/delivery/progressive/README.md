@@ -36,6 +36,16 @@ delete token. A missing or partial receipt disables retries for that ephemeral
 stream but does not suppress the independent final reply. An explicit
 `Unavailable` result means no attempt occurred and may be retried on a later
 tick. An ambiguous edit or delete does not trigger a replacement send.
+Filler status sends stop after eight attempts per turn, independently of the
+host-selected scoped output lease, and all known receipt parts remain available
+for cleanup.
+
+The host supplies a scoped output lease that covers its turn backstop and closes
+the handle on completion/error. The module validates that the nonzero deadline
+is representable and uses it for worker cleanup; it does not add a second
+scoped turn timeout. Legacy opens retain their 180-second compatibility
+lifetime. Active and retained handle counts remain bounded, and completed
+terminal results are process-local replay data that can be evicted at capacity.
 
 Approval and clarification prompts are delivered as text for native channels;
 their original correlation data remains in the typed output observation. Tool

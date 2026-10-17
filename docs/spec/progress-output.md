@@ -34,11 +34,15 @@ means no provider attempt occurred and may be retried on a later timer tick.
 part using its receipt authority.
 
 Scoped opens carry the host-selected turn ID, configured `ChannelRef` including
-account identity, and complete `ConversationRef`. The module checks the
-configured account key and provider before opening; send, edit, delete, typing,
-and observation requests retain that scope. Bridge idempotency keys include
-the event sequence and full channel/conversation scope. Replaying one event
-must reuse its sequence; each new event must advance it.
+account identity, complete `ConversationRef`, and required `lifetimeMs` lease.
+The host chooses a lease that covers its runner backstop and closes the handle
+when the turn completes or errors; the module rejects zero or unrepresentable
+deadlines and does not impose another scoped turn timeout. Legacy `Open` keeps
+its 180-second compatibility lifetime. The module checks the configured
+account key and provider before opening; send, edit, delete, typing, and
+observation requests retain that scope. Bridge idempotency keys include the
+event sequence and full channel/conversation scope. Replaying one event must
+reuse its sequence; each new event must advance it.
 
 Typed provider sends include a stable per-turn scoped sequence key. A terminal
 feed is fingerprinted before dispatch; an identical retry waits for or returns
@@ -49,9 +53,14 @@ caller-supplied batch identity or retained replay contract: a repeated call
 after a lost reply is a new delivery and must not be blindly retried. A host
 may retry the exact typed transport request with its stable key, but it must
 reconcile ambiguous nonterminal feed results before resubmitting events. This
-is in-process terminal retention, not crash recovery. Scoped opens currently resolve a
-local configured channel instance. Managed/relay provider descriptors and web
-surface registration are supplied by their owning host integrations.
+is in-process terminal retention, not crash recovery. Scoped opens currently
+resolve a local configured channel instance. Managed/relay provider
+descriptors and web surface registration are supplied by their owning host
+integrations. Open handles are bounded by active and retained-entry limits;
+completed entries may be evicted when retention is at capacity. Filler status
+sends are independently limited to eight attempts per turn, while all known
+receipt parts remain retained for cleanup; this limit does not cap the host
+lease or final delivery.
 If the harness `Agent.run` call returns an error before `TurnCompleted`, the
 host closes that turn with `Close`; this control cleans up owned drafts and
 ephemeral status messages without sending a replacement reply. `Lifecycle`
