@@ -1,7 +1,10 @@
 //! Posting and progressively editing the evolving draft reply bubble.
 
 use super::latch::{channel_edits_unsupported, mark_channel_edits_unsupported};
-use super::state::{StreamingState, extract_message_ids, extract_message_receipt};
+use super::state::{
+    StreamingState, extract_message_ids, extract_message_receipt, extract_message_receipt_or_ids,
+    message_receipt_ids,
+};
 use super::{MAX_EDIT_FAILURES, ProgressiveSendError, ProgressiveSender};
 
 /// Post or edit the draft carrying the latest buffered text. The first call
@@ -106,8 +109,13 @@ pub(super) async fn flush_streaming_edit(
             // A message reached the user: record that before looking for an
             // id, so finalize never posts a second bubble.
             state.draft_sent = true;
-            let ids = extract_message_ids(&resp);
-            state.message_receipt = extract_message_receipt(&resp);
+            state.message_receipt =
+                extract_message_receipt_or_ids(&resp).or_else(|| extract_message_receipt(&resp));
+            let ids = state
+                .message_receipt
+                .as_ref()
+                .map(message_receipt_ids)
+                .unwrap_or_else(|| extract_message_ids(&resp));
             if let Some(id) = ids.first().cloned() {
                 tracing::debug!(
                     "[channel-inbound][stream] initial draft sent channel='{}' msg_id={}",

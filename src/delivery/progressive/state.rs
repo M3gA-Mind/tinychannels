@@ -200,8 +200,23 @@ pub fn extract_message_receipt(
     let receipt_value = resp
         .get("receipt")
         .or_else(|| resp.get("data").and_then(|data| data.get("receipt")))
-        .cloned()?;
-    serde_json::from_value(receipt_value).ok()
+        .or_else(|| {
+            // The typed transport serializes MessageReceipt directly. Require
+            // receipt-specific fields before deserializing: serde defaults
+            // would otherwise turn any legacy success object into a receipt.
+            let direct_receipt = resp.get("primaryPlatformMessageId").is_some()
+                || resp.get("platformMessageIds").is_some()
+                || resp
+                    .get("parts")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|parts| {
+                        parts
+                            .iter()
+                            .any(|part| part.get("platformMessageId").is_some())
+                    });
+            direct_receipt.then_some(resp)
+        })?;
+    serde_json::from_value(receipt_value.clone()).ok()
 }
 
 /// Build cleanup authority from a normalized receipt or a legacy response

@@ -2543,7 +2543,7 @@ async fn module_outcome_receipts_keep_all_draft_edit_and_close_tokens() {
             ..Default::default()
         }),
         primary_platform_message_id: Some("draft-a".into()),
-        platform_message_ids: vec!["draft-a".into(), "draft-b".into()],
+        platform_message_ids: vec!["draft-a".into()],
         parts: vec![
             tinychannels_bus::channel::MessageReceiptPart {
                 platform_message_id: "draft-a".into(),
@@ -2551,14 +2551,6 @@ async fn module_outcome_receipts_keep_all_draft_edit_and_close_tokens() {
                 index: 0,
                 edit_token: Some("edit-a".into()),
                 delete_token: Some("delete-a".into()),
-                ..Default::default()
-            },
-            tinychannels_bus::channel::MessageReceiptPart {
-                platform_message_id: "draft-b".into(),
-                kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
-                index: 1,
-                edit_token: Some("edit-b".into()),
-                delete_token: Some("delete-b".into()),
                 ..Default::default()
             },
         ],
@@ -2626,7 +2618,7 @@ async fn module_outcome_receipts_keep_all_draft_edit_and_close_tokens() {
         })
         .cloned()
         .collect::<Vec<_>>();
-    assert_eq!(edits.len(), 2, "both draft and thinking bubble are edited");
+    assert_eq!(edits.len(), 1, "the editable draft is updated in place");
     assert!(edits.iter().all(|actual| actual == &receipt));
 
     replies
@@ -2641,14 +2633,88 @@ async fn module_outcome_receipts_keep_all_draft_edit_and_close_tokens() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(deletes.len(), 4, "both parts of both bubbles are deleted");
-    for (id, token) in [("draft-a", "delete-a"), ("draft-b", "delete-b")] {
-        assert!(deletes.iter().any(|receipt| {
-            receipt.platform_message_ids == [id]
-                && receipt.parts.len() == 1
-                && receipt.parts[0].delete_token.as_deref() == Some(token)
-                && receipt.idempotency_key.as_deref() == Some("draft-op-1")
-                && receipt.thread_id.as_deref() == Some("thread-7")
+    assert_eq!(deletes.len(), 1, "the draft is deleted on close");
+    assert_eq!(deletes[0], &receipt);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn module_outcome_multipart_draft_close_deletes_every_provider_part() {
+    let (replies, callback) = fixture(false).await;
+    let parts = vec![
+        tinychannels_bus::channel::MessageReceiptPart {
+            platform_message_id: "draft-a".into(),
+            kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
+            index: 0,
+            edit_token: Some("edit-a".into()),
+            delete_token: Some("delete-a".into()),
+            ..Default::default()
+        },
+        tinychannels_bus::channel::MessageReceiptPart {
+            platform_message_id: "draft-b".into(),
+            kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
+            index: 1,
+            edit_token: Some("edit-b".into()),
+            delete_token: Some("delete-b".into()),
+            ..Default::default()
+        },
+    ];
+    let receipt = tinychannels_bus::channel::MessageReceipt {
+        idempotency_key: Some("multipart-draft".into()),
+        primary_platform_message_id: Some("draft-a".into()),
+        platform_message_ids: vec!["draft-a".into(), "draft-b".into()],
+        parts: parts.clone(),
+        ..Default::default()
+    };
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Outcome(Box::new(
+        tinychannels_bus::channel::ChannelSendOutcome {
+            receipt: receipt.clone(),
+            ..Default::default()
+        },
+    )));
+    let handle = open_scoped(
+        &replies,
+        "discord:multipart-account",
+        "multipart-turn",
+        tinychannels_bus::ChannelCapabilities {
+            progressive_edits: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "draft".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+
+    let requests = callback.requests.lock().await;
+    let deletes = requests
+        .iter()
+        .filter_map(|request| match request {
+            ProgressiveTransportRequest::Delete { receipt, .. } => receipt.as_ref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(deletes.len(), 2);
+    for part in parts {
+        assert!(deletes.iter().any(|actual| {
+            actual.platform_message_ids == [part.platform_message_id.as_str()]
+                && actual.parts == [part.clone()]
+                && actual.idempotency_key.as_deref() == Some("multipart-draft")
         }));
     }
     replies.shutdown().await.unwrap();
