@@ -118,6 +118,8 @@ pub mod host_methods {
     /// `StoreVoiceMedia` — persist voice media and return a durable host reference.
     pub const STORE_VOICE_MEDIA: &str = "StoreVoiceMedia";
     pub const READ_VOICE_MEDIA: &str = "ReadVoiceMedia";
+    /// Host-selected voice reply mode and authoritative turn facts.
+    pub const GET_VOICE_REPLY_POLICY: &str = "GetVoiceReplyPolicy";
     /// `PublishEvent` — publish one provider event through the host event sink.
     pub const PUBLISH_EVENT: &str = "PublishEvent";
     /// Call a narrow host credential or managed API capability. Durable state is not
@@ -167,7 +169,7 @@ pub const METHODS: [&str; 37] = [
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 8] = [
+pub const HOST_METHODS: [&str; 13] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,
@@ -176,6 +178,11 @@ pub const HOST_METHODS: [&str; 8] = [
     host_methods::DISPATCH_CONTROLLER_BACKEND,
     host_methods::PROCESS_INBOUND,
     host_methods::DELIVER_EVENT,
+    host_methods::TRANSCRIBE_VOICE,
+    host_methods::SYNTHESIZE_SPEECH,
+    host_methods::STORE_VOICE_MEDIA,
+    host_methods::READ_VOICE_MEDIA,
+    host_methods::GET_VOICE_REPLY_POLICY,
 ];
 
 #[cfg(test)]

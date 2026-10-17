@@ -151,6 +151,9 @@ pub struct HostVoiceReplyPolicy {
     pub explicitly_requested: bool,
 }
 
+/// Host reply-policy callback name.
+pub const GET_VOICE_REPLY_POLICY: &str = "GetVoiceReplyPolicy";
+
 /// An event published by a provider through the host's event sink.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HostEventPublication {

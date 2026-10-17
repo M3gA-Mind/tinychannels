@@ -475,6 +475,15 @@ impl HostChannels {
             .await
     }
 
+    /// Resolve host-authoritative voice policy for the active scoped turn.
+    pub async fn voice_reply_policy(
+        &self,
+        request: tinychannels_bus::HostVoiceReplyPolicyRequest,
+    ) -> Result<tinychannels_bus::HostVoiceReplyPolicy> {
+        self.voice_callback(host_methods::GET_VOICE_REPLY_POLICY, request)
+            .await
+    }
+
     /// Call the loaded TinyVoice codec module over its minimal bus contract.
     pub async fn transcode_voice(
         &self,
