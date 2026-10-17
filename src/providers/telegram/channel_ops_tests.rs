@@ -7,7 +7,9 @@ use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 struct VoiceReadFixture;
-struct LargeVoiceReadFixture;
+struct LargeVoiceReadFixture {
+    expected_scope: tinychannels_bus::HostVoiceScope,
+}
 
 #[test]
 fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() {
@@ -70,8 +72,22 @@ impl crate::host::VoiceMediaStore for VoiceReadFixture {
         scope: tinychannels_bus::HostVoiceScope,
         opaque_id: String,
     ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
-        assert_eq!(scope.conversation.id, "100");
-        assert_eq!(scope.turn_id, "turn-7");
+        assert_eq!(scope, tinychannels_bus::HostVoiceScope {
+            configured_instance: "telegram:bot-1".into(),
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some("telegram:bot-1".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "100".into(),
+                scope_id: Some("scope-9".into()),
+                parent_id: Some("parent-4".into()),
+                thread_id: Some("thread-5".into()),
+                topic_id: Some("77".into()),
+            },
+            turn_id: "turn-7".into(),
+        });
         assert_eq!(opaque_id, "host-media-1");
         Ok(tinychannels_bus::HostReadVoiceMediaResult {
             audio_base64: "AQIDBA==".into(),
@@ -92,9 +108,10 @@ impl crate::host::VoiceMediaStore for LargeVoiceReadFixture {
 
     async fn read_voice(
         &self,
-        _scope: tinychannels_bus::HostVoiceScope,
+        scope: tinychannels_bus::HostVoiceScope,
         opaque_id: String,
     ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        assert_eq!(scope, self.expected_scope);
         assert_eq!(opaque_id, "large-opaque-voice");
         let bytes = vec![0x5a_u8; 129 * 1024];
         assert!(bytes.len() > tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
@@ -115,18 +132,31 @@ async fn telegram_resolves_and_uploads_voice_larger_than_inline_intent_limit() {
         ok_with(serde_json::json!({"message_id": 53})),
     )
     .await;
+    let expected_conversation = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Dm,
+        id: "100".into(),
+        scope_id: Some("scope-9".into()),
+        parent_id: Some("parent-4".into()),
+        thread_id: Some("thread-5".into()),
+        topic_id: Some("77".into()),
+    };
+    let expected_channel = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram:bot-1".into()),
+    };
+    let expected_scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "telegram:bot-1".into(),
+        channel: expected_channel.clone(),
+        conversation: expected_conversation.clone(),
+        turn_id: "large-voice-origin-turn".into(),
+    };
     let channel = channel_for(&server, &["*"])
-        .with_voice_media_store(Arc::new(LargeVoiceReadFixture));
+        .with_voice_media_store(Arc::new(LargeVoiceReadFixture { expected_scope }));
     let message = tinychannels_bus::ChannelOutboundMessage {
         channel_id: "telegram".into(),
         conversation_id: "100".into(),
-        channel_ref: None,
-        conversation_ref: Some(tinychannels_bus::ConversationRef {
-            kind: tinychannels_bus::ConversationKind::Dm,
-            id: "100".into(),
-            topic_id: Some("77".into()),
-            ..Default::default()
-        }),
+        channel_ref: Some(expected_channel),
+        conversation_ref: Some(expected_conversation),
         reply_to_id: Some("42".into()),
         thread_id: None,
         turn_id: Some("large-voice-origin-turn".into()),
