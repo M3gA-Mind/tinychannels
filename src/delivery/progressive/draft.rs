@@ -117,10 +117,11 @@ pub(super) async fn flush_streaming_edit(
                 state.message_id = Some(id.clone());
                 state.message_ids = ids;
                 if state.message_receipt.is_none() {
-                    let mut receipt = tinychannels_bus::channel::MessageReceipt::default();
-                    receipt.primary_platform_message_id = Some(id.clone());
-                    receipt.platform_message_ids = state.message_ids.clone();
-                    state.message_receipt = Some(receipt);
+                    state.message_receipt = Some(tinychannels_bus::channel::MessageReceipt {
+                        primary_platform_message_id: Some(id.clone()),
+                        platform_message_ids: state.message_ids.clone(),
+                        ..Default::default()
+                    });
                 }
                 if state.message_ids.len() > 1 {
                     // A draft assembled from several provider messages is not

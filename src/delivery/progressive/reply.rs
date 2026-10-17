@@ -230,11 +230,11 @@ impl ProgressiveReply {
                 outcome,
             )));
         }
-        if parts.is_empty() {
-            if let Some(outcome) = self.finalize_existing_text(text).await? {
-                dispatch.push_outcome(outcome);
-                return Ok(dispatch);
-            }
+        if parts.is_empty()
+            && let Some(outcome) = self.finalize_existing_text(text).await?
+        {
+            dispatch.push_outcome(outcome);
+            return Ok(dispatch);
         }
         let parts = if parts.is_empty() {
             vec![tinychannels_bus::OutboundContentPart::Content {
@@ -297,7 +297,7 @@ impl ProgressiveReply {
                 markdown_dialect: None,
             },
         };
-        match self.send_content_parts(&[part.clone()], text).await {
+        match self.send_content_parts(std::slice::from_ref(&part), text).await {
             Ok(outcome) => dispatch.push_outcome(outcome),
             Err(super::ProgressiveSendError::UnsupportedContent) => dispatch.unsupported.push(part),
             Err(error) => return Err(error),
@@ -419,10 +419,10 @@ impl ProgressiveReply {
                 )
                 .await;
                 let mut thinking_ids = std::mem::take(&mut self.state.thinking_message_ids);
-                if let Some(id) = self.state.thinking_message_id.take() {
-                    if !thinking_ids.contains(&id) {
-                        thinking_ids.push(id);
-                    }
+                if let Some(id) = self.state.thinking_message_id.take()
+                    && !thinking_ids.contains(&id)
+                {
+                    thinking_ids.push(id);
                 }
                 let thinking_receipts = std::mem::take(&mut self.state.thinking_message_receipt)
                     .into_iter()
@@ -437,8 +437,10 @@ impl ProgressiveReply {
                 self.state.content = final_text.to_owned();
                 self.state.dirty = false;
                 self.state.message_ids = vec![message_id.clone()];
-                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-                outcome.receipt = self.state.message_receipt.clone().unwrap_or_default();
+                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome {
+                    receipt: self.state.message_receipt.clone().unwrap_or_default(),
+                    ..Default::default()
+                };
                 if outcome.receipt.primary_platform_message_id.is_none() {
                     outcome.receipt.primary_platform_message_id = Some(message_id.clone());
                 }
@@ -452,45 +454,36 @@ impl ProgressiveReply {
                 let mut outcome = match error {
                     super::ProgressiveSendError::PartialOutcome(outcome) => *outcome,
                     super::ProgressiveSendError::Unavailable => {
-                        let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-                        outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
-                            kind: tinychannels_bus::channel::SendErrorKind::Transient,
-                            message: "progressive edit was unavailable".into(),
-                            retryable: true,
-                            sent_before_error: false,
-                            ..Default::default()
-                        });
-                        outcome
+                        progressive_edit_error(
+                            tinychannels_bus::channel::SendErrorKind::Transient,
+                            "progressive edit was unavailable",
+                            true,
+                            false,
+                        )
                     }
                     super::ProgressiveSendError::EditUnsupported => {
-                        let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-                        outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
-                            kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                            message: "progressive edit is unsupported".into(),
-                            sent_before_error: false,
-                            ..Default::default()
-                        });
-                        outcome
+                        progressive_edit_error(
+                            tinychannels_bus::channel::SendErrorKind::Unknown,
+                            "progressive edit is unsupported",
+                            false,
+                            false,
+                        )
                     }
                     super::ProgressiveSendError::MessageGone => {
-                        let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-                        outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
-                            kind: tinychannels_bus::channel::SendErrorKind::NotFound,
-                            message: "progressive draft no longer exists".into(),
-                            sent_before_error: false,
-                            ..Default::default()
-                        });
-                        outcome
+                        progressive_edit_error(
+                            tinychannels_bus::channel::SendErrorKind::NotFound,
+                            "progressive draft no longer exists",
+                            false,
+                            false,
+                        )
                     }
                     _ => {
-                        let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-                        outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
-                            kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                            message: "progressive edit outcome is uncertain".into(),
-                            sent_before_error: true,
-                            ..Default::default()
-                        });
-                        outcome
+                        progressive_edit_error(
+                            tinychannels_bus::channel::SendErrorKind::Unknown,
+                            "progressive edit outcome is uncertain",
+                            false,
+                            true,
+                        )
                     }
                 };
                 let mut retained = self.state.message_receipt.clone().unwrap_or_default();

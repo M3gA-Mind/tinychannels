@@ -220,10 +220,10 @@ pub(super) async fn finalize_channel_reply(
     )
     .await;
     let mut thinking_ids = std::mem::take(&mut state.thinking_message_ids);
-    if let Some(id) = state.thinking_message_id.take() {
-        if !thinking_ids.contains(&id) {
-            thinking_ids.push(id);
-        }
+    if let Some(id) = state.thinking_message_id.take()
+        && !thinking_ids.contains(&id)
+    {
+        thinking_ids.push(id);
     }
     let thinking_receipts = std::mem::take(&mut state.thinking_message_receipt)
         .into_iter()
@@ -268,10 +268,10 @@ pub(super) async fn abort_channel_reply(
     )
     .await;
     let mut thinking_ids = std::mem::take(&mut state.thinking_message_ids);
-    if let Some(id) = state.thinking_message_id.take() {
-        if !thinking_ids.contains(&id) {
-            thinking_ids.push(id);
-        }
+    if let Some(id) = state.thinking_message_id.take()
+        && !thinking_ids.contains(&id)
+    {
+        thinking_ids.push(id);
     }
     let thinking_receipts = std::mem::take(&mut state.thinking_message_receipt)
         .into_iter()
