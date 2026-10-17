@@ -318,7 +318,11 @@ impl ChannelOutboundMessage {
                             markdown_dialect: None,
                         },
                 } => text.push(value.as_str()),
-                _ => return Err(crate::TinyChannelsError::new("provider does not support typed channel content")),
+                _ => {
+                    return Err(crate::TinyChannelsError::new(
+                        "provider does not support typed channel content",
+                    ));
+                }
             }
         }
         Ok(text.join("\n"))
