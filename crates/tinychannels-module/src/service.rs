@@ -1168,7 +1168,10 @@ impl Channels {
                 },
                 || async {
                     !self.terminal.load(Ordering::SeqCst)
-                        && self.media_activation(&instance).await == Ok(activation)
+                        && matches!(
+                            self.media_activation(&instance).await,
+                            Ok(current) if current == activation
+                        )
                 },
             )
             .await

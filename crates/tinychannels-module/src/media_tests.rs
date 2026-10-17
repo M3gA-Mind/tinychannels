@@ -81,6 +81,17 @@ async fn media_reads_return_bounded_ordered_retryable_chunks_and_release_bytes()
         .unwrap();
     assert_eq!(last.bytes, bytes[tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES..]);
     assert!(last.done);
+    assert_eq!(
+        reads
+            .chunk(tinychannels_bus::MediaReadChunk {
+                handle: info.handle.clone(),
+                sequence: 1,
+            })
+            .await
+            .unwrap(),
+        last,
+        "a lost final reply must remain retryable until explicit close"
+    );
     let held = reads.reserve().await.unwrap();
     assert!(reads.reserve().await.is_err());
     reads
