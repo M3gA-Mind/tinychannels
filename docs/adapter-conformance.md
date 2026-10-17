@@ -15,6 +15,15 @@ or streaming-draft traits. Capability facts continue to come from the
 configured provider and are marked `adapterMode=legacy-backed` on the
 descriptor.
 
+The legacy `start_channel` service currently selects providers by their bare
+provider name and uses that name as the configured instance identity; it does
+not create separate account aliases for multiple accounts of one provider.
+At the bridge boundary, a missing `ChannelRef.account_id` is filled from the
+running instance, while an explicit account must match that instance. Tests
+that construct a `Running` actor with an explicit instance exercise the
+adapter contract but do not imply that the legacy service can start aliased
+accounts.
+
 ## Current automated coverage
 
 The reusable `tinychannels-conformance` crate defines a 24-case feature matrix
