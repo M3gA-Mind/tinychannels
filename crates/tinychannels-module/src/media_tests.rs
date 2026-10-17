@@ -366,7 +366,7 @@ async fn panicking_storage_releases_the_reservation_without_ready_media() {
     assert_eq!(uploads.state.lock().await.uploads.len(), 0);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn terminal_success_replays_and_terminal_state_is_pruned_and_bounded() {
     let uploads = std::sync::Arc::new(MediaUploads::default());
     let repository = std::sync::Arc::new(BlockingPersistence::default());
@@ -416,7 +416,6 @@ async fn terminal_success_replays_and_terminal_state_is_pruned_and_bounded() {
         uploads.abort(MediaUploadFinish(aborted)).await.unwrap();
     }
     assert_eq!(uploads.state.lock().await.terminal.len(), TERMINAL_CAPACITY);
-    tokio::time::pause();
     tokio::time::advance(TERMINAL_LIFETIME + Duration::from_millis(1)).await;
     assert!(uploads.binding(&MediaUploadFinish(handle)).await.is_err());
     assert!(uploads.state.lock().await.terminal.is_empty());
