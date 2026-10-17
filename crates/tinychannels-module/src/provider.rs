@@ -282,12 +282,6 @@ impl ModuleMediaRepository {
         ))
     }
 
-    pub(crate) async fn store_public_media(
-        &self,
-        request: tinychannels::host::MediaStoreRequest,
-    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
-        <Self as tinychannels::host::MediaRepository>::store_media(self, request).await
-    }
 }
 
 #[async_trait::async_trait]
