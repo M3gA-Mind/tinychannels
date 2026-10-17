@@ -31,6 +31,7 @@ impl TelegramChannel {
         chat_id: &str,
         thread_id: Option<&str>,
         reply_to_id: Option<&str>,
+        caption: Option<&str>,
         bytes: Vec<u8>,
         file_name: &str,
     ) -> anyhow::Result<String> {
@@ -48,6 +49,9 @@ impl TelegramChannel {
             let message_id = reply_to.parse::<i64>()
                 .map_err(|_| anyhow::anyhow!("Telegram reply target is invalid"))?;
             form = form.text("reply_parameters", serde_json::json!({"message_id": message_id}).to_string());
+        }
+        if let Some(caption) = caption {
+            form = form.text("caption", caption.to_owned());
         }
         let response = self
             .http_client()

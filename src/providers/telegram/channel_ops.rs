@@ -491,12 +491,25 @@ impl Channel for TelegramChannel {
         )) {
             anyhow::bail!("voice synthesis must be prepared by the shared module runtime");
         }
-        if let [
+        let voice_parts = message.parts.iter().filter_map(|part| match part {
             tinychannels_bus::OutboundContentPart::Voice {
                 voice: tinychannels_bus::OutboundVoice::Media { media, codec, .. },
-            },
-        ] = message.parts.as_slice()
-        {
+            } => Some((media, codec)),
+            _ => None,
+        }).collect::<Vec<_>>();
+        if voice_parts.len() == 1 {
+            let (media, codec) = voice_parts[0];
+            let caption_parts = message.parts.iter().filter_map(|part| match part {
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { text, .. },
+                } => Some(Ok(text.as_str())),
+                tinychannels_bus::OutboundContentPart::Voice { .. } => None,
+                _ => Some(Err(anyhow::anyhow!("Telegram voice send only supports transcript text"))),
+            }).collect::<anyhow::Result<Vec<_>>>()?;
+            let caption = strip_tool_call_tags(&caption_parts.join("\n"));
+            if caption.chars().count() > 1024 {
+                anyhow::bail!("Telegram voice caption exceeds its 1024 character limit");
+            }
             let store = self.voice_media_store.as_ref().ok_or_else(|| {
                 anyhow::anyhow!("Telegram voice upload requires host media resolution")
             })?;
@@ -543,6 +556,7 @@ impl Channel for TelegramChannel {
                         .or(conversation.topic_id.as_deref())
                         .or(conversation.thread_id.as_deref()),
                     message.reply_to_id.as_deref(),
+                    (!caption.trim().is_empty()).then_some(caption.as_str()),
                     audio,
                     resolved.file_name.as_deref().unwrap_or("voice.ogg"),
                 )
