@@ -96,6 +96,7 @@ pub struct TelegramChannel {
     pub(crate) mention_only: bool,
     pub(crate) bot_username: Mutex<Option<String>>,
     pub(crate) recent_updates: Mutex<TelegramUpdateWindow>,
+    pub(crate) pending_voice_notes: Mutex<std::collections::HashMap<String, tinychannels_bus::VoiceNote>>,
     /// Tracks the last time an approval prompt was sent to a given "chat_id:sender" key.
     /// Prevents duplicate prompts during restart-overlap races and rapid re-sends.
     /// Mirrors the `last_draft_edit` pattern.
