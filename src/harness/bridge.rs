@@ -49,7 +49,11 @@ pub fn translate_output_event(
                 OutboundPayload::Text { text }
             }
         }
-        ChannelOutputEvent::FinalMessage { text, parts, receipt } => {
+        ChannelOutputEvent::FinalMessage {
+            text,
+            parts,
+            receipt,
+        } => {
             if parts.is_empty() {
                 OutboundPayload::Text { text }
             } else {

@@ -189,6 +189,7 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
         &mut reply,
         vec![ChannelOutputEvent::TextDelta {
             text: "x".repeat(MAX_CONTENT),
+            iteration: None,
         }],
         false,
     )
@@ -369,6 +370,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
                         arguments: Some(serde_json::json!({"q": "safe test"})),
                         elapsed_ms: 0,
                         iteration: 1,
+                        failure: None,
                         display_label: None,
                         display_detail: None,
                         structured: Some(serde_json::json!({"kind": "search", "count": 1})),
@@ -411,6 +413,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
             handle: handle.clone(),
             events: vec![ChannelOutputEvent::TextDelta {
                 text: "late".into(),
+                iteration: None,
             }],
         })
         .await
@@ -445,7 +448,13 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
     let error = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
-            events: vec![ChannelOutputEvent::TextDelta { text: "x".into(), iteration: None }; 33],
+            events: vec![
+                ChannelOutputEvent::TextDelta {
+                    text: "x".into(),
+                    iteration: None
+                };
+                33
+            ],
         })
         .await
         .unwrap_err();
