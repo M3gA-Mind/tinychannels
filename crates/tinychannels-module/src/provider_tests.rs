@@ -6,13 +6,14 @@ use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinychannels::host::EventSink as _;
 use tinychannels_bus::{ChannelInboundEnvelope, ContentPart, ConversationKind, ConversationRef};
+use tinychannels_conformance::AdapterFixture as _;
 
 struct RunningTelegramConformance {
     adapter: ConfiguredAdapterHandle,
     server: wiremock::MockServer,
     scope: tinychannels_conformance::ExpectedScope,
-    observed: Mutex<Vec<tinychannels_conformance::WireObservation>>,
-    request_cursor: Mutex<usize>,
+    observed: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
+    request_cursor: std::sync::Mutex<usize>,
 }
 
 #[async_trait::async_trait]
@@ -40,8 +41,8 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
         &self,
         feature: tinychannels_conformance::ConformanceFeature,
     ) -> std::result::Result<
-        Option<tinychannels_bus::ChannelSendOutcome>,
-        tinychannels_bus::ChannelSendError,
+        Option<tinychannels_bus::channel::ChannelSendOutcome>,
+        tinychannels_bus::channel::ChannelSendError,
     > {
         use tinychannels_conformance::ConformanceFeature as Feature;
         let payload = match feature {
@@ -1137,8 +1138,8 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
                 ..Default::default()
             },
         },
-        observed: Mutex::new(Vec::new()),
-        request_cursor: Mutex::new(0),
+        observed: std::sync::Mutex::new(Vec::new()),
+        request_cursor: std::sync::Mutex::new(0),
     };
     check_feature(&fixture, ConformanceFeature::Text)
         .await

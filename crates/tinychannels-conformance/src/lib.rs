@@ -91,14 +91,21 @@ impl ConformanceFeature {
             Self::Poll => capabilities.content.poll.outbound,
             Self::Presentation => capabilities.content.presentation.outbound,
             Self::NativeData => capabilities.content.native.outbound,
-            Self::VoiceIn => capabilities.voice_in.supported && !capabilities.voice_in.transcript_sources.is_empty(),
+            Self::VoiceIn => {
+                capabilities.voice_in.supported
+                    && !capabilities.voice_in.transcript_sources.is_empty()
+            }
             Self::VoiceOut => capabilities.voice_out.supported,
             Self::VoiceSynthesis => capabilities.voice_out.synthesis,
             Self::ReplyAddressing => capabilities.addressing.reply_to_id,
             Self::ThreadAddressing => capabilities.addressing.thread_id,
             Self::Typing => action("typing"),
             Self::Reactions => capabilities.reactions,
-            Self::InboundReactions => capabilities.events.supported.iter().any(|event| event == "reaction"),
+            Self::InboundReactions => capabilities
+                .events
+                .supported
+                .iter()
+                .any(|event| event == "reaction"),
             Self::Edit => action("edit"),
             Self::Delete => action("delete") || action("unsend"),
             Self::ReadReceipts => capabilities
@@ -199,13 +206,26 @@ pub async fn check_feature(
             "declared {feature:?} produced no matching wire observation"
         ));
     };
-    let requires_receipt = matches!(feature,
-        ConformanceFeature::Text | ConformanceFeature::Image | ConformanceFeature::Video
-        | ConformanceFeature::Audio | ConformanceFeature::File | ConformanceFeature::Sticker
-        | ConformanceFeature::Location | ConformanceFeature::Contact | ConformanceFeature::Buttons
-        | ConformanceFeature::Poll | ConformanceFeature::Presentation | ConformanceFeature::NativeData
-        | ConformanceFeature::VoiceOut | ConformanceFeature::VoiceSynthesis | ConformanceFeature::Edit
-        | ConformanceFeature::Delete | ConformanceFeature::StreamingDraft);
+    let requires_receipt = matches!(
+        feature,
+        ConformanceFeature::Text
+            | ConformanceFeature::Image
+            | ConformanceFeature::Video
+            | ConformanceFeature::Audio
+            | ConformanceFeature::File
+            | ConformanceFeature::Sticker
+            | ConformanceFeature::Location
+            | ConformanceFeature::Contact
+            | ConformanceFeature::Buttons
+            | ConformanceFeature::Poll
+            | ConformanceFeature::Presentation
+            | ConformanceFeature::NativeData
+            | ConformanceFeature::VoiceOut
+            | ConformanceFeature::VoiceSynthesis
+            | ConformanceFeature::Edit
+            | ConformanceFeature::Delete
+            | ConformanceFeature::StreamingDraft
+    );
     let receipt = outcome.as_ref().map(|outcome| &outcome.receipt);
     if requires_receipt {
         let Some(receipt) = receipt else {
@@ -216,11 +236,16 @@ pub async fn check_feature(
             || receipt.platform_message_ids.is_empty()
             || receipt.parts.is_empty()
         {
-            return Err(format!("declared {feature:?} returned an incomplete or mis-scoped receipt"));
+            return Err(format!(
+                "declared {feature:?} returned an incomplete or mis-scoped receipt"
+            ));
         }
     }
     if observation.operation != feature.operation() {
-        return Err(format!("declared {feature:?} observed operation {}", observation.operation));
+        return Err(format!(
+            "declared {feature:?} observed operation {}",
+            observation.operation
+        ));
     }
     let expected_payload = feature.payload_kind();
     if let Some(expected_payload) = expected_payload
