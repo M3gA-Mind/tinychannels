@@ -145,6 +145,28 @@ impl Channel for TelegramChannel {
         "telegram"
     }
 
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+        capabilities.remote_control = true;
+        capabilities.chat_approvals = true;
+        capabilities.history_key_ignores_thread = true;
+        capabilities.reactions = true;
+        if self.voice_media_store.is_some() {
+            capabilities.voice_in.supported = true;
+            capabilities.voice_in.max_size_bytes = Some(8 * 1024 * 1024);
+            capabilities.voice_in.transcript_sources = vec![
+                tinychannels_bus::VoiceTranscriptSource::Provider,
+                tinychannels_bus::VoiceTranscriptSource::HostStt,
+            ];
+            capabilities.voice_out.supported = true;
+            capabilities.voice_out.accepted_codecs =
+                vec!["ogg_opus".into(), "m4a_aac".into(), "mp3".into()];
+            capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
+            capabilities.voice_out.synthesis = self.voice_synthesis;
+        }
+        capabilities
+    }
+
     fn supports_remote_control(&self) -> bool {
         true
     }
