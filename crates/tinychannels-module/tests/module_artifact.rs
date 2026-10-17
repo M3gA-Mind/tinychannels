@@ -1129,7 +1129,7 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .unwrap();
 
     let telegram_api = MockServer::start().await;
-    // SAFETY: this ignored integration test is run by itself against the compiled artifact.
+    // SAFETY: the artifact verifier runs this case in its own test process.
     unsafe {
         std::env::set_var("OPENHUMAN_TELEGRAM_BOT_API_BASE", telegram_api.uri());
     }
