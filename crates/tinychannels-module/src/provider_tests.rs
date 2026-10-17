@@ -437,7 +437,10 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             scope.reply_to_id = None;
         }
         if feature == tinychannels_conformance::ConformanceFeature::VoiceIn {
-            // Telegram Message carries message_thread_id, but no reply target.
+            // Telegram Message carries message_thread_id as the normalized
+            // topic_id; the shared envelope does not duplicate it in thread_id.
+            scope.conversation.thread_id = None;
+            scope.thread_id = None;
             scope.reply_to_id = None;
         }
         scope
@@ -574,7 +577,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 let conversation: ConversationRef = serde_json::from_value(envelope.get("conversation").cloned().unwrap_or_default())
                     .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                 let parts = envelope.get("parts").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
-                let voice = parts.iter().find(|part| part.get("type").and_then(serde_json::Value::as_str) == Some("voice_note"))
+                let voice = parts.iter().find(|part| part.get("kind").and_then(serde_json::Value::as_str) == Some("voice_note"))
                     .and_then(|part| part.get("voiceNote"));
                 let mut payload_kinds = Vec::new();
                 if voice.and_then(|v| v.get("media")).is_some() { payload_kinds.push("audio".into()); }
