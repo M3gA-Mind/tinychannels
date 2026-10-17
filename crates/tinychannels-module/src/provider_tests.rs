@@ -1876,7 +1876,9 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
                 | "sendDocument" | "sendSticker" | "sendLocation" | "sendVenue"
                 | "sendContact" | "sendPoll" | "editMessageText");
             let mut result = serde_json::json!(true);
-            if has_message {
+            if endpoint == "getFile" {
+                result = serde_json::json!({"file_id":"voice-file","file_unique_id":"voice-unique","file_size":2575,"file_path":"voice.oga"});
+            } else if has_message {
                 let requested_edit_id = if endpoint == "editMessageText" {
                     serde_json::from_slice::<serde_json::Value>(&request.body).ok()
                         .and_then(|body| body.get("message_id").and_then(|value| value.as_i64()))
@@ -1891,9 +1893,32 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         })
         .mount(&server)
         .await;
+    let updates_sent = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let updates_sent_once = updates_sent.clone();
+    Mock::given(method("GET"))
+        .and(path("/bottest-token/getUpdates"))
+        .respond_with(move |_request: &wiremock::Request| {
+            let result = if updates_sent_once.swap(true, Ordering::SeqCst) {
+                serde_json::json!([])
+            } else {
+                serde_json::json!([
+                    {"update_id":701,"message":{"message_id":91,"message_thread_id":77,"date":1720000000,"chat":{"id":-100,"type":"supergroup"},"from":{"id":42,"username":"alice"},"voice":{"file_id":"voice-file","file_unique_id":"voice-unique","duration":1,"mime_type":"audio/ogg","file_size":2575}}},
+                    {"update_id":702,"message_reaction":{"chat":{"id":-100,"type":"supergroup"},"message_id":92,"date":1720000001,"user":{"id":42,"username":"alice"},"old_reaction":[],"new_reaction":[{"type":"emoji","emoji":"🔥"}]}}
+                ])
+            };
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true,"result":result}))
+        })
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/file/bottest-token/voice.oga"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg").to_vec()))
+        .mount(&server)
+        .await;
     let instance = "telegram:account-a".to_owned();
     let hooks = Arc::new(Hooks::default());
     let (host, callbacks, _server_connection, _storage) = ingress_fixture().await;
+    *callbacks.transcription_result.lock().await = Some("fixture spoken words".into());
     let provider_host = hooks.host(
         host.clone(),
         instance.clone(),
