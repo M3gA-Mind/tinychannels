@@ -1704,12 +1704,25 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let server = MockServer::start().await;
+    let response_ids = Arc::new(Mutex::new(Vec::new()));
+    let response_ids_for_mock = response_ids.clone();
+    let next_id = Arc::new(AtomicUsize::new(320));
+    let next_id_for_mock = next_id.clone();
     Mock::given(method("POST"))
-        .and(path("/bottest-token/sendMessage"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "ok": true,
-            "result": { "message_id": 321 }
-        })))
+        .respond_with(move |request: &wiremock::Request| {
+            let endpoint = request.url.path().rsplit('/').next().unwrap_or_default();
+            let has_message = matches!(endpoint,
+                "sendMessage" | "sendPhoto" | "sendVideo" | "sendAudio" | "sendVoice"
+                | "sendDocument" | "sendSticker" | "sendLocation" | "sendVenue"
+                | "sendContact" | "sendPoll" | "editMessageText");
+            let mut result = serde_json::json!({});
+            if has_message {
+                let id = next_id_for_mock.fetch_add(1, Ordering::SeqCst).to_string();
+                response_ids_for_mock.lock().unwrap().push((endpoint.to_owned(), id.clone()));
+                result["message_id"] = serde_json::Value::String(id);
+            }
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true, "result": result}))
+        })
         .mount(&server)
         .await;
     let instance = "telegram:account-a".to_owned();
@@ -1767,6 +1780,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         },
         observed: std::sync::Mutex::new(Vec::new()),
         request_cursor: std::sync::Mutex::new(0),
+        response_ids,
         media: std::collections::HashMap::new(),
         callbacks,
     };
