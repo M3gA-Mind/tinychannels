@@ -17,24 +17,35 @@ descriptor.
 
 ## Current automated coverage
 
-The `configured_adapter_*` tests exercise account mismatch rejection before
-dispatch and verify that a partial send retains its primary receipt and cannot
-be retried. `scripts/test-adapter-conformance.sh` runs these tests in the
-feature-test CI lane. Telegram's provider tests separately exercise its
-configured Bot API implementation against mocked HTTP responses; they do not
-yet instantiate a native `ChannelAdapter`.
+The reusable `tinychannels-conformance` crate defines a 24-case feature matrix
+and checks declared capability behavior against wire observations. Its own
+tests reject authentication failures mislabeled as unsupported, missing or
+mis-scoped receipts, wrong payloads, mismatched response IDs, partial effects
+reported as unsupported, and voice ingress without both audio and transcript
+evidence. Non-message operations can be observed without manufacturing a
+message receipt; streaming drafts must report create, update, finalize, and
+cancel-cleanup operations.
+
+The module tests exercise account mismatch rejection before dispatch, partial
+receipt retry safety, raw voice-synthesis capability gating, and a real
+configured Running adapter that sends through Telegram's Bot API against a
+wiremock server. The conformance kit observes the actual `sendMessage` request
+and the fixture's configured response ID, then verifies the configured
+account and conversation scope. The same configured Telegram adapter rejects
+undeclared image content before any platform request. CI runs these tests and
+the conformance-kit self-tests through `scripts/test-adapter-conformance.sh`.
 
 | Behavior | Foundation status | Final provider coverage |
 | --- | --- | --- |
-| Text | Existing typed provider tests; bridge scope and receipt behavior tested | Pending provider ports |
+| Text | Running factory and Telegram Bot API mock-wire request/receipt tested | Pending full provider port coverage |
 | Image, video, audio, files, stickers, locations, contacts, buttons, polls | Capability-gated at adapter dispatch | Pending per-provider wire assertions |
-| Voice in and out | Existing shared voice contract tests | Pending native adapter fixtures |
+| Voice in and out | Raw synthesis is rejected unless configured synthesis is declared | Pending native adapter fixtures and ingress lifecycle coverage |
 | Reply and thread addressing | Full refs preserved and mismatches rejected | Pending per-provider wire assertions |
 | Typing, reactions, edit, delete | Not exposed by the bridge | Pending native adapter traits |
 | Read receipts | Not exposed by the bridge | Pending provider ports |
 | Streaming draft lifecycle | Not exposed by the bridge | Pending native adapter traits |
-| Capability honesty | Unsupported rich content is rejected before dispatch | Pending observed wire behavior per declared feature |
+| Capability honesty | Kit validates unsupported outcomes and real configured Telegram text/image cases | Pending observed wire behavior for every declared feature |
 
-Provider leaves #106–#110 must add mock-platform fixtures that assert the
+Provider leaves #106–#111 must add mock-platform fixtures that assert the
 actual request and receipt for each declared operation. The final matrix and
 legacy trait removal remain open until those fixtures pass for every provider.
