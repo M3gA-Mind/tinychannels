@@ -26,6 +26,10 @@ pub trait ChannelAdapter: Send + Sync {
         tinychannels_bus::ChannelCapabilities::unknown()
     }
 
+    fn proactive_target(&self) -> Option<String> {
+        None
+    }
+
     fn receive_ack_policy(&self) -> ChannelReceiveAckPolicy {
         ChannelReceiveAckPolicy::AfterReceiveRecord
     }

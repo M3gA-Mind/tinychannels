@@ -646,6 +646,10 @@ impl ConfiguredAdapterHandle {
         self.adapter.declared_capabilities()
     }
 
+    pub(crate) fn proactive_target(&self) -> Option<String> {
+        self.adapter.proactive_target()
+    }
+
     pub(crate) async fn send(
         &self,
         intent: tinychannels_bus::ChannelOutboundIntent,
@@ -983,6 +987,10 @@ impl tinychannels::channel::ChannelAdapter for Running {
 
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
         self.channel.capabilities()
+    }
+
+    fn proactive_target(&self) -> Option<String> {
+        self.channel.proactive_target()
     }
 
     async fn start(
