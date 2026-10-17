@@ -1,6 +1,7 @@
 use super::*;
 use base64::Engine as _;
 use sha2::Digest as _;
+use tinychannels::host::EventSink as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
