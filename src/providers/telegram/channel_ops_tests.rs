@@ -303,8 +303,12 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
         max_bytes: u64,
     ) -> anyhow::Result<crate::host::StoredMedia> {
         assert_eq!(scope.configured_instance, "telegram-main");
+        assert_eq!(scope.channel.id, "telegram");
         assert_eq!(scope.channel.account_id.as_deref(), Some("telegram-main"));
         assert_eq!(scope.conversation.id, "-10042");
+        assert_eq!(scope.conversation.scope_id.as_deref(), Some("scope-42"));
+        assert_eq!(scope.conversation.parent_id.as_deref(), Some("parent-42"));
+        assert_eq!(scope.conversation.thread_id.as_deref(), Some("77"));
         assert_eq!(scope.conversation.topic_id.as_deref(), Some("topic-77"));
         assert_eq!(scope.turn_id, "turn-42");
         let (kind, content_type, file_name, bytes) = match opaque_id.as_str() {
@@ -877,12 +881,16 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
     message.turn_id = Some("turn-42".into());
     message.conversation_ref = Some(tinychannels_bus::ConversationRef {
         id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
         thread_id: Some("77".into()),
         topic_id: Some("topic-77".into()),
         ..Default::default()
     });
     message.conversation_ref = Some(tinychannels_bus::ConversationRef {
         id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
         thread_id: Some("77".into()),
         topic_id: Some("topic-77".into()),
         ..Default::default()
@@ -1091,6 +1099,8 @@ async fn typed_audio_upload_preserves_caption_title_and_duration() {
     message.turn_id = Some("turn-42".into());
     message.conversation_ref = Some(tinychannels_bus::ConversationRef {
         id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
         topic_id: Some("topic-77".into()),
         thread_id: Some("77".into()),
         ..Default::default()
