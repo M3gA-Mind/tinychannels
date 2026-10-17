@@ -1100,7 +1100,6 @@ async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts
     replies.shutdown().await.unwrap();
 }
 
-#[test]
 #[tokio::test(start_paused = true)]
 async fn terminal_text_edits_existing_draft_without_duplicate_send() {
     let (base, callback) = fixture(false).await;
