@@ -1095,7 +1095,9 @@ fn adapter_operation_error(error: RunningSendError) -> tinychannels::channel::Ch
 impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
     fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
         let mut descriptor = self.running.adapter_descriptor();
-        descriptor.metadata.insert("adapterMode".into(), "native-v2".into());
+        descriptor
+            .metadata
+            .insert("adapterMode".into(), "native-v2".into());
         descriptor
     }
 
@@ -1290,7 +1292,12 @@ impl tinychannels::channel::ChannelStreamingDraft for TelegramNativeAdapter {
             let message_id = previous
                 .primary_platform_message_id
                 .as_deref()
-                .or_else(|| previous.parts.first().map(|part| part.platform_message_id.as_str()))
+                .or_else(|| {
+                    previous
+                        .parts
+                        .first()
+                        .map(|part| part.platform_message_id.as_str())
+                })
                 .ok_or_else(|| tinychannels::channel::ChannelSendError {
                     kind: tinychannels::channel::SendErrorKind::BadFormat,
                     message: "Telegram draft receipt has no provider message ID".into(),

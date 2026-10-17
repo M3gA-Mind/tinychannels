@@ -1039,9 +1039,9 @@ impl Channel for TelegramChannel {
         reaction: &tinychannels_bus::channel::ChannelReaction,
         remove: bool,
     ) -> anyhow::Result<()> {
-        let message_id = provider_message_id
-            .parse::<i64>()
-            .map_err(|_| anyhow::anyhow!("Telegram reaction requires a numeric provider message ID"))?;
+        let message_id = provider_message_id.parse::<i64>().map_err(|_| {
+            anyhow::anyhow!("Telegram reaction requires a numeric provider message ID")
+        })?;
         if !remove {
             if !self
                 .send_message_reaction(&conversation.id, message_id, &reaction.value)
@@ -1063,8 +1063,15 @@ impl Channel for TelegramChannel {
             .send()
             .await?;
         let result = response.json::<serde_json::Value>().await?;
-        if !result.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false) {
-            anyhow::bail!("Telegram reaction removal failed: {}", result["description"]);
+        if !result
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            anyhow::bail!(
+                "Telegram reaction removal failed: {}",
+                result["description"]
+            );
         }
         Ok(())
     }
@@ -1096,7 +1103,12 @@ impl Channel for TelegramChannel {
         let provider_message_id = receipt
             .primary_platform_message_id
             .as_deref()
-            .or_else(|| receipt.parts.first().map(|part| part.platform_message_id.as_str()))
+            .or_else(|| {
+                receipt
+                    .parts
+                    .first()
+                    .map(|part| part.platform_message_id.as_str())
+            })
             .ok_or_else(|| anyhow::anyhow!("Telegram edit receipt has no message ID"))?
             .parse::<i64>()
             .map_err(|_| anyhow::anyhow!("Telegram edit receipt has an invalid message ID"))?;
@@ -1112,7 +1124,11 @@ impl Channel for TelegramChannel {
             .send()
             .await?;
         let result = response.json::<serde_json::Value>().await?;
-        if !result.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+        if !result
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
             anyhow::bail!("Telegram editMessageText failed: {}", result["description"]);
         }
         Ok(receipt.clone())
@@ -1129,7 +1145,12 @@ impl Channel for TelegramChannel {
         let provider_message_id = receipt
             .primary_platform_message_id
             .as_deref()
-            .or_else(|| receipt.parts.first().map(|part| part.platform_message_id.as_str()))
+            .or_else(|| {
+                receipt
+                    .parts
+                    .first()
+                    .map(|part| part.platform_message_id.as_str())
+            })
             .ok_or_else(|| anyhow::anyhow!("Telegram delete receipt has no message ID"))?
             .parse::<i64>()
             .map_err(|_| anyhow::anyhow!("Telegram delete receipt has an invalid message ID"))?;
@@ -1143,8 +1164,14 @@ impl Channel for TelegramChannel {
             .send()
             .await?;
         let result = response.json::<serde_json::Value>().await?;
-        if !result.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false)
-            || !result.get("result").and_then(serde_json::Value::as_bool).unwrap_or(false)
+        if !result
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+            || !result
+                .get("result")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false)
         {
             anyhow::bail!("Telegram deleteMessage failed: {}", result["description"]);
         }
