@@ -115,6 +115,7 @@ struct Callback {
     sends: Arc<Mutex<Vec<Value>>>,
     requests: Arc<Mutex<Vec<ProgressiveTransportRequest>>>,
     output_result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
+    output_queue: Arc<Mutex<std::collections::VecDeque<ProgressiveTransportResult>>>,
     send_result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
     send_queue: Arc<Mutex<std::collections::VecDeque<ProgressiveTransportResult>>>,
     block: bool,
@@ -153,6 +154,8 @@ impl Callback {
         }
         let queued = if typed_send {
             self.send_queue.lock().await.pop_front()
+        } else if matches!(request, ProgressiveTransportRequest::OutputEvent { .. }) {
+            self.output_queue.lock().await.pop_front()
         } else {
             None
         };
@@ -669,7 +672,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
         callback.sends.lock().await.last().unwrap()["text"],
         "complete answer"
     );
-    let error = replies
+    let result = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
             events: vec![ChannelOutputEvent::TextDelta {
@@ -864,12 +867,14 @@ async fn output_callback_failure_cleans_up_without_sending_a_replacement() {
             }],
         })
         .await
-        .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("host output event callback failed")
-    );
+        .unwrap();
+    assert!(matches!(result,
+        ProgressiveResult::DeliveryBatch {
+            outcomes,
+            failure: Some(tinychannels_bus::module_progressive::ProgressiveOutputFailure::ObservationCallback),
+            ..
+        } if outcomes.is_empty()
+    ));
     assert!(callback.sends.lock().await.is_empty());
     assert!(
         callback
