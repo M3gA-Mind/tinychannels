@@ -240,14 +240,25 @@ async fn shared_matrix_exercises_every_declared_feature_contract() {
     for feature in ConformanceFeature::ALL {
         let mut fixture = fixture(feature);
         declare_feature(&mut fixture, feature);
-        if matches!(feature, ConformanceFeature::Typing | ConformanceFeature::Reactions | ConformanceFeature::InboundReactions | ConformanceFeature::Delete | ConformanceFeature::ReadReceipts | ConformanceFeature::VoiceIn) {
+        if matches!(
+            feature,
+            ConformanceFeature::Typing
+                | ConformanceFeature::Reactions
+                | ConformanceFeature::InboundReactions
+                | ConformanceFeature::Delete
+                | ConformanceFeature::ReadReceipts
+                | ConformanceFeature::VoiceIn
+        ) {
             fixture.result = Ok(None);
             for observation in &mut fixture.observations {
                 observation.platform_message_ids.clear();
             }
         }
         let result = check_feature(&fixture, feature).await;
-        assert!(result.is_ok(), "{feature:?} should pass its declared case: {result:?}");
+        assert!(
+            result.is_ok(),
+            "{feature:?} should pass its declared case: {result:?}"
+        );
     }
 }
 
@@ -434,9 +445,11 @@ async fn undeclared_features_accept_only_clean_explicit_unsupported_results() {
         sent_before_error: false,
         ..Default::default()
     });
-    assert!(check_feature(&error_result, ConformanceFeature::Image)
-        .await
-        .is_ok());
+    assert!(
+        check_feature(&error_result, ConformanceFeature::Image)
+            .await
+            .is_ok()
+    );
 
     let mut outcome_result = fixture(ConformanceFeature::Image);
     outcome_result.adapter.0.content.image.outbound = false;
@@ -450,9 +463,11 @@ async fn undeclared_features_accept_only_clean_explicit_unsupported_results() {
             ..Default::default()
         }),
     }));
-    assert!(check_feature(&outcome_result, ConformanceFeature::Image)
-        .await
-        .is_ok());
+    assert!(
+        check_feature(&outcome_result, ConformanceFeature::Image)
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -463,10 +478,12 @@ async fn undeclared_feature_rejects_side_effects_and_nonexplicit_unsupported() {
         unsupported: true,
         ..Default::default()
     });
-    assert!(check_feature(&wire_side_effect, ConformanceFeature::Image)
-        .await
-        .unwrap_err()
-        .contains("reached the mock platform"));
+    assert!(
+        check_feature(&wire_side_effect, ConformanceFeature::Image)
+            .await
+            .unwrap_err()
+            .contains("reached the mock platform")
+    );
 
     let mut retryable = fixture(ConformanceFeature::Image);
     retryable.adapter.0.content.image.outbound = false;
@@ -476,10 +493,12 @@ async fn undeclared_feature_rejects_side_effects_and_nonexplicit_unsupported() {
         retryable: true,
         ..Default::default()
     });
-    assert!(check_feature(&retryable, ConformanceFeature::Image)
-        .await
-        .unwrap_err()
-        .contains("explicit unsupported"));
+    assert!(
+        check_feature(&retryable, ConformanceFeature::Image)
+            .await
+            .unwrap_err()
+            .contains("explicit unsupported")
+    );
 
     let mut receipt_side_effect = fixture(ConformanceFeature::Image);
     receipt_side_effect.adapter.0.content.image.outbound = false;
@@ -494,34 +513,42 @@ async fn undeclared_feature_rejects_side_effects_and_nonexplicit_unsupported() {
             ..Default::default()
         }),
     }));
-    assert!(check_feature(&receipt_side_effect, ConformanceFeature::Image)
-        .await
-        .unwrap_err()
-        .contains("explicit unsupported"));
+    assert!(
+        check_feature(&receipt_side_effect, ConformanceFeature::Image)
+            .await
+            .unwrap_err()
+            .contains("explicit unsupported")
+    );
 }
 
 #[tokio::test]
 async fn declared_operations_must_have_a_matching_wire_scope() {
     let mut missing = fixture(ConformanceFeature::Text);
     missing.observations.clear();
-    assert!(check_feature(&missing, ConformanceFeature::Text)
-        .await
-        .unwrap_err()
-        .contains("no matching wire observation"));
+    assert!(
+        check_feature(&missing, ConformanceFeature::Text)
+            .await
+            .unwrap_err()
+            .contains("no matching wire observation")
+    );
 
     let mut wrong_conversation = fixture(ConformanceFeature::Text);
     wrong_conversation.observations[0].conversation.id = "other-chat".into();
-    assert!(check_feature(&wrong_conversation, ConformanceFeature::Text)
-        .await
-        .unwrap_err()
-        .contains("no matching wire observation"));
+    assert!(
+        check_feature(&wrong_conversation, ConformanceFeature::Text)
+            .await
+            .unwrap_err()
+            .contains("no matching wire observation")
+    );
 
     let mut missing_send = fixture(ConformanceFeature::Text);
     missing_send.observations[0].operation = "typing".into();
-    assert!(check_feature(&missing_send, ConformanceFeature::Text)
-        .await
-        .unwrap_err()
-        .contains("omitted operation send"));
+    assert!(
+        check_feature(&missing_send, ConformanceFeature::Text)
+            .await
+            .unwrap_err()
+            .contains("omitted operation send")
+    );
 }
 
 #[tokio::test]
@@ -530,27 +557,33 @@ async fn thread_addressing_and_voice_ingress_require_observed_evidence() {
     thread.adapter.0.addressing.thread_id = true;
     thread.scope.thread_id = Some("topic-9".into());
     thread.observations[0].thread_id = Some("topic-8".into());
-    assert!(check_feature(&thread, ConformanceFeature::ThreadAddressing)
-        .await
-        .unwrap_err()
-        .contains("thread addressing"));
+    assert!(
+        check_feature(&thread, ConformanceFeature::ThreadAddressing)
+            .await
+            .unwrap_err()
+            .contains("thread addressing")
+    );
 
     let mut voice = fixture(ConformanceFeature::VoiceIn);
     voice.result = Ok(None);
     voice.observations[0].payload_kinds = vec!["transcript".into()];
-    assert!(check_feature(&voice, ConformanceFeature::VoiceIn)
-        .await
-        .unwrap_err()
-        .contains("audio or transcript"));
+    assert!(
+        check_feature(&voice, ConformanceFeature::VoiceIn)
+            .await
+            .unwrap_err()
+            .contains("audio or transcript")
+    );
 }
 
 #[tokio::test]
 async fn streaming_draft_passes_with_all_four_lifecycle_operations() {
     let mut draft = fixture(ConformanceFeature::StreamingDraft);
     declare_feature(&mut draft, ConformanceFeature::StreamingDraft);
-    assert!(check_feature(&draft, ConformanceFeature::StreamingDraft)
-        .await
-        .is_ok());
+    assert!(
+        check_feature(&draft, ConformanceFeature::StreamingDraft)
+            .await
+            .is_ok()
+    );
 }
 
 #[test]
@@ -583,7 +616,10 @@ fn intent_scope_uses_channel_conversation_and_address_fallbacks() {
     intent.thread_id = None;
     intent.conversation_ref.as_mut().unwrap().thread_id = None;
     intent.conversation_ref.as_mut().unwrap().topic_id = Some("topic".into());
-    assert_eq!(intent_scope(&intent).unwrap().thread_id.as_deref(), Some("topic"));
+    assert_eq!(
+        intent_scope(&intent).unwrap().thread_id.as_deref(),
+        Some("topic")
+    );
 }
 
 #[test]
@@ -654,7 +690,10 @@ fn each_canonical_feature_uses_its_contract_capability() {
                 capabilities.actions.supported.push("draft-update".into());
             }
         }
-        assert!(feature.declared(&capabilities), "{feature:?} contract capability");
+        assert!(
+            feature.declared(&capabilities),
+            "{feature:?} contract capability"
+        );
     }
 
     let mut delete_capabilities = ChannelCapabilities::default();
@@ -662,6 +701,9 @@ fn each_canonical_feature_uses_its_contract_capability() {
     assert!(ConformanceFeature::Delete.declared(&delete_capabilities));
 
     let mut incomplete_draft = ChannelCapabilities::default();
-    incomplete_draft.actions.supported.push("draft-update".into());
+    incomplete_draft
+        .actions
+        .supported
+        .push("draft-update".into());
     assert!(!ConformanceFeature::StreamingDraft.declared(&incomplete_draft));
 }
