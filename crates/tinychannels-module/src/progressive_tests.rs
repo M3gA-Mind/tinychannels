@@ -2696,6 +2696,86 @@ async fn native_approval_and_clarification_events_deliver_prompts() {
 }
 
 #[tokio::test]
+async fn provider_with_native_presentation_sends_typed_approval_choices() {
+    let (base, callback) = fixture(false).await;
+    let configured = Arc::new(Mutex::new(HashMap::new()));
+    configured.lock().await.insert(
+        "telegram:approvals".to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "telegram",
+                capabilities: tinychannels_bus::ChannelCapabilities {
+                    chat_approvals: true,
+                    content: tinychannels_bus::ContentCapabilities {
+                        buttons: tinychannels_bus::ContentCapability {
+                            outbound: true,
+                            ..Default::default()
+                        },
+                        presentation: tinychannels_bus::ContentCapability {
+                            outbound: true,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            base.host.clone(),
+        ),
+    );
+    let replies = Replies::new(base.host.clone(), configured);
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some("telegram:approvals".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "approval-turn".into(),
+            lifetime_ms: 210_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected opened output")
+    };
+
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::ApprovalRequest {
+                id: "approval-7".into(),
+                prompt: "May I run the command?".into(),
+                choices: vec!["Allow once".into(), "Deny".into()],
+            }],
+        })
+        .await
+        .unwrap();
+
+    let requests = callback.requests.lock().await;
+    assert!(requests.iter().any(|request| matches!(request,
+        ProgressiveTransportRequest::SendTyped { parts, .. }
+            if parts.iter().any(|part| matches!(part,
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Presentation { blocks }
+                } if blocks == &serde_json::json!({
+                    "kind": "approval",
+                    "id": "approval-7",
+                    "prompt": "May I run the command?",
+                    "choices": ["Allow once", "Deny"]
+                })
+            ))
+    )), "native approval is transported as typed choices; the provider applies no decision");
+    drop(requests);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn later_provider_rpc_failure_retains_prior_receipt_and_stops_terminal_batch() {
     let (replies, callback) = fixture(false).await;
     let handle = open_scoped(
