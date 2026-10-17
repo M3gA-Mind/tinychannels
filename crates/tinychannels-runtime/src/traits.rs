@@ -5,9 +5,9 @@ use async_trait::async_trait;
 
 /// Provider-facing channel operations shared by the runtime and every host.
 ///
-/// This is part of the contract crate so the runtime and hosts implement one
-/// trait. The crate stays free of I/O: `async-trait` is a proc macro and
-/// `tokio` is limited to the `sync` feature for the `listen` channel type.
+/// This trait belongs to the runtime crate because its async provider methods
+/// depend on `async-trait` and Tokio's listener channel. The bus contract keeps
+/// the serialized message DTOs used by the legacy `listen` seam.
 ///
 /// `listen` remains available to focused test doubles and legacy local
 /// adapters. Production module-backed channels receive inbound traffic through
@@ -221,8 +221,9 @@ pub trait ChannelSendExt: Channel {
 
 impl<T: Channel + ?Sized> ChannelSendExt for T {}
 
-// Runtime idempotency construction for the legacy send DTO.
+/// Runtime idempotency construction for the legacy send DTO.
 pub trait SendMessageExt {
+    /// Add a deterministic key derived from the legacy message and provider.
     fn with_deterministic_idempotency_key(self, channel_id: impl AsRef<str>) -> Self;
 }
 impl SendMessageExt for SendMessage {

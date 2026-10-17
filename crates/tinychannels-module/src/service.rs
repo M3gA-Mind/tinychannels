@@ -1330,7 +1330,7 @@ fn delivery_store_error(error: DeliveryQueueError) -> BusError {
 )]
 pub(crate) mod exports {
     macro_rules! declare_channel_exports {
-        ([$($name:ident => $method:literal),* $(,)?]) => {
+        ([$($(#[$doc:meta])* $name:ident => $method:literal),* $(,)?]) => {
             tinybus_module::module_export_optional_static! {
                 setup = super::setup,
                 worker_threads = 4,

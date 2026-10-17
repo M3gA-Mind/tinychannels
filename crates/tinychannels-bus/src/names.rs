@@ -55,51 +55,48 @@ pub mod host_methods {
 macro_rules! channel_method_registry {
     ($consumer:ident) => {
         $consumer!([
-            START_CHANNEL => "StartChannel",
-            STOP_CHANNEL => "StopChannel",
-            SEND_MESSAGE => "SendMessage",
-            LIST_CHANNELS => "ListChannels",
-            CHANNEL_STATUS => "ChannelStatus",
-            RESERVE_RELAY => "ReserveRelay",
-            START_RELAY => "StartRelay",
-            START_RELAY_V2 => "StartRelayV2",
-            STOP_RELAY => "StopRelay",
-            RELAY_STATUS => "RelayStatus",
-            RELAY_CAPABILITIES_V2 => "RelayCapabilitiesV2",
-            SEND_RELAY_INTENT => "SendRelayIntent",
-            SHUTDOWN => "Shutdown",
-            SEND_CHANNEL_INTENT => "SendChannelIntent",
-            SEND_EMAIL => "SendEmail",
-            BEGIN_EMAIL_UPLOAD => "BeginEmailUpload",
-            APPEND_EMAIL_UPLOAD_CHUNK => "AppendEmailUploadChunk",
-            SEND_EMAIL_UPLOAD => "SendEmailUpload",
-            ABORT_EMAIL_UPLOAD => "AbortEmailUpload",
-            START_CHANNEL_CONFIGURED => "StartChannelConfigured",
-            CHANNEL_CONTROLLER => "ChannelController",
-            CHANNEL_INTERACTION => "ChannelInteraction",
-            CHECK_CHANNEL_HEALTH => "CheckChannelHealth",
-            START_CHANNEL_SUPERVISED => "StartChannelSupervised",
-            RESERVE_RUNTIME => "ReserveRuntime",
-            START_RUNTIME => "StartRuntime",
-            STOP_RUNTIME => "StopRuntime",
-            DESCRIBE_CONFIGURED_CHANNELS => "DescribeConfiguredChannels",
-            START_OUTBOUND_CHANNEL => "StartOutboundChannel",
-            PREPARE_OUTBOUND_INTENT => "PrepareOutboundIntent",
-            PREPARE_CHANNEL_INBOUND => "PrepareChannelInbound",
-            PREPARE_CHANNEL_IDENTITY => "PrepareChannelIdentity",
-            EXECUTE_PROGRESSIVE => "ExecuteProgressive",
-            EXECUTE_REMOTE => "ExecuteRemote",
-            PREPARE_CHANNEL_CONTROL => "PrepareChannelControl",
-            START_RUNTIME_WITH_DISPATCH => "StartRuntimeWithDispatch",
-            PREPARE_RUNTIME_COMMAND => "PrepareRuntimeCommand"
+            #[doc = "`StartChannel` \u2014 connect and begin receiving on one configured provider."] START_CHANNEL => "StartChannel",
+            #[doc = "`StopChannel` \u2014 disconnect one running provider."] STOP_CHANNEL => "StopChannel",
+            #[doc = "`SendMessage` \u2014 deliver one outbound intent through a running provider."] SEND_MESSAGE => "SendMessage",
+            #[doc = "`ListChannels` \u2014 report every provider this build can serve."] LIST_CHANNELS => "ListChannels",
+            #[doc = "`ChannelStatus` \u2014 report connection state for one provider."] CHANNEL_STATUS => "ChannelStatus",
+            #[doc = "Reserve one idle relay handle before native startup."] RESERVE_RELAY => "ReserveRelay",
+            #[doc = "Start a reserved relay using confidential hydrated configuration."] START_RELAY => "StartRelay",
+            #[doc = "Stop and join one reserved relay, including pending startup."] STOP_RELAY => "StopRelay",
+            #[doc = "Return safe lifecycle facts for one relay reservation."] RELAY_STATUS => "RelayStatus",
+            #[doc = "Submit an ordered relay outbound intent."] SEND_RELAY_INTENT => "SendRelayIntent",
+            #[doc = "Freeze publication and drain every owned provider, relay and callback."] SHUTDOWN => "Shutdown",
+            #[doc = "`SendChannelIntent` \u2014 deliver one typed intent through a running provider."] SEND_CHANNEL_INTENT => "SendChannelIntent",
+            #[doc = "`SendEmail` \u2014 send host-configured MIME mail without starting IMAP."] SEND_EMAIL => "SendEmail",
+            #[doc = "Begin an attachment upload whose chunks remain below TinyBus frame limits."] BEGIN_EMAIL_UPLOAD => "BeginEmailUpload",
+            #[doc = "Append one bounded confidential attachment chunk idempotently."] APPEND_EMAIL_UPLOAD_CHUNK => "AppendEmailUploadChunk",
+            #[doc = "Send a completed upload once and replay its terminal result by handle."] SEND_EMAIL_UPLOAD => "SendEmailUpload",
+            #[doc = "Abort an upload that has not entered SMTP delivery."] ABORT_EMAIL_UPLOAD => "AbortEmailUpload",
+            #[doc = "Start a provider with host-selected HTTP proxy policy."] START_CHANNEL_CONFIGURED => "StartChannelConfigured",
+            #[doc = "Dispatch typed controller work through TinyChannels' owning manager."] CHANNEL_CONTROLLER => "ChannelController",
+            #[doc = "Run typing, draft and capability operations on one running provider."] CHANNEL_INTERACTION => "ChannelInteraction",
+            #[doc = "Check configured providers without starting listeners; inputs are confidential."] CHECK_CHANNEL_HEALTH => "CheckChannelHealth",
+            #[doc = "Start a provider with module-owned reconnect supervision and host-selected timing."] START_CHANNEL_SUPERVISED => "StartChannelSupervised",
+            #[doc = "Reserve one inert identity-scoped runtime with immutable callback paths."] RESERVE_RUNTIME => "ReserveRuntime",
+            #[doc = "Activate the private provider object for a known runtime handle."] START_RUNTIME => "StartRuntime",
+            #[doc = "Stop and join all resources belonging to one runtime handle."] STOP_RUNTIME => "StopRuntime",
+            #[doc = "Resolve provider facts from confidential hydrated configuration without listening."] DESCRIBE_CONFIGURED_CHANNELS => "DescribeConfiguredChannels",
+            #[doc = "Keep an external-webhook provider available for outbound operations."] START_OUTBOUND_CHANNEL => "StartOutboundChannel",
+            #[doc = "Normalize legacy messages and produce deterministic intent keys in the module."] PREPARE_OUTBOUND_INTENT => "PrepareOutboundIntent",
+            #[doc = "Prepare normalized inbound facts and persisted keys inside the module."] PREPARE_CHANNEL_INBOUND => "PrepareChannelInbound",
+            #[doc = "Derive hosted-ingress thread and client identities inside the module."] PREPARE_CHANNEL_IDENTITY => "PrepareChannelIdentity",
+            #[doc = "Drive a module-owned progressive reply through an opaque handle."] EXECUTE_PROGRESSIVE => "ExecuteProgressive",
+            #[doc = "Run module-owned remote commands and persisted turn state."] EXECUTE_REMOTE => "ExecuteRemote",
+            #[doc = "Prepare module-owned channel facts and runtime command responses."] PREPARE_CHANNEL_CONTROL => "PrepareChannelControl",
+            #[doc = "Activate an identity runtime with bounded `ProcessInbound` turn callbacks."] START_RUNTIME_WITH_DISPATCH => "StartRuntimeWithDispatch",
+            #[doc = "Parse model/provider commands and render help without changing host state."] PREPARE_RUNTIME_COMMAND => "PrepareRuntimeCommand"
         ]);
     };
 }
 
 macro_rules! define_method_table {
-    ([$($name:ident => $method:literal),* $(,)?]) => {
-        #[allow(missing_docs, reason = "generated from the canonical module method registry")]
-        pub mod methods { $(pub const $name: &str = $method;)* }
+    ([$($(#[$doc:meta])* $name:ident => $method:literal),* $(,)?]) => {
+        pub mod methods { $($(#[$doc])* pub const $name: &str = $method;)* }
         /// All module method names in the declaration order used by the interface.
         pub const METHODS: [&str; 37] = [$(methods::$name),*];
     };
