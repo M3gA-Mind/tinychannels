@@ -5,6 +5,7 @@ use crate::channel::{
     DeliveryDurability, OutboundPayload,
 };
 use crate::harness::types::{ChannelOutputEvent, ChannelTurn};
+use sha2::{Digest, Sha256};
 use serde_json::json;
 
 /// Translation knobs for harness output delivery.
@@ -13,6 +14,9 @@ pub struct BridgeTranslationOptions {
     pub draft_throttle_ms: u64,
     pub flood_backoff_ms: u64,
     pub durability: DeliveryDurability,
+    /// Monotonic sequence within the source turn. Replays of one event must
+    /// reuse this value; distinct events must not.
+    pub event_sequence: u64,
 }
 
 impl Default for BridgeTranslationOptions {
@@ -21,6 +25,7 @@ impl Default for BridgeTranslationOptions {
             draft_throttle_ms: 750,
             flood_backoff_ms: 3000,
             durability: DeliveryDurability::BestEffort,
+            event_sequence: 0,
         }
     }
 }
@@ -49,18 +54,13 @@ pub fn translate_output_event(
                 OutboundPayload::Text { text }
             }
         }
-        ChannelOutputEvent::FinalMessage {
-            text,
-            parts,
-            receipt,
-        } => {
-            if parts.is_empty() {
-                OutboundPayload::Text { text }
-            } else {
-                OutboundPayload::NativeChannelData {
-                    data: json!({"text": text, "parts": parts, "receipt": receipt}),
-                }
+        ChannelOutputEvent::FinalMessage { text, mut parts, .. } => {
+            if !text.is_empty() {
+                parts.insert(0, crate::channel::OutboundContentPart::Content {
+                    part: crate::channel::ContentPart::Text { text, markdown_dialect: None },
+                });
             }
+            OutboundPayload::Parts { parts }
         }
         ChannelOutputEvent::ToolProgress { label, message } => OutboundPayload::Text {
             text: match message {
@@ -89,9 +89,32 @@ pub fn translate_output_event(
             }
         }
         ChannelOutputEvent::Clarification { prompt } => OutboundPayload::Text { text: prompt },
-        ChannelOutputEvent::Media { text, parts } => OutboundPayload::NativeChannelData {
-            data: json!({"text": text, "parts": parts}),
-        },
+        ChannelOutputEvent::Media { text, parts } => {
+            let mut content = Vec::new();
+            if let Some(text) = text.filter(|text| !text.is_empty()) {
+                content.push(crate::channel::OutboundContentPart::Content {
+                    part: crate::channel::ContentPart::Text { text, markdown_dialect: None },
+                });
+            }
+            content.extend(parts.into_iter().map(|part| crate::channel::OutboundContentPart::Content { part }));
+            OutboundPayload::Parts { parts: content }
+        }
+        ChannelOutputEvent::VoiceNote { text, voice } => {
+            let mut parts = Vec::new();
+            if let Some(text) = text.or_else(|| voice.transcript.as_ref().map(|transcript| transcript.text.clone())) {
+                parts.push(crate::channel::OutboundContentPart::Content {
+                    part: crate::channel::ContentPart::Text { text, markdown_dialect: None },
+                });
+            }
+            parts.push(crate::channel::OutboundContentPart::Voice {
+                voice: crate::channel::OutboundVoice::Media {
+                    media: voice.media,
+                    codec: voice.codec,
+                    duration_ms: voice.duration_ms,
+                },
+            });
+            OutboundPayload::Parts { parts }
+        }
         ChannelOutputEvent::Cancellation { reason } => OutboundPayload::Text {
             text: reason.unwrap_or_else(|| "Cancelled.".to_string()),
         },
@@ -110,8 +133,14 @@ pub fn translate_output_event(
         },
     };
 
+    let scope = serde_json::to_vec(&(
+        &turn.envelope.channel,
+        &turn.envelope.conversation,
+        options.event_sequence,
+    ))?;
+    let scoped_key = hex::encode(Sha256::digest(scope));
     Ok(vec![ChannelOutboundIntent {
-        idempotency_key: format!("{}:{}", turn.id, intent_suffix(&payload)),
+        idempotency_key: format!("{}:{}", turn.id, scoped_key),
         channel_id: turn.envelope.channel.id.clone(),
         conversation_id: turn.envelope.conversation.id.clone(),
         channel_ref: Some(turn.envelope.channel.clone()),
@@ -133,15 +162,3 @@ fn supports_native_approval(
         && presentation.max_actions_per_row.unwrap_or(1) > 0
 }
 
-fn intent_suffix(payload: &OutboundPayload) -> &'static str {
-    match payload {
-        OutboundPayload::Text { .. } => "text",
-        OutboundPayload::Media { .. } => "media",
-        OutboundPayload::Voice { .. } => "voice",
-        OutboundPayload::Files { .. } => "files",
-        OutboundPayload::Poll { .. } => "poll",
-        OutboundPayload::PresentationBlocks { .. } => "presentation",
-        OutboundPayload::NativeChannelData { .. } => "native",
-        OutboundPayload::Parts { .. } => "parts",
-    }
-}
