@@ -403,14 +403,22 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         scope.configured_instance.clone_from(&self.1);
         scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         scope.channel.account_id = Some(self.1.clone());
-        self.0
+        let result = self.0
             .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
                 scope,
                 opaque_id,
                 max_bytes: 8 * 1024 * 1024,
             })
             .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let decoded = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            &result.audio_base64,
+        )?;
+        if decoded.len() > 8 * 1024 * 1024 {
+            anyhow::bail!("resolved voice media exceeds provider upload limit");
+        }
+        Ok(result)
     }
 }
 

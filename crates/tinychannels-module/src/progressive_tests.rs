@@ -511,6 +511,8 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
         Arc::new(Sender {
             host: replies.host.clone(),
             context: None,
+            capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+            channel: "discord:fixture".into(),
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:fixture",
@@ -1119,6 +1121,8 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
         Arc::new(Sender {
             host: replies.host.clone(),
             context: None,
+            capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+            channel: "discord:fixture".into(),
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:fixture",
@@ -1162,6 +1166,8 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
     let sender = Sender {
         host: replies.host.clone(),
         context: None,
+        capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+        channel: "discord:fixture".into(),
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     sender
@@ -1186,6 +1192,8 @@ async fn transport_failures_preserve_recovery_classification() {
     let sender = Sender {
         host: replies.host.clone(),
         context: None,
+        capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+        channel: "discord:fixture".into(),
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     for result in [
@@ -2149,6 +2157,8 @@ async fn filler_callback_error_after_acceptance_is_not_retried() {
                     ..Default::default()
                 },
             }),
+            capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+            channel: "discord:filler-unknown".into(),
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:filler-unknown",
