@@ -285,7 +285,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         );
     }
     assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 1);
-    let output_events = callback.output_events.lock().unwrap();
+    let output_events = callback.output_events.lock().unwrap().clone();
     assert!(
         matches!(output_events.get(1), Some(ChannelOutputEvent::ToolCallCompleted {
         call_id, arguments: Some(arguments), structured: Some(structured), ..
