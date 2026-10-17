@@ -4160,7 +4160,14 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         .lock()
         .await
         .iter()
-        .find(|request| request.scope.turn_id == context.turn_id)
+        .find(|request| {
+            request.scope.turn_id == context.turn_id
+                && request
+                    .media_reference
+                    .as_ref()
+                    .and_then(|media| media.opaque_id.as_deref())
+                    == Some(published_id)
+        })
         .cloned()
         .expect("voice publication captures its originating scope and bytes");
     let sent_id = callback
@@ -4168,7 +4175,6 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         .lock()
         .await
         .iter()
-        .rev()
         .find_map(|request| match request {
             ProgressiveTransportRequest::SendTyped {
                 turn_id: Some(turn_id),
@@ -4177,7 +4183,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             } if turn_id == &context.turn_id => parts.iter().find_map(|part| match part {
                 tinychannels_bus::OutboundContentPart::Voice {
                     voice: tinychannels_bus::OutboundVoice::Media { media, .. },
-                } => media.opaque_id.clone(),
+                } if media.opaque_id.as_deref() == Some(published_id) => media.opaque_id.clone(),
                 _ => None,
             }),
             _ => None,
