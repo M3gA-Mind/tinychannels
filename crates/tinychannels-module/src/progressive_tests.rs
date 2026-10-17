@@ -693,7 +693,17 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
             handle: handle.clone(),
             events: vec![tinychannels_bus::module_progressive::ProgressiveEvent::TextDelta(
                 "legacy chunk".into(),
-            )],
+            ),
+            tinychannels_bus::module_progressive::ProgressiveEvent::ThinkingDelta(
+                "legacy thought".into(),
+            ),
+            tinychannels_bus::module_progressive::ProgressiveEvent::ToolCall(
+                "search".into(),
+            ),
+            tinychannels_bus::module_progressive::ProgressiveEvent::ToolResult {
+                tool_name: "search".into(),
+                success: true,
+            }],
         })
         .await
         .unwrap();
