@@ -14,7 +14,7 @@ pub struct VoiceCodecRequest {
     pub target: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VoiceCodecResult {
     pub audio_base64: String,
     pub duration_ms: Option<u64>,
