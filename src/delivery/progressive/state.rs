@@ -43,8 +43,14 @@ pub struct StreamingState {
     /// Backend-assigned id of the ephemeral thinking message. Used to
     /// delete it at finalization so the user sees only the clean reply.
     pub thinking_message_id: Option<String>,
+    /// Every provider message and its authority for the thinking bubble.
+    pub thinking_message_ids: Vec<String>,
+    pub thinking_message_receipt: Option<tinychannels_bus::channel::MessageReceipt>,
     /// `true` once a thinking message has been posted to the channel.
     pub thinking_sent: bool,
+    /// The thinking send may have reached the provider without a complete
+    /// receipt. Fence this ephemeral stream without suppressing final output.
+    pub thinking_delivery_uncertain: bool,
     /// New thinking content has arrived since the last thinking flush.
     pub thinking_dirty: bool,
     /// Latched when the first thinking POST succeeded with 200 but the
@@ -57,6 +63,10 @@ pub struct StreamingState {
     /// send order. Deleted in `finalize_channel_reply` after the
     /// canonical response is on screen.
     pub filler_message_ids: Vec<String>,
+    /// Complete receipts for filler sends, including per-part cleanup tokens.
+    pub filler_message_receipts: Vec<tinychannels_bus::channel::MessageReceipt>,
+    /// A filler may have been accepted without a known provider receipt.
+    pub filler_delivery_uncertain: bool,
     /// Next entry in `STATIC_FILLERS` to send when we fall back to the
     /// rotating pool (no fresh thinking content to surface). Wraps
     /// modulo pool size.
@@ -100,6 +110,8 @@ impl StreamingState {
     /// Thinking-bubble counterpart of [`Self::forget_draft`].
     pub fn forget_thinking(&mut self) {
         self.thinking_message_id = None;
+        self.thinking_message_ids.clear();
+        self.thinking_message_receipt = None;
         self.thinking_edit_disabled = true;
     }
 
@@ -141,6 +153,12 @@ pub fn extract_message_id(resp: &serde_json::Value) -> Option<String> {
 /// response shapes, preserving provider order and removing duplicates.
 pub fn extract_message_ids(resp: &serde_json::Value) -> Vec<String> {
     let mut ids = Vec::new();
+    if let Some(id) = resp
+        .get("primaryPlatformMessageId")
+        .and_then(receipt_id_value)
+    {
+        ids.push(id);
+    }
     if let Some(values) = resp
         .get("platformMessageIds")
         .and_then(serde_json::Value::as_array)
@@ -184,6 +202,50 @@ pub fn extract_message_receipt(
         .or_else(|| resp.get("data").and_then(|data| data.get("receipt")))
         .cloned()?;
     serde_json::from_value(receipt_value).ok()
+}
+
+/// Build cleanup authority from a normalized receipt or a legacy response
+/// that exposes provider IDs without tokens.
+pub fn extract_message_receipt_or_ids(
+    resp: &serde_json::Value,
+) -> Option<tinychannels_bus::channel::MessageReceipt> {
+    let ids = extract_message_ids(resp);
+    let mut receipt = extract_message_receipt(resp).unwrap_or_default();
+    if receipt.platform_message_ids.is_empty() {
+        receipt.platform_message_ids = ids;
+    } else {
+        for id in ids {
+            if !receipt.platform_message_ids.contains(&id) {
+                receipt.platform_message_ids.push(id);
+            }
+        }
+    }
+    if receipt.primary_platform_message_id.is_none() {
+        receipt.primary_platform_message_id = message_receipt_ids(&receipt).first().cloned();
+    }
+    (!message_receipt_ids(&receipt).is_empty()).then_some(receipt)
+}
+
+/// List every provider message represented by a receipt, in provider order.
+pub fn message_receipt_ids(receipt: &tinychannels_bus::channel::MessageReceipt) -> Vec<String> {
+    let mut ids = Vec::new();
+    if let Some(id) = &receipt.primary_platform_message_id {
+        ids.push(id.clone());
+    }
+    ids.extend(receipt.platform_message_ids.iter().cloned());
+    ids.extend(
+        receipt
+            .parts
+            .iter()
+            .map(|part| part.platform_message_id.clone()),
+    );
+    let mut unique = Vec::new();
+    for id in ids {
+        if !unique.contains(&id) {
+            unique.push(id);
+        }
+    }
+    unique
 }
 
 fn receipt_id_value(value: &serde_json::Value) -> Option<String> {

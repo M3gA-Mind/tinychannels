@@ -45,6 +45,10 @@ reconcile ambiguous nonterminal feed results before resubmitting events. This
 is in-process terminal retention, not crash recovery. Scoped opens currently resolve a
 local configured channel instance. Managed/relay provider descriptors and web
 surface registration are supplied by their owning host integrations.
+If the harness `Agent.run` call returns an error before `TurnCompleted`, the
+host closes that turn with `Close`; this control cleans up owned drafts and
+ephemeral status messages without sending a replacement reply. `Lifecycle`
+stage strings are observational metadata and do not imply terminal control.
 
 When `FinalMessage.parts` is non-empty, that ordered list is authoritative.
 `text` is a display/compatibility projection and must not be appended as another

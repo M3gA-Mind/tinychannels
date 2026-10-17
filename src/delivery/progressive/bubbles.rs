@@ -4,7 +4,7 @@
 use super::latch::{channel_edits_unsupported, mark_channel_edits_unsupported};
 use super::state::{
     StreamingState, TypingState, extract_message_id, extract_message_receipt,
-    latest_thinking_snippet,
+    extract_message_receipt_or_ids, latest_thinking_snippet, message_receipt_ids,
 };
 use super::{
     MAX_FILLER_FAILURES, MAX_THINKING_DISPLAY_CHARS, MAX_TYPING_FAILURES, ProgressiveSendError,
@@ -92,7 +92,11 @@ pub(super) async fn flush_thinking_message(
             state.latch_thinking_edits_unsupported();
             return;
         }
-        match sender.edit(channel, &msg_id, &text).await {
+        let edit = match state.thinking_message_receipt.as_ref() {
+            Some(receipt) => sender.edit_with_receipt(channel, receipt, &text).await,
+            None => sender.edit(channel, &msg_id, &text).await,
+        };
+        match edit {
             Ok(()) | Err(ProgressiveSendError::Unavailable) => {}
             Err(ProgressiveSendError::EditUnsupported) => {
                 // Keep the id so finalization still deletes the bubble (#5230).
@@ -139,13 +143,20 @@ pub(super) async fn flush_thinking_message(
     match sender.send(channel, &text).await {
         Ok(resp) => {
             state.thinking_sent = true;
-            if let Some(id) = extract_message_id(&resp) {
+            let receipt = extract_message_receipt_or_ids(&resp);
+            let ids = receipt
+                .as_ref()
+                .map(message_receipt_ids)
+                .unwrap_or_else(|| extract_message_ids(&resp));
+            if let Some(id) = ids.first().cloned() {
                 tracing::debug!(
                     "[channel-inbound][thinking] thinking msg sent channel='{}' msg_id={}",
                     channel,
                     id,
                 );
                 state.thinking_message_id = Some(id);
+                state.thinking_message_ids = ids;
+                state.thinking_message_receipt = receipt;
             } else {
                 tracing::warn!(
                     "[channel-inbound][thinking] thinking msg sent but response lacked id — disabling further thinking flushes (message won't be deletable) channel='{}' receipt_parts={} response_fields={}",
@@ -156,14 +167,23 @@ pub(super) async fn flush_thinking_message(
                     resp.as_object().map_or(0, serde_json::Map::len),
                 );
                 state.thinking_edit_disabled = true;
+                state.thinking_delivery_uncertain = true;
             }
         }
         Err(ProgressiveSendError::Unavailable) => {}
+        Err(ProgressiveSendError::PartialOutcome(outcome)) => {
+            retain_thinking_receipt(state, outcome.receipt);
+            state.thinking_sent = true;
+            state.thinking_delivery_uncertain = true;
+            state.thinking_edit_disabled = true;
+        }
         Err(_err) => {
             tracing::warn!(
                 "[channel-inbound][thinking] failed to send thinking msg channel='{}' — disabling further thinking flushes",
                 channel,
             );
+            state.thinking_sent = true;
+            state.thinking_delivery_uncertain = true;
             state.thinking_edit_disabled = true;
         }
     }
@@ -196,14 +216,17 @@ pub(super) async fn send_filler_message(
     match sender.send(channel, &text).await {
         Ok(resp) => {
             state.filler_failures = 0;
-            if let Some(id) = extract_message_id(&resp) {
+            if let Some(receipt) = extract_message_receipt_or_ids(&resp) {
+                let ids = message_receipt_ids(&receipt);
+                state.filler_message_ids.extend(ids.iter().cloned());
+                state.filler_message_receipts.push(receipt);
+                let id = ids.first().cloned().expect("receipt has an id");
                 tracing::debug!(
                     "[channel-inbound][filler] sent channel='{}' len={} msg_id={}",
                     channel,
                     text.len(),
                     id,
                 );
-                state.filler_message_ids.push(id);
             } else {
                 tracing::warn!(
                     "[channel-inbound][filler] sent but response lacked id — cannot clean up on finalize channel='{}' receipt_parts={} response_fields={}",
@@ -213,24 +236,39 @@ pub(super) async fn send_filler_message(
                         .map_or(0, |receipt| receipt.parts.len()),
                     resp.as_object().map_or(0, serde_json::Map::len),
                 );
-            }
-        }
-        Err(ProgressiveSendError::Unavailable) => {}
-        Err(_err) => {
-            state.filler_failures = state.filler_failures.saturating_add(1);
-            tracing::warn!(
-                "[channel-inbound][filler] send failed channel='{}' (failures={}/{})",
-                channel,
-                state.filler_failures,
-                MAX_FILLER_FAILURES,
-            );
-            if state.filler_failures >= MAX_FILLER_FAILURES {
-                tracing::info!(
-                    "[channel-inbound][filler] disabling filler messages for channel='{}' — backend unsupported",
-                    channel,
-                );
+                state.filler_delivery_uncertain = true;
                 state.filler_disabled = true;
             }
         }
+        Err(ProgressiveSendError::Unavailable) => {}
+        Err(ProgressiveSendError::PartialOutcome(outcome)) => {
+            let ids = message_receipt_ids(&outcome.receipt);
+            state.filler_message_ids.extend(ids);
+            if !message_receipt_ids(&outcome.receipt).is_empty() {
+                state.filler_message_receipts.push(outcome.receipt);
+            }
+            state.filler_delivery_uncertain = true;
+            state.filler_disabled = true;
+        }
+        Err(_err) => {
+            state.filler_delivery_uncertain = true;
+            state.filler_disabled = true;
+            tracing::warn!(
+                "[channel-inbound][filler] send outcome uncertain; disabling future fillers channel='{}'",
+                channel,
+            );
+        }
+    }
+}
+
+fn retain_thinking_receipt(
+    state: &mut StreamingState,
+    receipt: tinychannels_bus::channel::MessageReceipt,
+) {
+    let ids = message_receipt_ids(&receipt);
+    state.thinking_message_id = ids.first().cloned();
+    state.thinking_message_ids = ids;
+    if !state.thinking_message_ids.is_empty() {
+        state.thinking_message_receipt = Some(receipt);
     }
 }

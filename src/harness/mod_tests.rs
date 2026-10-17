@@ -164,17 +164,25 @@ fn final_message_keeps_caption_and_media_as_ordered_provider_parts() {
         &turn(),
         ChannelOutputEvent::FinalMessage {
             text: "caption".into(),
-            parts: vec![tinychannels_bus::OutboundContentPart::Content {
-                part: ContentPart::Image {
-                    media: MediaReference {
-                        kind: MediaKind::Image,
-                        url: Some("https://example.test/final.png".into()),
-                        ..Default::default()
+            parts: vec![
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: ContentPart::Text {
+                        text: "caption".into(),
+                        markdown_dialect: None,
                     },
-                    caption: None,
-                    alt_text: Some("final".into()),
                 },
-            }],
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: ContentPart::Image {
+                        media: MediaReference {
+                            kind: MediaKind::Image,
+                            url: Some("https://example.test/final.png".into()),
+                            ..Default::default()
+                        },
+                        caption: None,
+                        alt_text: Some("final".into()),
+                    },
+                },
+            ],
             receipt: None,
         },
         &Default::default(),
