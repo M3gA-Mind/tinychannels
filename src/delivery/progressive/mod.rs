@@ -131,6 +131,21 @@ pub trait ProgressiveSender: Send + Sync {
         Err(ProgressiveSendError::UnsupportedContent)
     }
 
+    /// Deliver one segment of a logical progressive text event. Legacy
+    /// transports may ignore the index; v2 transports use it in their stable
+    /// per-event idempotency key.
+    async fn send_parts_with_segment(
+        &self,
+        channel: &str,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+        context: Option<&ProgressiveOutputContext>,
+        sequence: u64,
+        _segment_index: u32,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
+        self.send_parts(channel, parts, text, context, sequence).await
+    }
+
     /// Replace the text of a posted message.
     async fn edit(
         &self,

@@ -24,6 +24,7 @@ pub struct ProgressiveReply {
     output_context: Option<ProgressiveOutputContext>,
     output_sequence: u64,
     use_global_edit_latch: bool,
+    text_limit: Option<(u64, tinychannels_bus::LengthUnit)>,
 }
 
 impl ProgressiveReply {
@@ -50,6 +51,7 @@ impl ProgressiveReply {
             output_context: None,
             output_sequence: 0,
             use_global_edit_latch: true,
+            text_limit: capabilities.text.text_limit.map(|limit| (limit, capabilities.text.length_unit)),
         }
     }
 
