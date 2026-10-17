@@ -1104,6 +1104,12 @@ impl Channels {
         if self.terminal.load(Ordering::SeqCst) {
             return Err(BusError::failed("module is shutting down"));
         }
+        let (instance, activation) = self.media_uploads.binding(&request).await?;
+        if self.media_activation(&instance).await? != activation {
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
+        }
         self.media_uploads.abort(request).await
     }
 
