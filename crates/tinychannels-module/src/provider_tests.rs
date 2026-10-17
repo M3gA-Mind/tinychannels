@@ -1966,7 +1966,7 @@ async fn configured_telegram_native_optional_ports_share_ordered_queue_and_rejec
     assert_eq!(server.received_requests().await.unwrap().len(), before, "mismatched receipt must be rejected before provider I/O");
 
     let draft = running.interact(ChannelInteraction::UpsertDraft { previous: None, intent: intent.clone() }).await.unwrap();
-    let ChannelInteractionResult::Sent(draft) = draft else { panic!("native draft returned no receipt"); };
+    let tinychannels_bus::ChannelInteractionResult::Sent(draft) = draft else { panic!("native draft returned no receipt"); };
     assert_eq!(draft.receipt.primary_platform_message_id.as_deref(), Some("321"));
     let before_bad_draft = server.received_requests().await.unwrap().len();
     let bad = running.interact(ChannelInteraction::UpsertDraft { previous: Some(wrong_scope), intent }).await;
