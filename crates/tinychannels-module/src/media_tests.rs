@@ -318,6 +318,8 @@ async fn activation_replacement_discards_the_pending_read_before_retaining_bytes
 
 #[tokio::test]
 async fn rapid_read_close_cycles_keep_expiry_cleanup_bounded() {
+    let runtime = tokio::runtime::Handle::current();
+    let baseline_tasks = runtime.metrics().num_alive_tasks();
     let reads = MediaReads::default();
     for _ in 0..64 {
         let info = reads
@@ -334,6 +336,11 @@ async fn rapid_read_close_cycles_keep_expiry_cleanup_bounded() {
             .await
             .unwrap();
     }
+    tokio::task::yield_now().await;
+    assert!(
+        runtime.metrics().num_alive_tasks() <= baseline_tasks + 1,
+        "closing reads must not leave one detached expiry task per handle"
+    );
     let first = reads.reserve().await.unwrap();
     let second = reads.reserve().await.unwrap();
     assert!(reads.reserve().await.is_err());
