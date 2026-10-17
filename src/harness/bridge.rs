@@ -91,6 +91,9 @@ pub fn translate_output_event(
             data: json!({ "lifecycle": event }),
         },
         ChannelOutputEvent::Native { data } => OutboundPayload::NativeChannelData { data },
+        event => OutboundPayload::NativeChannelData {
+            data: serde_json::to_value(event).unwrap_or(serde_json::Value::Null),
+        },
     };
 
     vec![ChannelOutboundIntent {

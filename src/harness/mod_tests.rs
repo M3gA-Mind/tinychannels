@@ -308,3 +308,31 @@ fn blocked_streaming_uses_text_even_when_edits_are_available() {
         }
     );
 }
+
+#[test]
+fn tool_progress_projection_preserves_call_identity_arguments_and_result() {
+    let event = ChannelOutputEvent::ToolCallCompleted {
+        call_id: "call-7".into(),
+        tool_name: "search".into(),
+        success: true,
+        output_chars: 13,
+        output: "two results".into(),
+        arguments: Some(serde_json::json!({"query": "weather"})),
+        elapsed_ms: 42,
+        iteration: 2,
+        display_label: Some("Search the web".into()),
+        display_detail: Some("weather".into()),
+        structured: Some(serde_json::json!({"kind": "search", "count": 2})),
+    };
+    let intents = translate_output_event(
+        &turn(),
+        event.clone(),
+        &ChannelStaticCapabilities::default(),
+        &ChannelPresentationCapabilities::default(),
+        BridgeTranslationOptions::default(),
+    );
+    let OutboundPayload::NativeChannelData { data } = &intents[0].payload else {
+        panic!("rich progress must remain typed data until the host projects it")
+    };
+    assert_eq!(data, serde_json::to_value(event).unwrap());
+}
