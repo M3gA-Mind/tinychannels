@@ -41,6 +41,8 @@ pub(crate) struct TelegramMediaUpload<'a> {
     pub(crate) thread_id: Option<&'a str>,
     pub(crate) reply_to_id: Option<&'a str>,
     pub(crate) caption: Option<&'a str>,
+    pub(crate) title: Option<&'a str>,
+    pub(crate) duration_ms: Option<u64>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) content_type: &'a str,
     pub(crate) file_name: &'a str,
@@ -78,6 +80,15 @@ impl TelegramChannel {
         }
         if let Some(caption) = upload.caption {
             form = form.text("caption", caption.to_owned());
+        }
+        if let Some(title) = upload.title {
+            form = form.text("title", title.to_owned());
+        }
+        if let Some(duration_ms) = upload.duration_ms {
+            form = form.text(
+                "duration",
+                duration_ms.saturating_add(999).saturating_div(1000).to_string(),
+            );
         }
         let response = self
             .http_client()
