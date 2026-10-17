@@ -967,13 +967,13 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
             .await
     });
     let command = commands.recv().await.expect("adapter dispatch");
-    let outcome = Box::new(tinychannels_bus::ChannelSendOutcome {
-        receipt: tinychannels_bus::MessageReceipt {
+    let outcome = Box::new(tinychannels_bus::channel::ChannelSendOutcome {
+        receipt: tinychannels_bus::channel::MessageReceipt {
             primary_platform_message_id: Some("msg-1".into()),
             platform_message_ids: vec!["msg-1".into()],
             ..Default::default()
         },
-        error: Some(tinychannels_bus::ChannelSendError {
+        error: Some(tinychannels_bus::channel::ChannelSendError {
             message: "second chunk failed".into(),
             retryable: true,
             ..Default::default()
