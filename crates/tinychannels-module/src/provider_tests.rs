@@ -1248,6 +1248,9 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         observed: std::sync::Mutex::new(Vec::new()),
         request_cursor: std::sync::Mutex::new(0),
     };
+    let descriptor = fixture.adapter.descriptor();
+    assert_eq!(descriptor.id, "telegram");
+    assert_eq!(descriptor.account_id.as_deref(), Some("telegram:account-a"));
     check_feature(&fixture, ConformanceFeature::Text)
         .await
         .unwrap();
