@@ -1551,6 +1551,7 @@ async fn send_typed_media_with_receipt(
                             title,
                             transcript,
                             duration_ms,
+                            ..
                         },
                 } => (
                     "sendAudio",
