@@ -212,6 +212,12 @@ pub(super) async fn send_filler_message(
     channel: &str,
     state: &mut StreamingState,
 ) {
+    const MAX_FILLER_SENDS_PER_TURN: u8 = 8;
+    if state.filler_send_count >= MAX_FILLER_SENDS_PER_TURN {
+        state.filler_disabled = true;
+        return;
+    }
+    state.filler_send_count += 1;
     let text = next_filler_text(state);
     match sender.send(channel, &text).await {
         Ok(resp) => {

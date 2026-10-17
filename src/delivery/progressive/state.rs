@@ -73,6 +73,8 @@ pub struct StreamingState {
     pub filler_index: usize,
     /// Consecutive filler-send failures. Reset to zero on success.
     pub filler_failures: u32,
+    /// Maximum filler send attempts per turn, independent of host output lease.
+    pub filler_send_count: u8,
     /// Latched when the backend rejects filler sends — stops hitting
     /// a broken endpoint every 13 s.
     pub filler_disabled: bool,

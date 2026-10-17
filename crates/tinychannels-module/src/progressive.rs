@@ -661,6 +661,7 @@ impl Replies {
         if channel.id.is_empty()
             || conversation.id.is_empty()
             || turn_id.is_empty()
+            || lifetime_ms == 0
             || channel.id.len() > 4096
             || conversation.id.len() > 4096
             || turn_id.len() > 256
