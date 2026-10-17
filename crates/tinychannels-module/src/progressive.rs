@@ -971,87 +971,12 @@ async fn apply(
                 .await
                 .map_err(|_| Error::failed("host output event callback failed"))?;
         }
-        match event {
-            ChannelOutputEvent::TextDelta { text, .. } => reply.on_text_delta(&text),
-            ChannelOutputEvent::ThinkingDelta { text, .. } => reply.on_thinking_delta(&text),
-            ChannelOutputEvent::ToolCallStarted {
-                tool_name,
-                display_label,
-                ..
-            } => reply.on_tool_call(display_label.as_deref().unwrap_or(&tool_name)),
-            ChannelOutputEvent::ToolProgress { label, message } => {
-                reply.on_tool_call(message.as_deref().unwrap_or(&label))
-            }
-            ChannelOutputEvent::ToolCallProgress { message, .. } => reply.on_tool_call(&message),
-            ChannelOutputEvent::ToolCallCompleted {
-                tool_name,
-                display_label,
-                success,
-                ..
-            } => reply.on_tool_result(display_label.as_deref().unwrap_or(&tool_name), success),
-            ChannelOutputEvent::FinalMessage { .. }
-            | ChannelOutputEvent::ToolCallArgsDelta { .. }
-            | ChannelOutputEvent::ApprovalRequest { .. }
-            | ChannelOutputEvent::Clarification { .. } => {}
-            ChannelOutputEvent::Media { text, parts } if forward => {
-                let mut outbound = Vec::new();
-                if let Some(text) = text {
-                    outbound.push(tinychannels_bus::OutboundContentPart::Content {
-                        part: tinychannels_bus::ContentPart::Text {
-                            text,
-                            markdown_dialect: None,
-                        },
-                    });
-                }
-                outbound.extend(
-                    parts
-                        .into_iter()
-                        .map(|part| tinychannels_bus::OutboundContentPart::Content { part }),
-                );
-                match reply.send_content_parts(&outbound, "").await {
-                    Ok(outcome) => outcomes.push(outcome),
-                    Err(ProgressiveSendError::UnsupportedContent) => unsupported.extend(outbound),
-                    Err(error) => return Err(Error::failed(error.to_string())),
-                }
-            }
-            ChannelOutputEvent::VoiceNote { text, voice } if forward => {
-                let mut outbound = Vec::new();
-                if let Some(text) = text.or_else(|| {
-                    voice
-                        .transcript
-                        .as_ref()
-                        .map(|transcript| transcript.text.clone())
-                }) {
-                    outbound.push(tinychannels_bus::OutboundContentPart::Content {
-                        part: tinychannels_bus::ContentPart::Text {
-                            text,
-                            markdown_dialect: None,
-                        },
-                    });
-                }
-                outbound.push(tinychannels_bus::OutboundContentPart::Voice {
-                    voice: tinychannels_bus::OutboundVoice::Media {
-                        media: voice.media,
-                        codec: voice.codec,
-                        duration_ms: voice.duration_ms,
-                    },
-                });
-                match reply.send_content_parts(&outbound, "").await {
-                    Ok(outcome) => outcomes.push(outcome),
-                    Err(ProgressiveSendError::UnsupportedContent) => unsupported.extend(outbound),
-                    Err(error) => return Err(Error::failed(error.to_string())),
-                }
-            }
-            ChannelOutputEvent::Media { .. }
-            | ChannelOutputEvent::VoiceNote { .. }
-            | ChannelOutputEvent::Subagent { .. }
-            | ChannelOutputEvent::Usage { .. }
-            | ChannelOutputEvent::ModelUsage { .. }
-            | ChannelOutputEvent::Artifact { .. }
-            | ChannelOutputEvent::Cancellation { .. }
-            | ChannelOutputEvent::Lifecycle { .. }
-            | ChannelOutputEvent::Native { .. } => {}
-        }
+        let dispatched = reply
+            .apply_output_event(&event, forward)
+            .await
+            .map_err(|error| Error::failed(error.to_string()))?;
+        outcomes.extend(dispatched.outcomes);
+        unsupported.extend(dispatched.unsupported);
     }
     if !unsupported.is_empty() {
         Ok(ProgressiveResult::DeliveryUnsupported { parts: unsupported })
