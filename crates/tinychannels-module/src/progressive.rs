@@ -493,10 +493,17 @@ async fn send_typed_part(
             });
             if should_speak {
                 let instance = sender.channel.clone();
-                let synthesizer =
-                    crate::provider::ModuleSynthesizer(sender.host.clone(), instance.clone());
+                let synthesizer = crate::provider::ModuleSynthesizer(
+                    sender.host.clone(),
+                    instance.clone(),
+                    media_account_scope.clone(),
+                );
                 let codec = crate::provider::ModuleVoiceCodec(sender.host.clone());
-                let store = crate::provider::ModuleVoiceMediaStore(sender.host.clone(), instance);
+                let store = crate::provider::ModuleVoiceMediaStore(
+                    sender.host.clone(),
+                    instance,
+                    media_account_scope.clone(),
+                );
                 let native_voice = sender.capabilities.voice_out.supported
                     && !sender.capabilities.voice_out.accepted_codecs.is_empty();
                 let audio_codecs = sender
@@ -1256,6 +1263,7 @@ async fn run(
     host: HostChannels,
     channel: String,
     capabilities: tinychannels_bus::ChannelCapabilities,
+    media_account_scope: Option<String>,
     context: Option<ProgressiveOutputContext>,
     lifetime: Duration,
     terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
