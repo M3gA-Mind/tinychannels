@@ -8,7 +8,9 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_core::{BlobReader, BlobStore, CollectionSpec, DocumentStore, Precondition};
+use tinystoragedrivers_core::{
+    BlobReader, BlobStore, CollectionSpec, DocumentStore, Precondition, Query,
+};
 use tokio::io::AsyncReadExt;
 
 const MEDIA_COLLECTION: &str = "channels_media_metadata";
@@ -33,6 +35,7 @@ struct MediaRecord {
     content_type: String,
     file_name: Option<String>,
     digest: String,
+    storage_key: String,
     created_at_unix_ms: u64,
     state: MediaRecordState,
 }
@@ -91,6 +94,7 @@ impl ScopedMediaStore {
             _ => uuid::Uuid::new_v4().to_string(),
         };
         let key = blob_key(&opaque_id)?;
+        let storage_key = format!("{key}/{}", uuid::Uuid::new_v4());
         let file_name = file_name.and_then(safe_file_name);
         let reference = tinychannels_bus::MediaReference {
             opaque_id: Some(opaque_id.clone()),
@@ -107,6 +111,7 @@ impl ScopedMediaStore {
             content_type: content_type.clone(),
             file_name,
             digest: digest.clone(),
+            storage_key: storage_key.clone(),
             created_at_unix_ms: now_unix_ms(),
             state: MediaRecordState::Writing,
         };
@@ -135,7 +140,7 @@ impl ScopedMediaStore {
         if self
             .blobs
             .put_stream(
-                &key,
+                &storage_key,
                 Box::pin(Cursor::new(bytes)),
                 record.media.size_bytes.unwrap_or_default(),
                 Some(&content_type),
@@ -166,8 +171,9 @@ impl ScopedMediaStore {
             .await
             .is_err()
         {
-            // Leave the reservation and blob for explicit recovery. Deleting
-            // the blob here could erase bytes committed by another process.
+            // Blob keys are unique per reservation, so cleaning this attempt
+            // cannot erase another writer's committed bytes.
+            let _ = self.blobs.delete(&storage_key).await;
             anyhow::bail!("media metadata could not be finalized");
         }
         Ok(reference)
@@ -225,7 +231,7 @@ impl ScopedMediaStore {
         if record.scope != scope || record.state != MediaRecordState::Ready {
             anyhow::bail!("media reference is outside the configured channel scope");
         }
-        let key = blob_key(opaque_id)?;
+        let key = record.storage_key.clone();
         let mut stream = self
             .blobs
             .get_stream(&key)
@@ -282,7 +288,7 @@ impl ScopedMediaStore {
                 .map_err(|_| anyhow::anyhow!("media cleanup reservation failed"))?
         };
         self.blobs
-            .delete(&blob_key(opaque_id)?)
+            .delete(&record.storage_key)
             .await
             .map_err(|_| anyhow::anyhow!("media blob cleanup is pending"))?;
         self.documents
@@ -294,6 +300,69 @@ impl ScopedMediaStore {
             .await
             .map_err(|_| anyhow::anyhow!("media cleanup metadata is pending"))?;
         Ok(true)
+    }
+
+    /// Reclaim interrupted writes and deletion tombstones older than the
+    /// caller's cutoff. Unique per-attempt blob keys make this safe even if a
+    /// timed-out writer later resumes: its metadata CAS will fail and it can
+    /// only write its own key.
+    pub async fn cleanup_pending(
+        &self,
+        scope: MediaScope,
+        created_before_unix_ms: u64,
+        limit: usize,
+    ) -> anyhow::Result<usize> {
+        validate_scope(&scope)?;
+        let page = self
+            .documents
+            .query(MEDIA_COLLECTION, &Query::all().limit(limit.clamp(1, 1000)))
+            .await
+            .map_err(|_| anyhow::anyhow!("media cleanup scan failed"))?;
+        let mut cleaned = 0;
+        for document in page.items {
+            let Ok(mut record) = serde_json::from_value::<MediaRecord>(document.doc.clone()) else {
+                continue;
+            };
+            if record.scope != scope
+                || record.created_at_unix_ms > created_before_unix_ms
+                || record.state == MediaRecordState::Ready
+            {
+                continue;
+            }
+            let tombstone_version = if record.state == MediaRecordState::Deleting {
+                document.version
+            } else {
+                record.state = MediaRecordState::Deleting;
+                match self
+                    .documents
+                    .put(
+                        MEDIA_COLLECTION,
+                        record.media.opaque_id.as_deref().unwrap_or_default(),
+                        serde_json::to_value(&record)?,
+                        Precondition::Version(document.version),
+                    )
+                    .await
+                {
+                    Ok(version) => version,
+                    Err(_) => continue,
+                }
+            };
+            if self.blobs.delete(&record.storage_key).await.is_err() {
+                continue;
+            }
+            let Some(id) = record.media.opaque_id.as_deref() else {
+                continue;
+            };
+            if self
+                .documents
+                .delete(MEDIA_COLLECTION, id, Precondition::Version(tombstone_version))
+                .await
+                .is_ok()
+            {
+                cleaned += 1;
+            }
+        }
+        Ok(cleaned)
     }
 
     async fn record(
