@@ -105,6 +105,8 @@ macro_rules! define_method_table {
     };
 }
 
+crate::channel_method_registry!(define_method_table);
+
 /// All host-callback method names in declaration order.
 pub const HOST_METHODS: [&str; 13] = [
     host_methods::DELIVER_INBOUND,
