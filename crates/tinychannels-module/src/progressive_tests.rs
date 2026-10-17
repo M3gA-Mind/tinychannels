@@ -2385,14 +2385,17 @@ async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked()
     // Keep the host synthesis callback pending so finalization must observe
     // the short output lease itself.
     let feed_replies = replies.clone();
-    let feed = tokio::spawn(async move {
-        feed_replies.execute(ProgressiveCommand::FeedOutput {
-            handle,
-            events: vec![ChannelOutputEvent::FinalMessage {
+    let replay_handle = handle.clone();
+    let terminal_events = vec![ChannelOutputEvent::FinalMessage {
                 text: "spoken words".into(),
                 parts: vec![],
                 receipt: None,
-            }],
+            }];
+    let feed_events = terminal_events.clone();
+    let feed = tokio::spawn(async move {
+        feed_replies.execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: feed_events,
         }).await
     });
     callback.entered.notified().await;
@@ -2405,6 +2408,17 @@ async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked()
         request, ProgressiveTransportRequest::SendTyped { .. }
     )), "a late synthesis result must not reach provider transport");
     callback.released.notify_one();
+    tokio::task::yield_now().await;
+    let replay = replies.execute(ProgressiveCommand::FeedOutput {
+        handle: replay_handle,
+        events: terminal_events,
+    }).await;
+    assert!(replay.is_err(), "identical terminal replay remains fenced after expiry");
+    assert_eq!(callback.synthesis_calls.load(Ordering::SeqCst), 1,
+        "terminal replay must not start another synthesis callback");
+    assert!(callback.requests.lock().await.iter().all(|request| !matches!(
+        request, ProgressiveTransportRequest::SendTyped { .. }
+    )), "released late synthesis must not reach provider transport");
     replies.shutdown().await.unwrap();
 }
 
