@@ -336,6 +336,8 @@ pub enum ProgressiveTransportResult {
     /// Structured result for hosts that can preserve normalized receipts and
     /// partial-send failure facts across the module boundary.
     Outcome(crate::channel::ChannelSendOutcome),
+    /// The provider adapter explicitly does not support this typed payload.
+    UnsupportedContent,
     Unavailable,
     EditUnsupported,
     MessageGone,
