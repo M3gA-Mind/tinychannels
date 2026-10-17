@@ -46,6 +46,7 @@ pub use services::{
     ConversationStore, EventSink, LifecycleRegistry, ReactionDecision, ReactionGate, ReactionQuery,
     RunEventAppend, RunLedger, RunTelemetry, RunUpsert, ShutdownHook, SpeechRequest, SpeechResult,
     SpeechSynthesizer, StorageProvider, Transcriber, TranscriptionRequest, TranscriptionResult,
+    VoiceMediaRequest, VoiceMediaStore,
 };
 
 use crate::config::ChannelsConfig;
@@ -65,6 +66,7 @@ pub struct HostCapabilities {
     pub turn_dispatch: bool,
     pub stt: bool,
     pub tts: bool,
+    pub voice_media_store: bool,
     pub approvals: bool,
     pub reaction_gate: bool,
     pub conversation_store: bool,
@@ -82,6 +84,7 @@ impl HostCapabilities {
         turn_dispatch: false,
         stt: false,
         tts: false,
+        voice_media_store: false,
         approvals: false,
         reaction_gate: false,
         conversation_store: false,
@@ -137,6 +140,10 @@ pub trait ChannelHost: Send + Sync {
     fn synthesizer(&self) -> Option<Arc<dyn SpeechSynthesizer>> {
         None
     }
+    /// Durable voice media storage for normalized inbound and outbound parts.
+    fn voice_media_store(&self) -> Option<Arc<dyn VoiceMediaStore>> {
+        None
+    }
     /// Human-in-the-loop approval gate.
     fn approvals(&self) -> Option<Arc<dyn ApprovalGate>> {
         None
@@ -181,6 +188,7 @@ pub trait ChannelHost: Send + Sync {
             turn_dispatch: self.dispatcher().is_some(),
             stt: self.transcriber().is_some(),
             tts: self.synthesizer().is_some(),
+            voice_media_store: self.voice_media_store().is_some(),
             approvals: self.approvals().is_some(),
             reaction_gate: self.reactions().is_some(),
             conversation_store: self.conversations().is_some(),

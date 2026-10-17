@@ -111,6 +111,10 @@ pub mod host_methods {
     pub const PERSIST_ALLOWED_IDENTITY: &str = "PersistAllowedIdentity";
     /// `Transcribe` — use the host's configured speech recognition provider.
     pub const TRANSCRIBE: &str = "Transcribe";
+    /// `SynthesizeSpeech` — use the host's configured speech synthesis provider.
+    pub const SYNTHESIZE_SPEECH: &str = "SynthesizeSpeech";
+    /// `StoreVoiceMedia` — persist voice media and return a durable host reference.
+    pub const STORE_VOICE_MEDIA: &str = "StoreVoiceMedia";
     /// `PublishEvent` — publish one provider event through the host event sink.
     pub const PUBLISH_EVENT: &str = "PublishEvent";
     /// Call a narrow host credential or managed API capability. Durable state is not

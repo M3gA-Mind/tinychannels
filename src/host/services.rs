@@ -7,6 +7,26 @@
 
 use async_trait::async_trait;
 
+/// Persist audio with a host-authorized reference before a provider forwards
+/// it to a normalized channel envelope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceMediaRequest {
+    pub audio_base64: String,
+    pub mime_type: String,
+    pub codec: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub file_name: Option<String>,
+    pub direction: tinychannels_bus::HostVoiceMediaDirection,
+    pub scope: tinychannels_bus::HostVoiceScope,
+}
+
+/// Host-owned durable media persistence. Implementations return only media
+/// references they authorize for the scoped conversation.
+#[async_trait]
+pub trait VoiceMediaStore: Send + Sync {
+    async fn store_voice(&self, request: VoiceMediaRequest) -> anyhow::Result<tinychannels_bus::MediaReference>;
+}
+
 // ---------------------------------------------------------------------------
 // Voice: speech-to-text
 // ---------------------------------------------------------------------------
