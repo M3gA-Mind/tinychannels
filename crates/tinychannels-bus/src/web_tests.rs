@@ -16,7 +16,15 @@ fn assert_historical_fixture_round_trips(fixture: &str) {
 
 #[test]
 fn deployed_web_event_goldens_keep_their_serialized_shapes() {
-    for fixture in [CHAT_DONE, APPROVAL, SUBAGENT, LEGACY_CANCEL, CANCEL, TEXT_DELTA, PROACTIVE] {
+    for fixture in [
+        CHAT_DONE,
+        APPROVAL,
+        SUBAGENT,
+        LEGACY_CANCEL,
+        CANCEL,
+        TEXT_DELTA,
+        PROACTIVE,
+    ] {
         assert_historical_fixture_round_trips(fixture);
     }
 }
@@ -68,12 +76,26 @@ fn known_legacy_events_parse_but_unknown_discriminators_fail() {
 
 #[test]
 fn socket_aliases_are_transport_names_and_streaming_aliases_stay_suppressed() {
-    assert_eq!(legacy_event_alias("tool_call", true).as_deref(), Some("tool:call"));
-    assert_eq!(legacy_event_alias("tool:call", true).as_deref(), Some("tool_call"));
-    assert_eq!(legacy_event_alias("subagent_tool_result", true).as_deref(), Some("subagent:tool:result"));
+    assert_eq!(
+        legacy_event_alias("tool_call", true).as_deref(),
+        Some("tool:call")
+    );
+    assert_eq!(
+        legacy_event_alias("tool:call", true).as_deref(),
+        Some("tool_call")
+    );
+    assert_eq!(
+        legacy_event_alias("subagent_tool_result", true).as_deref(),
+        Some("subagent:tool:result")
+    );
     for name in [
-        "text_delta", "text:delta", "thinking_delta", "subagent_text_delta",
-        "subagent:thinking:delta", "tool_args_delta", "subagent_tool_args_delta",
+        "text_delta",
+        "text:delta",
+        "thinking_delta",
+        "subagent_text_delta",
+        "subagent:thinking:delta",
+        "tool_args_delta",
+        "subagent_tool_args_delta",
     ] {
         assert_eq!(legacy_event_alias(name, true), None, "{name}");
     }
@@ -121,12 +143,66 @@ fn timing_rate_is_finite_and_requires_a_positive_duration() {
 }
 
 #[test]
+fn web_events_keep_ordered_typed_media_and_voice_parts() {
+    use crate::channel::{ContentPart, MediaKind, MediaReference, OutboundContentPart, VoiceNote};
+
+    let event = WebChannelEvent::ChatDone {
+        context: WebEventContext {
+            client_id: "c".into(),
+            thread_id: "t".into(),
+            request_id: "r".into(),
+            ..Default::default()
+        },
+        full_response: Some("See attachment".into()),
+        citations: None,
+        usage: None,
+        timing: None,
+        parts: Some(vec![
+            OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "See attachment".into(),
+                    markdown_dialect: None,
+                },
+            },
+            OutboundContentPart::Content {
+                part: ContentPart::VoiceNote {
+                    voice_note: VoiceNote {
+                        media: MediaReference {
+                            url: Some("https://example.test/audio.ogg".into()),
+                            kind: MediaKind::Audio,
+                            ..Default::default()
+                        },
+                        codec: Some("opus".into()),
+                        ..Default::default()
+                    },
+                },
+            },
+        ]),
+    };
+    let json = serde_json::to_value(event).unwrap();
+    let parts = json["parts"].as_array().unwrap();
+    assert_eq!(parts[0]["part"]["kind"], "text");
+    assert_eq!(parts[1]["part"]["kind"], "voice_note");
+    assert_eq!(
+        parts[1]["part"]["voice_note"]["media"]["url"],
+        "https://example.test/audio.ogg"
+    );
+}
+
+#[test]
 fn schema_export_is_deterministic_and_contains_every_variant() {
     let schema = web_event_schema_json().unwrap();
     assert_eq!(schema, web_event_schema_json().unwrap());
     for event in [
-        "chat_done", "chat_error", "chat_cancelled", "proactive_message", "voice_speak",
-        "subagent_completed", "approval_request", "chat_message", "chat_segment",
+        "chat_done",
+        "chat_error",
+        "chat_cancelled",
+        "proactive_message",
+        "voice_speak",
+        "subagent_completed",
+        "approval_request",
+        "chat_message",
+        "chat_segment",
     ] {
         assert!(schema.contains(event), "schema omitted {event}");
     }
@@ -139,5 +215,8 @@ fn flattened_context_is_the_only_owner_of_turn_request_id() {
         r#"{"event":"artifact_pending","client_id":"c","thread_id":"t","request_id":"r","turn_request_id":"turn"}"#,
     )
     .unwrap();
-    assert_eq!(serde_json::to_value(event).unwrap()["turn_request_id"], "turn");
+    assert_eq!(
+        serde_json::to_value(event).unwrap()["turn_request_id"],
+        "turn"
+    );
 }
