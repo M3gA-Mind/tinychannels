@@ -3175,7 +3175,7 @@ async fn unsupported_rich_final_returns_the_unflattened_parts() {
             },
             codec: None,
             duration_ms: Some(1200),
-                audio_base64: None,
+            audio_base64: None,
         },
     }];
     let result = replies
