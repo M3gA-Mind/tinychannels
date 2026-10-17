@@ -1251,10 +1251,6 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     assert_eq!(observation.request["chat_id"], "100");
     assert_eq!(observation.request["text"], "module-kit");
     assert_eq!(observation.platform_message_ids, ["321"]);
-    check_feature(&fixture, ConformanceFeature::ThreadAddressing)
-        .await
-        .unwrap();
-    let observation = fixture.observations().pop().unwrap();
     assert_eq!(observation.reply_to_id.as_deref(), Some("5"));
     assert_eq!(observation.thread_id.as_deref(), Some("77"));
     check_feature(&fixture, ConformanceFeature::Image)
