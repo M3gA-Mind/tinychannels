@@ -4012,12 +4012,20 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     );
     link_reply
         .send_parts(
-            &[tinychannels_bus::OutboundContentPart::Content {
-                part: tinychannels_bus::ContentPart::Text {
-                    text: "spoken words".into(),
-                    markdown_dialect: None,
+            &[
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: "spoken ".into(),
+                        markdown_dialect: None,
+                    },
                 },
-            }],
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: "words".into(),
+                        markdown_dialect: None,
+                    },
+                },
+            ],
             "spoken words",
         )
         .await
@@ -4037,6 +4045,17 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             | tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Audio { .. } }
     )));
     assert!(link_request.1.contains("https://media.example/authorized/voice"));
+    let canonical_text = link_request.0.iter().filter_map(|part| match part {
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text { text, .. },
+        } => Some(text.as_str()),
+        _ => None,
+    }).collect::<Vec<_>>();
+    assert_eq!(canonical_text.len(), 2, "fallback must preserve ordered text parts");
+    assert_eq!(canonical_text[0], "spoken ");
+    assert!(canonical_text[1].contains("words"));
+    assert!(canonical_text[1].contains("https://media.example/authorized/voice"),
+        "authorized link must exist in provider-rendered content.parts");
     drop(requests);
 
     *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
@@ -4083,6 +4102,11 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     assert!(too_long_request
         .1
         .contains("Audio reply exceeded the channel size limit"));
+    assert!(too_long_request.0.iter().any(|part| matches!(part,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text { text, .. }
+        } if text.contains("Audio reply exceeded the channel size limit")
+    )), "size fallback note must exist in canonical provider-rendered content.parts");
     drop(requests);
 
     *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
