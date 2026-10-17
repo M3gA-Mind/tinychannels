@@ -3,7 +3,7 @@ use tinychannels::Channel;
 
 /// Capability facts bound to the exact adapter handle selected at startup.
 pub(crate) fn configured_adapter_capabilities(
-    provider: &crate::provider::Running,
+    provider: &std::sync::Arc<crate::provider::Running>,
 ) -> tinychannels_bus::ChannelCapabilities {
     let adapter = provider.adapter_handle();
     let descriptor = adapter.descriptor();
