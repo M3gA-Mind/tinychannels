@@ -628,6 +628,89 @@ async fn completed_progressive_handles_are_evicted_at_the_retention_bound() {
 }
 
 #[tokio::test]
+async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usable() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+
+    let too_many = (0..33)
+        .map(|index| ChannelOutputEvent::ThinkingDelta {
+            text: format!("thinking-{index}"),
+            iteration: None,
+        })
+        .collect();
+    let error = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: too_many,
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("too many progressive events"));
+
+    let error = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![
+                ChannelOutputEvent::FinalMessage {
+                    text: "terminal".into(),
+                    parts: vec![],
+                },
+                ChannelOutputEvent::Cancellation {
+                    reason: Some("cancelled".into()),
+                },
+            ],
+        })
+        .await
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("terminal progressive event must be unique and last"));
+
+    let error = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::ThinkingDelta {
+                text: "x".repeat(MAX_CONTENT + 1),
+                iteration: None,
+            }],
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("progressive request exceeds its limit"));
+
+    let error = replies
+        .execute(ProgressiveCommand::Finish {
+            handle: handle.clone(),
+            text: "x".repeat(MAX_CONTENT + 1),
+        })
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("progressive content exceeds its limit"));
+
+    replies
+        .execute(ProgressiveCommand::Feed {
+            handle: handle.clone(),
+            events: vec![tinychannels_bus::module_progressive::ProgressiveEvent::TextDelta(
+                "legacy chunk".into(),
+            )],
+        })
+        .await
+        .unwrap();
+    replies
+        .execute(ProgressiveCommand::Finish {
+            handle,
+            text: "legacy final".into(),
+        })
+        .await
+        .unwrap();
+    let sends = callback.sends.lock().await;
+    assert_eq!(sends.len(), 1);
+    assert_eq!(sends[0]["text"], "legacy final");
+    drop(sends);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn shutdown_aborts_every_open_reply_without_sending_cancellation_text() {
     let (replies, callback) = fixture(false).await;
     let replies = Arc::new(replies);
