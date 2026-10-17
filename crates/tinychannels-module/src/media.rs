@@ -3,6 +3,7 @@ use futures_util::FutureExt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
+use std::future::Future;
 use tinybus::{Error, Result};
 use tinychannels_bus::{
     MediaUploadBegin, MediaUploadChunk, MediaUploadFinish, MediaUploadHandle, MediaUploadResult,
@@ -24,6 +25,7 @@ const UPLOAD_LIFETIME: Duration = Duration::from_secs(60);
 const TERMINAL_LIFETIME: Duration = Duration::from_secs(5 * 60);
 const TERMINAL_CAPACITY: usize = 128;
 const READ_LIFETIME: Duration = Duration::from_secs(60);
+const READ_IO_TIMEOUT: Duration = Duration::from_secs(30);
 
 struct Read {
     instance: String,
@@ -71,6 +73,47 @@ impl MediaReads {
             .map_err(|_| Error::failed("media read capacity is full"))
     }
 
+    pub(crate) async fn resolve<F, Fut, V, Vut>(
+        &self,
+        request: tinychannels_bus::MediaReadBegin,
+        activation: String,
+        load: F,
+        still_active: V,
+    ) -> Result<tinychannels_bus::MediaReadInfo>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<tinychannels::host::StoredMedia>>,
+        V: FnOnce() -> Vut,
+        Vut: Future<Output = bool>,
+    {
+        self.resolve_with_deadline(request, activation, READ_IO_TIMEOUT, load, still_active)
+            .await
+    }
+
+    async fn resolve_with_deadline<F, Fut, V, Vut>(
+        &self,
+        request: tinychannels_bus::MediaReadBegin,
+        activation: String,
+        deadline: Duration,
+        load: F,
+        still_active: V,
+    ) -> Result<tinychannels_bus::MediaReadInfo>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<tinychannels::host::StoredMedia>>,
+        V: FnOnce() -> Vut,
+        Vut: Future<Output = bool>,
+    {
+        let reservation = self.reserve().await?;
+        let media = tokio::time::timeout(deadline, load())
+            .await
+            .map_err(|_| Error::failed("media resolution timed out"))??;
+        if !still_active().await {
+            return Err(Error::failed("media provider activation changed during resolution"));
+        }
+        self.complete(request, activation, media, reservation).await
+    }
+
     pub(crate) async fn complete(
         &self,
         request: tinychannels_bus::MediaReadBegin,
@@ -98,9 +141,13 @@ impl MediaReads {
             }
         };
         let chunk_count = bytes.div_ceil(chunk_size);
+        let mut resolved_reference = media.media;
+        resolved_reference.path = None;
+        resolved_reference.url = None;
+        resolved_reference.local_cache_path = None;
         let info = tinychannels_bus::MediaReadInfo {
             handle: tinychannels_bus::MediaReadHandle(handle.clone()),
-            media: media.media,
+            media: resolved_reference,
             content_type: media.content_type,
             file_name: media.file_name,
             byte_count: bytes,

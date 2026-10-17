@@ -1145,7 +1145,11 @@ impl Channels {
             self.host.clone(),
             request.instance.clone(),
         );
-        let media_id = request.media.opaque_id.clone().expect("validated opaque id");
+        let media_id = request
+            .media
+            .opaque_id
+            .clone()
+            .ok_or_else(|| BusError::failed("media resolution request is invalid"))?;
         let scope = request.scope.clone();
         let max_bytes = request.max_bytes;
         let media = tokio::time::timeout(
