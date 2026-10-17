@@ -1,7 +1,12 @@
 use super::*;
 use base64::Engine;
+use std::ops::Range;
+use std::sync::Arc;
 use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_core::{
+    Blob, BlobMeta, BlobStore, MemoryStorage, Scope, StorageBackend,
+    error::{Result as StorageResult, StorageError},
+};
 
 fn media_scope() -> MediaScope {
     MediaScope {
@@ -30,6 +35,58 @@ fn store() -> ScopedMediaStore {
         Arc::clone(storage.documents()),
         Arc::clone(storage.blobs()),
     )
+}
+
+fn shared_stores() -> (ScopedMediaStore, ScopedMediaStore) {
+    let backend = MemoryStorage::new();
+    let scope = Scope::new("module:tinychannels@test").unwrap();
+    let first = backend.for_scope(&scope).unwrap();
+    let second = backend.for_scope(&scope).unwrap();
+    (
+        ScopedMediaStore::new(Arc::clone(first.documents()), Arc::clone(first.blobs())),
+        ScopedMediaStore::new(Arc::clone(second.documents()), Arc::clone(second.blobs())),
+    )
+}
+
+#[derive(Debug)]
+struct FailDeleteOnce {
+    inner: Arc<dyn BlobStore>,
+    failed: std::sync::atomic::AtomicBool,
+}
+
+#[async_trait::async_trait]
+impl BlobStore for FailDeleteOnce {
+    async fn put(
+        &self,
+        key: &str,
+        bytes: Vec<u8>,
+        content_type: Option<&str>,
+    ) -> StorageResult<BlobMeta> {
+        self.inner.put(key, bytes, content_type).await
+    }
+
+    async fn get(&self, key: &str) -> StorageResult<Option<Blob>> {
+        self.inner.get(key).await
+    }
+
+    async fn get_range(&self, key: &str, range: Range<u64>) -> StorageResult<Option<Vec<u8>>> {
+        self.inner.get_range(key, range).await
+    }
+
+    async fn head(&self, key: &str) -> StorageResult<Option<BlobMeta>> {
+        self.inner.head(key).await
+    }
+
+    async fn delete(&self, key: &str) -> StorageResult<bool> {
+        if !self.failed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return Err(StorageError::backend("injected blob deletion failure"));
+        }
+        self.inner.delete(key).await
+    }
+
+    async fn list(&self, prefix: &str) -> StorageResult<Vec<BlobMeta>> {
+        self.inner.list(prefix).await
+    }
 }
 
 fn valid_png() -> Vec<u8> {
@@ -160,4 +217,79 @@ async fn media_store_rejects_spoofed_mime_and_truncated_image_bodies() {
             .await
             .is_err());
     }
+}
+
+#[tokio::test]
+async fn independent_store_instances_cannot_replace_a_deduplicated_blob() {
+    let (first, second) = shared_stores();
+    let key = Some("telegram:91:photo:concurrent".to_owned());
+    let (left, right) = tokio::join!(
+        first.store(
+            media_scope(),
+            tinychannels_bus::MediaKind::Image,
+            "image/png".into(),
+            Some("photo.png".into()),
+            None,
+            valid_png(),
+            key.clone(),
+            1024,
+        ),
+        second.store(
+            media_scope(),
+            tinychannels_bus::MediaKind::Image,
+            "image/png".into(),
+            Some("photo.png".into()),
+            None,
+            valid_png(),
+            key,
+            1024,
+        )
+    );
+    let successes = usize::from(left.is_ok()) + usize::from(right.is_ok());
+    let reference = left
+        .or(right)
+        .expect("one store must reserve the shared id");
+    let opaque_id = reference.opaque_id.as_deref().unwrap();
+    let resolved = first.read(media_scope(), opaque_id, 1024).await.unwrap();
+    assert_eq!(resolved.bytes, valid_png());
+    assert_eq!(successes, 1);
+}
+
+#[tokio::test]
+async fn failed_blob_cleanup_can_be_retried_after_reopening_the_store() {
+    let backend = MemoryStorage::new();
+    let storage = backend
+        .for_scope(&Scope::new("module:tinychannels@test").unwrap())
+        .unwrap();
+    let failing_blobs = Arc::new(FailDeleteOnce {
+        inner: Arc::clone(storage.blobs()),
+        failed: std::sync::atomic::AtomicBool::new(false),
+    });
+    let writer = ScopedMediaStore::new(
+        Arc::clone(storage.documents()),
+        failing_blobs.clone(),
+    );
+    let reference = writer
+        .store(
+            media_scope(),
+            tinychannels_bus::MediaKind::Image,
+            "image/png".into(),
+            None,
+            None,
+            valid_png(),
+            None,
+            1024,
+        )
+        .await
+        .unwrap();
+    let opaque_id = reference.opaque_id.unwrap();
+    assert!(writer.delete(media_scope(), &opaque_id).await.is_err());
+
+    let reopened = ScopedMediaStore::new(
+        Arc::clone(storage.documents()),
+        failing_blobs,
+    );
+    assert!(reopened.delete(media_scope(), &opaque_id).await.unwrap());
+    assert!(!reopened.delete(media_scope(), &opaque_id).await.unwrap());
+    assert!(reopened.read(media_scope(), &opaque_id, 1024).await.is_err());
 }
