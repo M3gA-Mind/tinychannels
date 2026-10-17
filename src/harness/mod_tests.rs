@@ -429,6 +429,61 @@ fn lifecycle_and_native_events_preserve_structured_data() {
 }
 
 #[test]
+fn voice_note_projection_keeps_transcript_precedence_and_audio_order() {
+    let voice = || tinychannels_bus::VoiceNote {
+        media: MediaReference {
+            kind: MediaKind::Audio,
+            url: Some("https://example.test/voice.ogg".into()),
+            ..Default::default()
+        },
+        codec: Some("opus".into()),
+        duration_ms: Some(1200),
+        transcript: Some(tinychannels_bus::VoiceTranscript {
+            text: "recognized words".into(),
+            language: Some("en".into()),
+        }),
+    };
+    let translated = |text| {
+        translate_output_event(
+            &turn(),
+            ChannelOutputEvent::VoiceNote {
+                text,
+                voice: voice(),
+            },
+            &Default::default(),
+            &Default::default(),
+            BridgeTranslationOptions::default(),
+        )
+        .unwrap()
+    };
+
+    for (text, expected) in [
+        (None, "recognized words"),
+        (Some("host transcript".into()), "host transcript"),
+    ] {
+        let intents = translated(text);
+        let OutboundPayload::Parts { parts } = &intents[0].payload else {
+            panic!("voice note must remain an ordered typed payload")
+        };
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(
+            &parts[0],
+            tinychannels_bus::OutboundContentPart::Content {
+                part: ContentPart::Text { text, .. }
+            } if text == expected
+        ));
+        assert!(matches!(
+            &parts[1],
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    codec: Some(codec), duration_ms: Some(1200), ..
+                }
+            } if codec == "opus"
+        ));
+    }
+}
+
+#[test]
 fn blocked_streaming_uses_text_even_when_edits_are_available() {
     let intents = translate_output_event(
         &turn(),
