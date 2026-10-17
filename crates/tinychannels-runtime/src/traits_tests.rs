@@ -52,8 +52,6 @@ fn explicit_send_message_idempotency_key_is_preserved() {
     assert_eq!(message.idempotency_key.as_deref(), Some("caller-key"));
 }
 
-use super::*;
-
 struct DummyChannel;
 
 #[async_trait]
