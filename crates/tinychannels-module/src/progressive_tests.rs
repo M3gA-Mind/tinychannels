@@ -70,6 +70,46 @@ fn legacy_feed_retains_the_v1_event_wire_shape() {
     );
 }
 
+#[test]
+fn subagent_output_dto_preserves_authorized_worktree_and_iteration_facts() {
+    let event = ChannelOutputEvent::Subagent {
+        agent_id: "agent-2".into(),
+        task_id: "task-9".into(),
+        state: "completed".into(),
+        mode: None,
+        dedicated_thread: Some(true),
+        parent_call_id: None,
+        call_id: None,
+        iteration: Some(3),
+        max_iterations: Some(5),
+        prompt_chars: Some(128),
+        message: None,
+        display_name: Some("executor".into()),
+        tool_name: None,
+        arguments: None,
+        success: Some(true),
+        elapsed_ms: Some(450),
+        output_chars: Some(12),
+        output: Some("short result".into()),
+        structured: None,
+        usage: None,
+        failure: None,
+        display_label: None,
+        display_detail: None,
+        worker_thread_id: Some("child-thread".into()),
+        worktree_path: Some("/workspace/.worktrees/task-9".into()),
+        changed_files: vec!["src/main.rs".into()],
+        dirty_status: Some(true),
+        stop: None,
+        extended_policy: Some(true),
+    };
+    let encoded = serde_json::to_value(&event).unwrap();
+    let decoded: ChannelOutputEvent = serde_json::from_value(encoded.clone()).unwrap();
+    assert_eq!(decoded, event);
+    assert_eq!(encoded["worktreePath"], "/workspace/.worktrees/task-9");
+    assert_eq!(encoded["extendedPolicy"], true);
+}
+
 #[derive(Clone, Default)]
 struct Callback {
     sends: Arc<Mutex<Vec<Value>>>,
