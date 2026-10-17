@@ -69,6 +69,7 @@ use tokio::task::JoinHandle;
 
 use crate::email::EmailSender;
 use crate::host::HostChannels;
+use crate::media::MediaUploads;
 
 const UNKNOWN_CHANNEL_ERROR: &str = "ai.tinyhumans.tinychannels.Error.UnknownChannel";
 const ALREADY_RUNNING_ERROR: &str = "ai.tinyhumans.tinychannels.Error.AlreadyRunning";
@@ -103,9 +104,11 @@ async fn configured_capabilities(
 pub(crate) struct Channels {
     pub(crate) host: HostChannels,
     email: EmailSender,
+    media_uploads: Arc<MediaUploads>,
     progressive: Arc<crate::progressive::Replies>,
     /// Shared with each listener task so it can retire its own entry.
     pub(crate) running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    provider_activations: Mutex<HashMap<String, String>>,
     relays: Arc<Relays>,
     pub(crate) terminal: AtomicBool,
     runtimes: Option<Arc<crate::runtime::Runtimes>>,
@@ -129,12 +132,32 @@ impl Channels {
             relays: Arc::new(Relays::new(host.clone())),
             host,
             email: EmailSender::new(),
+            media_uploads: Arc::new(MediaUploads::default()),
             running,
+            provider_activations: Mutex::new(HashMap::new()),
             terminal: AtomicBool::new(false),
             runtimes,
             shutdown_task: Mutex::new(None),
             delivery_admission: Arc::new(Mutex::new(())),
         }
+    }
+
+    async fn media_activation(&self, instance: &str) -> BusResult<String> {
+        if self
+            .running
+            .lock()
+            .await
+            .get(instance)
+            .is_none_or(|provider| provider.is_finished())
+        {
+            return Err(BusError::failed("media provider instance is not running"));
+        }
+        self.provider_activations
+            .lock()
+            .await
+            .get(instance)
+            .cloned()
+            .ok_or_else(|| BusError::failed("media provider activation is unavailable"))
     }
 
     async fn start_channel_inner(
@@ -195,6 +218,10 @@ impl Channels {
             None => Running::start(channel, hooks, self.host.clone()),
         };
         running.insert(name.clone(), provider);
+        self.provider_activations
+            .lock()
+            .await
+            .insert(name.clone(), uuid::Uuid::new_v4().simple().to_string());
         drop(running);
         finish_start_admission(
             &self.host,
@@ -1010,6 +1037,80 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         self.email.begin_upload(request).await
+    }
+
+    /// Begin bounded media ingestion for one active configured provider.
+    #[tinybus(confidential)]
+    async fn begin_media_upload(
+        &self,
+        request: tinychannels_bus::MediaUploadBegin,
+    ) -> BusResult<tinychannels_bus::MediaUploadHandle> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let activation = self.media_activation(&request.instance).await?;
+        self.media_uploads.begin(request, activation).await
+    }
+
+    /// Append one ordered, retry-safe media chunk over confidential TinyBus.
+    #[tinybus(confidential)]
+    async fn append_media_upload_chunk(
+        &self,
+        chunk: tinychannels_bus::MediaUploadChunk,
+    ) -> BusResult<u32> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_uploads.binding_handle(&chunk.handle).await?;
+        if self.media_activation(&instance).await? != activation {
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
+        }
+        self.media_uploads.append(chunk).await
+    }
+
+    /// Persist a complete upload as an opaque scoped media reference.
+    #[tinybus(confidential)]
+    async fn finish_media_upload(
+        &self,
+        request: tinychannels_bus::MediaUploadFinish,
+    ) -> BusResult<tinychannels_bus::MediaUploadResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_uploads.binding(&request).await?;
+        if self.media_activation(&instance).await? != activation {
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
+        }
+        let repository = Arc::new(crate::provider::ModuleMediaRepository(
+            self.host.clone(),
+            instance,
+        ));
+        self.media_uploads
+            .clone()
+            .finish(request, activation, repository)
+            .await
+    }
+
+    /// Abort buffered media without writing a durable record.
+    #[tinybus(confidential)]
+    async fn abort_media_upload(
+        &self,
+        request: tinychannels_bus::MediaUploadFinish,
+    ) -> BusResult<()> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_uploads.binding(&request).await?;
+        if self.media_activation(&instance).await? != activation {
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
+        }
+        self.media_uploads.abort(request).await
     }
 
     /// Append an ordered, retry-safe confidential attachment chunk.

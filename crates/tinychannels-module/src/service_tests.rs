@@ -210,7 +210,9 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
+        media_uploads: Arc::new(crate::media::MediaUploads::default()),
         running: Arc::new(Mutex::new(running)),
+        provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
         terminal: AtomicBool::new(false),
         runtimes: None,
@@ -299,7 +301,9 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
+        media_uploads: Arc::new(crate::media::MediaUploads::default()),
         running: Arc::new(Mutex::new(running)),
+        provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
         terminal: AtomicBool::new(false),
         runtimes: None,
@@ -767,7 +771,9 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
         )),
         host: host.clone(),
         email: crate::email::EmailSender::new(),
+        media_uploads: Arc::new(crate::media::MediaUploads::default()),
         running: Arc::new(Mutex::new(running)),
+        provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
         terminal: AtomicBool::new(false),
         runtimes: None,
@@ -1148,7 +1154,9 @@ async fn channels_with_store(
         )),
         host,
         email: crate::email::EmailSender::new(),
+        media_uploads: Arc::new(crate::media::MediaUploads::default()),
         running: Arc::new(Mutex::new(running)),
+        provider_activations: Mutex::new(HashMap::new()),
         relays,
         terminal: AtomicBool::new(false),
         runtimes: None,
@@ -2857,6 +2865,126 @@ async fn channel_start_variants_refuse_missing_configuration_and_excessive_backo
         );
     }
     service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
+    use base64::Engine as _;
+    use tinychannels_bus::{
+        ChannelRef, ConversationKind, ConversationRef, HostVoiceScope, MediaKind, MediaUploadBegin,
+        MediaUploadChunk, MediaUploadFinish,
+    };
+
+    let (service, _callbacks, _server) =
+        channels_with_store(Arc::new(CaptureChannel(tokio::sync::mpsc::channel(1).0))).await;
+    service
+        .provider_activations
+        .lock()
+        .await
+        .insert("fixture".into(), "activation-a".into());
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII=")
+        .unwrap();
+    let begin = MediaUploadBegin {
+        instance: "fixture".into(),
+        scope: HostVoiceScope {
+            configured_instance: "forged-instance".into(),
+            channel: ChannelRef {
+                id: "forged-channel".into(),
+                account_id: Some("forged-account".into()),
+            },
+            conversation: ConversationRef {
+                kind: ConversationKind::Thread,
+                id: "conversation".into(),
+                scope_id: Some("scope".into()),
+                parent_id: Some("parent".into()),
+                thread_id: Some("thread".into()),
+                topic_id: Some("topic".into()),
+            },
+            turn_id: "turn".into(),
+        },
+        kind: MediaKind::Image,
+        content_type: "image/png".into(),
+        file_name: Some("image.png".into()),
+        duration_ms: None,
+        codec: None,
+        byte_count: bytes.len(),
+    };
+    assert!(
+        service
+            .begin_media_upload(MediaUploadBegin {
+                instance: "missing".into(),
+                ..begin.clone()
+            })
+            .await
+            .is_err()
+    );
+    let handle = service.begin_media_upload(begin).await.unwrap();
+    assert_eq!(
+        service
+            .append_media_upload_chunk(MediaUploadChunk {
+                handle: handle.clone(),
+                sequence: 0,
+                bytes,
+            })
+            .await
+            .unwrap(),
+        1
+    );
+    let finish = MediaUploadFinish(handle);
+    let result = service.finish_media_upload(finish.clone()).await.unwrap();
+    assert!(result.opaque_id.is_some());
+    assert_eq!(result.content_type.as_deref(), Some("image/png"));
+    assert_eq!(
+        service.finish_media_upload(finish.clone()).await.unwrap(),
+        result
+    );
+    assert!(service.abort_media_upload(finish.clone()).await.is_err());
+
+    service
+        .provider_activations
+        .lock()
+        .await
+        .insert("fixture".into(), "activation-b".into());
+    assert!(service.finish_media_upload(finish).await.is_err());
+    service.terminal.store(true, Ordering::SeqCst);
+    assert!(
+        service
+            .begin_media_upload(MediaUploadBegin {
+                instance: "fixture".into(),
+                ..MediaUploadBegin {
+                    byte_count: 1,
+                    ..request_media_fixture()
+                }
+            })
+            .await
+            .is_err()
+    );
+    service.shutdown().await.unwrap();
+}
+
+fn request_media_fixture() -> tinychannels_bus::MediaUploadBegin {
+    tinychannels_bus::MediaUploadBegin {
+        instance: "fixture".into(),
+        scope: tinychannels_bus::HostVoiceScope {
+            configured_instance: "fixture".into(),
+            channel: tinychannels_bus::ChannelRef {
+                id: "fixture".into(),
+                account_id: None,
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                id: "conversation".into(),
+                ..Default::default()
+            },
+            turn_id: "turn".into(),
+        },
+        kind: tinychannels_bus::MediaKind::Unknown,
+        content_type: "application/octet-stream".into(),
+        file_name: None,
+        duration_ms: None,
+        codec: None,
+        byte_count: 1,
+    }
 }
 
 #[tokio::test]

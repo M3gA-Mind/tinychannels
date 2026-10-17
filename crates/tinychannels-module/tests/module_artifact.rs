@@ -1018,6 +1018,653 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
     );
 }
 
+#[tokio::test]
+#[ignore = "run through scripts/verify-module-artifact.sh"]
+async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference() {
+    use tinychannels_bus::{
+        ChannelRef, ConversationKind, ConversationRef, MediaKind, MediaUploadBegin,
+        MediaUploadChunk, MediaUploadFinish, MediaUploadHandle, OutboundContentPart,
+        module_media::{MEDIA_UPLOAD_CHUNK_BYTES, MediaUploadResult},
+    };
+    use wiremock::matchers::{method, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let (module_host, connection, _broker_task) = start_bus().await.unwrap();
+    admit_module(
+        &module_host,
+        "TINYCHANNELS_MODULE_ARTIFACT",
+        "tinychannels-module",
+    )
+    .unwrap();
+    let storage = MemoryStorage::new();
+    let served_backend = storage.clone();
+    let endpoint = PerCallerEndpoint::new(move |_sender| {
+        let scoped = served_backend.for_scope(&Scope::local()).ok()?;
+        Some(StorageServer::new(scoped))
+    });
+    let _storage_host = serve(&connection, Arc::new(endpoint)).await.unwrap();
+    let callbacks = Callback(
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(Mutex::new(DeliveryState::default())),
+    );
+    connection
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            callbacks,
+        )
+        .await
+        .unwrap();
+    connection
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    wait_until_serving(
+        &connection,
+        tinychannels_bus::BUS_NAME,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
+    let module_proxy = connection
+        .proxy(
+            tinychannels_bus::BUS_NAME,
+            tinychannels_bus::OBJECT_PATH,
+            tinychannels_bus::BUS_NAME,
+        )
+        .unwrap();
+    let reservation: tinychannels_bus::ChannelRuntimeReservation = module_proxy
+        .call_confidential("ReserveRuntime", ())
+        .await
+        .unwrap();
+    let scoped_callbacks = Callback(
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(Mutex::new(DeliveryState::default())),
+    );
+    connection
+        .serve_at(
+            reservation.host_object_path.clone().try_into().unwrap(),
+            scoped_callbacks,
+        )
+        .await
+        .unwrap();
+    module_proxy
+        .call_confidential::<()>("StartRuntime", reservation.handle.clone())
+        .await
+        .unwrap();
+    let runtime_proxy = connection
+        .proxy(
+            tinychannels_bus::BUS_NAME,
+            &reservation.object_path,
+            tinychannels_bus::BUS_NAME,
+        )
+        .unwrap();
+    let other_reservation: tinychannels_bus::ChannelRuntimeReservation = module_proxy
+        .call_confidential("ReserveRuntime", ())
+        .await
+        .unwrap();
+    connection
+        .serve_at(
+            other_reservation
+                .host_object_path
+                .clone()
+                .try_into()
+                .unwrap(),
+            Callback(
+                Arc::new(Mutex::new(Vec::new())),
+                Arc::new(Mutex::new(DeliveryState::default())),
+            ),
+        )
+        .await
+        .unwrap();
+    module_proxy
+        .call_confidential::<()>("StartRuntime", other_reservation.handle.clone())
+        .await
+        .unwrap();
+    let other_runtime_proxy = connection
+        .proxy(
+            tinychannels_bus::BUS_NAME,
+            &other_reservation.object_path,
+            tinychannels_bus::BUS_NAME,
+        )
+        .unwrap();
+
+    let telegram_api = MockServer::start().await;
+    // SAFETY: the artifact verifier runs this case in its own test process.
+    unsafe {
+        std::env::set_var("OPENHUMAN_TELEGRAM_BOT_API_BASE", telegram_api.uri());
+    }
+    Mock::given(method("POST"))
+        .and(path_regex(".*/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": []
+        })))
+        .mount(&telegram_api)
+        .await;
+    Mock::given(method("POST"))
+        .and(path_regex(".*/sendPhoto"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {
+                "message_id": 91,
+                "date": 1,
+                "chat": {"id": 42, "type": "group"},
+                "photo": [{"file_id":"photo-fixture", "file_unique_id":"photo-unique", "width":1, "height":1}]
+            }
+        })))
+        .mount(&telegram_api)
+        .await;
+    let config = ChannelsConfig {
+        telegram: Some(tinychannels_bus::config::TelegramConfig {
+            bot_token: "123:fixture".into(),
+            chat_id: None,
+            allowed_users: vec!["42".into()],
+            stream_mode: Default::default(),
+            draft_update_interval_ms: 1_000,
+            silent_streaming: true,
+            mention_only: false,
+        }),
+        ..Default::default()
+    };
+    runtime_proxy
+        .call_confidential::<()>(
+            "StartChannelConfigured",
+            (
+                "telegram",
+                config.clone(),
+                tinychannels_bus::HttpProxyPolicy::default(),
+            ),
+        )
+        .await
+        .unwrap();
+    other_runtime_proxy
+        .call_confidential::<()>(
+            "StartChannelConfigured",
+            (
+                "telegram",
+                ChannelsConfig {
+                    telegram: Some(tinychannels_bus::config::TelegramConfig {
+                        bot_token: "456:other-fixture".into(),
+                        chat_id: None,
+                        allowed_users: vec!["42".into()],
+                        stream_mode: Default::default(),
+                        draft_update_interval_ms: 1_000,
+                        silent_streaming: true,
+                        mention_only: false,
+                    }),
+                    ..Default::default()
+                },
+                tinychannels_bus::HttpProxyPolicy::default(),
+            ),
+        )
+        .await
+        .unwrap();
+
+    let scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "caller-cannot-select-this".into(),
+        channel: ChannelRef {
+            id: "caller-channel".into(),
+            account_id: Some("caller-account".into()),
+        },
+        conversation: ConversationRef {
+            kind: ConversationKind::Group,
+            id: "42".into(),
+            scope_id: Some("tenant-room".into()),
+            parent_id: Some("parent".into()),
+            thread_id: Some("17".into()),
+            topic_id: Some("topic-17".into()),
+        },
+        turn_id: "turn-media-wire-1".into(),
+    };
+    let begin = MediaUploadBegin {
+        instance: "telegram".into(),
+        scope: scope.clone(),
+        kind: MediaKind::Image,
+        content_type: "image/png".into(),
+        file_name: Some("tiny.png".into()),
+        duration_ms: None,
+        codec: None,
+        byte_count: 68,
+    };
+    assert_eq!(
+        runtime_proxy
+            .call::<MediaUploadHandle>("BeginMediaUpload", begin.clone())
+            .await
+            .unwrap_err()
+            .wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    let handle: MediaUploadHandle = runtime_proxy
+        .call_confidential("BeginMediaUpload", begin)
+        .await
+        .unwrap();
+    let other_runtime_error = other_runtime_proxy
+        .call_confidential::<MediaUploadResult>(
+            "FinishMediaUpload",
+            MediaUploadFinish(handle.clone()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(other_runtime_error.wire_name(), tinybus::Error::FAILED);
+    let png = base64::engine::general_purpose::STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII=")
+        .unwrap();
+    assert_eq!(png.len(), 68);
+    assert!(MEDIA_UPLOAD_CHUNK_BYTES > png.len());
+    let png_for_wire_check = png.clone();
+    runtime_proxy
+        .call_confidential::<u32>(
+            "AppendMediaUploadChunk",
+            MediaUploadChunk {
+                handle: handle.clone(),
+                sequence: 0,
+                bytes: png,
+            },
+        )
+        .await
+        .unwrap();
+    let finish = MediaUploadFinish(handle);
+    let reference: MediaUploadResult = runtime_proxy
+        .call_confidential("FinishMediaUpload", finish.clone())
+        .await
+        .unwrap();
+    assert!(reference.opaque_id.is_some());
+    assert_eq!(reference.kind, MediaKind::Image);
+    assert_eq!(reference.content_type.as_deref(), Some("image/png"));
+    assert!(reference.path.is_none());
+    assert!(reference.url.is_none());
+    assert!(reference.local_cache_path.is_none());
+    let replay: MediaUploadResult = runtime_proxy
+        .call_confidential("FinishMediaUpload", finish.clone())
+        .await
+        .unwrap();
+    assert_eq!(replay, reference);
+
+    // Exercise the public framed request boundary at the advertised maximum
+    // chunk, followed by a final partial chunk. The ordinary channel message
+    // path below uses the independently returned opaque image reference.
+    let mut pdf = vec![b'x'; MEDIA_UPLOAD_CHUNK_BYTES + 17];
+    pdf[..5].copy_from_slice(b"%PDF-");
+    let pdf_begin = MediaUploadBegin {
+        instance: "telegram".into(),
+        scope: scope.clone(),
+        kind: MediaKind::Document,
+        content_type: "application/pdf".into(),
+        file_name: Some("chunk-boundary.pdf".into()),
+        duration_ms: None,
+        codec: None,
+        byte_count: pdf.len(),
+    };
+    let pdf_handle: MediaUploadHandle = runtime_proxy
+        .call_confidential("BeginMediaUpload", pdf_begin)
+        .await
+        .unwrap();
+    let remainder = pdf.split_off(MEDIA_UPLOAD_CHUNK_BYTES);
+    runtime_proxy
+        .call_confidential::<u32>(
+            "AppendMediaUploadChunk",
+            MediaUploadChunk {
+                handle: pdf_handle.clone(),
+                sequence: 0,
+                bytes: pdf,
+            },
+        )
+        .await
+        .unwrap();
+    runtime_proxy
+        .call_confidential::<u32>(
+            "AppendMediaUploadChunk",
+            MediaUploadChunk {
+                handle: pdf_handle.clone(),
+                sequence: 1,
+                bytes: remainder,
+            },
+        )
+        .await
+        .unwrap();
+    let pdf_reference: MediaUploadResult = runtime_proxy
+        .call_confidential("FinishMediaUpload", MediaUploadFinish(pdf_handle))
+        .await
+        .unwrap();
+    assert_eq!(pdf_reference.kind, MediaKind::Document);
+    assert_eq!(
+        pdf_reference.size_bytes,
+        Some((MEDIA_UPLOAD_CHUNK_BYTES + 17) as u64)
+    );
+
+    let send = ChannelOutboundIntent {
+        idempotency_key: "media-wire-send".into(),
+        channel_id: "telegram".into(),
+        conversation_id: "42".into(),
+        channel_ref: Some(ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram".into()),
+        }),
+        conversation_ref: Some(ConversationRef {
+            kind: ConversationKind::Group,
+            id: "42".into(),
+            scope_id: Some("tenant-room".into()),
+            parent_id: Some("parent".into()),
+            thread_id: Some("17".into()),
+            topic_id: Some("topic-17".into()),
+        }),
+        thread_id: Some("17".into()),
+        turn_id: Some("turn-media-wire-1".into()),
+        payload: OutboundPayload::Parts {
+            parts: vec![OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image {
+                    media: reference.clone(),
+                    caption: Some("fixture".into()),
+                    alt_text: None,
+                },
+            }],
+        },
+        ..Default::default()
+    };
+    let send_result = runtime_proxy
+        .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+            "SendChannelIntent",
+            ("telegram", send.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(send_result.message_id.as_deref(), Some("91"));
+    assert!(send_result.error.is_none());
+
+    let mut wrong_account = send.clone();
+    wrong_account.channel_ref.as_mut().unwrap().account_id = Some("telegram:other".into());
+    let mut wrong_conversation = send.clone();
+    wrong_conversation.conversation_id = "43".into();
+    wrong_conversation.conversation_ref.as_mut().unwrap().id = "43".into();
+    let mut wrong_scope = send.clone();
+    wrong_scope.conversation_ref.as_mut().unwrap().scope_id = Some("other-room".into());
+    let mut wrong_parent = send.clone();
+    wrong_parent.conversation_ref.as_mut().unwrap().parent_id = Some("other-parent".into());
+    let mut wrong_thread = send.clone();
+    wrong_thread.thread_id = Some("18".into());
+    wrong_thread.conversation_ref.as_mut().unwrap().thread_id = Some("18".into());
+    let mut wrong_topic = send.clone();
+    wrong_topic.conversation_ref.as_mut().unwrap().topic_id = Some("other-topic".into());
+    let mut wrong_turn = send.clone();
+    wrong_turn.turn_id = Some("turn-from-another-message".into());
+    let invalid_scopes = [
+        wrong_account,
+        wrong_conversation,
+        wrong_scope,
+        wrong_parent,
+        wrong_thread,
+        wrong_topic,
+        wrong_turn,
+    ];
+    for invalid in invalid_scopes {
+        let before = telegram_api
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path().ends_with("/sendPhoto"))
+            .count();
+        assert!(
+            runtime_proxy
+                .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                    "SendChannelIntent",
+                    ("telegram", invalid),
+                )
+                .await
+                .is_err()
+        );
+        let after = telegram_api
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .filter(|request| request.url.path().ends_with("/sendPhoto"))
+            .count();
+        assert_eq!(after, before, "out-of-scope media must not reach Telegram");
+    }
+    let invalid_body = b"not a png".to_vec();
+    let invalid_begin = MediaUploadBegin {
+        instance: "telegram".into(),
+        scope: scope.clone(),
+        kind: MediaKind::Image,
+        content_type: "image/png".into(),
+        file_name: Some("invalid.png".into()),
+        duration_ms: None,
+        codec: None,
+        byte_count: invalid_body.len(),
+    };
+    let invalid_handle: MediaUploadHandle = runtime_proxy
+        .call_confidential("BeginMediaUpload", invalid_begin)
+        .await
+        .unwrap();
+    runtime_proxy
+        .call_confidential::<u32>(
+            "AppendMediaUploadChunk",
+            MediaUploadChunk {
+                handle: invalid_handle.clone(),
+                sequence: 0,
+                bytes: invalid_body,
+            },
+        )
+        .await
+        .unwrap();
+    let invalid_finish = MediaUploadFinish(invalid_handle);
+    assert!(
+        runtime_proxy
+            .call_confidential::<MediaUploadResult>("FinishMediaUpload", invalid_finish.clone())
+            .await
+            .is_err()
+    );
+    runtime_proxy
+        .call_confidential::<()>("AbortMediaUpload", invalid_finish.clone())
+        .await
+        .unwrap();
+    assert!(
+        runtime_proxy
+            .call_confidential::<MediaUploadResult>("FinishMediaUpload", invalid_finish)
+            .await
+            .is_err()
+    );
+    let invalid_mime: MediaUploadHandle = runtime_proxy
+        .call_confidential(
+            "BeginMediaUpload",
+            MediaUploadBegin {
+                instance: "telegram".into(),
+                scope: scope.clone(),
+                kind: MediaKind::Image,
+                content_type: "image/svg+xml".into(),
+                file_name: Some("unsupported.svg".into()),
+                duration_ms: None,
+                codec: None,
+                byte_count: png_for_wire_check.len(),
+            },
+        )
+        .await
+        .unwrap();
+    runtime_proxy
+        .call_confidential::<u32>(
+            "AppendMediaUploadChunk",
+            MediaUploadChunk {
+                handle: invalid_mime.clone(),
+                sequence: 0,
+                bytes: png_for_wire_check.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let invalid_mime_finish = MediaUploadFinish(invalid_mime);
+    assert!(
+        runtime_proxy
+            .call_confidential::<MediaUploadResult>(
+                "FinishMediaUpload",
+                invalid_mime_finish.clone(),
+            )
+            .await
+            .is_err()
+    );
+    runtime_proxy
+        .call_confidential::<()>("AbortMediaUpload", invalid_mime_finish.clone())
+        .await
+        .unwrap();
+    assert!(
+        runtime_proxy
+            .call_confidential::<MediaUploadResult>("FinishMediaUpload", invalid_mime_finish)
+            .await
+            .is_err()
+    );
+    let before_invalid_send = telegram_api
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path().ends_with("/sendPhoto"))
+        .count();
+    let invalid_send = ChannelOutboundIntent {
+        idempotency_key: "invalid-media-no-reference".into(),
+        channel_id: "telegram".into(),
+        conversation_id: "42".into(),
+        channel_ref: Some(ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram".into()),
+        }),
+        conversation_ref: send.conversation_ref.clone(),
+        thread_id: send.thread_id.clone(),
+        turn_id: send.turn_id.clone(),
+        payload: OutboundPayload::Parts {
+            parts: vec![OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image {
+                    media: Default::default(),
+                    caption: None,
+                    alt_text: None,
+                },
+            }],
+        },
+        ..Default::default()
+    };
+    assert!(
+        runtime_proxy
+            .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                "SendChannelIntent",
+                ("telegram", invalid_send),
+            )
+            .await
+            .is_err()
+    );
+    let after_invalid_send = telegram_api
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path().ends_with("/sendPhoto"))
+        .count();
+    assert_eq!(after_invalid_send, before_invalid_send);
+
+    let abandoned_handle: MediaUploadHandle = runtime_proxy
+        .call_confidential(
+            "BeginMediaUpload",
+            MediaUploadBegin {
+                instance: "telegram".into(),
+                scope: scope.clone(),
+                kind: MediaKind::Document,
+                content_type: "application/pdf".into(),
+                file_name: Some("abandoned.pdf".into()),
+                duration_ms: None,
+                codec: None,
+                byte_count: 5,
+            },
+        )
+        .await
+        .unwrap();
+    let requests = telegram_api.received_requests().await.unwrap();
+    let upload = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/sendPhoto"))
+        .expect("typed image send must reach Telegram's photo upload endpoint");
+    let upload_text = String::from_utf8_lossy(&upload.body);
+    assert!(upload_text.contains("name=\"chat_id\"\r\n\r\n42"));
+    assert!(upload_text.contains("name=\"message_thread_id\"\r\n\r\n17"));
+    assert!(upload_text.contains("name=\"caption\"\r\n\r\nfixture"));
+    assert!(upload_text.contains("filename=\"tiny.png\""));
+    assert!(
+        upload
+            .body
+            .windows(png_for_wire_check.len())
+            .any(|bytes| bytes == png_for_wire_check)
+    );
+
+    runtime_proxy
+        .call_confidential::<()>("StopChannel", "telegram")
+        .await
+        .unwrap();
+    runtime_proxy
+        .call_confidential::<()>(
+            "StartChannelConfigured",
+            (
+                "telegram",
+                config,
+                tinychannels_bus::HttpProxyPolicy::default(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(
+        runtime_proxy
+            .call_confidential::<u32>(
+                "AppendMediaUploadChunk",
+                MediaUploadChunk {
+                    handle: abandoned_handle.clone(),
+                    sequence: 0,
+                    bytes: b"%PDF-".to_vec(),
+                },
+            )
+            .await
+            .is_err()
+    );
+    for stale in [finish, MediaUploadFinish(abandoned_handle)] {
+        assert!(
+            runtime_proxy
+                .call_confidential::<MediaUploadResult>("FinishMediaUpload", stale.clone())
+                .await
+                .is_err()
+        );
+        assert!(
+            runtime_proxy
+                .call_confidential::<()>("AbortMediaUpload", stale)
+                .await
+                .is_err()
+        );
+    }
+    let after_restart = runtime_proxy
+        .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+            "SendChannelIntent",
+            ("telegram", send),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_restart.message_id.as_deref(), Some("91"));
+    assert!(after_restart.error.is_none());
+    runtime_proxy
+        .call_confidential::<()>("StopChannel", "telegram")
+        .await
+        .unwrap();
+    other_runtime_proxy
+        .call_confidential::<()>("StopChannel", "telegram")
+        .await
+        .unwrap();
+    module_proxy
+        .call_confidential::<()>("StopRuntime", reservation.handle)
+        .await
+        .unwrap();
+    module_proxy
+        .call_confidential::<()>("StopRuntime", other_reservation.handle)
+        .await
+        .unwrap();
+    // SAFETY: restore the process environment after the isolated artifact test.
+    unsafe {
+        std::env::remove_var("OPENHUMAN_TELEGRAM_BOT_API_BASE");
+    }
+}
+
 fn mime_attachment_bytes(lines: &[String], filename: &str) -> Vec<u8> {
     let message = lines.join("\r\n");
     let marker = format!("filename=\"{filename}\"");
