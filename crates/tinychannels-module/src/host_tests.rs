@@ -619,9 +619,9 @@ async fn absent_host_event_sink_is_an_optional_capability() {
 
 #[tokio::test]
 async fn typed_channel_event_crosses_memory_bus_with_full_source_and_address() {
-    assert_eq!(
-        tinychannels_bus::names::HOST_METHODS.last(),
-        Some(&tinychannels_bus::names::host_methods::DELIVER_EVENT),
+    assert!(
+        tinychannels_bus::names::HOST_METHODS
+            .contains(&tinychannels_bus::names::host_methods::DELIVER_EVENT),
         "the real callback used below must remain in the declared host method table"
     );
     let (host, callback, _server) = connected_host().await;
