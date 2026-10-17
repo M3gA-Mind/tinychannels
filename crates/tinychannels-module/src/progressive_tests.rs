@@ -1775,12 +1775,14 @@ async fn callback_error_after_accepting_draft_is_not_retried_or_resent() {
 #[tokio::test(start_paused = true)]
 async fn scoped_draft_keys_differ_for_identical_text_across_turns_and_accounts() {
     let (replies, callback) = fixture(false).await;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.progressive_edits = true;
     for (account, turn) in [("discord:key-a", "turn-a"), ("discord:key-b", "turn-b")] {
         let handle = open_scoped(
             &replies,
             account,
             turn,
-            tinychannels_bus::ChannelCapabilities::default(),
+            capabilities.clone(),
         )
         .await;
         replies
