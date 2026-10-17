@@ -1,4 +1,107 @@
 use super::*;
+
+fn stored(bytes: Vec<u8>) -> tinychannels::host::StoredMedia {
+    tinychannels::host::StoredMedia {
+        media: tinychannels_bus::MediaReference {
+            opaque_id: Some("opaque".into()),
+            content_type: Some("application/octet-stream".into()),
+            size_bytes: Some(bytes.len() as u64),
+            ..Default::default()
+        },
+        content_type: "application/octet-stream".into(),
+        file_name: Some("data.bin".into()),
+        bytes,
+    }
+}
+
+fn request() -> tinychannels_bus::MediaReadBegin {
+    tinychannels_bus::MediaReadBegin {
+        instance: "telegram:primary".into(),
+        scope: tinychannels_bus::HostVoiceScope {
+            conversation: tinychannels_bus::ConversationRef {
+                id: "conversation".into(),
+                ..Default::default()
+            },
+            turn_id: "turn".into(),
+            ..Default::default()
+        },
+        media: tinychannels_bus::MediaReference {
+            opaque_id: Some("opaque".into()),
+            ..Default::default()
+        },
+        max_bytes: 1024,
+    }
+}
+
+#[tokio::test]
+async fn media_reads_reserve_capacity_before_resolution_and_release_it_on_cancel() {
+    let reads = MediaReads::default();
+    let first = reads.reserve().unwrap();
+    let second = reads.reserve().unwrap();
+    let held = reads.reserve().unwrap();
+    assert!(reads.reserve().is_err());
+    drop(first);
+    let third = reads.reserve().unwrap();
+    drop((second, third));
+    assert!(reads.reserve().is_ok());
+}
+
+#[tokio::test]
+async fn media_reads_return_bounded_ordered_retryable_chunks_and_release_bytes() {
+    let reads = MediaReads::default();
+    let mut begin = request();
+    let bytes = vec![0x5a; tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES + 7];
+    begin.max_bytes = bytes.len() as u64;
+    let info = reads
+        .complete(begin, "activation".into(), stored(bytes.clone()), reads.reserve().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(info.byte_count, bytes.len());
+    assert_eq!(info.chunk_count, 2);
+    let first_request = tinychannels_bus::MediaReadChunk {
+        handle: info.handle.clone(),
+        sequence: 0,
+    };
+    let first = reads.chunk(first_request.clone()).await.unwrap();
+    assert_eq!(first.bytes.len(), tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES);
+    assert!(!first.done);
+    assert_eq!(reads.chunk(first_request).await.unwrap(), first);
+    assert!(reads
+        .chunk(tinychannels_bus::MediaReadChunk {
+            handle: info.handle.clone(),
+            sequence: 2,
+        })
+        .await
+        .is_err());
+    let last = reads
+        .chunk(tinychannels_bus::MediaReadChunk {
+            handle: info.handle.clone(),
+            sequence: 1,
+        })
+        .await
+        .unwrap();
+    assert_eq!(last.bytes, bytes[tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES..]);
+    assert!(last.done);
+    assert!(reads.reserve().is_err());
+    reads
+        .abort(tinychannels_bus::MediaReadFinish(info.handle))
+        .await
+        .unwrap();
+    assert!(reads.reserve().is_ok());
+    drop(held);
+}
+
+#[tokio::test]
+async fn media_reads_reject_claimed_size_mismatch_without_retaining_the_slot() {
+    let reads = MediaReads::default();
+    let mut wrong = stored(vec![1, 2, 3]);
+    wrong.media.size_bytes = Some(4);
+    assert!(reads
+        .complete(request(), "activation".into(), wrong, reads.reserve().unwrap())
+        .await
+        .is_err());
+    assert!(reads.reserve().is_ok());
+}
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
 
