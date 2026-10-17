@@ -104,7 +104,7 @@ async fn configured_capabilities(
 pub(crate) struct Channels {
     pub(crate) host: HostChannels,
     email: EmailSender,
-    media_uploads: MediaUploads,
+    media_uploads: Arc<MediaUploads>,
     progressive: Arc<crate::progressive::Replies>,
     /// Shared with each listener task so it can retire its own entry.
     pub(crate) running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
@@ -132,7 +132,7 @@ impl Channels {
             relays: Arc::new(Relays::new(host.clone())),
             host,
             email: EmailSender::new(),
-            media_uploads: MediaUploads::default(),
+            media_uploads: Arc::new(MediaUploads::default()),
             running,
             provider_activations: Mutex::new(HashMap::new()),
             terminal: AtomicBool::new(false),
@@ -1081,11 +1081,14 @@ impl Channels {
         if self.media_activation(&instance).await? != activation {
             return Err(BusError::failed("media upload belongs to another provider activation"));
         }
-        let repository = crate::provider::ModuleMediaRepository(
+        let repository = Arc::new(crate::provider::ModuleMediaRepository(
             self.host.clone(),
             instance,
-        );
-        self.media_uploads.finish(request, activation, &repository).await
+        ));
+        self.media_uploads
+            .clone()
+            .finish(request, activation, repository)
+            .await
     }
 
     /// Abort buffered media without writing a durable record.

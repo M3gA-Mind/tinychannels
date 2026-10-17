@@ -268,6 +268,7 @@ impl tinychannels::host::StorageProvider for ModuleStorage {
     }
 }
 
+#[derive(Clone)]
 pub(crate) struct ModuleMediaRepository(HostChannels, String);
 
 impl ModuleMediaRepository {
