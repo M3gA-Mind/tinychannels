@@ -196,6 +196,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         conversation_ref: None,
         reply_to_id: Some("message-3".to_owned()),
         thread_id: Some("thread-9".to_owned()),
+        turn_id: None,
         durability: tinychannels::DeliveryDurability::BestEffort,
         payload: tinychannels::OutboundPayload::Text {
             text: "hello".to_owned(),
@@ -513,7 +514,8 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         }),
                         reply_to_id: Some("source-message".into()),
                         thread_id: Some("thread".into()),
-                        durability: tinychannels_bus::DeliveryDurability::BestEffort,
+                        turn_id: None,
+        durability: tinychannels_bus::DeliveryDurability::BestEffort,
                         payload,
                     },
                 ),
@@ -673,7 +675,8 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         idempotency_key: key.into(),
                         channel_id: "fixture".into(),
                         conversation_id: "room".into(),
-                        durability: tinychannels_bus::DeliveryDurability::BestEffort,
+                        turn_id: None,
+        durability: tinychannels_bus::DeliveryDurability::BestEffort,
                         payload,
                         ..Default::default()
                     },
@@ -734,7 +737,8 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
                 channel_ref: None,
                 conversation_ref: None,
                 idempotency_key: "delivery-required".to_owned(),
-                durability: tinychannels::DeliveryDurability::Required,
+                turn_id: None,
+        durability: tinychannels::DeliveryDurability::Required,
                 payload: tinychannels::OutboundPayload::Text {
                     text: "must remain durable".to_owned(),
                 },
@@ -1115,6 +1119,7 @@ fn required_intent(id: &str, text: &str) -> ChannelOutboundIntent {
         conversation_id: "room-1".into(),
         channel_ref: None,
         conversation_ref: None,
+        turn_id: None,
         durability: tinychannels::DeliveryDurability::Required,
         payload: tinychannels::OutboundPayload::Text { text: text.into() },
         ..Default::default()
@@ -1580,6 +1585,7 @@ async fn best_effort_rich_payload_is_rejected_by_the_legacy_text_only_provider()
     let intent = ChannelOutboundIntent {
         idempotency_key: "structured-1".into(),
         channel_id: "fixture".into(),
+        turn_id: None,
         durability: tinychannels::DeliveryDurability::BestEffort,
         payload: tinychannels::OutboundPayload::NativeChannelData {
             data: serde_json::json!({"kind": "card", "safe": true}),
@@ -2004,6 +2010,7 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
     let original = tinychannels_bus::ChannelOutboundIntent {
         channel_id: "telegram".into(),
         idempotency_key: "existing-required-key".into(),
+        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         payload: tinychannels_bus::OutboundPayload::Text {
             text: "fixture".into(),
@@ -2987,7 +2994,8 @@ async fn service_send_failures_preserve_named_error_and_durable_queue_busy_refus
             .send_channel_intent(
                 "fixture".into(),
                 ChannelOutboundIntent {
-                    durability: tinychannels::DeliveryDurability::BestEffort,
+                    turn_id: None,
+        durability: tinychannels::DeliveryDurability::BestEffort,
                     ..required_intent("best-effort", "hello")
                 },
             )

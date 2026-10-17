@@ -327,7 +327,8 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         let intent = ChannelOutboundIntent {
             idempotency_key: key.into(),
             channel_id: "not-running".into(),
-            durability: tinychannels_bus::DeliveryDurability::Required,
+            turn_id: None,
+        durability: tinychannels_bus::DeliveryDurability::Required,
             payload: OutboundPayload::Text {
                 text: "scoped delivery".into(),
             },
@@ -685,6 +686,7 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
     let required = ChannelOutboundIntent {
         idempotency_key: "artifact-required".into(),
         channel_id: "not-running".into(),
+        turn_id: None,
         durability: tinychannels::DeliveryDurability::Required,
         payload: OutboundPayload::Text {
             text: "artifact fixture".into(),

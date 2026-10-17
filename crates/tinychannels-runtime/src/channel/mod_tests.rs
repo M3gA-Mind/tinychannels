@@ -757,6 +757,7 @@ fn outbound_intent_carries_idempotency_key() {
         conversation_ref: None,
         reply_to_id: None,
         thread_id: Some("topic-99".into()),
+        turn_id: None,
         durability: DeliveryDurability::Required,
         payload: OutboundPayload::NativeChannelData {
             data: json!({"x": 1}),

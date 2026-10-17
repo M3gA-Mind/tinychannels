@@ -935,6 +935,7 @@ async fn durable_store_round_trips_records_inside_the_active_host_scope() {
         conversation_id: "room-1".into(),
         channel_ref: None,
         conversation_ref: None,
+        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         ..Default::default()
     };
@@ -970,6 +971,7 @@ async fn updating_pending_delivery_does_not_read_the_full_queue() {
     let store = crate::delivery::HostDeliveryStore::from_host(&host);
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "op-update-only".into(),
+        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         ..Default::default()
     };
@@ -999,6 +1001,7 @@ async fn durable_store_rejects_invalid_and_expired_records() {
     let store = crate::delivery::HostDeliveryStore::from_host(&host);
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "op-validate".into(),
+        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         ..Default::default()
     };
@@ -1124,6 +1127,7 @@ async fn host_without_a_storage_object_has_no_delivery_store_and_refuses_require
     ));
     let intent = tinychannels_bus::ChannelOutboundIntent {
         idempotency_key: "missing-store".into(),
+        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         ..Default::default()
     };

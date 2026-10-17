@@ -308,6 +308,7 @@ fn relay_send_action_projects_text_outbound_intent() {
         conversation_ref: None,
         reply_to_id: Some("message-1".into()),
         thread_id: Some("thread-2".into()),
+        turn_id: None,
         durability: DeliveryDurability::Required,
         payload: OutboundPayload::Text { text: "hi".into() },
     };
