@@ -365,6 +365,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 },
                 codec: Some("audio/ogg".into()),
                 duration_ms: Some(700),
+                audio_base64: None,
             },
         },
         tinychannels_bus::OutboundContentPart::Voice {
@@ -412,6 +413,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 },
                 codec: Some("audio/ogg".into()),
                 duration_ms: Some(1200),
+                audio_base64: None,
             },
         },
         tinychannels_bus::OutboundPayload::Voice {
@@ -524,6 +526,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                             media,
                             codec,
                             duration_ms,
+                            ..
                         },
                 } = &typed.parts[0]
                 else {

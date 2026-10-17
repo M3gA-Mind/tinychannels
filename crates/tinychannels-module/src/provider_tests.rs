@@ -5,6 +5,7 @@ use sha2::Digest as _;
 #[tokio::test]
 #[ignore = "requires the separately built TinyVoice module; run with TINYVOICE_MODULE_ARTIFACT"]
 async fn codec_adapter_calls_loaded_tinyvoice_module() {
+    use tinychannels::host::VoiceCodec as _;
     use tinybus::broker::Broker;
     use tinybus::module::ModuleHost;
     use tinyvoice_bus::codec::AudioCodec;

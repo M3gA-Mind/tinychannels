@@ -218,6 +218,7 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         transcriptions_started: Arc::new(AtomicUsize::new(0)),
         transcription_started: Arc::new(tokio::sync::Notify::new()),
         transcription_gate: Arc::new(tokio::sync::Notify::new()),
+        voice_scopes: Arc::new(Mutex::new(Vec::new())),
         controller_blocked: Arc::new(AtomicBool::new(false)),
         controllers_started: Arc::new(AtomicUsize::new(0)),
         controller_started: Arc::new(tokio::sync::Notify::new()),
