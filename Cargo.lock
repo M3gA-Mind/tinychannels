@@ -2811,6 +2811,7 @@ dependencies = [
  "serde_json",
  "tinychannels-bus",
  "tinychannels-runtime",
+ "tokio",
 ]
 
 [[package]]
