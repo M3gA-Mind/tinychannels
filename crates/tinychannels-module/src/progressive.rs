@@ -31,7 +31,6 @@ const TURN_LIFETIME: Duration = Duration::from_secs(180);
 struct Sender {
     host: HostChannels,
     context: Option<ProgressiveOutputContext>,
-    text_limit: Option<(u64, tinychannels_bus::LengthUnit)>,
 }
 
 impl Sender {
@@ -136,73 +135,19 @@ impl ProgressiveSender for Sender {
         sequence: u64,
     ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
     {
-        let text_only = parts.iter().all(|part| {
-            matches!(
-                part,
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Text { .. }
-                }
-            )
-        });
-        let segments = match self.text_limit.filter(|_| text_only) {
-            Some((limit, unit)) => split_text_by_limit(text, limit, unit)?,
-            None => vec![text.to_owned()],
-        };
-        let mut aggregate = tinychannels_bus::channel::ChannelSendOutcome::default();
-        for (index, segment) in segments.iter().enumerate() {
-            let segment_parts = if text_only && segments.len() > 1 {
-                vec![tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Text {
-                        text: segment.clone(),
-                        markdown_dialect: None,
-                    },
-                }]
-            } else {
-                parts.to_vec()
-            };
-            let outcome = match send_typed_part(
-                self,
-                channel,
-                &segment_parts,
-                segment,
-                context,
-                sequence,
-                index as u32,
-            )
-            .await
-            {
-                Ok(outcome) => outcome,
-                Err(ProgressiveSendError::PartialOutcome(outcome)) => outcome,
-                Err(error) if index > 0 => {
-                    aggregate.error = Some(tinychannels_bus::channel::ChannelSendError {
-                        kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                        message: error.to_string(),
-                        sent_before_error: true,
-                        ..Default::default()
-                    });
-                    break;
-                }
-                Err(error) => return Err(error),
-            };
-            let missing_receipt = outcome.receipt.platform_message_ids.is_empty()
-                && outcome.receipt.parts.is_empty()
-                && outcome.error.is_none();
-            merge_receipt(&mut aggregate.receipt, outcome.receipt, index == 0, index);
-            if outcome.error.is_some() {
-                aggregate.error = outcome.error;
-                break;
-            }
-            if missing_receipt {
-                aggregate.error = Some(tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                    message: "provider accepted a progressive send without a receipt id".into(),
-                    sent_before_error: true,
-                    ..Default::default()
-                });
-                break;
-            }
-        }
-        Ok(aggregate)
+        send_typed_part(self, channel, parts, text, context, sequence, 0).await
+    }
+
+    async fn send_parts_with_segment(
+        &self,
+        channel: &str,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+        context: Option<&ProgressiveOutputContext>,
+        sequence: u64,
+        segment_index: u32,
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
+        send_typed_part(self, channel, parts, text, context, sequence, segment_index).await
     }
 
     async fn edit(
@@ -941,16 +886,11 @@ async fn run(
     terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
     mut inbox: mpsc::Receiver<Command>,
 ) {
-    let text_limit = capabilities
-        .text
-        .text_limit
-        .map(|limit| (limit, capabilities.text.length_unit));
     let mut reply = if let Some(context) = context {
         ProgressiveReply::new_scoped(
             Arc::new(Sender {
                 host,
                 context: Some(context.clone()),
-                text_limit,
             }),
             channel,
             capabilities,
@@ -961,7 +901,6 @@ async fn run(
             Arc::new(Sender {
                 host,
                 context: None,
-                text_limit,
             }),
             channel,
             capabilities,
