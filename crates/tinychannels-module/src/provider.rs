@@ -615,6 +615,7 @@ async fn listen_with_supervision(
 /// A resource is retained until its owning task acknowledges cleanup.
 pub(crate) struct Running {
     pub(crate) channel: Arc<dyn Channel>,
+    configured_instance: String,
     send: mpsc::Sender<SendCommand>,
     cancel: watch::Sender<bool>,
     worker: Mutex<Option<JoinHandle<()>>>,
@@ -771,6 +772,7 @@ impl Running {
         });
         Arc::new(Self {
             channel,
+            configured_instance,
             send,
             cancel,
             worker: Mutex::new(Some(worker)),
