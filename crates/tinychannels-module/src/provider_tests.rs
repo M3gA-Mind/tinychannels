@@ -516,7 +516,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
                 let synthesized = synthesizer.synthesize_scoped(scope.clone(), tinychannels::host::SpeechRequest {
                     text: "speak this".into(), voice: None, format: Some("ogg_opus".into()),
-                    ..Default::default()
+                    thread_id: scope.conversation.thread_id.clone().or_else(|| scope.conversation.topic_id.clone()),
                 }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                 let audio = base64::engine::general_purpose::STANDARD.decode(&synthesized.audio_base64)
                     .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
