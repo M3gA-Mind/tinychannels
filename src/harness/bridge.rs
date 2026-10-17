@@ -148,7 +148,23 @@ pub fn translate_output_event(
             max_iterations,
             stop,
         } => OutboundPayload::NativeChannelData {
-            data: json!({ "lifecycle": { "stage": stage, "message": message, "iteration": iteration, "maxIterations": max_iterations, "stop": stop } }),
+            data: {
+                let mut lifecycle = serde_json::Map::new();
+                lifecycle.insert("stage".into(), json!(stage));
+                if let Some(message) = message {
+                    lifecycle.insert("message".into(), json!(message));
+                }
+                if let Some(iteration) = iteration {
+                    lifecycle.insert("iteration".into(), json!(iteration));
+                }
+                if let Some(max_iterations) = max_iterations {
+                    lifecycle.insert("maxIterations".into(), json!(max_iterations));
+                }
+                if let Some(stop) = stop {
+                    lifecycle.insert("stop".into(), json!(stop));
+                }
+                json!({"lifecycle": lifecycle})
+            },
         },
         ChannelOutputEvent::Native { data } => OutboundPayload::NativeChannelData { data },
         event => OutboundPayload::NativeChannelData {

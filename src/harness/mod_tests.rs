@@ -281,10 +281,20 @@ fn harness_events_preserve_text_and_routing_metadata() {
         )
         .unwrap();
         assert_eq!(intents.len(), 1);
-        assert_eq!(
-            intents[0].payload,
-            OutboundPayload::Text { text: text.into() }
-        );
+        if text == "final" {
+            assert!(matches!(
+                &intents[0].payload,
+                OutboundPayload::Parts { parts }
+                    if matches!(parts.first(), Some(tinychannels_bus::OutboundContentPart::Content {
+                        part: ContentPart::Text { text: caption, .. }
+                    }) if caption == "final")
+            ));
+        } else {
+            assert_eq!(
+                intents[0].payload,
+                OutboundPayload::Text { text: text.into() }
+            );
+        }
         assert!(intents[0].idempotency_key.starts_with("turn-1:"));
         assert_eq!(intents[0].channel_id, "telegram");
         assert_eq!(intents[0].conversation_id, "chat-1");
