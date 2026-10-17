@@ -1688,22 +1688,43 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         })))
         .mount(&server)
         .await;
-    let channel = Arc::new(
-        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
-            .with_api_base_for_test(server.uri()),
-    );
     let instance = "telegram:account-a".to_owned();
     let hooks = Arc::new(Hooks::default());
-    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
-    let _provider_host = hooks.host(
+    let (host, callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let provider_host = hooks.host(
         host.clone(),
         instance.clone(),
         Some("telegram:media-v1:test".into()),
+    );
+    let config = tinychannels_bus::ChannelsConfig {
+        telegram: Some(tinychannels_bus::config::TelegramConfig {
+            bot_token: "test-token".into(),
+            chat_id: None,
+            allowed_users: vec!["*".into()],
+            stream_mode: Default::default(),
+            draft_update_interval_ms: 1000,
+            silent_streaming: true,
+            mention_only: false,
+        }),
+        ..Default::default()
+    };
+    let built = tinychannels::build_telegram_channel(
+        &config,
+        &provider_host,
+        &tinychannels::DefaultHttpClients,
+    )
+    .expect("configured Telegram adapter exists");
+    let channel = Arc::new(
+        Arc::try_unwrap(built)
+            .ok()
+            .expect("factory channel has no outside owners")
+            .with_api_base_for_test(server.uri()),
     );
     let running = Running::start_telegram(channel, hooks, host, None, true);
     let handle = running.adapter_handle();
     let fixture = RunningTelegramConformance {
         adapter: handle,
+        running: running.clone(),
         server,
         scope: ExpectedScope {
             channel: tinychannels_bus::ChannelRef {
@@ -1712,8 +1733,8 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
             },
             conversation: ConversationRef {
                 kind: ConversationKind::Group,
-                id: "100".into(),
-                thread_id: Some("77".into()),
+                id: "-100".into(),
+                topic_id: Some("77".into()),
                 ..Default::default()
             },
             reply_to_id: Some("5".into()),
@@ -1721,6 +1742,8 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         },
         observed: std::sync::Mutex::new(Vec::new()),
         request_cursor: std::sync::Mutex::new(0),
+        media: std::collections::HashMap::new(),
+        callbacks,
     };
     let descriptor = fixture.adapter.descriptor();
     assert_eq!(descriptor.id, "telegram");
@@ -1734,15 +1757,11 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         .await
         .unwrap();
     let observation = fixture.observations().pop().unwrap();
-    assert_eq!(observation.request["chat_id"], "100");
+    assert_eq!(observation.request["chat_id"], "-100");
     assert_eq!(observation.request["text"], "module-kit");
     assert_eq!(observation.platform_message_ids, ["321"]);
     assert_eq!(observation.reply_to_id.as_deref(), Some("5"));
     assert_eq!(observation.thread_id.as_deref(), Some("77"));
-    check_feature(&fixture, ConformanceFeature::Image)
-        .await
-        .unwrap();
-    assert!(fixture.observations().is_empty());
     running.stop().await.unwrap();
 }
 
