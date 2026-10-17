@@ -39,7 +39,7 @@ fn vcard_escape(value: &str) -> String {
         .replace('\r', "")
 }
 
-fn safe_vcard_type(label: Option<&str>, fallback: &str) -> &str {
+fn safe_vcard_type<'a>(label: Option<&'a str>, fallback: &'a str) -> &'a str {
     match label.map(str::trim).map(str::to_ascii_uppercase).as_deref() {
         Some("CELL" | "HOME" | "WORK" | "FAX" | "PAGER" | "VOICE") => {
             label.map(str::trim).unwrap_or(fallback)
