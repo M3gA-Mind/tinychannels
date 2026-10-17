@@ -180,6 +180,7 @@ impl ProgressiveReply {
                 outbound.push(tinychannels_bus::OutboundContentPart::Voice {
                     voice: tinychannels_bus::OutboundVoice::Media {
                         media: voice.media.clone(),
+                        audio_base64: None,
                         codec: voice.codec.clone(),
                         duration_ms: voice.duration_ms,
                     },

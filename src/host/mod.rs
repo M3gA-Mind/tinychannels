@@ -102,6 +102,7 @@ impl HostCapabilities {
             turn_dispatch: host.dispatcher().is_some(),
             stt: host.transcriber().is_some(),
             tts: host.synthesizer().is_some(),
+            voice_media_store: host.voice_media_store().is_some(),
             approvals: host.approvals().is_some(),
             reaction_gate: host.reactions().is_some(),
             conversation_store: host.conversations().is_some(),
