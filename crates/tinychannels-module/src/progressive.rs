@@ -156,11 +156,13 @@ impl ProgressiveSender for Sender {
                 Err(ProgressiveSendError::Unavailable)
             }
             ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Failed) => {
-                Err(ProgressiveSendError::Other(anyhow::anyhow!("typed provider send failed with unknown outcome")))
+                Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                    "typed provider send failed with unknown outcome"
+                )))
             }
-            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::UnsupportedContent) => {
-                Err(ProgressiveSendError::UnsupportedContent)
-            }
+            ChannelBackendResult::ProgressiveTransport(
+                ProgressiveTransportResult::UnsupportedContent,
+            ) => Err(ProgressiveSendError::UnsupportedContent),
             _ => Err(ProgressiveSendError::UnsupportedContent),
         }
     }

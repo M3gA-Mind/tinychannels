@@ -612,7 +612,8 @@ async fn transport_failures_preserve_recovery_classification() {
             .await
             .unwrap_err();
         match result {
-            ProgressiveTransportResult::Acknowledged | ProgressiveTransportResult::UnsupportedContent => unreachable!(),
+            ProgressiveTransportResult::Acknowledged
+            | ProgressiveTransportResult::UnsupportedContent => unreachable!(),
             ProgressiveTransportResult::Unavailable => {
                 assert!(matches!(error, ProgressiveSendError::Unavailable))
             }
