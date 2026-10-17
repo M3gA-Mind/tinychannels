@@ -265,7 +265,10 @@ fn telegram_advertises_typed_media_only_with_scoped_storage() {
         ["image/jpeg", "image/png", "image/gif", "image/webp"]
     );
     assert_eq!(configured.content.sticker.accepted_types, ["image/webp"]);
-    assert_eq!(configured.content.image.max_size_bytes, Some(10 * 1024 * 1024));
+    assert_eq!(
+        configured.content.image.max_size_bytes,
+        Some(10 * 1024 * 1024)
+    );
     assert_eq!(
         configured.content.video.max_size_bytes,
         Some(20 * 1024 * 1024)
@@ -274,7 +277,10 @@ fn telegram_advertises_typed_media_only_with_scoped_storage() {
         configured.content.file.max_size_bytes,
         Some(20 * 1024 * 1024)
     );
-    assert_eq!(configured.content.audio.emitted_types, ["audio/mpeg", "audio/mp4"]);
+    assert_eq!(
+        configured.content.audio.emitted_types,
+        ["audio/mpeg", "audio/mp4"]
+    );
     assert_eq!(configured.content.video.emitted_types, ["video/mp4"]);
 }
 
@@ -1160,8 +1166,8 @@ async fn typed_audio_upload_preserves_caption_title_and_duration() {
 #[tokio::test]
 async fn telegram_rejects_wav_audio_before_native_upload() {
     let server = mock_api().await;
-    let channel = channel_for(&server, &["*"])
-        .with_media_repository(Arc::new(TypedMediaReadFixture));
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
     let mut message = typed_text("unsupported-wav", String::new());
     message.channel_ref = Some(tinychannels_bus::ChannelRef {
         id: "telegram".into(),
@@ -1199,8 +1205,8 @@ async fn telegram_rejects_wav_audio_before_native_upload() {
 #[tokio::test]
 async fn telegram_photo_over_ten_megabytes_is_rejected_before_http() {
     let server = mock_api().await;
-    let channel = channel_for(&server, &["*"])
-        .with_media_repository(Arc::new(TypedMediaReadFixture));
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
     let mut message = typed_text("oversized-photo", String::new());
     message.channel_ref = Some(tinychannels_bus::ChannelRef {
         id: "telegram".into(),
@@ -1242,7 +1248,9 @@ fn valid_mp3_frame() -> Vec<u8> {
 
 fn oversized_jpeg_with_dimensions() -> Vec<u8> {
     let mut bytes = vec![0_u8; 10 * 1024 * 1024 + 1];
-    bytes[..11].copy_from_slice(&[0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01]);
+    bytes[..11].copy_from_slice(&[
+        0xff, 0xd8, 0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x01, 0x00, 0x01,
+    ]);
     bytes
 }
 
