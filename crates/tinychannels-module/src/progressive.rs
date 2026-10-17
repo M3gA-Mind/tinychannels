@@ -204,7 +204,7 @@ impl ProgressiveSender for Sender {
         sequence: u64,
     ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
     {
-        send_typed_part(self, channel, parts, text, context, sequence, 0).await
+        send_typed_part(self, channel, parts, text, context, sequence, 0, false).await
     }
 
     async fn send_parts_with_segment(
