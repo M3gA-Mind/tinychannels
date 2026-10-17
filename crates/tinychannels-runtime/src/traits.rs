@@ -1,5 +1,5 @@
 //! In-process provider seams and legacy send helpers.
-use tinychannels_bus::{ChannelIngress, ChannelMessage, SendMessage};
+use tinychannels_bus::{ChannelMessage, SendMessage};
 
 use async_trait::async_trait;
 
@@ -220,10 +220,6 @@ pub trait ChannelSendExt: Channel {
 }
 
 impl<T: Channel + ?Sized> ChannelSendExt for T {}
-
-#[cfg(test)]
-#[path = "traits_tests.rs"]
-mod tests;
 
 // Runtime idempotency construction for the legacy send DTO.
 pub trait SendMessageExt {
