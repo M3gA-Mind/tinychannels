@@ -712,6 +712,38 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
 }
 
 #[tokio::test]
+async fn progressive_open_and_handle_errors_are_closed_after_shutdown() {
+    let (replies, _) = fixture(false).await;
+    let invalid = replies
+        .execute(ProgressiveCommand::Open {
+            channel: "".into(),
+        })
+        .await
+        .unwrap_err();
+    assert!(invalid.to_string().contains("invalid progressive target"));
+
+    let missing = replies
+        .execute(ProgressiveCommand::Finish {
+            handle: "missing".into(),
+            text: "final".into(),
+        })
+        .await
+        .unwrap_err();
+    assert!(missing.to_string().contains("unknown progressive handle"));
+
+    replies.shutdown().await.unwrap();
+    let stopped = replies
+        .execute(ProgressiveCommand::Open {
+            channel: "discord:after-shutdown".into(),
+        })
+        .await
+        .unwrap_err();
+    assert!(stopped
+        .to_string()
+        .contains("progressive replies are shutting down"));
+}
+
+#[tokio::test]
 async fn shutdown_aborts_every_open_reply_without_sending_cancellation_text() {
     let (replies, callback) = fixture(false).await;
     let replies = Arc::new(replies);
