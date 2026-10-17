@@ -63,10 +63,8 @@ impl Callback {
         }
         let configured = if matches!(request, ProgressiveTransportRequest::OutputEvent { .. }) {
             self.output_result.lock().await.clone()
-        } else if typed_send {
-            self.send_result.lock().await.clone()
         } else {
-            None
+            self.send_result.lock().await.clone()
         };
         let result = configured.unwrap_or_else(|| {
             if typed_send {
@@ -608,13 +606,13 @@ async fn transport_failures_preserve_recovery_classification() {
         ProgressiveTransportResult::MessageGone,
         ProgressiveTransportResult::Failed,
     ] {
-        *callback.result.lock().await = Some(result.clone());
+        *callback.send_result.lock().await = Some(result.clone());
         let error = sender
             .edit("discord:room", "message-id", "updated")
             .await
             .unwrap_err();
         match result {
-            ProgressiveTransportResult::Acknowledged => unreachable!(),
+            ProgressiveTransportResult::Acknowledged | ProgressiveTransportResult::UnsupportedContent => unreachable!(),
             ProgressiveTransportResult::Unavailable => {
                 assert!(matches!(error, ProgressiveSendError::Unavailable))
             }
@@ -640,7 +638,7 @@ async fn transport_failures_preserve_recovery_classification() {
 async fn output_callback_failure_cleans_up_without_sending_a_replacement() {
     let (replies, callback) = fixture(false).await;
     let handle = open(&replies).await;
-    *callback.result.lock().await = Some(ProgressiveTransportResult::Failed);
+    *callback.output_result.lock().await = Some(ProgressiveTransportResult::Failed);
     let error = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
@@ -719,7 +717,7 @@ async fn typed_final_delivery_returns_partial_receipt_without_retrying() {
         continuation_message_ids: vec![],
         ..Default::default()
     });
-    *callback.result.lock().await = Some(ProgressiveTransportResult::Outcome(outcome.clone()));
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Outcome(outcome.clone()));
     let result = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle,
@@ -791,7 +789,7 @@ async fn typed_send_preserves_configured_account_and_full_conversation_scope() {
 async fn unsupported_rich_final_returns_the_unflattened_parts() {
     let (replies, callback) = fixture(false).await;
     let handle = open(&replies).await;
-    *callback.result.lock().await = Some(ProgressiveTransportResult::Failed);
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::UnsupportedContent);
     let parts = vec![tinychannels_bus::OutboundContentPart::Voice {
         voice: tinychannels_bus::OutboundVoice::Media {
             media: tinychannels_bus::MediaReference {
