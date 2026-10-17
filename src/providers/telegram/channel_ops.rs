@@ -1537,28 +1537,42 @@ async fn send_typed_media_with_receipt(
     let mut receipt_parts = Vec::new();
     let mut failed = None;
     for part in &message.parts {
-        let (method, media_kind, media, caption, title, duration_ms, fallback_name) =
-            match part {
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Text { text, .. },
-                } => {
-                    let text = strip_tool_call_tags(text);
-                    match channel
-                        .send_text_chunks_with_ids(
-                            &text,
-                            &conversation.id,
-                            thread_id.as_deref(),
-                            message
-                                .reply_to_id
-                                .as_deref()
-                                .and_then(|id| id.parse::<i64>().ok()),
-                        )
-                        .await
-                    {
-                        Ok(ids) => {
-                            for id in ids {
+        let (method, media_kind, media, caption, title, duration_ms, fallback_name) = match part {
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. },
+            } => {
+                let text = strip_tool_call_tags(text);
+                match channel
+                    .send_text_chunks_with_ids(
+                        &text,
+                        &conversation.id,
+                        thread_id.as_deref(),
+                        message
+                            .reply_to_id
+                            .as_deref()
+                            .and_then(|id| id.parse::<i64>().ok()),
+                    )
+                    .await
+                {
+                    Ok(ids) => {
+                        for id in ids {
+                            receipt_parts.push(telegram_receipt_part(
+                                &id,
+                                tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                                receipt_parts.len(),
+                                &conversation,
+                                &thread_id,
+                                message.reply_to_id.as_deref(),
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(partial) =
+                            error.downcast_ref::<super::channel_send::PartialTextSendError>()
+                        {
+                            for id in &partial.message_ids {
                                 receipt_parts.push(telegram_receipt_part(
-                                    &id,
+                                    id,
                                     tinychannels_bus::channel::MessageReceiptPartKind::Text,
                                     receipt_parts.len(),
                                     &conversation,
@@ -1567,104 +1581,89 @@ async fn send_typed_media_with_receipt(
                                 ));
                             }
                         }
-                        Err(error) => {
-                            if let Some(partial) =
-                                error.downcast_ref::<super::channel_send::PartialTextSendError>()
-                            {
-                                for id in &partial.message_ids {
-                                    receipt_parts.push(telegram_receipt_part(
-                                        id,
-                                        tinychannels_bus::channel::MessageReceiptPartKind::Text,
-                                        receipt_parts.len(),
-                                        &conversation,
-                                        &thread_id,
-                                        message.reply_to_id.as_deref(),
-                                    ));
-                                }
-                            }
-                            failed = Some(error);
-                        }
+                        failed = Some(error);
                     }
-                    if failed.is_some() {
-                        break;
-                    }
-                    continue;
                 }
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Image { media, caption, .. },
-                } => (
-                    "sendPhoto",
-                    tinychannels_bus::MediaKind::Image,
-                    media,
-                    caption.as_deref(),
-                    None,
-                    None,
-                    "photo",
-                ),
-                tinychannels_bus::OutboundContentPart::Content {
-                    part:
-                        tinychannels_bus::ContentPart::Video {
-                            media,
-                            caption,
-                            duration_ms,
-                            ..
-                        },
-                } => (
-                    "sendVideo",
-                    tinychannels_bus::MediaKind::Video,
-                    media,
-                    caption.as_deref(),
-                    None,
-                    *duration_ms,
-                    "video",
-                ),
-                tinychannels_bus::OutboundContentPart::Content {
-                    part:
-                        tinychannels_bus::ContentPart::Audio {
-                            media,
-                            title,
-                            transcript,
-                            duration_ms,
-                            ..
-                        },
-                } => (
-                    "sendAudio",
-                    tinychannels_bus::MediaKind::Audio,
-                    media,
-                    transcript.as_deref(),
-                    title.as_deref(),
-                    *duration_ms,
-                    "audio",
-                ),
-                tinychannels_bus::OutboundContentPart::Content {
-                    part:
-                        tinychannels_bus::ContentPart::File {
-                            media,
-                            file_name,
-                            caption,
-                        },
-                } => (
-                    "sendDocument",
-                    tinychannels_bus::MediaKind::Document,
-                    media,
-                    caption.as_deref(),
-                    None,
-                    None,
-                    file_name.as_deref().unwrap_or("file"),
-                ),
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Sticker { media, .. },
-                } => (
-                    "sendSticker",
-                    tinychannels_bus::MediaKind::Image,
-                    media,
-                    None,
-                    None,
-                    None,
-                    "sticker",
-                ),
-                _ => unreachable!("content combination was validated above"),
-            };
+                if failed.is_some() {
+                    break;
+                }
+                continue;
+            }
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image { media, caption, .. },
+            } => (
+                "sendPhoto",
+                tinychannels_bus::MediaKind::Image,
+                media,
+                caption.as_deref(),
+                None,
+                None,
+                "photo",
+            ),
+            tinychannels_bus::OutboundContentPart::Content {
+                part:
+                    tinychannels_bus::ContentPart::Video {
+                        media,
+                        caption,
+                        duration_ms,
+                        ..
+                    },
+            } => (
+                "sendVideo",
+                tinychannels_bus::MediaKind::Video,
+                media,
+                caption.as_deref(),
+                None,
+                *duration_ms,
+                "video",
+            ),
+            tinychannels_bus::OutboundContentPart::Content {
+                part:
+                    tinychannels_bus::ContentPart::Audio {
+                        media,
+                        title,
+                        transcript,
+                        duration_ms,
+                        ..
+                    },
+            } => (
+                "sendAudio",
+                tinychannels_bus::MediaKind::Audio,
+                media,
+                transcript.as_deref(),
+                title.as_deref(),
+                *duration_ms,
+                "audio",
+            ),
+            tinychannels_bus::OutboundContentPart::Content {
+                part:
+                    tinychannels_bus::ContentPart::File {
+                        media,
+                        file_name,
+                        caption,
+                    },
+            } => (
+                "sendDocument",
+                tinychannels_bus::MediaKind::Document,
+                media,
+                caption.as_deref(),
+                None,
+                None,
+                file_name.as_deref().unwrap_or("file"),
+            ),
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Sticker { media, .. },
+            } => (
+                "sendSticker",
+                tinychannels_bus::MediaKind::Image,
+                media,
+                None,
+                None,
+                None,
+                "sticker",
+            ),
+            _ => unreachable!("content combination was validated above"),
+        };
         let Some(opaque_id) = media
             .opaque_id
             .as_deref()
