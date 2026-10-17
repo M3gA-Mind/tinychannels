@@ -622,6 +622,85 @@ async fn empty_thinking_and_filler_without_an_id_do_not_claim_cleanup_ownership(
     assert_eq!(state.filler_failures, 0);
 }
 
+#[tokio::test]
+async fn draft_uncertain_edit_retains_authority_and_never_posts_a_replacement() {
+    use super::draft::flush_streaming_edit;
+
+    let sender = FakeSender::default();
+    let mut state = StreamingState {
+        content: "updated draft".into(),
+        message_id: Some("draft-1".into()),
+        message_ids: vec!["draft-1".into(), "draft-2".into()],
+        ..Default::default()
+    };
+    FakeSender::script(&sender.edits, Outcome::Err(|| {
+        ProgressiveSendError::PartialOutcome(Box::new(
+            tinychannels_bus::channel::ChannelSendOutcome {
+                receipt: tinychannels_bus::channel::MessageReceipt {
+                    platform_message_ids: vec!["draft-1".into(), "draft-2".into()],
+                    ..Default::default()
+                },
+                error: Some(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                    sent_before_error: true,
+                    ..Default::default()
+                }),
+            },
+        ))
+    }));
+
+    flush_streaming_edit(&sender, "telegram:receipt", &mut state, false).await;
+    flush_streaming_edit(&sender, "telegram:receipt", &mut state, false).await;
+
+    assert!(state.edit_disabled);
+    assert_eq!(state.message_id.as_deref(), Some("draft-1"));
+    assert_eq!(state.message_ids, ["draft-1", "draft-2"]);
+    assert_eq!(sender.calls(), [Call::Edit("draft-1".into(), "updated draft".into())]);
+}
+
+#[tokio::test]
+async fn thinking_partial_edit_keeps_bubble_for_cleanup_and_stops_editing() {
+    use super::bubbles::flush_thinking_message;
+
+    let sender = FakeSender::default();
+    let mut state = StreamingState {
+        thinking_accumulator: "current thought".into(),
+        thinking_message_id: Some("thinking-1".into()),
+        thinking_message_ids: vec!["thinking-1".into(), "thinking-2".into()],
+        ..Default::default()
+    };
+    FakeSender::script(&sender.edits, Outcome::Err(|| {
+        ProgressiveSendError::PartialOutcome(Box::new(
+            tinychannels_bus::channel::ChannelSendOutcome::default(),
+        ))
+    }));
+
+    flush_thinking_message(&sender, "telegram:thinking", &mut state, false).await;
+    flush_thinking_message(&sender, "telegram:thinking", &mut state, false).await;
+
+    assert!(state.thinking_edit_disabled);
+    assert_eq!(state.thinking_message_id.as_deref(), Some("thinking-1"));
+    assert_eq!(state.thinking_message_ids, ["thinking-1", "thinking-2"]);
+    assert_eq!(sender.calls().len(), 1);
+}
+
+#[tokio::test]
+async fn typing_failures_disable_only_after_the_configured_failure_budget() {
+    use super::bubbles::send_typing_indicator;
+
+    let sender = FakeSender::default();
+    let mut state = TypingState::default();
+    FakeSender::script(&sender.typings, Outcome::Err(other));
+    send_typing_indicator(&sender, "telegram:typing", &mut state).await;
+    assert_eq!(state.failures, 1);
+    assert!(!state.disabled);
+    FakeSender::script(&sender.typings, Outcome::Err(other));
+    send_typing_indicator(&sender, "telegram:typing", &mut state).await;
+    assert!(state.disabled);
+    send_typing_indicator(&sender, "telegram:typing", &mut state).await;
+    assert_eq!(sender.calls(), [Call::Typing, Call::Typing]);
+}
+
 #[test]
 fn unicode_segment_boundaries_match_configured_units() {
     let source = "a😀éz";
