@@ -102,12 +102,10 @@ async fn reservations_and_metadata_are_bounded_before_retaining_media() {
         .begin(request(1), "activation-a".into())
         .await
         .unwrap();
-    assert!(
-        uploads
-            .begin(request(1), "activation-a".into())
-            .await
-            .is_err()
-    );
+    uploads
+        .begin(request(1), "activation-a".into())
+        .await
+        .expect("finalization must release its reservation");
     assert_eq!(uploads.state.lock().await.uploads.len(), 2);
 }
 
