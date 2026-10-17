@@ -78,6 +78,16 @@ impl Callback {
         } else {
             result
         };
+        let result = if !typed_send
+            && matches!(request, ProgressiveTransportRequest::OutputEvent {
+                event: ChannelOutputEvent::FinalMessage { .. }, ..
+            })
+            && matches!(result, ProgressiveTransportResult::Failed)
+        {
+            ProgressiveTransportResult::Acknowledged
+        } else {
+            result
+        };
         Ok(ChannelBackendResult::ProgressiveTransport(result))
     }
 }
@@ -783,5 +793,34 @@ async fn typed_send_preserves_configured_account_and_full_conversation_scope() {
     assert_eq!(turn_id.as_deref(), Some("turn-topic-9"));
     assert_eq!(channel_ref.as_ref(), Some(&context.channel));
     assert_eq!(conversation.as_ref(), Some(&context.conversation));
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn unsupported_rich_final_returns_the_unflattened_parts() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Failed);
+    let parts = vec![tinychannels_bus::OutboundContentPart::Voice {
+        voice: tinychannels_bus::OutboundVoice {
+            url: "https://media.invalid/voice.ogg".into(),
+            mime_type: Some("audio/ogg".into()),
+            duration_ms: Some(1200),
+            transcript: None,
+        },
+    }];
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "voice note".into(),
+                parts: parts.clone(),
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    assert_eq!(result, ProgressiveResult::DeliveryUnsupported { parts });
+    assert!(callback.sends.lock().await.is_empty());
     replies.shutdown().await.unwrap();
 }
