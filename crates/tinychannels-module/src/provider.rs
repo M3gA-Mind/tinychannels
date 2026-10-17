@@ -1118,18 +1118,14 @@ fn adapter_payload_supported(
                 .is_none_or(|_| capabilities.content.text.outbound)
                 && (media_urls.is_empty() || capabilities.content.image.outbound)
         }
-        OutboundPayload::Voice { .. } => {
-            capabilities.voice_out.supported || capabilities.content.text.outbound
-        }
+        OutboundPayload::Voice { .. } => capabilities.voice_out.supported,
         OutboundPayload::Files { .. } => capabilities.content.file.outbound,
         OutboundPayload::Poll { .. } => capabilities.content.poll.outbound,
         OutboundPayload::PresentationBlocks { .. } => capabilities.content.presentation.outbound,
         OutboundPayload::NativeChannelData { .. } => capabilities.content.native.outbound,
         OutboundPayload::Parts { parts } => parts.iter().all(|part| match part {
             OutboundContentPart::Content { part } => supports_part(part),
-            OutboundContentPart::Voice { .. } => {
-                capabilities.voice_out.supported || capabilities.content.text.outbound
-            }
+            OutboundContentPart::Voice { .. } => capabilities.voice_out.supported,
         }),
     }
 }
