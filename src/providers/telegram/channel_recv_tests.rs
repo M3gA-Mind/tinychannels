@@ -885,6 +885,68 @@ async fn telegram_document_download_infers_type_and_name_from_getfile_path() {
 }
 
 #[tokio::test]
+async fn telegram_audio_mime_hint_precedes_ambiguous_download_extension() {
+    let server = mock_api().await;
+    let mp4_audio = b"\0\0\0\x18ftypM4A \0\0\0\0fixture".to_vec();
+    mount_post(
+        &server,
+        "getFile",
+        ok_with(serde_json::json!({
+            "file_path": "audio/recording.mp4",
+            "file_size": mp4_audio.len()
+        })),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/file/bot{TOKEN}/audio/recording.mp4")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/octet-stream")
+                .set_body_bytes(mp4_audio.clone()),
+        )
+        .mount(&server)
+        .await;
+
+    let repository = ScopedMediaRepository::new();
+    let channel =
+        channel_for(&server, &["alice"]).with_media_repository(Arc::new(repository.clone()));
+    let update = serde_json::json!({
+        "update_id": 13,
+        "message": {
+            "message_id": 63,
+            "chat": { "id": 888, "type": "supergroup" },
+            "from": { "id": 9, "username": "alice" },
+            "audio": {
+                "file_id": "audio-file",
+                "file_unique_id": "audio-unique",
+                "mime_type": "audio/mp4"
+            }
+        }
+    });
+    let message = channel
+        .parse_update_message_or_voice(&update)
+        .await
+        .expect("audio-only update is accepted");
+    let parts = channel
+        .media_parts_for_ingress(&update, &message)
+        .await
+        .unwrap();
+    let envelope = TelegramChannel::inbound_envelope_with_media(&update, &message, None, parts);
+    let [tinychannels_bus::ContentPart::Audio { media, .. }] = envelope.parts.as_slice() else {
+        panic!("audio update should remain typed audio");
+    };
+    assert_eq!(media.file_name.as_deref(), Some("recording.mp4"));
+    assert_eq!(media.content_type.as_deref(), Some("audio/mp4"));
+    let scope = repository.scopes.lock().unwrap()[0].clone();
+    let stored = repository
+        .read_media(scope, media.opaque_id.clone().unwrap(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(stored.bytes, mp4_audio);
+    assert_eq!(stored.content_type, "audio/mp4");
+}
+
+#[tokio::test]
 async fn text_update_bypasses_voice_parser() {
     let server = mock_api().await;
     let ch = channel_for(&server, &["*"]);
