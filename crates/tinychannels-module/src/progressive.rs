@@ -30,6 +30,7 @@ const LEGACY_TURN_LIFETIME: Duration = Duration::from_secs(180);
 
 struct Sender {
     host: HostChannels,
+    media_account_scope: Option<String>,
     context: Option<ProgressiveOutputContext>,
     capabilities: tinychannels_bus::ChannelCapabilities,
     channel: String,
@@ -496,13 +497,13 @@ async fn send_typed_part(
                 let synthesizer = crate::provider::ModuleSynthesizer(
                     sender.host.clone(),
                     instance.clone(),
-                    media_account_scope.clone(),
+                    sender.media_account_scope.clone(),
                 );
                 let codec = crate::provider::ModuleVoiceCodec(sender.host.clone());
                 let store = crate::provider::ModuleVoiceMediaStore(
                     sender.host.clone(),
                     instance,
-                    media_account_scope.clone(),
+                    sender.media_account_scope.clone(),
                 );
                 let native_voice = sender.capabilities.voice_out.supported
                     && !sender.capabilities.voice_out.accepted_codecs.is_empty();
@@ -1273,6 +1274,7 @@ async fn run(
         ProgressiveReply::new_scoped(
             Arc::new(Sender {
                 host,
+                media_account_scope: media_account_scope.clone(),
                 context: Some(context.clone()),
                 capabilities: capabilities.clone(),
                 channel: channel.clone(),
@@ -1286,6 +1288,7 @@ async fn run(
         ProgressiveReply::new(
             Arc::new(Sender {
                 host,
+                media_account_scope,
                 context: None,
                 capabilities: capabilities.clone(),
                 channel: channel.clone(),
