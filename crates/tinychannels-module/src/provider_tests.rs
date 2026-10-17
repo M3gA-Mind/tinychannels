@@ -129,7 +129,11 @@ async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
     assert_eq!(note["media"]["opaqueId"], "opaque-voice");
     assert_eq!(note["codec"], "ogg_opus");
     assert_eq!(note["durationMs"], 1400);
-    assert_eq!(note["waveform"], serde_json::json!([0.1, 0.6, 1.0]));
+    let waveform = note["waveform"].as_array().unwrap();
+    assert_eq!(waveform.len(), 3);
+    for (actual, expected) in waveform.iter().zip([0.1_f64, 0.6, 1.0]) {
+        assert!((actual.as_f64().unwrap() - expected).abs() < 0.000_001);
+    }
     assert_eq!(note["transcript"]["state"], "unavailable");
     host.shutdown().await.unwrap();
 }
