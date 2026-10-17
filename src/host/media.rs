@@ -15,6 +15,7 @@ use tokio::io::AsyncReadExt;
 
 const MEDIA_COLLECTION: &str = "channels_media_metadata";
 const MEDIA_KEY_PREFIX: &str = "channels/media/";
+const OPAQUE_ID_PREFIX: &str = "tcmedia1_";
 
 /// The identity required to store or resolve media for one channel turn.
 pub type MediaScope = tinychannels_bus::HostVoiceScope;
@@ -36,6 +37,7 @@ pub struct MediaMetadata {
     pub content_type: String,
     pub file_name: Option<String>,
     pub duration_ms: Option<u64>,
+    pub voice_direction: Option<tinychannels_bus::HostVoiceMediaDirection>,
     pub dedupe_key: Option<String>,
     pub max_bytes: u64,
 }
@@ -61,6 +63,7 @@ struct MediaRecord {
     file_name: Option<String>,
     digest: String,
     storage_key: String,
+    voice_direction: Option<tinychannels_bus::HostVoiceMediaDirection>,
     created_at_unix_ms: u64,
     state: MediaRecordState,
 }
@@ -102,6 +105,7 @@ impl ScopedMediaStore {
             content_type,
             file_name,
             duration_ms,
+            voice_direction,
             dedupe_key,
             max_bytes,
         } = metadata;
@@ -119,7 +123,7 @@ impl ScopedMediaStore {
         let digest = digest(&bytes);
         let opaque_id = match dedupe_key.as_deref() {
             Some(key) if !key.trim().is_empty() => scoped_id(&scope, key)?,
-            _ => uuid::Uuid::new_v4().to_string(),
+            _ => format!("{OPAQUE_ID_PREFIX}{}", uuid::Uuid::new_v4()),
         };
         let key = blob_key(&opaque_id)?;
         let storage_key = format!("{key}/{}", uuid::Uuid::new_v4());
@@ -140,6 +144,7 @@ impl ScopedMediaStore {
             file_name,
             digest: digest.clone(),
             storage_key: storage_key.clone(),
+            voice_direction,
             created_at_unix_ms: now_unix_ms(),
             state: MediaRecordState::Writing,
         };
@@ -234,6 +239,7 @@ impl ScopedMediaStore {
             content_type,
             file_name,
             duration_ms,
+            voice_direction,
             dedupe_key,
             max_bytes,
         } = metadata;
@@ -269,6 +275,7 @@ impl ScopedMediaStore {
                 content_type,
                 file_name,
                 duration_ms,
+                voice_direction,
                 dedupe_key,
                 max_bytes,
             },
@@ -497,12 +504,13 @@ fn scoped_id(scope: &MediaScope, dedupe_key: &str) -> anyhow::Result<String> {
     hash.update(encoded);
     hash.update((dedupe_key.len() as u64).to_le_bytes());
     hash.update(dedupe_key.as_bytes());
-    Ok(hex::encode(hash.finalize()))
+    Ok(format!("{OPAQUE_ID_PREFIX}{}", hex::encode(hash.finalize())))
 }
 
 fn blob_key(opaque_id: &str) -> anyhow::Result<String> {
-    if !(opaque_id.len() == 36 || opaque_id.len() == 64)
-        || !opaque_id
+    let suffix = opaque_id.strip_prefix(OPAQUE_ID_PREFIX).unwrap_or_default();
+    if !(suffix.len() == 36 || suffix.len() == 64)
+        || !suffix
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
     {
