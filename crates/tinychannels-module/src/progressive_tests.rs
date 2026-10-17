@@ -500,6 +500,8 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
 #[tokio::test]
 async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     let (replies, _) = fixture(false).await;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.progressive_edits = true;
     let mut reply = ProgressiveReply::new(
         Arc::new(Sender {
             host: replies.host.clone(),
@@ -1798,7 +1800,7 @@ async fn filler_callback_error_after_acceptance_is_not_retried() {
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:filler-unknown",
-        tinychannels_bus::ChannelCapabilities::default(),
+        capabilities,
     );
     reply.filler_tick().await;
     reply.filler_tick().await;
