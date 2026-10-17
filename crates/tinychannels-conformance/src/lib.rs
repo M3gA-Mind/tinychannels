@@ -8,7 +8,7 @@
 
 use async_trait::async_trait;
 use tinychannels_bus::{
-    ChannelCapabilities, ChannelOutboundIntent, ChannelRef, ChannelSendError,
+    ChannelCapabilities, ChannelOutboundIntent, ChannelRef, ChannelSendError, SendErrorKind,
     channel::{ChannelSendOutcome, ConversationRef},
 };
 use tinychannels_runtime::channel::ChannelAdapter;
@@ -122,8 +122,10 @@ pub async fn check_feature(
 
     if !declared {
         let explicitly_unsupported = match &result {
-            Err(error) => !error.retryable,
-            Ok(Some(outcome)) => outcome.error.as_ref().is_some_and(|error| !error.retryable),
+            Err(error) => error.kind == SendErrorKind::BadFormat && !error.retryable,
+            Ok(Some(outcome)) => outcome.error.as_ref().is_some_and(|error| {
+                error.kind == SendErrorKind::BadFormat && !error.retryable
+            }),
             Ok(None) => false,
         };
         if !explicitly_unsupported {
@@ -148,13 +150,41 @@ pub async fn check_feature(
     let Some(observation) = matching else {
         return Err(format!("declared {feature:?} produced no matching wire observation"));
     };
-    if let Some(outcome) = outcome {
-        let expected_ids = &outcome.receipt.platform_message_ids;
-        if !expected_ids.is_empty() && &observation.platform_message_ids != expected_ids {
-            return Err(format!("{feature:?} receipt IDs differ from the mock response"));
-        }
+    let Some(outcome) = outcome else {
+        return Err(format!("declared {feature:?} returned no receipt"));
+    };
+    let receipt = &outcome.receipt;
+    if receipt.channel.as_ref() != Some(&expected.channel)
+        || receipt.conversation.as_ref() != Some(&expected.conversation)
+        || receipt.platform_message_ids.is_empty()
+        || receipt.parts.is_empty()
+    {
+        return Err(format!("declared {feature:?} returned an incomplete or mis-scoped receipt"));
+    }
+    let expected_payload = feature.payload_kind();
+    if let Some(expected_payload) = expected_payload
+        && !observation.payload_kinds.iter().any(|kind| kind == expected_payload)
+    {
+        return Err(format!("{feature:?} wire payload omitted {expected_payload}"));
+    }
+    if observation.platform_message_ids != receipt.platform_message_ids {
+        return Err(format!("{feature:?} receipt IDs differ from the mock response"));
     }
     Ok(())
+}
+
+impl ConformanceFeature {
+    fn payload_kind(self) -> Option<&'static str> {
+        match self {
+            Self::Text => Some("text"),
+            Self::Image => Some("image"),
+            Self::Video => Some("video"),
+            Self::Audio => Some("audio"),
+            Self::File => Some("file"),
+            Self::VoiceOut => Some("voice"),
+            _ => None,
+        }
+    }
 }
 
 /// Run the entire shared feature matrix against a provider fixture.
