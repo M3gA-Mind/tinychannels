@@ -8,36 +8,8 @@ use tinychannels_runtime::channel::ChannelAdapter;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-struct TelegramConformanceSink(Arc<TelegramChannel>);
-
-#[async_trait::async_trait]
-impl tinychannels_runtime::adapters::LocalOutboundSink for TelegramConformanceSink {
-    async fn send(
-        &self,
-        intent: tinychannels_bus::ChannelOutboundIntent,
-    ) -> Result<
-        tinychannels_bus::channel::MessageReceipt,
-        tinychannels_bus::channel::ChannelSendError,
-    > {
-        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
-        let outcome = self
-            .0
-            .send_typed_with_receipt(&message)
-            .await
-            .map_err(|error| tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                message: error.to_string(),
-                ..Default::default()
-            })?;
-        if let Some(error) = outcome.error {
-            return Err(error);
-        }
-        Ok(outcome.receipt)
-    }
-}
-
 struct TelegramWireFixture {
-    adapter: tinychannels_runtime::adapters::LocalChannelAdapter,
+    adapter: Arc<TelegramChannel>,
     server: MockServer,
     observations: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
     request_cursor: std::sync::Mutex<usize>,
@@ -149,7 +121,11 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                     reply_to_id: wire_id("reply_to_message_id"),
                     thread_id: wire_id("message_thread_id"),
                     payload_kinds,
-                    platform_message_ids: vec!["321".into()],
+                    platform_message_ids: result
+                        .as_ref()
+                        .ok()
+                        .map(|outcome| outcome.receipt.platform_message_ids.clone())
+                        .unwrap_or_default(),
                     request: body,
                 });
         }
@@ -2237,7 +2213,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
     let scope = ExpectedScope {
         channel: tinychannels_bus::ChannelRef {
             id: "telegram".into(),
-            account_id: Some("telegram:test-account".into()),
+            account_id: None,
         },
         conversation: tinychannels_bus::ConversationRef {
             kind: tinychannels_bus::ConversationKind::Dm,
@@ -2247,16 +2223,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         reply_to_id: None,
         thread_id: None,
     };
-    let adapter = tinychannels_runtime::adapters::LocalChannelAdapter::new(
-        tinychannels_bus::channel::ChannelDescriptor {
-            id: scope.channel.id.clone(),
-            display_name: "Telegram test account".into(),
-            account_id: scope.channel.account_id.clone(),
-            ..Default::default()
-        },
-        channel.capabilities(),
-        Arc::new(TelegramConformanceSink(channel)),
-    );
+    let adapter = channel;
     let fixture = TelegramWireFixture {
         adapter,
         server,
