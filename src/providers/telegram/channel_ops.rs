@@ -85,7 +85,9 @@ fn presentation_text(value: &serde_json::Value) -> anyhow::Result<String> {
                 for key in ["title", "heading", "text", "caption", "description"] {
                     if let Some(value) = object.get(key) {
                         let Some(text) = value.as_str() else {
-                            anyhow::bail!("Telegram presentation block text fields must be strings");
+                            anyhow::bail!(
+                                "Telegram presentation block text fields must be strings"
+                            );
                         };
                         if !text.trim().is_empty() {
                             out.push(text.to_owned());

@@ -1167,10 +1167,13 @@ async fn native_location_contact_buttons_poll_and_presentation_use_bot_api_metho
             },
         }],
     );
+    let before_presentation = json_bodies(&server, "sendMessage").await.len();
     crate::channel::ChannelTypedSend::send_typed(&channel, &presentation)
         .await
         .unwrap();
-    let body = json_bodies(&server, "sendMessage").await.remove(0);
+    let message_bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(message_bodies.len(), before_presentation + 1);
+    let body = message_bodies.last().unwrap();
     assert_eq!(body["text"], "Update\nStatus");
     assert_eq!(body["parse_mode"], "MarkdownV2");
 }
