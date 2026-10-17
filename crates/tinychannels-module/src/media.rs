@@ -81,7 +81,7 @@ impl MediaUploads {
         state
             .uploads
             .get(&handle.0)
-            .map(|upload| (upload.request.instance.clone(), upload.activation))
+            .map(|upload| (upload.request.instance.clone(), upload.activation.clone()))
             .ok_or_else(|| Error::failed("media upload is unknown or expired"))
     }
 
@@ -91,7 +91,7 @@ impl MediaUploads {
         state
             .uploads
             .get(&request.0.0)
-            .map(|upload| (upload.request.instance.clone(), upload.activation))
+            .map(|upload| (upload.request.instance.clone(), upload.activation.clone()))
             .or_else(|| {
                 state
                     .terminal
@@ -150,7 +150,7 @@ impl MediaUploads {
                 expires: Instant::now() + UPLOAD_LIFETIME,
                 chunks: (0..count).map(|_| None).collect(),
                 next_sequence: 0,
-                finalizing: false,
+                finalizing: std::sync::Arc::new(AtomicBool::new(false)),
                 changed: std::sync::Arc::new(Notify::new()),
             },
         );
@@ -172,6 +172,9 @@ impl MediaUploads {
         if upload.expires <= Instant::now() {
             state.uploads.remove(&chunk.handle.0);
             return Err(Error::failed("media upload is unknown or expired"));
+        }
+        if upload.finalizing.load(Ordering::SeqCst) {
+            return Err(Error::failed("media upload is already finalizing"));
         }
         let sequence = chunk.sequence as usize;
         if sequence >= upload.chunks.len() {
@@ -229,7 +232,7 @@ impl MediaUploads {
             notified.as_mut().enable();
             drop(state);
             notified.await;
-            return Box::pin(self.finish(request, repository)).await;
+            return Box::pin(self.finish(request, activation, repository)).await;
         }
         if upload.expires <= Instant::now() {
             state.uploads.remove(&request.0.0);
@@ -247,7 +250,7 @@ impl MediaUploads {
             complete: false,
         };
         let instance = upload.request.instance.clone();
-        let activation = upload.activation;
+        let activation_for_terminal = upload.activation.clone();
         let request_metadata = upload.request.clone();
         let chunks = upload.chunks.clone();
         let bytes: Vec<u8> = chunks.into_iter().flatten().collect();
@@ -296,7 +299,7 @@ impl MediaUploads {
             TerminalEntry {
                 value: Terminal::Finished(media.clone()),
                 instance,
-                activation,
+                activation: activation_for_terminal,
                 expires: Instant::now() + TERMINAL_LIFETIME,
             },
         );

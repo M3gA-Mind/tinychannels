@@ -108,6 +108,7 @@ pub(crate) struct Channels {
     progressive: Arc<crate::progressive::Replies>,
     /// Shared with each listener task so it can retire its own entry.
     pub(crate) running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    provider_activations: Mutex<HashMap<String, String>>,
     relays: Arc<Relays>,
     pub(crate) terminal: AtomicBool,
     runtimes: Option<Arc<crate::runtime::Runtimes>>,
@@ -133,6 +134,7 @@ impl Channels {
             email: EmailSender::new(),
             media_uploads: MediaUploads::default(),
             running,
+            provider_activations: Mutex::new(HashMap::new()),
             terminal: AtomicBool::new(false),
             runtimes,
             shutdown_task: Mutex::new(None),
@@ -140,14 +142,22 @@ impl Channels {
         }
     }
 
-    async fn media_activation(&self, instance: &str) -> BusResult<usize> {
-        self.running
+    async fn media_activation(&self, instance: &str) -> BusResult<String> {
+        if !self
+            .running
             .lock()
             .await
             .get(instance)
-            .filter(|provider| !provider.is_finished())
-            .map(|provider| Arc::as_ptr(provider) as usize)
-            .ok_or_else(|| BusError::failed("media provider instance is not running"))
+            .is_some_and(|provider| !provider.is_finished())
+        {
+            return Err(BusError::failed("media provider instance is not running"));
+        }
+        self.provider_activations
+            .lock()
+            .await
+            .get(instance)
+            .cloned()
+            .ok_or_else(|| BusError::failed("media provider activation is unavailable"))
     }
 
     async fn start_channel_inner(
@@ -208,6 +218,10 @@ impl Channels {
             None => Running::start(channel, hooks, self.host.clone()),
         };
         running.insert(name.clone(), provider);
+        self.provider_activations
+            .lock()
+            .await
+            .insert(name.clone(), uuid::Uuid::new_v4().simple().to_string());
         drop(running);
         finish_start_admission(
             &self.host,
