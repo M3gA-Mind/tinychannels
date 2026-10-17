@@ -120,6 +120,7 @@ struct Callback {
     send_result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
     send_queue: Arc<Mutex<std::collections::VecDeque<ProgressiveTransportResult>>>,
     rpc_error_after_send: Arc<Mutex<bool>>,
+    unexpected_typed_response: Arc<Mutex<bool>>,
     block: bool,
     entered: Arc<Notify>,
     released: Arc<Notify>,
@@ -186,6 +187,9 @@ impl Callback {
                     "fixture callback failed after accepting send",
                 ));
             }
+        }
+        if typed_send && *self.unexpected_typed_response.lock().await {
+            return Ok(ChannelBackendResult::Status(Vec::new()));
         }
         Ok(ChannelBackendResult::ProgressiveTransport(Box::new(result)))
     }
@@ -586,6 +590,38 @@ async fn reply_capacity_refuses_seventeenth_and_shutdown_drains_every_worker() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn completed_progressive_handles_are_evicted_at_the_retention_bound() {
+    let (replies, _) = fixture(false).await;
+    let mut handles = Vec::new();
+    for _ in 0..=MAX_RETAINED {
+        let handle = open(&replies).await;
+        replies
+            .execute(ProgressiveCommand::Close {
+                handle: handle.clone(),
+            })
+            .await
+            .unwrap();
+        handles.push(handle);
+    }
+    assert_eq!(replies.state.lock().await.entries.len(), MAX_RETAINED);
+    assert!(replies
+        .execute(ProgressiveCommand::Close {
+            handle: handles[0].clone(),
+        })
+        .await
+        .is_ok());
+    let unknown = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handles[0].clone(),
+            events: vec![],
+        })
+        .await
+        .unwrap_err();
+    assert!(unknown.to_string().contains("unknown progressive handle"));
+    replies.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -3213,5 +3249,38 @@ async fn typed_callback_acknowledgement_and_unavailability_keep_distinct_failure
             tinychannels_bus::channel::SendErrorKind::Unknown
         );
     }
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_provider_callback_with_wrong_result_family_is_unknown_not_success() {
+    let (replies, callback) = fixture(false).await;
+    *callback.unexpected_typed_response.lock().await = true;
+    let handle = open(&replies).await;
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::Media {
+                text: None,
+                parts: vec![tinychannels_bus::ContentPart::Image {
+                    media: tinychannels_bus::MediaReference {
+                        kind: tinychannels_bus::MediaKind::Image,
+                        url: Some("https://media.invalid/wrong-response.png".into()),
+                        ..Default::default()
+                    },
+                    caption: None,
+                    alt_text: None,
+                }],
+            }],
+        })
+        .await
+        .unwrap();
+    let ProgressiveResult::DeliveryBatch { outcomes, .. } = result else {
+        panic!("unexpected callback result family must remain a delivery failure")
+    };
+    assert_eq!(outcomes.len(), 1);
+    let error = outcomes[0].error.as_ref().expect("unknown delivery result");
+    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Unknown);
+    assert!(error.sent_before_error);
     replies.shutdown().await.unwrap();
 }
