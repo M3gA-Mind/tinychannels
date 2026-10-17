@@ -458,13 +458,14 @@ async fn run(
                     let failed = result.is_err();
                     let _ = response.send(result);
                     if failed {
-                        reply.finalize("Sorry, the response could not be delivered.").await;
+                        reply.abort().await;
                         break;
                     }
                     if let Some(reason) = cancellation {
                         reply.finalize(&reason).await;
                         break;
                     }
+                    let terminal = events_terminal_hint(&events);
                 }
                 Some(Command::Finish(text, response)) => {
                     reply.finalize(&text).await;

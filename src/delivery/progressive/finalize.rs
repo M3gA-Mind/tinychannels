@@ -160,3 +160,22 @@ pub(super) async fn finalize_channel_reply(
         delete_channel_message(sender, channel, &thinking_id).await;
     }
 }
+
+/// Remove only drafts and ephemeral status messages after an ambiguous or
+/// failed delivery. This path never sends a replacement reply, because the
+/// host may have observed a partial or unknown result already.
+pub(super) async fn abort_channel_reply(
+    sender: &dyn ProgressiveSender,
+    channel: &str,
+    state: &mut StreamingState,
+) {
+    if let Some(message_id) = state.message_id.take() {
+        delete_channel_message(sender, channel, &message_id).await;
+    }
+    for id in std::mem::take(&mut state.filler_message_ids) {
+        delete_channel_message(sender, channel, &id).await;
+    }
+    if let Some(thinking_id) = state.thinking_message_id.take() {
+        delete_channel_message(sender, channel, &thinking_id).await;
+    }
+}

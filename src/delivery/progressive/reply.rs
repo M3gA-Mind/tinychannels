@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use super::bubbles::{flush_thinking_message, send_filler_message, send_typing_indicator};
 use super::draft::flush_streaming_edit;
-use super::finalize::{finalize_channel_reply, send_channel_reply};
+use super::finalize::{abort_channel_reply, finalize_channel_reply, send_channel_reply};
 use super::state::{StreamingState, TypingState};
 use super::{ProgressiveSender, channel_supports_progressive_ui};
 use tinychannels_bus::ChannelCapabilities;
@@ -123,6 +123,12 @@ impl ProgressiveReply {
     pub async fn finalize(&mut self, final_text: &str) {
         let sender = Arc::clone(&self.sender);
         finalize_channel_reply(sender.as_ref(), &self.channel, &mut self.state, final_text).await;
+    }
+
+    /// Close local drafts without sending another message after an ambiguous
+    /// or failed event delivery.
+    pub async fn abort(&mut self) {
+        abort_channel_reply(self.sender.as_ref(), &self.channel, &mut self.state).await;
     }
 
     /// Send a standalone reply without touching the turn's draft state (for a
