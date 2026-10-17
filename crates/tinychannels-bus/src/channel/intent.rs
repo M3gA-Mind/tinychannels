@@ -307,7 +307,7 @@ impl ChannelOutboundMessage {
     }
 
     /// Build the documented one-release text-only v21 projection.
-    pub fn legacy_text(&self) -> anyhow::Result<String> {
+    pub fn legacy_text(&self) -> crate::Result<String> {
         let mut text = Vec::new();
         for part in &self.parts {
             match part {
@@ -318,7 +318,7 @@ impl ChannelOutboundMessage {
                             markdown_dialect: None,
                         },
                 } => text.push(value.as_str()),
-                _ => anyhow::bail!("provider does not support typed channel content"),
+                _ => return Err(crate::TinyChannelsError::new("provider does not support typed channel content")),
             }
         }
         Ok(text.join("\n"))
@@ -354,7 +354,7 @@ impl ChannelOutboundMessage {
     }
 
     /// Convert to the explicit one-release legacy text-only send shape.
-    pub fn to_legacy_message(&self) -> anyhow::Result<crate::traits::SendMessage> {
+    pub fn to_legacy_message(&self) -> crate::Result<crate::traits::SendMessage> {
         Ok(crate::traits::SendMessage {
             content: self.legacy_text()?,
             recipient: self
