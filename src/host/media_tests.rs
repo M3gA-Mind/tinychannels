@@ -611,7 +611,7 @@ async fn partially_committed_failed_upload_is_cleaned_after_restart() {
     let reopened = ScopedMediaStore::new(Arc::clone(storage.documents()), failing_blobs);
     assert_eq!(
         reopened
-            .cleanup_pending(media_scope(), 10, 0)
+            .cleanup_pending(media_scope(), now_unix_ms(), 0)
             .await
             .unwrap(),
         1

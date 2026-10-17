@@ -60,6 +60,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
                     message: "fixture does not expose this operation".into(),
                     unsupported: true,
+                    ..Default::default()
                 });
             }
         };
@@ -1298,7 +1299,6 @@ async fn configured_running_telegram_adapter_uploads_media_from_host_storage() {
         parent_id: Some("parent-99".into()),
         thread_id: Some("31".into()),
         topic_id: Some("topic-31".into()),
-        ..Default::default()
     };
     let scope = tinychannels_bus::HostVoiceScope {
         configured_instance: instance.clone(),
