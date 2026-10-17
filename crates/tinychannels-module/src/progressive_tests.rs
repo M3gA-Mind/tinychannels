@@ -1782,6 +1782,8 @@ async fn thinking_multipart_receipt_drives_per_part_token_cleanup() {
 async fn filler_callback_error_after_acceptance_is_not_retried() {
     let (replies, callback) = fixture(false).await;
     *callback.rpc_error_after_send.lock().await = true;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.progressive_edits = true;
     let mut reply = ProgressiveReply::new(
         Arc::new(Sender {
             host: replies.host.clone(),

@@ -241,14 +241,10 @@ pub(super) async fn send_filler_message(
             }
         }
         Err(ProgressiveSendError::Unavailable) => {}
-        Err(ProgressiveSendError::PartialOutcome(outcome)) => {
-            let ids = message_receipt_ids(&outcome.receipt);
-            state.filler_message_ids.extend(ids);
-            if !message_receipt_ids(&outcome.receipt).is_empty() {
-                state.filler_message_receipts.push(outcome.receipt);
-            }
+        Err(ProgressiveSendError::PartialOutcome(_outcome)) => {
+            state.filler_failures = state.filler_failures.saturating_add(1);
             state.filler_delivery_uncertain = true;
-            state.filler_disabled = true;
+            state.filler_disabled = state.filler_failures >= super::MAX_FILLER_FAILURES;
         }
         Err(_err) => {
             state.filler_delivery_uncertain = true;
