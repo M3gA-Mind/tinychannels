@@ -1395,3 +1395,90 @@ async fn configured_running_telegram_adapter_uploads_media_from_host_storage() {
     );
     running.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn configured_adapter_marks_first_unknown_media_upload_non_retryable() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendPhoto"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("uncertain provider response"))
+        .mount(&server)
+        .await;
+    let (host, _callbacks, _bus_server, _storage) = ingress_fixture().await;
+    let instance = "telegram:media-account".to_owned();
+    let hooks = Arc::new(Hooks::default());
+    let provider_host = hooks.host(host.clone(), instance.clone());
+    let repository = provider_host.media_repository().unwrap();
+    let conversation = ConversationRef {
+        kind: ConversationKind::Group,
+        id: "-10099".into(),
+        thread_id: Some("31".into()),
+        ..Default::default()
+    };
+    let media = repository
+        .store_media(tinychannels::host::MediaStoreRequest {
+            metadata: tinychannels::host::MediaMetadata {
+                scope: tinychannels_bus::HostVoiceScope {
+                    configured_instance: instance.clone(),
+                    channel: tinychannels_bus::ChannelRef {
+                        id: "telegram".into(),
+                        account_id: Some(instance.clone()),
+                    },
+                    conversation: conversation.clone(),
+                    turn_id: "turn-503".into(),
+                },
+                kind: tinychannels_bus::MediaKind::Image,
+                content_type: "image/png".into(),
+                file_name: Some("uncertain.png".into()),
+                duration_ms: None,
+                codec: None,
+                voice_direction: None,
+                dedupe_key: None,
+                max_bytes: 20 * 1024 * 1024,
+            },
+            bytes: base64::engine::general_purpose::STANDARD
+                .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
+                .unwrap(),
+        })
+        .await
+        .unwrap();
+    let channel = Arc::new(
+        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
+            .with_api_base_for_test(server.uri())
+            .with_media_repository(repository),
+    );
+    let running = Running::start_outbound(channel, hooks, host);
+    let adapter = running.adapter_handle();
+    let error = adapter
+        .send(tinychannels_bus::ChannelOutboundIntent {
+            idempotency_key: "uncertain-media-send".into(),
+            channel_id: "telegram".into(),
+            conversation_id: conversation.id.clone(),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some(instance),
+            }),
+            conversation_ref: Some(conversation),
+            turn_id: Some("turn-503".into()),
+            payload: tinychannels_bus::OutboundPayload::Parts {
+                parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Image {
+                        media,
+                        caption: None,
+                        alt_text: None,
+                    },
+                }],
+            },
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    assert!(!error.unsupported);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    running.stop().await.unwrap();
+}
