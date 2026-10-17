@@ -1032,6 +1032,125 @@ impl Channel for TelegramChannel {
         Ok(tinychannels_bus::channel::ChannelSendOutcome { receipt, error })
     }
 
+    async fn send_reaction(
+        &self,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> anyhow::Result<()> {
+        let message_id = provider_message_id
+            .parse::<i64>()
+            .map_err(|_| anyhow::anyhow!("Telegram reaction requires a numeric provider message ID"))?;
+        if !remove {
+            if !self
+                .send_message_reaction(&conversation.id, message_id, &reaction.value)
+                .await?
+            {
+                anyhow::bail!("Telegram did not apply the requested reaction");
+            }
+            return Ok(());
+        }
+        let response = self
+            .http_client()
+            .post(self.api_url("setMessageReaction"))
+            .json(&serde_json::json!({
+                "chat_id": conversation.id,
+                "message_id": message_id,
+                "reaction": [],
+                "is_big": false
+            }))
+            .send()
+            .await?;
+        let result = response.json::<serde_json::Value>().await?;
+        if !result.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+            anyhow::bail!("Telegram reaction removal failed: {}", result["description"]);
+        }
+        Ok(())
+    }
+
+    async fn edit_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: &tinychannels_bus::channel::ChannelOutboundIntent,
+    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
+        use tinychannels_bus::OutboundPayload;
+        let text = match &intent.payload {
+            OutboundPayload::Text { text } => text.clone(),
+            OutboundPayload::Parts { parts } => parts
+                .iter()
+                .filter_map(|part| match part {
+                    tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Text { text, .. },
+                    } => Some(text.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("\n"),
+            _ => anyhow::bail!("Telegram message editing supports text content only"),
+        };
+        let conversation = receipt
+            .conversation
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Telegram edit receipt has no conversation"))?;
+        let provider_message_id = receipt
+            .primary_platform_message_id
+            .as_deref()
+            .or_else(|| receipt.parts.first().map(|part| part.platform_message_id.as_str()))
+            .ok_or_else(|| anyhow::anyhow!("Telegram edit receipt has no message ID"))?
+            .parse::<i64>()
+            .map_err(|_| anyhow::anyhow!("Telegram edit receipt has an invalid message ID"))?;
+        let response = self
+            .http_client()
+            .post(self.api_url("editMessageText"))
+            .json(&serde_json::json!({
+                "chat_id": conversation.id,
+                "message_id": provider_message_id,
+                "text": markdown_v2_text(&strip_tool_call_tags(&text)),
+                "parse_mode": "MarkdownV2"
+            }))
+            .send()
+            .await?;
+        let result = response.json::<serde_json::Value>().await?;
+        if !result.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+            anyhow::bail!("Telegram editMessageText failed: {}", result["description"]);
+        }
+        Ok(receipt.clone())
+    }
+
+    async fn delete_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> anyhow::Result<()> {
+        let conversation = receipt
+            .conversation
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("Telegram delete receipt has no conversation"))?;
+        let provider_message_id = receipt
+            .primary_platform_message_id
+            .as_deref()
+            .or_else(|| receipt.parts.first().map(|part| part.platform_message_id.as_str()))
+            .ok_or_else(|| anyhow::anyhow!("Telegram delete receipt has no message ID"))?
+            .parse::<i64>()
+            .map_err(|_| anyhow::anyhow!("Telegram delete receipt has an invalid message ID"))?;
+        let response = self
+            .http_client()
+            .post(self.api_url("deleteMessage"))
+            .json(&serde_json::json!({
+                "chat_id": conversation.id,
+                "message_id": provider_message_id
+            }))
+            .send()
+            .await?;
+        let result = response.json::<serde_json::Value>().await?;
+        if !result.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false)
+            || !result.get("result").and_then(serde_json::Value::as_bool).unwrap_or(false)
+        {
+            anyhow::bail!("Telegram deleteMessage failed: {}", result["description"]);
+        }
+        Ok(())
+    }
+
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         let mut offset: i64 = 0;
 

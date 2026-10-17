@@ -80,9 +80,11 @@ pub trait ChannelTyping: Send + Sync {
 pub trait ChannelReaction: Send + Sync {
     async fn send_reaction(
         &self,
-        conversation_id: &str,
-        message_id: &str,
-        reaction: &str,
+        channel: &tinychannels_bus::channel::ChannelRef,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
     ) -> Result<(), ChannelSendError>;
 }
 
