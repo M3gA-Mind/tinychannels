@@ -232,6 +232,22 @@ pub trait ProgressiveSender: Send + Sync {
             .await
     }
 
+    /// Deliver the completed assistant final through shared turn policy.
+    /// Mid-turn typed content uses `send_parts_with_segment` and cannot trigger
+    /// automatic voice synthesis.
+    async fn send_final_parts_with_segment(
+        &self,
+        channel: &str,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+        context: Option<&ProgressiveOutputContext>,
+        sequence: u64,
+        segment_index: u32,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
+        self.send_parts_with_segment(channel, parts, text, context, sequence, segment_index)
+            .await
+    }
+
     /// Replace the text of a posted message.
     async fn edit(
         &self,

@@ -217,7 +217,19 @@ impl ProgressiveSender for Sender {
         segment_index: u32,
     ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
     {
-        send_typed_part(self, channel, parts, text, context, sequence, segment_index).await
+        send_typed_part(self, channel, parts, text, context, sequence, segment_index, false).await
+    }
+
+    async fn send_final_parts_with_segment(
+        &self,
+        channel: &str,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+        context: Option<&ProgressiveOutputContext>,
+        sequence: u64,
+        segment_index: u32,
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
+        send_typed_part(self, channel, parts, text, context, sequence, segment_index, true).await
     }
 
     async fn edit(
@@ -337,6 +349,7 @@ async fn send_typed_part(
     context: Option<&ProgressiveOutputContext>,
     sequence: u64,
     segment_index: u32,
+    final_phase: bool,
 ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
     let mut prepared_parts = parts.to_vec();
     let mut prepared_text = text.to_owned();
@@ -350,9 +363,13 @@ async fn send_typed_part(
         if synths.len() > 1 {
             return Err(ProgressiveSendError::UnsupportedContent);
         }
+        let explicit_synthesis = !synths.is_empty();
         let (requested_text, requested_voice) = synths.into_iter().next()
             .unwrap_or_else(|| (prepared_text.clone(), None));
-        if !requested_text.trim().is_empty() && sender.capabilities.voice_out.synthesis {
+        if (final_phase || explicit_synthesis)
+            && !requested_text.trim().is_empty()
+            && sender.capabilities.voice_out.synthesis
+        {
             let scope = tinychannels_bus::HostVoiceScope {
                 configured_instance: sender.channel.clone(),
                 channel: context.channel.clone(),
