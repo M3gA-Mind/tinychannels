@@ -117,6 +117,7 @@ pub mod host_methods {
     pub const SYNTHESIZE_SPEECH: &str = "SynthesizeSpeech";
     /// `StoreVoiceMedia` — persist voice media and return a durable host reference.
     pub const STORE_VOICE_MEDIA: &str = "StoreVoiceMedia";
+    pub const READ_VOICE_MEDIA: &str = "ReadVoiceMedia";
     /// `PublishEvent` — publish one provider event through the host event sink.
     pub const PUBLISH_EVENT: &str = "PublishEvent";
     /// Call a narrow host credential or managed API capability. Durable state is not

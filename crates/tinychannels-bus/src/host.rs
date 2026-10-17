@@ -107,6 +107,23 @@ pub struct HostStoreVoiceMediaResult {
     pub accessible_url: Option<String>,
 }
 
+/// Resolve authorized stored bytes for a native provider upload.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HostReadVoiceMediaRequest {
+    pub scope: HostVoiceScope,
+    pub opaque_id: String,
+}
+
+/// Bounded media returned only for the requested conversation and turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HostReadVoiceMediaResult {
+    pub audio_base64: String,
+    pub mime_type: String,
+    pub file_name: Option<String>,
+}
+
 /// An event published by a provider through the host's event sink.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct HostEventPublication {

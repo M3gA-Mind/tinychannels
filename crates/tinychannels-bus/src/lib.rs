@@ -59,7 +59,8 @@ pub use error::{Result, TinyChannelsError};
 pub use health::{ChannelHealthReport, ChannelHealthState};
 pub use host::{
     HostEventPublication, HostSpeechSynthesisRequest, HostSpeechSynthesisResult,
-    HostStoreVoiceMediaRequest, HostStoreVoiceMediaResult, HostTranscriptionRequest,
+    HostReadVoiceMediaRequest, HostReadVoiceMediaResult, HostStoreVoiceMediaRequest,
+    HostStoreVoiceMediaResult, HostTranscriptionRequest,
     HostTranscriptionResult, HostVoiceMediaDirection, HostVoiceScope,
     HostVoiceTranscriptionRequest,
 };

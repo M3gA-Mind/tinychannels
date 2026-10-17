@@ -357,6 +357,22 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         }
         Ok(result)
     }
+
+    async fn read_voice(
+        &self,
+        mut scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        validate_voice_scope(&scope)?;
+        if opaque_id.trim().is_empty() {
+            anyhow::bail!("voice media reference is empty");
+        }
+        scope.configured_instance.clone_from(&self.1);
+        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        scope.channel.account_id = Some(self.1.clone());
+        self.0.read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest { scope, opaque_id })
+            .await.map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
 }
 
 fn validate_voice_scope(scope: &tinychannels_bus::HostVoiceScope) -> anyhow::Result<()> {

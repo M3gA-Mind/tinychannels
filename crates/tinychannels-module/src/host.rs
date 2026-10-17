@@ -466,6 +466,14 @@ impl HostChannels {
             .await
     }
 
+    /// Resolve scoped media bytes for a provider-native upload.
+    pub async fn read_voice_media(
+        &self,
+        request: tinychannels_bus::HostReadVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        self.voice_callback(host_methods::READ_VOICE_MEDIA, request).await
+    }
+
     /// Invoke one bounded host-owned credential, persistence, or managed API
     /// capability required by the module's controller adapter.
     pub async fn dispatch_controller_backend(

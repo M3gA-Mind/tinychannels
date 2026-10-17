@@ -28,6 +28,15 @@ pub trait VoiceMediaStore: Send + Sync {
         &self,
         request: VoiceMediaRequest,
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult>;
+
+    /// Resolve a host-authorized opaque reference for one outbound upload.
+    async fn read_voice(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        _opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        anyhow::bail!("host voice media resolution is unavailable")
+    }
 }
 
 // ---------------------------------------------------------------------------
