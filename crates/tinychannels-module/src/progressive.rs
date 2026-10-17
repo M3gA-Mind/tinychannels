@@ -341,13 +341,18 @@ async fn send_typed_part(
     let mut prepared_parts = parts.to_vec();
     let mut prepared_text = text.to_owned();
     if let Some(context) = context {
-        let synth = prepared_parts.iter().find_map(|part| match part {
+        let synths = prepared_parts.iter().filter_map(|part| match part {
             tinychannels_bus::OutboundContentPart::Voice {
                 voice: tinychannels_bus::OutboundVoice::Synthesize { text, voice },
             } => Some((text.clone(), voice.clone())),
             _ => None,
-        });
-        if let Some((spoken_text, voice)) = synth {
+        }).collect::<Vec<_>>();
+        if synths.len() > 1 {
+            return Err(ProgressiveSendError::UnsupportedContent);
+        }
+        let (requested_text, requested_voice) = synths.into_iter().next()
+            .unwrap_or_else(|| (prepared_text.clone(), None));
+        if !requested_text.trim().is_empty() && sender.capabilities.voice_out.synthesis {
             let scope = tinychannels_bus::HostVoiceScope {
                 configured_instance: sender.channel.clone(),
                 channel: context.channel.clone(),
@@ -365,19 +370,21 @@ async fn send_typed_part(
                     tinychannels_bus::HostVoiceReplyMode::SpeakReply => policy.explicitly_requested,
                 }
             });
+            let had_synthesis = prepared_parts.iter().any(|part| matches!(part, tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
+            }));
             prepared_parts.retain(|part| !matches!(part, tinychannels_bus::OutboundContentPart::Voice {
                 voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
             }));
             if should_speak {
-                let _policy = policy.expect("checked above");
                 let instance = sender.channel.clone();
                 let synthesizer = crate::provider::ModuleSynthesizer(sender.host.clone(), instance.clone());
                 let codec = crate::provider::ModuleVoiceCodec(sender.host.clone());
                 let store = crate::provider::ModuleVoiceMediaStore(sender.host.clone(), instance);
                 match tinychannels::host::prepare_voice_reply(
                     scope,
-                    spoken_text.clone(),
-                    voice,
+                    requested_text.clone(),
+                    requested_voice,
                     &synthesizer,
                     &codec,
                     &store,
@@ -401,12 +408,14 @@ async fn send_typed_part(
                         }
                     }
                     Err(error) => {
-                        tracing::warn!(channel = %sender.channel, "shared voice preparation unavailable: {error}");
-                        if prepared_text.trim().is_empty() { prepared_text = spoken_text; }
+                        let kind = if error.to_string().contains("limit") { "limit" } else { "unavailable" };
+                        tracing::warn!(channel = %sender.channel, kind, "shared voice preparation unavailable");
+                        if prepared_text.trim().is_empty() { prepared_text = requested_text; }
                     }
                 }
-            } else if prepared_text.trim().is_empty() {
-                prepared_text = spoken_text;
+            } else if had_synthesis {
+                // The model explicitly requested speech, but host policy denied it.
+                if prepared_text.trim().is_empty() { prepared_text = requested_text; }
             }
         }
     }
