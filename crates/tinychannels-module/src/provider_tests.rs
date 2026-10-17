@@ -134,8 +134,14 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
     assert!(configured_media_account_scope("signal", &unauthenticated_signal).is_none());
     let session_only_whatsapp = tinychannels_bus::ChannelsConfig {
         whatsapp: Some(WhatsAppConfig {
+            access_token: None,
+            phone_number_id: None,
+            verify_token: None,
+            app_secret: None,
             session_path: Some("/private/session".into()),
-            ..Default::default()
+            pair_phone: None,
+            pair_code: None,
+            allowed_numbers: vec![],
         }),
         ..Default::default()
     };
