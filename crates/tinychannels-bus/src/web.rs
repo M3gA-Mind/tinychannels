@@ -60,7 +60,7 @@ pub enum WebChannelEvent {
     PlanReviewDecided { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] tool_name: Option<String>, #[serde(skip_serializing_if="Option::is_none")] message: Option<String>, #[serde(skip_serializing_if="Option::is_none")] tool_call_id: Option<String>, #[serde(skip_serializing_if="Option::is_none")] cancel_reason: Option<String> },
     QueueItemQueued { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] queue_item: Option<WebQueueItemPayload> }, QueueItemDelivered { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] queue_item: Option<WebQueueItemPayload> }, QueueItemRemoved { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] queue_item: Option<WebQueueItemPayload> },
     ThreadGoalUpdated { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] goal: Option<serde_json::Value> }, ThreadGoalCleared { #[serde(flatten)] context: WebEventContext }, ThreadTodosChanged { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] todos: Option<serde_json::Value> }, RunModeChanged { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] message: Option<String> },
-    ArtifactReady { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] tool_call_id: Option<String>, #[serde(skip_serializing_if="Option::is_none")] args: Option<serde_json::Value> }, ArtifactFailed { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] tool_call_id: Option<String>, #[serde(skip_serializing_if="Option::is_none")] turn_request_id: Option<String>, #[serde(skip_serializing_if="Option::is_none")] args: Option<serde_json::Value> }, ArtifactPending { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] tool_call_id: Option<String>, #[serde(skip_serializing_if="Option::is_none")] turn_request_id: Option<String>, #[serde(skip_serializing_if="Option::is_none")] args: Option<serde_json::Value> }, MemoryActivity { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] args: Option<serde_json::Value> }, ExternalTransferPending { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] args: Option<serde_json::Value> },
+    ArtifactReady { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] tool_call_id: Option<String>, #[serde(skip_serializing_if="Option::is_none")] args: Option<serde_json::Value> }, ArtifactFailed { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] tool_call_id: Option<String>, #[serde(skip_serializing_if="Option::is_none")] args: Option<serde_json::Value> }, ArtifactPending { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] tool_call_id: Option<String>, #[serde(skip_serializing_if="Option::is_none")] args: Option<serde_json::Value> }, MemoryActivity { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] args: Option<serde_json::Value> }, ExternalTransferPending { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] args: Option<serde_json::Value> },
     ProactiveMessage { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] full_response: Option<String>, #[serde(skip_serializing_if="Option::is_none")] message: Option<String>, #[serde(skip_serializing_if="Option::is_none")] success: Option<bool>, #[serde(skip_serializing_if="Option::is_none")] persisted_message_id: Option<String> }, VoiceSpeak { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] full_response: Option<String>, #[serde(skip_serializing_if="Option::is_none")] success: Option<bool> }, UserError { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] error_type: Option<String>, #[serde(skip_serializing_if="Option::is_none")] error_source: Option<String> },
     /// Accepted by older clients; no current core emitter produces this event.
     ChatMessage { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] message: Option<String>, #[serde(skip_serializing_if="Option::is_none")] full_response: Option<String> },
@@ -71,9 +71,9 @@ pub enum WebChannelEvent {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum WebCostSource {
+    #[default]
     Charged,
     Estimated,
-    #[default]
     Unknown,
 }
 
@@ -130,7 +130,6 @@ pub struct WebTurnUsagePayload {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
-        #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
     #[serde(default)]
     pub cost_source: WebCostSource,
@@ -148,7 +147,6 @@ pub struct WebSubagentUsagePayload {
     pub agent_id: String,
     pub input_tokens: u64,
     pub output_tokens: u64,
-        #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
 }
 
