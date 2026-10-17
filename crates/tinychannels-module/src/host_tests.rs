@@ -405,7 +405,7 @@ async fn callback_consumer_preserves_inbound_then_status_order() {
 }
 
 #[tokio::test]
-async fn module_host_exposes_typed_transcription_and_event_capabilities() {
+async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
     let (host, callback, _server) = connected_host().await;
     let provider_host =
         Arc::new(crate::provider::Hooks::default()).host(host.clone(), "telegram".into());
@@ -423,6 +423,70 @@ async fn module_host_exposes_typed_transcription_and_event_capabilities() {
     assert_eq!(transcription.text, "spoken words");
     assert_eq!(transcription.language.as_deref(), Some("en"));
 
+    let mut scope = tinychannels_bus::HostVoiceScope {
+        channel: tinychannels_bus::ChannelRef {
+            id: "provider-forged-channel".into(),
+            account_id: Some("provider-forged-account".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            id: "conversation-1".into(),
+            thread_id: Some("thread-2".into()),
+            topic_id: Some("topic-3".into()),
+            ..Default::default()
+        },
+        turn_id: "message-4".into(),
+        ..Default::default()
+    };
+    let speech = provider_host
+        .synthesizer()
+        .unwrap()
+        .synthesize_scoped(
+            scope.clone(),
+            tinychannels::host::SpeechRequest {
+                text: "hello".into(),
+                voice: None,
+                format: Some("wav".into()),
+                thread_id: Some("thread-2".into()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(speech.mime_type, "audio/wav");
+    assert_eq!(speech.audio_base64, "UklGRg==");
+
+    let stored = provider_host
+        .voice_media_store()
+        .unwrap()
+        .store_voice(tinychannels::host::VoiceMediaRequest {
+            audio_base64: "UklGRg==".into(),
+            mime_type: "audio/wav".into(),
+            codec: Some("wav_pcm16".into()),
+            duration_ms: Some(1_250),
+            file_name: Some("voice.wav".into()),
+            direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
+            scope: scope.clone(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        stored.url.as_deref(),
+        Some("https://media.example.test/authorized/voice-1")
+    );
+    let scopes = callback.voice_scopes.lock().await;
+    assert_eq!(scopes.len(), 3);
+    for observed in scopes.iter() {
+        assert_eq!(observed.configured_instance, "telegram");
+        assert_eq!(observed.channel.id, "telegram");
+        assert_eq!(observed.channel.account_id.as_deref(), Some("telegram"));
+    }
+    for observed in &scopes[1..] {
+        assert_eq!(observed.conversation.id, "conversation-1");
+        assert_eq!(observed.conversation.thread_id.as_deref(), Some("thread-2"));
+        assert_eq!(observed.conversation.topic_id.as_deref(), Some("topic-3"));
+        assert_eq!(observed.turn_id, "message-4");
+    }
+    drop(scopes);
+
     provider_host
         .events()
         .unwrap()
@@ -435,7 +499,10 @@ async fn module_host_exposes_typed_transcription_and_event_capabilities() {
         .unwrap();
     assert_eq!(
         callback.events.lock().await.as_slice(),
-        ["transcription:complete", "event:channel:reaction_sent"]
+        [
+            "transcription:complete",
+            "event:channel:reaction_sent"
+        ]
     );
     host.shutdown().await.unwrap();
 }
