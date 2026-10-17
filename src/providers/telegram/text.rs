@@ -107,6 +107,9 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
         let Some(url_close) = paren_pairs[url_open] else {
             continue;
         };
+        if url[url_open..=url_close].iter().any(|marked| *marked) {
+            continue;
+        }
         syntax[open] = true;
         syntax[close] = true;
         syntax[url_open] = true;

@@ -101,7 +101,10 @@ pub(crate) async fn dispatch(
                 .await
                 .map(|receipt| {
                     ChannelInteractionResult::Sent(Box::new(
-                        tinychannels_bus::channel::ChannelSendOutcome { receipt, error: None },
+                        tinychannels_bus::channel::ChannelSendOutcome {
+                            receipt,
+                            error: None,
+                        },
                     ))
                 })
                 .map_err(|_| tinybus::Error::failed("provider message edit failed"));
