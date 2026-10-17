@@ -179,6 +179,13 @@ impl TelegramChannel {
         self.api_base = base.into();
     }
 
+    /// Point a test-support build at a local mock Bot API server.
+    #[cfg(feature = "test-support")]
+    pub fn with_api_base_for_test(mut self, base: impl Into<String>) -> Self {
+        self.api_base = base.into();
+        self
+    }
+
     pub(crate) fn pairing_code_active(&self) -> bool {
         self.pairing
             .as_ref()

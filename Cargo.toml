@@ -51,6 +51,7 @@ categories = ["asynchronous", "api-bindings"]
 
 [features]
 default = []
+test-support = []
 # Retained so downstreams that request it keep resolving; the relay WebSocket
 # transport module is still gated on this cfg. `tokio-tungstenite` and
 # `tokio/net` are now unconditional dependencies (the ported channel providers

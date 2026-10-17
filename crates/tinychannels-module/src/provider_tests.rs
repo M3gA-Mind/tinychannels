@@ -7,6 +7,90 @@ use tinybus::transport::memory::MemoryBus;
 use tinychannels::host::EventSink as _;
 use tinychannels_bus::{ChannelInboundEnvelope, ContentPart, ConversationKind, ConversationRef};
 
+struct RunningTelegramConformance {
+    adapter: ConfiguredAdapterHandle,
+    server: wiremock::MockServer,
+    scope: tinychannels_conformance::ExpectedScope,
+    observed: Mutex<Vec<tinychannels_conformance::WireObservation>>,
+    request_cursor: Mutex<usize>,
+}
+
+#[async_trait::async_trait]
+impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
+    fn adapter(&self) -> &dyn tinychannels::channel::ChannelAdapter {
+        self.adapter.adapter()
+    }
+
+    fn expected_scope(
+        &self,
+        _feature: tinychannels_conformance::ConformanceFeature,
+    ) -> tinychannels_conformance::ExpectedScope {
+        self.scope.clone()
+    }
+
+    fn clear_observations(&self) {
+        self.observed.lock().unwrap().clear();
+    }
+
+    fn observations(&self) -> Vec<tinychannels_conformance::WireObservation> {
+        self.observed.lock().unwrap().clone()
+    }
+
+    async fn exercise(
+        &self,
+        feature: tinychannels_conformance::ConformanceFeature,
+    ) -> std::result::Result<Option<tinychannels_bus::ChannelSendOutcome>, tinychannels_bus::ChannelSendError> {
+        use tinychannels_conformance::ConformanceFeature as Feature;
+        let payload = match feature {
+            Feature::Text => tinychannels_bus::OutboundPayload::Text { text: "module-kit".into() },
+            Feature::Image => tinychannels_bus::OutboundPayload::Media {
+                text: None,
+                media_urls: vec!["https://example.invalid/image.png".into()],
+            },
+            _ => return Err(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Unsupported,
+                message: "fixture does not expose this operation".into(),
+                ..Default::default()
+            }),
+        };
+        let intent = tinychannels_bus::ChannelOutboundIntent {
+            idempotency_key: "module-kit-send".into(),
+            channel_id: "telegram:account-a".into(),
+            conversation_id: self.scope.conversation.id.clone(),
+            channel_ref: Some(self.scope.channel.clone()),
+            conversation_ref: Some(self.scope.conversation.clone()),
+            payload,
+            ..Default::default()
+        };
+        let result = self.adapter.send(intent).await;
+        let requests = self.server.received_requests().await.unwrap_or_default();
+        let mut cursor = self.request_cursor.lock().unwrap();
+        for request in requests.iter().skip(*cursor) {
+            if !request.url.path().ends_with("/sendMessage") {
+                continue;
+            }
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
+            let chat = body.get("chat_id").and_then(|value| value.as_str()).unwrap_or_default();
+            let conversation = ConversationRef {
+                kind: ConversationKind::Dm,
+                id: chat.to_owned(),
+                ..Default::default()
+            };
+            let payload_kinds = if body.get("text").is_some() { vec!["text".into()] } else { vec![] };
+            self.observed.lock().unwrap().push(tinychannels_conformance::WireObservation {
+                feature,
+                channel: self.scope.channel.clone(),
+                conversation,
+                payload_kinds,
+                platform_message_ids: vec!["321".into()],
+                request: body,
+            });
+        }
+        *cursor = requests.len();
+        result.map(Some)
+    }
+}
+
 #[derive(Clone, Default)]
 struct IngressVoiceCallback {
     read_requests: Arc<Mutex<Vec<tinychannels_bus::HostReadVoiceMediaRequest>>>,

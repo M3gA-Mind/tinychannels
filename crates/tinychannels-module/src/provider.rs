@@ -634,6 +634,10 @@ pub(crate) struct ConfiguredAdapterHandle {
 }
 
 impl ConfiguredAdapterHandle {
+    pub(crate) fn adapter(&self) -> &dyn tinychannels::channel::ChannelAdapter {
+        self.adapter.as_ref()
+    }
+
     pub(crate) fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
         debug_assert_eq!(
             self.adapter.descriptor().account_id.as_deref(),
