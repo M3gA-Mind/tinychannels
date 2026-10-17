@@ -1162,16 +1162,20 @@ impl TelegramChannel {
         file_id: &str,
         max_bytes: u64,
     ) -> anyhow::Result<TelegramDownloadedMedia> {
-        let file_response = self
-            .http_client()
-            .post(self.api_url("getFile"))
-            .json(&serde_json::json!({ "file_id": file_id }))
-            .send()
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+        let file_response = tokio::time::timeout_at(
+            deadline,
+            self.http_client()
+                .post(self.api_url("getFile"))
+                .json(&serde_json::json!({ "file_id": file_id }))
+                .send(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Telegram media request timed out"))?
+        .map_err(|_| anyhow::anyhow!("Telegram getFile request failed"))?;
+        let file_response: serde_json::Value = tokio::time::timeout_at(deadline, file_response.json())
             .await
-            .map_err(|_| anyhow::anyhow!("Telegram getFile request failed"))?;
-        let file_response: serde_json::Value = file_response
-            .json()
-            .await
+            .map_err(|_| anyhow::anyhow!("Telegram media request timed out"))?
             .map_err(|_| anyhow::anyhow!("Telegram getFile response was invalid"))?;
         if !file_response
             .get("ok")
@@ -1197,11 +1201,9 @@ impl TelegramChannel {
         }
         let file_name = file_path.rsplit('/').next().map(str::to_owned);
         let url = format!("{}/file/bot{}/{}", self.api_base, self.bot_token, file_path);
-        let mut response = self
-            .http_client()
-            .get(url)
-            .send()
+        let mut response = tokio::time::timeout_at(deadline, self.http_client().get(url).send())
             .await
+            .map_err(|_| anyhow::anyhow!("Telegram media request timed out"))?
             .map_err(|_| anyhow::anyhow!("Telegram media download failed"))?;
         if !response.status().is_success()
             || response
@@ -1223,11 +1225,12 @@ impl TelegramChannel {
                     .to_ascii_lowercase()
             });
         let mut bytes = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .map_err(|_| anyhow::anyhow!("Telegram media download failed"))?
-        {
+        loop {
+            let chunk = tokio::time::timeout_at(deadline, response.chunk())
+                .await
+                .map_err(|_| anyhow::anyhow!("Telegram media download timed out"))?
+                .map_err(|_| anyhow::anyhow!("Telegram media download failed"))?;
+            let Some(chunk) = chunk else { break };
             if bytes.len() as u64 + chunk.len() as u64 > max_bytes {
                 anyhow::bail!("Telegram media exceeds the configured size limit");
             }

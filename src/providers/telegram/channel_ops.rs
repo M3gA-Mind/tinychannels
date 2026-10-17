@@ -1196,7 +1196,7 @@ Ensure only one `openhuman` process is using this bot token."
                             tracing::warn!(
                                 "Telegram attachment could not be persisted as typed media"
                             );
-                            Vec::new()
+                            return Err(anyhow::anyhow!("Telegram attachment persistence failed"));
                         }
                     };
                     let ingress =
