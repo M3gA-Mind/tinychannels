@@ -621,7 +621,7 @@ async fn run(
                         }
                         _ => None,
                     });
-                    let mut result = apply(&mut reply, events, forward).await.map(|()| ProgressiveResult::Updated);
+                    let mut result = apply(&mut reply, events, forward).await;
                     let failed = result.is_err();
                     if failed {
                         reply.abort().await;
@@ -681,7 +681,7 @@ async fn apply(
     reply: &mut ProgressiveReply,
     events: Vec<ChannelOutputEvent>,
     forward: bool,
-) -> Result<()> {
+) -> Result<ProgressiveResult> {
     let text = events
         .iter()
         .filter_map(|event| match event {
@@ -706,6 +706,8 @@ async fn apply(
     {
         return Err(Error::failed("progressive content exceeds its limit"));
     }
+    let mut outcomes = Vec::new();
+    let mut unsupported = Vec::new();
     for event in events {
         if forward {
             reply
@@ -735,8 +737,41 @@ async fn apply(
             | ChannelOutputEvent::ToolCallArgsDelta { .. }
             | ChannelOutputEvent::ApprovalRequest { .. }
             | ChannelOutputEvent::Clarification { .. }
-            | ChannelOutputEvent::Media { .. }
-            | ChannelOutputEvent::VoiceNote { .. }
+            ChannelOutputEvent::Media { text, parts } if forward => {
+                let mut outbound = Vec::new();
+                if let Some(text) = text {
+                    outbound.push(tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Text { text, markdown_dialect: None },
+                    });
+                }
+                outbound.extend(parts.into_iter().map(|part| tinychannels_bus::OutboundContentPart::Content { part }));
+                match reply.send_content_parts(&outbound, "").await {
+                    Ok(outcome) => outcomes.push(outcome),
+                    Err(ProgressiveSendError::UnsupportedContent) => unsupported.extend(outbound),
+                    Err(error) => return Err(Error::failed(error.to_string())),
+                }
+            }
+            ChannelOutputEvent::VoiceNote { text, voice } if forward => {
+                let mut outbound = Vec::new();
+                if let Some(text) = text.or_else(|| voice.transcript.as_ref().map(|transcript| transcript.text.clone())) {
+                    outbound.push(tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Text { text, markdown_dialect: None },
+                    });
+                }
+                outbound.push(tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media {
+                        media: voice.media,
+                        codec: voice.codec,
+                        duration_ms: voice.duration_ms,
+                    },
+                });
+                match reply.send_content_parts(&outbound, "").await {
+                    Ok(outcome) => outcomes.push(outcome),
+                    Err(ProgressiveSendError::UnsupportedContent) => unsupported.extend(outbound),
+                    Err(error) => return Err(Error::failed(error.to_string())),
+                }
+            }
+            ChannelOutputEvent::Media { .. } | ChannelOutputEvent::VoiceNote { .. }
             | ChannelOutputEvent::Subagent { .. }
             | ChannelOutputEvent::Usage { .. }
             | ChannelOutputEvent::ModelUsage { .. }
@@ -746,7 +781,13 @@ async fn apply(
             | ChannelOutputEvent::Native { .. } => {}
         }
     }
-    Ok(())
+    if !unsupported.is_empty() {
+        Ok(ProgressiveResult::DeliveryUnsupported { parts: unsupported })
+    } else if !outcomes.is_empty() {
+        Ok(ProgressiveResult::DeliveryOutcomes { outcomes })
+    } else {
+        Ok(ProgressiveResult::Updated)
+    }
 }
 
 #[cfg(test)]

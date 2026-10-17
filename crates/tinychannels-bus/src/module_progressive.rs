@@ -255,6 +255,9 @@ pub enum ProgressiveResult {
     DeliveryUnsupported {
         parts: Vec<crate::channel::OutboundContentPart>,
     },
+    DeliveryOutcomes {
+        outcomes: Vec<crate::channel::ChannelSendOutcome>,
+    },
 }
 
 /// The host supplies its managed REST transport and captured credential.

@@ -170,6 +170,17 @@ impl ProgressiveReply {
         Ok(outcome)
     }
 
+    /// Deliver typed content during a turn without finalizing its text draft.
+    pub async fn send_content_parts(
+        &self,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, super::ProgressiveSendError> {
+        self.sender
+            .send_parts(&self.channel, parts, text, self.output_context.as_ref())
+            .await
+    }
+
     /// Send a standalone reply without touching the turn's draft state (for a
     /// turn that failed to start).
     pub async fn send_reply(&self, text: &str) {
