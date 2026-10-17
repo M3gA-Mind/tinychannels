@@ -1739,6 +1739,10 @@ impl Channel for TelegramChannel {
         true
     }
 
+    fn supports_edit(&self) -> bool {
+        true
+    }
+
     fn supports_reply_to_id(&self) -> bool {
         true
     }
