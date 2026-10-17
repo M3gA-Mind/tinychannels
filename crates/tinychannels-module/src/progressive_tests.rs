@@ -2392,7 +2392,7 @@ async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked()
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
     capabilities.voice_out.supported = true;
     capabilities.voice_out.synthesis = true;
-    capabilities.voice_out.accepted_codecs = vec!["wav_pcm16".into()];
+    capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
     replies.running.lock().await.insert(
         "discord:voice-lease".into(),
         Running::start(
@@ -4535,7 +4535,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
                     codec: Some(codec),
                     ..
                 }
-            } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "wav_pcm16"
+            } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
         ))));
     }
     assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
