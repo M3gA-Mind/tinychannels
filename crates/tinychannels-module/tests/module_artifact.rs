@@ -1178,17 +1178,6 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         )
         .await
         .unwrap();
-    runtime_proxy
-        .call_confidential::<()>(
-            "StartChannelConfigured",
-            (
-                "telegram:foreign",
-                config.clone(),
-                tinychannels_bus::HttpProxyPolicy::default(),
-            ),
-        )
-        .await
-        .unwrap();
     other_runtime_proxy
         .call_confidential::<()>(
             "StartChannelConfigured",
@@ -1351,6 +1340,22 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         configured_foreign_account.wire_name(),
         tinybus::Error::FAILED
     );
+    let mut claimed_foreign_account = read_request.clone();
+    claimed_foreign_account.scope.channel.account_id = Some("telegram:foreign".into());
+    let normalized_claim = runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadInfo>(
+            "BeginMediaRead",
+            claimed_foreign_account,
+        )
+        .await
+        .unwrap();
+    runtime_proxy
+        .call_confidential::<()>(
+            "AbortMediaRead",
+            tinychannels_bus::MediaReadFinish(normalized_claim.handle),
+        )
+        .await
+        .unwrap();
     let mut unknown_media = read_request.clone();
     unknown_media.media.opaque_id = Some("tinychannels_media_v1_unknown".into());
     assert!(
@@ -1832,10 +1837,6 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
 
     runtime_proxy
         .call_confidential::<()>("StopChannel", "telegram")
-        .await
-        .unwrap();
-    runtime_proxy
-        .call_confidential::<()>("StopChannel", "telegram:foreign")
         .await
         .unwrap();
     runtime_proxy
