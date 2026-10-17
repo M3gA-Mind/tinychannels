@@ -55,7 +55,7 @@ impl Callback {
         let tinychannels_bus::ChannelBackendRequest::ProgressiveTransport(request) = request else {
             return Err(tinybus::Error::failed("unexpected backend callback"));
         };
-        match request {
+        match *request {
             ProgressiveTransportRequest::Send { .. } => {
                 self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
@@ -65,20 +65,20 @@ impl Callback {
                 outcome.receipt.primary_platform_message_id = Some("artifact-message".into());
                 outcome.receipt.platform_message_ids = vec!["artifact-message".into()];
                 return Ok(
-                    tinychannels_bus::ChannelBackendResult::ProgressiveTransport(
-                        ProgressiveTransportResult::Outcome(outcome),
-                    ),
+                    tinychannels_bus::ChannelBackendResult::ProgressiveTransport(Box::new(
+                        ProgressiveTransportResult::Outcome(Box::new(outcome)),
+                    )),
                 );
             }
             ProgressiveTransportRequest::OutputEvent { event, .. } => {
-                self.output_events.lock().unwrap().push(event);
+                self.output_events.lock().unwrap().push(*event);
             }
             _ => {}
         }
         Ok(
-            tinychannels_bus::ChannelBackendResult::ProgressiveTransport(
+            tinychannels_bus::ChannelBackendResult::ProgressiveTransport(Box::new(
                 ProgressiveTransportResult::Success(serde_json::json!({"id": "artifact-message"})),
-            ),
+            )),
         )
     }
 
