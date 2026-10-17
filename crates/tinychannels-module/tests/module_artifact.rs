@@ -1289,6 +1289,16 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         media: reference.clone(),
         max_bytes: 1024,
     };
+    let cross_account_read = other_runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadInfo>(
+            "BeginMediaRead",
+            read_request.clone(),
+        )
+        .await;
+    assert!(
+        cross_account_read.is_err(),
+        "a separately configured Telegram account must not resolve this account's durable media"
+    );
     assert_eq!(
         runtime_proxy
             .call::<tinychannels_bus::MediaReadInfo>("BeginMediaRead", read_request.clone())
