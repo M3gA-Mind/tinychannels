@@ -75,22 +75,19 @@ fn typed_draft_interaction_round_trips_full_account_and_topic_scope() {
     let request = ChannelInteractionRequest {
         channel: "telegram:account-a".into(),
         interaction: ChannelInteraction::UpsertDraft {
-            previous: Some(ChannelSendOutcome {
-                receipt: MessageReceipt {
-                    channel: Some(ChannelRef { id: "telegram".into(), account_id: Some("telegram:account-a".into()) }),
-                    conversation: Some(ConversationRef { id: "-100".into(), topic_id: Some("topic-4".into()), ..Default::default() }),
+            previous: Some(crate::channel::MessageReceipt {
+                    channel: Some(crate::channel::crate::channel::ChannelRef { id: "telegram".into(), account_id: Some("telegram:account-a".into()) }),
+                    conversation: Some(crate::channel::crate::channel::ConversationRef { id: "-100".into(), topic_id: Some("topic-4".into()), ..Default::default() }),
                     primary_platform_message_id: Some("91".into()),
                     platform_message_ids: vec!["91".into()],
                     ..Default::default()
-                },
-                error: None,
-            }.receipt),
+                }),
             intent: ChannelOutboundIntent {
                 idempotency_key: "draft-op".into(),
                 channel_id: "telegram".into(),
                 conversation_id: "-100".into(),
-                channel_ref: Some(ChannelRef { id: "telegram".into(), account_id: Some("telegram:account-a".into()) }),
-                conversation_ref: Some(ConversationRef { id: "-100".into(), topic_id: Some("topic-4".into()), ..Default::default() }),
+                channel_ref: Some(crate::channel::crate::channel::ChannelRef { id: "telegram".into(), account_id: Some("telegram:account-a".into()) }),
+                conversation_ref: Some(crate::channel::crate::channel::ConversationRef { id: "-100".into(), topic_id: Some("topic-4".into()), ..Default::default() }),
                 payload: crate::OutboundPayload::Text { text: "progress".into() },
                 ..Default::default()
             },
