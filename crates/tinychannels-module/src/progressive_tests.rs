@@ -130,6 +130,7 @@ struct Callback {
     voice_policy: Arc<Mutex<Option<tinychannels_bus::HostVoiceReplyPolicy>>>,
     synthesis_calls: Arc<AtomicUsize>,
     voice_store_calls: Arc<AtomicUsize>,
+    published_voice_media: Arc<Mutex<Vec<tinychannels_bus::MediaReference>>>,
 }
 
 #[derive(Clone, Default)]
@@ -204,15 +205,15 @@ impl Callback {
 
     async fn store_voice_media(
         &self,
-        _request: tinychannels_bus::HostStoreVoiceMediaRequest,
+        request: tinychannels_bus::HostStoreVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         self.voice_store_calls.fetch_add(1, Ordering::SeqCst);
+        let media = request
+            .media_reference
+            .expect("module publishes its canonical scoped media reference");
+        self.published_voice_media.lock().await.push(media.clone());
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
-            media: tinychannels_bus::MediaReference {
-                opaque_id: Some("durable-host-voice".into()),
-                kind: tinychannels_bus::MediaKind::Audio,
-                ..Default::default()
-            },
+            media,
             accessible_url: Some("https://media.example/authorized/voice".into()),
         })
     }
@@ -4468,6 +4469,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         .await
         .unwrap();
     server.request_name(tinyvoice_bus::BUS_NAME).await.unwrap();
+    let _storage = crate::storage_fixture::StorageHost::serve(&server, "voice-pipeline").await;
     let client = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
@@ -4488,7 +4490,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
     capabilities.voice_out.supported = true;
     capabilities.voice_out.synthesis = true;
-    capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
+    capabilities.voice_out.accepted_codecs = vec!["wav_pcm16".into()];
     capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
     capabilities.voice_out.max_duration_ms = Some(10_000);
     let sender = Arc::new(Sender {
@@ -4536,7 +4538,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
                         codec: Some(codec),
                         ..
                     }
-                } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
+                } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_")) && codec == "wav_pcm16"
             ))),
             "captured outbound parts: {send:?}; synthesis calls {}; store calls {}",
             callback.synthesis_calls.load(Ordering::SeqCst),
@@ -4545,6 +4547,46 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     }
     assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
     assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 1);
+    let published = callback.published_voice_media.lock().await[0].clone();
+    let sent_id = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                ..
+            } if turn_id == "stub-codec-turn" => parts.iter().find_map(|part| match part {
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media { media, .. },
+                } => media.opaque_id.clone(),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("native voice part carries the published opaque reference");
+    assert_eq!(Some(sent_id.as_str()), published.opaque_id.as_deref());
+    let scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "telegram:bot-1".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:bot-1".into()),
+        },
+        conversation: context.conversation.clone(),
+        turn_id: "stub-codec-turn".into(),
+    };
+    let storage = host.storage().await.unwrap();
+    let media_store = tinychannels::host::ScopedMediaStore::new(
+        Arc::clone(storage.documents()),
+        Arc::clone(storage.blobs()),
+    );
+    let stored = media_store
+        .read(scope, &sent_id, 1024 * 1024)
+        .await
+        .expect("published voice reference resolves in host scoped storage");
+    assert_eq!(stored.bytes, progressive_test_wav());
 
     // Mirror, Never, and SpeakReply are evaluated against the host's scoped
     // policy on each final turn. A denied policy sends the canonical text and
