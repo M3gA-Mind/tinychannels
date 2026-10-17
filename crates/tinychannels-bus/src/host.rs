@@ -113,6 +113,8 @@ pub struct HostStoreVoiceMediaResult {
 pub struct HostReadVoiceMediaRequest {
     pub scope: HostVoiceScope,
     pub opaque_id: String,
+    /// Maximum decoded audio bytes the host may return for a provider upload.
+    pub max_bytes: u64,
 }
 
 /// Bounded media returned only for the requested conversation and turn.
