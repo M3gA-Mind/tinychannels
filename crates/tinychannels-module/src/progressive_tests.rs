@@ -140,7 +140,7 @@ impl StubTinyVoiceCodec {
     async fn codec_transcode(
         &self,
         request: tinyvoice_bus::codec::CodecTranscodeRequest,
-    ) -> tinyvoice_bus::Result<tinyvoice_bus::codec::CodecOutput> {
+    ) -> tinybus::Result<tinyvoice_bus::codec::CodecOutput> {
         self.0.fetch_add(1, Ordering::SeqCst);
         Ok(tinyvoice_bus::codec::CodecOutput {
             audio_base64: request.audio_base64,
@@ -150,7 +150,7 @@ impl StubTinyVoiceCodec {
     async fn codec_probe(
         &self,
         _request: tinyvoice_bus::codec::CodecInput,
-    ) -> tinyvoice_bus::Result<tinyvoice_bus::codec::CodecInfo> {
+    ) -> tinybus::Result<tinyvoice_bus::codec::CodecInfo> {
         Ok(tinyvoice_bus::codec::CodecInfo {
             codec: tinyvoice_bus::codec::AudioCodec::OggOpus,
             duration_ms: 1_500,
@@ -162,7 +162,7 @@ impl StubTinyVoiceCodec {
     async fn codec_waveform(
         &self,
         request: tinyvoice_bus::codec::WaveformRequest,
-    ) -> tinyvoice_bus::Result<tinyvoice_bus::codec::WaveformResult> {
+    ) -> tinybus::Result<tinyvoice_bus::codec::WaveformResult> {
         Ok(tinyvoice_bus::codec::WaveformResult {
             peaks: (0..request.buckets.min(2))
                 .map(|index| if index == 0 { 0 } else { 255 })
