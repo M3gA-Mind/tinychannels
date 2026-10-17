@@ -387,6 +387,18 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
                 "image.gif",
                 b"GIF89a".to_vec(),
             ),
+            "zero-dimension-photo" => {
+                let mut bytes = vec![0; 24];
+                bytes[..8].copy_from_slice(b"\x89PNG\r\n\x1a\n");
+                bytes[16..20].copy_from_slice(&0_u32.to_be_bytes());
+                bytes[20..24].copy_from_slice(&1_u32.to_be_bytes());
+                (
+                    tinychannels_bus::MediaKind::Image,
+                    "image/png",
+                    "zero.png",
+                    bytes,
+                )
+            }
             _ => panic!("unexpected typed media id: {opaque_id}"),
         };
         assert!(bytes.len() as u64 <= max_bytes);
@@ -1080,6 +1092,165 @@ async fn typed_image_rejects_non_numeric_platform_thread_before_upload() {
 
     assert!(channel.send_typed_with_receipt(&message).await.is_err());
     assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+fn scoped_typed_media_message(id: &str) -> tinychannels_bus::ChannelOutboundMessage {
+    let mut message = typed_text(id, String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Group,
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+    });
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some(id.into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    }];
+    message
+}
+
+#[tokio::test]
+async fn typed_media_scope_and_provider_validation_fail_before_upload() {
+    let server = mock_api().await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+
+    let mut no_conversation = scoped_typed_media_message("stored-photo-1");
+    no_conversation.conversation_ref.as_mut().unwrap().id = "  ".into();
+    assert!(channel
+        .send_typed_with_receipt(&no_conversation)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("conversation identity"));
+
+    let mut no_account = scoped_typed_media_message("stored-photo-1");
+    no_account.channel_ref.as_mut().unwrap().account_id = None;
+    assert!(channel
+        .send_typed_with_receipt(&no_account)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("configured account"));
+
+    let mut no_turn = scoped_typed_media_message("stored-photo-1");
+    no_turn.turn_id = None;
+    assert!(channel
+        .send_typed_with_receipt(&no_turn)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("originating turn"));
+
+    let mut no_reply = scoped_typed_media_message("stored-photo-1");
+    no_reply.reply_to_id = Some("not-a-platform-id".into());
+    assert!(channel
+        .send_typed_with_receipt(&no_reply)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("reply_to_id"));
+
+    let mut unsupported = scoped_typed_media_message("stored-photo-1");
+    unsupported.parts = vec![tinychannels_bus::OutboundContentPart::Voice {
+        voice: tinychannels_bus::OutboundVoice::Synthesize {
+            text: "not prepared".into(),
+            voice: None,
+        },
+    }];
+    assert!(channel
+        .send_typed_with_receipt(&unsupported)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("does not support this content combination"));
+
+    let zero_dimensions = scoped_typed_media_message("zero-dimension-photo");
+    assert!(channel
+        .send_typed_with_receipt(&zero_dimensions)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("dimensions exceed provider limits"));
+
+    let mut sticker = scoped_typed_media_message("stored-photo-1");
+    sticker.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Sticker {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-photo-1".into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            pack_id: None,
+            sticker_id: None,
+            emoji: None,
+            alt_text: None,
+        },
+    }];
+    assert!(channel
+        .send_typed_with_receipt(&sticker)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("sticker upload is not enabled"));
+
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn typed_media_caption_failure_after_text_keeps_receipt_and_forbids_retry() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({"message_id": 700})),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = scoped_typed_media_message("stored-photo-1");
+    message.parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "delivered before media".into(),
+                markdown_dialect: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-photo-1".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: Some("caption ".repeat(129)),
+                alt_text: None,
+            },
+        },
+    ];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["700"]);
+    assert_eq!(outcome.receipt.parts.len(), 1);
+    let error = outcome.error.expect("partial typed send is reported");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    assert_eq!(json_bodies(&server, "sendPhoto").await.len(), 0);
 }
 
 #[tokio::test]
