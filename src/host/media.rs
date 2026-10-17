@@ -436,7 +436,11 @@ impl ScopedMediaStore {
             };
             if self
                 .documents
-                .delete(MEDIA_COLLECTION, id, Precondition::Version(tombstone_version))
+                .delete(
+                    MEDIA_COLLECTION,
+                    id,
+                    Precondition::Version(tombstone_version),
+                )
                 .await
                 .is_ok()
             {
@@ -487,7 +491,11 @@ impl super::MediaRepository for ScopedMediaStore {
 fn validate_scope(scope: &MediaScope) -> anyhow::Result<()> {
     if scope.configured_instance.trim().is_empty()
         || scope.channel.id.trim().is_empty()
-        || scope.channel.account_id.as_deref().is_none_or(str::is_empty)
+        || scope
+            .channel
+            .account_id
+            .as_deref()
+            .is_none_or(str::is_empty)
         || scope.conversation.id.trim().is_empty()
         || scope.turn_id.trim().is_empty()
     {
@@ -504,7 +512,10 @@ fn scoped_id(scope: &MediaScope, dedupe_key: &str) -> anyhow::Result<String> {
     hash.update(encoded);
     hash.update((dedupe_key.len() as u64).to_le_bytes());
     hash.update(dedupe_key.as_bytes());
-    Ok(format!("{OPAQUE_ID_PREFIX}{}", hex::encode(hash.finalize())))
+    Ok(format!(
+        "{OPAQUE_ID_PREFIX}{}",
+        hex::encode(hash.finalize())
+    ))
 }
 
 fn blob_key(opaque_id: &str) -> anyhow::Result<String> {
@@ -560,7 +571,10 @@ fn validate_content_type(
 ) -> anyhow::Result<()> {
     let allowed = match kind {
         tinychannels_bus::MediaKind::Image => {
-            matches!(content_type, "image/jpeg" | "image/png" | "image/gif" | "image/webp")
+            matches!(
+                content_type,
+                "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+            )
         }
         tinychannels_bus::MediaKind::Video => {
             matches!(content_type, "video/mp4" | "video/quicktime" | "video/webm")

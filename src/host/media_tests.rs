@@ -4,8 +4,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
 use tinystoragedrivers_core::{
-    Blob, BlobMeta, BlobReader, BlobStore, MemoryStorage, Scope, StorageBackend, Result as StorageResult,
-    StorageError,
+    Blob, BlobMeta, BlobReader, BlobStore, MemoryStorage, Result as StorageResult, Scope,
+    StorageBackend, StorageError,
 };
 
 fn media_scope() -> MediaScope {
@@ -31,10 +31,7 @@ fn store() -> ScopedMediaStore {
     let storage = MemoryStorage::new()
         .for_scope(&Scope::new("module:tinychannels@test").unwrap())
         .unwrap();
-    ScopedMediaStore::new(
-        Arc::clone(storage.documents()),
-        Arc::clone(storage.blobs()),
-    )
+    ScopedMediaStore::new(Arc::clone(storage.documents()), Arc::clone(storage.blobs()))
 }
 
 #[derive(Debug)]
@@ -219,20 +216,24 @@ async fn media_reference_requires_the_original_configured_full_turn_scope() {
     wrong_scopes.push(wrong);
 
     for wrong_scope in wrong_scopes {
-        assert!(store
-            .read(wrong_scope, reference.opaque_id.as_deref().unwrap(), 1024)
-            .await
-            .is_err());
+        assert!(
+            store
+                .read(wrong_scope, reference.opaque_id.as_deref().unwrap(), 1024)
+                .await
+                .is_err()
+        );
     }
 }
 
 #[tokio::test]
 async fn media_store_rejects_oversized_bytes_before_persisting_them() {
     let store = store();
-    assert!(store
-        .store(media_request(vec![0; 1025], None, None))
-        .await
-        .is_err());
+    assert!(
+        store
+            .store(media_request(vec![0; 1025], None, None))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -256,13 +257,15 @@ async fn streamed_media_accepts_actual_length_and_rejects_unknown_length_over_ca
 
     let mut metadata = media_request(Vec::new(), None, None).metadata;
     metadata.max_bytes = 64;
-    assert!(store
-        .store_stream(MediaStreamRequest {
-            metadata,
-            reader: Box::pin(std::io::Cursor::new(vec![b'x'; 4096])),
-        })
-        .await
-        .is_err());
+    assert!(
+        store
+            .store_stream(MediaStreamRequest {
+                metadata,
+                reader: Box::pin(std::io::Cursor::new(vec![b'x'; 4096])),
+            })
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -289,10 +292,7 @@ async fn media_store_rejects_spoofed_mime_and_truncated_image_bodies() {
     ] {
         let mut request = media_request(bytes, None, None);
         request.metadata.content_type = content_type.into();
-        assert!(store
-            .store(request)
-            .await
-            .is_err());
+        assert!(store.store(request).await.is_err());
     }
 }
 
@@ -321,11 +321,13 @@ async fn independent_store_instances_cannot_replace_a_deduplicated_blob() {
         let first = Arc::clone(&first);
         let key = key.clone();
         tokio::spawn(async move {
-            first.store(media_request(
-                valid_png(),
-                Some("photo.png"),
-                key.as_deref(),
-            )).await
+            first
+                .store(media_request(
+                    valid_png(),
+                    Some("photo.png"),
+                    key.as_deref(),
+                ))
+                .await
         })
     };
     paused.entered.notified().await;
@@ -341,7 +343,10 @@ async fn independent_store_instances_cannot_replace_a_deduplicated_blob() {
     let opaque_id = reference.opaque_id.as_deref().unwrap();
     let resolved = first.read(media_scope(), opaque_id, 1024).await.unwrap();
     assert_eq!(resolved.bytes, valid_png());
-    assert!(competing.is_err(), "a second writer cannot replace a reservation");
+    assert!(
+        competing.is_err(),
+        "a second writer cannot replace a reservation"
+    );
 }
 
 #[tokio::test]
@@ -392,10 +397,7 @@ async fn failed_blob_cleanup_can_be_retried_after_reopening_the_store() {
         inner: Arc::clone(storage.blobs()),
         failed: std::sync::atomic::AtomicBool::new(false),
     });
-    let writer = ScopedMediaStore::new(
-        Arc::clone(storage.documents()),
-        failing_blobs.clone(),
-    );
+    let writer = ScopedMediaStore::new(Arc::clone(storage.documents()), failing_blobs.clone());
     let reference = writer
         .store(media_request(valid_png(), None, None))
         .await
@@ -403,11 +405,13 @@ async fn failed_blob_cleanup_can_be_retried_after_reopening_the_store() {
     let opaque_id = reference.opaque_id.unwrap();
     assert!(writer.delete(media_scope(), &opaque_id).await.is_err());
 
-    let reopened = ScopedMediaStore::new(
-        Arc::clone(storage.documents()),
-        failing_blobs,
-    );
+    let reopened = ScopedMediaStore::new(Arc::clone(storage.documents()), failing_blobs);
     assert!(reopened.delete(media_scope(), &opaque_id).await.unwrap());
     assert!(!reopened.delete(media_scope(), &opaque_id).await.unwrap());
-    assert!(reopened.read(media_scope(), &opaque_id, 1024).await.is_err());
+    assert!(
+        reopened
+            .read(media_scope(), &opaque_id, 1024)
+            .await
+            .is_err()
+    );
 }

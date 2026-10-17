@@ -272,11 +272,9 @@ struct ModuleMediaRepository(HostChannels, String);
 
 impl ModuleMediaRepository {
     async fn scoped_store(&self) -> anyhow::Result<tinychannels::host::ScopedMediaStore> {
-        let storage = self
-            .0
-            .storage()
-            .await
-            .map_err(|error| anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind()))?;
+        let storage = self.0.storage().await.map_err(|error| {
+            anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind())
+        })?;
         Ok(tinychannels::host::ScopedMediaStore::new(
             Arc::clone(storage.documents()),
             Arc::clone(storage.blobs()),
@@ -312,7 +310,10 @@ impl tinychannels::host::MediaRepository for ModuleMediaRepository {
         scope.configured_instance.clone_from(&self.1);
         scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         scope.channel.account_id = Some(self.1.clone());
-        self.scoped_store().await?.read(scope, &opaque_id, max_bytes).await
+        self.scoped_store()
+            .await?
+            .read(scope, &opaque_id, max_bytes)
+            .await
     }
 }
 
@@ -444,11 +445,9 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         if audio.is_empty() || audio.len() > 8 * 1024 * 1024 {
             anyhow::bail!("voice media exceeds the configured size limit");
         }
-        let storage = self
-            .0
-            .storage()
-            .await
-            .map_err(|error| anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind()))?;
+        let storage = self.0.storage().await.map_err(|error| {
+            anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind())
+        })?;
         let media_store = tinychannels::host::ScopedMediaStore::new(
             Arc::clone(storage.documents()),
             Arc::clone(storage.blobs()),
@@ -517,13 +516,16 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
                     max_bytes: 8 * 1024 * 1024,
                 })
                 .await
-                .map_err(|error| anyhow::anyhow!("legacy scoped voice media is unavailable: {:?}", error.kind()));
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "legacy scoped voice media is unavailable: {:?}",
+                        error.kind()
+                    )
+                });
         }
-        let storage = self
-            .0
-            .storage()
-            .await
-            .map_err(|error| anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind()))?;
+        let storage = self.0.storage().await.map_err(|error| {
+            anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind())
+        })?;
         let media_store = tinychannels::host::ScopedMediaStore::new(
             Arc::clone(storage.documents()),
             Arc::clone(storage.blobs()),
