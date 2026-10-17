@@ -1171,7 +1171,7 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
             "StartChannelConfigured",
             (
                 "telegram",
-                config,
+                config.clone(),
                 tinychannels_bus::HttpProxyPolicy::default(),
             ),
         )
@@ -1353,7 +1353,7 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         payload: OutboundPayload::Parts {
             parts: vec![OutboundContentPart::Content {
                 part: tinychannels_bus::ContentPart::Image {
-                    media: reference,
+                    media: reference.clone(),
                     caption: Some("fixture".into()),
                     alt_text: None,
                 },
