@@ -1140,10 +1140,10 @@ impl Channels {
         if encoded.len() > tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES {
             return Err(BusError::failed("media resolution request exceeds its limit"));
         }
-        let reservation = self.media_reads.reserve().await?;
+        let instance = request.instance.clone();
         let repository = crate::provider::ModuleMediaRepository(
             self.host.clone(),
-            request.instance.clone(),
+            instance.clone(),
         );
         let media_id = request
             .media
@@ -1152,30 +1152,25 @@ impl Channels {
             .ok_or_else(|| BusError::failed("media resolution request is invalid"))?;
         let scope = request.scope.clone();
         let max_bytes = request.max_bytes;
-        let media = tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            async move {
+        self.media_reads
+            .resolve(
+                request,
+                activation.clone(),
+                || async move {
                 <crate::provider::ModuleMediaRepository as tinychannels::host::MediaRepository>::read_media(
                     &repository,
                     scope,
                     media_id,
                     max_bytes,
                 )
-                    .await
-            },
-        )
-        .await
-        .map_err(|_| BusError::failed("media resolution timed out"))?
-        .map_err(|_| BusError::failed("media could not be resolved"))?;
-        if self.terminal.load(Ordering::SeqCst)
-            || self.media_activation(&request.instance).await? != activation
-        {
-            return Err(BusError::failed(
-                "media provider activation changed during resolution",
-            ));
-        }
-        self.media_reads
-            .complete(request, activation, media, reservation)
+                .await
+                .map_err(|_| BusError::failed("media could not be resolved"))
+                },
+                || async {
+                    !self.terminal.load(Ordering::SeqCst)
+                        && self.media_activation(&instance).await == Ok(activation)
+                },
+            )
             .await
     }
 

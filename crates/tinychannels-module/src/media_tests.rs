@@ -100,7 +100,10 @@ async fn media_reads_reject_claimed_size_mismatch_without_retaining_the_slot() {
         .complete(read_request_fixture(), "activation".into(), wrong, reads.reserve().await.unwrap())
         .await
         .is_err());
-    assert!(reads.reserve().await.is_ok());
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
 }
 
 #[tokio::test]
@@ -121,8 +124,10 @@ async fn expired_read_leases_release_capacity_without_being_touched() {
             },
         );
     }
-    assert!(reads.reserve().await.is_ok());
-    assert!(reads.reserve().await.is_ok());
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
 }
 
 #[tokio::test]
@@ -136,8 +141,80 @@ async fn oversized_resolved_metadata_drops_the_reserved_capacity() {
         .complete(read_request_fixture(), "activation".into(), media, reads.reserve().await.unwrap())
         .await
         .is_err());
-    assert!(reads.reserve().await.is_ok());
-    assert!(reads.reserve().await.is_ok());
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn canceled_and_timed_out_scoped_reads_release_their_pending_slots() {
+    use std::{future::pending, sync::Arc};
+    use tokio::sync::Notify;
+
+    let reads = Arc::new(MediaReads::default());
+    let entered = Arc::new(Notify::new());
+    let task_reads = Arc::clone(&reads);
+    let task_entered = Arc::clone(&entered);
+    let first = tokio::spawn(async move {
+        task_reads
+            .resolve_with_deadline(
+                read_request_fixture(),
+                "activation".into(),
+                Duration::from_secs(600),
+                || async move {
+                    task_entered.notify_one();
+                    pending::<tinybus::Result<tinychannels::host::StoredMedia>>().await
+                },
+                || async { true },
+            )
+            .await
+    });
+    entered.notified().await;
+    first.abort();
+    let _ = first.await;
+
+    let entered = Arc::new(Notify::new());
+    let task_reads = Arc::clone(&reads);
+    let task_entered = Arc::clone(&entered);
+    let timed_out = task_reads
+        .resolve_with_deadline(
+            read_request_fixture(),
+            "activation".into(),
+            Duration::from_millis(1),
+            || async move {
+                task_entered.notify_one();
+                pending::<tinybus::Result<tinychannels::host::StoredMedia>>().await
+            },
+            || async { true },
+        )
+        .await;
+    assert!(timed_out.is_err());
+
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn activation_replacement_discards_the_pending_read_before_retaining_bytes() {
+    use std::future::ready;
+
+    let reads = MediaReads::default();
+    let result = reads
+        .resolve(
+            read_request_fixture(),
+            "old-activation".into(),
+            || async { Ok(stored(vec![1, 2, 3])) },
+            || ready(false),
+        )
+        .await;
+    assert!(result.is_err());
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
 }
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
