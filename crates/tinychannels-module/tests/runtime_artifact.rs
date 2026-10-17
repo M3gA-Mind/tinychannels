@@ -179,7 +179,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         PreparedChannelIdentity, PreparedChannelInbound,
     };
     use tinychannels_bus::module_progressive::{
-        ProgressiveCommand, ProgressiveEvent, ProgressiveResult,
+        ProgressiveCommand, ChannelOutputEvent, ProgressiveResult,
     };
     let ordinary = first_client
         .call::<ProgressiveResult>(
@@ -210,7 +210,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             methods::EXECUTE_PROGRESSIVE,
             ProgressiveCommand::Feed {
                 handle: handle.clone(),
-                events: vec![ProgressiveEvent::TextDelta { text: "artifact draft".into() }],
+                events: vec![ChannelOutputEvent::TextDelta { text: "artifact draft".into() }],
             },
         )
         .await
