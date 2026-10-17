@@ -1224,9 +1224,9 @@ async fn bridge_approval_presentation_renders_scoped_inline_choice_actions() {
     assert_eq!(bodies[0]["text"], "Run the command?");
     let keyboard = &bodies[0]["reply_markup"]["inline_keyboard"];
     assert_eq!(keyboard[0][0]["text"], "Allow once");
-    assert_eq!(keyboard[0][1]["text"], "Deny");
+    assert_eq!(keyboard[1][0]["text"], "Deny");
     assert_eq!(keyboard[0][0]["callback_data"], "approval-v1:request-42:0");
-    assert_eq!(keyboard[0][1]["callback_data"], "approval-v1:request-42:1");
+    assert_eq!(keyboard[1][0]["callback_data"], "approval-v1:request-42:1");
 }
 
 #[tokio::test]
