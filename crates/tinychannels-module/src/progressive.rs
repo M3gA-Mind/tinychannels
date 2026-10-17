@@ -874,6 +874,19 @@ async fn run(
                     }
                     if let Some((text, event_parts, has_typed_parts)) = final_message {
                         if forward {
+                            if !has_typed_parts {
+                                match reply.finalize_existing_text(&text).await {
+                                    Ok(Some(outcome)) => {
+                                        result = Ok(ProgressiveResult::DeliveryOutcome { outcome });
+                                    }
+                                    Err(error) => {
+                                        reply.abort().await;
+                                        result = Err(Error::failed(error.to_string()));
+                                    }
+                                    Ok(None) => {}
+                                }
+                            }
+                            if result.is_ok() && !matches!(&result, Ok(ProgressiveResult::DeliveryOutcome { .. })) {
                             let parts = if has_typed_parts {
                                 event_parts
                             } else {
@@ -892,6 +905,7 @@ async fn run(
                                     Err(Error::failed(error.to_string()))
                                 }
                             };
+                            }
                         } else {
                             reply.finalize(&text).await;
                             result = Ok(ProgressiveResult::Closed);

@@ -934,6 +934,76 @@ fn text_segments_obey_unicode_units_without_losing_scalars() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn terminal_text_edits_existing_draft_without_duplicate_send() {
+    let (base, callback) = fixture(false).await;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.progressive_edits = true;
+    let mut configured = HashMap::new();
+    configured.insert(
+        "discord:final-draft".to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities,
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            base.host.clone(),
+        ),
+    );
+    let replies = Replies::new(base.host.clone(), Arc::new(Mutex::new(configured)));
+    let opened = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:final-draft".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "final-draft-turn".into(),
+        })
+        .await
+        .unwrap();
+    let ProgressiveResult::Opened { handle } = opened else {
+        panic!("expected opened output")
+    };
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "partial".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..5 { tokio::task::yield_now().await; }
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "complete".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
+        if outcome.receipt.platform_message_ids == ["fixture-message"]));
+    let sends = callback.sends.lock().await;
+    assert_eq!(sends.len(), 1, "the terminal result must edit the visible draft");
+    assert!(matches!(callback.requests.lock().await.last().unwrap(),
+        ProgressiveTransportRequest::Edit { text, message_id, .. }
+            if text == "complete" && message_id == "fixture-message"
+    ));
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
 async fn configured_progressive_channel_posts_and_edits_one_draft() {
     let (base, callback) = fixture(false).await;
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
