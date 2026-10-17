@@ -1098,6 +1098,31 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
             tinychannels_bus::BUS_NAME,
         )
         .unwrap();
+    let other_reservation: tinychannels_bus::ChannelRuntimeReservation = module_proxy
+        .call_confidential("ReserveRuntime", ())
+        .await
+        .unwrap();
+    connection
+        .serve_at(
+            other_reservation.host_object_path.clone().try_into().unwrap(),
+            Callback(
+                Arc::new(Mutex::new(Vec::new())),
+                Arc::new(Mutex::new(DeliveryState::default())),
+            ),
+        )
+        .await
+        .unwrap();
+    module_proxy
+        .call_confidential::<()>("StartRuntime", other_reservation.handle.clone())
+        .await
+        .unwrap();
+    let other_runtime_proxy = connection
+        .proxy(
+            tinychannels_bus::BUS_NAME,
+            &other_reservation.object_path,
+            tinychannels_bus::BUS_NAME,
+        )
+        .unwrap();
 
     let telegram_api = MockServer::start().await;
     // SAFETY: this ignored integration test is run by itself against the compiled artifact.
@@ -1187,6 +1212,13 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .call_confidential("BeginMediaUpload", begin)
         .await
         .unwrap();
+    assert!(other_runtime_proxy
+        .call_confidential::<MediaUploadResult>(
+            "FinishMediaUpload",
+            MediaUploadFinish(handle.clone()),
+        )
+        .await
+        .is_err());
     let png = base64::engine::general_purpose::STANDARD
         .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII=")
         .unwrap();
@@ -1314,8 +1346,16 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .call_confidential::<()>("StopChannel", "telegram")
         .await
         .unwrap();
+    assert!(runtime_proxy
+        .call_confidential::<MediaUploadResult>("FinishMediaUpload", finish)
+        .await
+        .is_err());
     module_proxy
         .call_confidential::<()>("StopRuntime", reservation.handle)
+        .await
+        .unwrap();
+    module_proxy
+        .call_confidential::<()>("StopRuntime", other_reservation.handle)
         .await
         .unwrap();
     // SAFETY: restore the process environment after the isolated artifact test.
