@@ -1167,7 +1167,7 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     };
     let begin = MediaUploadBegin {
         instance: "telegram".into(),
-        scope,
+        scope: scope.clone(),
         kind: MediaKind::Image,
         content_type: "image/png".into(),
         file_name: Some("tiny.png".into()),
@@ -1214,6 +1214,58 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     assert!(reference.path.is_none());
     assert!(reference.url.is_none());
     assert!(reference.local_cache_path.is_none());
+
+    // Exercise the public framed request boundary at the advertised maximum
+    // chunk, followed by a final partial chunk. The ordinary channel message
+    // path below uses the independently returned opaque image reference.
+    let mut pdf = vec![b'x'; MEDIA_UPLOAD_CHUNK_BYTES + 17];
+    pdf[..5].copy_from_slice(b"%PDF-");
+    let pdf_begin = MediaUploadBegin {
+        instance: "telegram".into(),
+        scope: scope.clone(),
+        kind: MediaKind::Document,
+        content_type: "application/pdf".into(),
+        file_name: Some("chunk-boundary.pdf".into()),
+        duration_ms: None,
+        codec: None,
+        byte_count: pdf.len(),
+    };
+    let pdf_handle: MediaUploadHandle = runtime_proxy
+        .call_confidential("BeginMediaUpload", pdf_begin)
+        .await
+        .unwrap();
+    let remainder = pdf.split_off(MEDIA_UPLOAD_CHUNK_BYTES);
+    runtime_proxy
+        .call_confidential::<u32>(
+            "AppendMediaUploadChunk",
+            MediaUploadChunk {
+                handle: pdf_handle.clone(),
+                sequence: 0,
+                bytes: pdf,
+            },
+        )
+        .await
+        .unwrap();
+    runtime_proxy
+        .call_confidential::<u32>(
+            "AppendMediaUploadChunk",
+            MediaUploadChunk {
+                handle: pdf_handle.clone(),
+                sequence: 1,
+                bytes: remainder,
+            },
+        )
+        .await
+        .unwrap();
+    let pdf_reference: MediaUploadResult = runtime_proxy
+        .call_confidential(
+            "FinishMediaUpload",
+            MediaUploadFinish(pdf_handle),
+        )
+        .await
+        .unwrap();
+    assert_eq!(pdf_reference.kind, MediaKind::Document);
+    assert_eq!(pdf_reference.size_bytes, Some((MEDIA_UPLOAD_CHUNK_BYTES + 17) as u64));
 
     let send = ChannelOutboundIntent {
         idempotency_key: "media-wire-send".into(),
