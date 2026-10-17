@@ -59,6 +59,15 @@ impl Callback {
             ProgressiveTransportRequest::Send { .. } => {
                 self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
+            ProgressiveTransportRequest::SendTyped { .. } => {
+                self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+                outcome.receipt.primary_platform_message_id = Some("artifact-message".into());
+                outcome.receipt.platform_message_ids = vec!["artifact-message".into()];
+                return Ok(tinychannels_bus::ChannelBackendResult::ProgressiveTransport(
+                    ProgressiveTransportResult::Outcome(outcome),
+                ));
+            }
             ProgressiveTransportRequest::OutputEvent { event, .. } => {
                 self.output_events.lock().unwrap().push(event);
             }
@@ -237,24 +246,45 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
                         display_detail: None,
                         structured: Some(serde_json::json!({"kind": "lookup", "count": 1})),
                     },
+                    ChannelOutputEvent::FinalMessage {
+                        text: "artifact final".into(),
+                        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                            part: tinychannels_bus::ContentPart::Text {
+                                text: "artifact final".into(),
+                                markdown_dialect: None,
+                            },
+                        }],
+                        receipt: None,
+                    },
                 ],
             },
         )
         .await
         .unwrap();
-    assert_eq!(updated, ProgressiveResult::Updated);
+    assert!(matches!(updated, ProgressiveResult::DeliveryOutcome { outcome }
+        if outcome.receipt.platform_message_ids == ["artifact-message"]));
     for _ in 0..2 {
         let result: ProgressiveResult = first_client
             .call_confidential(
                 methods::EXECUTE_PROGRESSIVE,
-                ProgressiveCommand::Finish {
+                ProgressiveCommand::FeedOutput {
                     handle: handle.clone(),
-                    text: "artifact final".into(),
+                    events: vec![ChannelOutputEvent::FinalMessage {
+                        text: "artifact final".into(),
+                        parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                            part: tinychannels_bus::ContentPart::Text {
+                                text: "artifact final".into(),
+                                markdown_dialect: None,
+                            },
+                        }],
+                        receipt: None,
+                    }],
                 },
             )
             .await
             .unwrap();
-        assert_eq!(result, ProgressiveResult::Closed);
+        assert!(matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
+            if outcome.receipt.platform_message_ids == ["artifact-message"]));
     }
     assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 1);
     let output_events = callback.output_events.lock().unwrap();
