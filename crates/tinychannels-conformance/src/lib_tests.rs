@@ -257,3 +257,37 @@ async fn voice_in_requires_audio_and_transcript_on_the_observed_ingress() {
             .contains("audio or transcript")
     );
 }
+
+#[tokio::test]
+async fn address_features_require_the_expected_wire_addresses() {
+    let mut fixture = fixture(ConformanceFeature::ReplyAddressing);
+    fixture.adapter.0.addressing.reply_to_id = true;
+    fixture.scope.reply_to_id = Some("reply-5".into());
+    fixture.observations[0].reply_to_id = None;
+    assert!(check_feature(&fixture, ConformanceFeature::ReplyAddressing)
+        .await
+        .unwrap_err()
+        .contains("reply addressing"));
+}
+
+#[tokio::test]
+async fn streaming_draft_requires_the_complete_observed_lifecycle() {
+    let mut fixture = fixture(ConformanceFeature::StreamingDraft);
+    fixture.adapter.0.progressive_edits = true;
+    fixture.adapter.0.actions.supported.push("draft-update".into());
+    fixture.observations[0].operation = "draft_create".into();
+    assert!(check_feature(&fixture, ConformanceFeature::StreamingDraft)
+        .await
+        .unwrap_err()
+        .contains("omitted operation draft_update"));
+}
+
+#[tokio::test]
+async fn delete_operation_can_conform_without_a_message_receipt() {
+    let mut fixture = fixture(ConformanceFeature::Delete);
+    fixture.adapter.0.actions.supported.push("delete".into());
+    fixture.result = Ok(None);
+    fixture.observations[0].operation = "delete".into();
+    fixture.observations[0].platform_message_ids.clear();
+    assert!(check_feature(&fixture, ConformanceFeature::Delete).await.is_ok());
+}
