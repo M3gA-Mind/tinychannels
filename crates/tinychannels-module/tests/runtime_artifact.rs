@@ -41,6 +41,9 @@ struct Callback {
     sends: Arc<std::sync::atomic::AtomicUsize>,
     output_events:
         Arc<std::sync::Mutex<Vec<tinychannels_bus::module_progressive::ChannelOutputEvent>>>,
+    requests: Arc<
+        std::sync::Mutex<Vec<tinychannels_bus::module_progressive::ProgressiveTransportRequest>>,
+    >,
 }
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
@@ -55,7 +58,9 @@ impl Callback {
         let tinychannels_bus::ChannelBackendRequest::ProgressiveTransport(request) = request else {
             return Err(tinybus::Error::failed("unexpected backend callback"));
         };
-        match *request {
+        let request = *request;
+        self.requests.lock().unwrap().push(request.clone());
+        match request {
             ProgressiveTransportRequest::Send { .. } => {
                 self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             }
@@ -198,7 +203,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         PreparedChannelIdentity, PreparedChannelInbound,
     };
     use tinychannels_bus::module_progressive::{
-        ChannelOutputEvent, ProgressiveCommand, ProgressiveResult,
+        ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
     };
     let ordinary = first_client
         .call::<ProgressiveResult>(
@@ -492,6 +497,77 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         )
         .await
         .unwrap();
+    let scope = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Thread,
+        id: "artifact-room".into(),
+        scope_id: Some("artifact-scope".into()),
+        parent_id: Some("artifact-parent".into()),
+        thread_id: Some("artifact-thread".into()),
+        topic_id: Some("artifact-topic".into()),
+    };
+    let ProgressiveResult::Opened {
+        handle: scoped_handle,
+    } = first_client
+        .call_confidential(
+            methods::EXECUTE_PROGRESSIVE,
+            ProgressiveCommand::OpenOutput {
+                channel: tinychannels_bus::ChannelRef {
+                    id: "linq".into(),
+                    account_id: None,
+                },
+                conversation: scope.clone(),
+                turn_id: "artifact-scoped-turn".into(),
+                lifetime_ms: 210_000,
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("scoped output handle did not open")
+    };
+    let terminal = vec![ChannelOutputEvent::FinalMessage {
+        text: "scoped artifact final".into(),
+        parts: vec![],
+        receipt: None,
+    }];
+    for _ in 0..2 {
+        let result: ProgressiveResult = first_client
+            .call_confidential(
+                methods::EXECUTE_PROGRESSIVE,
+                ProgressiveCommand::FeedOutput {
+                    handle: scoped_handle.clone(),
+                    events: terminal.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
+            if outcome.receipt.platform_message_ids == ["artifact-message"])
+        );
+    }
+    let scoped_send = callback
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                channel_ref: Some(channel),
+                conversation: Some(conversation),
+                turn_id: Some(turn_id),
+                idempotency_key: Some(key),
+                ..
+            } if turn_id == "artifact-scoped-turn" => {
+                Some((channel.clone(), conversation.clone(), key.clone()))
+            }
+            _ => None,
+        })
+        .expect("scoped typed send callback");
+    assert_eq!(scoped_send.0.id, "linq");
+    assert_eq!(scoped_send.1, scope);
+    assert!(!scoped_send.2.is_empty());
+    assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 2);
     let interaction: tinychannels_bus::ChannelInteractionResult = first_client
         .call_confidential(
             methods::CHANNEL_INTERACTION,
