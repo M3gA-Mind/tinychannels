@@ -148,14 +148,24 @@ impl ScopedMediaStore {
             .await
             .is_err()
         {
-            let _ = self
+            let mut deleting = record.clone();
+            deleting.state = MediaRecordState::Deleting;
+            if let Ok(version) = self
                 .documents
-                .delete(
+                .put(
                     MEDIA_COLLECTION,
                     &opaque_id,
+                    serde_json::to_value(&deleting)?,
                     Precondition::Version(reservation_version),
                 )
-                .await;
+                .await
+                && self.blobs.delete(&storage_key).await.is_ok()
+            {
+                let _ = self
+                    .documents
+                    .delete(MEDIA_COLLECTION, &opaque_id, Precondition::Version(version))
+                    .await;
+            }
             anyhow::bail!("media blob could not be stored");
         }
         let mut ready = record;
@@ -192,14 +202,28 @@ impl ScopedMediaStore {
         dedupe_key: Option<String>,
         max_bytes: u64,
     ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        validate_scope(&scope)?;
+        let normalized = normalized_content_type(&content_type);
+        let allowed_kind = match kind {
+            tinychannels_bus::MediaKind::Image => normalized.starts_with("image/"),
+            tinychannels_bus::MediaKind::Video => normalized.starts_with("video/"),
+            tinychannels_bus::MediaKind::Audio => normalized.starts_with("audio/"),
+            tinychannels_bus::MediaKind::Document => true,
+            tinychannels_bus::MediaKind::Unknown => false,
+        };
+        if !allowed_kind {
+            anyhow::bail!("media content type or body is not allowed");
+        }
         let bounded = max_bytes.saturating_add(1);
         let capacity = usize::try_from(bounded.min(64 * 1024)).unwrap_or(64 * 1024);
         let mut bytes = Vec::with_capacity(capacity);
-        reader
-            .take(bounded)
-            .read_to_end(&mut bytes)
-            .await
-            .map_err(|_| anyhow::anyhow!("media download could not be read"))?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(60),
+            reader.take(bounded).read_to_end(&mut bytes),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("media download timed out"))?
+        .map_err(|_| anyhow::anyhow!("media download could not be read"))?;
         if bytes.is_empty() || bytes.len() as u64 > max_bytes {
             anyhow::bail!("media exceeds the configured size limit");
         }
