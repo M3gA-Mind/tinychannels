@@ -478,7 +478,9 @@ async fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>) ->
         return Err(Error::failed("progressive content exceeds its limit"));
     }
     for event in events {
-        reply.on_output_event(&event).await
+        reply
+            .on_output_event(&event)
+            .await
             .map_err(|_| Error::failed("host output event callback failed"))?;
         match event {
             ChannelOutputEvent::TextDelta { text } => reply.on_text_delta(&text),

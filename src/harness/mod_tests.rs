@@ -1,7 +1,7 @@
 use crate::channel::{
     ChannelInboundEnvelope, ChannelPresentationCapabilities, ChannelRef, ChannelStaticCapabilities,
-    ContentPart,
-    ConversationKind, ConversationRef, MediaKind, MediaReference, OutboundPayload, SenderRef,
+    ContentPart, ConversationKind, ConversationRef, MediaKind, MediaReference, OutboundPayload,
+    SenderRef,
 };
 use crate::harness::{
     BridgeTranslationOptions, ChannelOutputEvent, ChannelTurn, TurnAdmissionVerdict,

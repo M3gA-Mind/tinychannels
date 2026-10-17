@@ -190,6 +190,7 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
             text: "x".repeat(MAX_CONTENT),
         }],
     )
+    .await
     .unwrap();
     assert!(
         apply(
@@ -204,6 +205,7 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
                 }
             ]
         )
+        .await
         .is_err()
     );
     assert_eq!(reply.state().content.len(), MAX_CONTENT);
@@ -468,6 +470,7 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
             iteration: None,
         }],
     )
+    .await
     .unwrap();
     assert!(
         apply(
@@ -482,6 +485,7 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
                 }
             ]
         )
+        .await
         .is_err()
     );
     assert!(reply.state().content.is_empty());
