@@ -865,6 +865,7 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
         let (cancel, _) = watch::channel(false);
         let running = Arc::new(Running {
             channel: Arc::new(InteractionChannel::default()),
+            configured_instance: "interaction-fixture:account-a".into(),
             send,
             cancel,
             worker: Mutex::new(None),
@@ -896,4 +897,100 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
+    let (send, mut commands) = mpsc::channel::<SendCommand>(1);
+    let (cancel, _) = watch::channel(false);
+    let running = Arc::new(Running {
+        channel: Arc::new(InteractionChannel::default()),
+        configured_instance: "interaction-fixture:account-a".into(),
+        send,
+        cancel,
+        worker: Mutex::new(None),
+        finished: Arc::new(AtomicBool::new(false)),
+    });
+    let adapter = running.adapter_handle();
+    let error = adapter
+        .send(tinychannels_bus::ChannelOutboundIntent {
+            channel_id: "interaction-fixture".into(),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "interaction-fixture".into(),
+                account_id: Some("interaction-fixture:account-b".into()),
+            }),
+            conversation_id: "chat-1".into(),
+            payload: tinychannels_bus::OutboundPayload::Text { text: "hello".into() },
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Forbidden);
+    assert!(commands.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
+    let (send, mut commands) = mpsc::channel::<SendCommand>(1);
+    let (cancel, _) = watch::channel(false);
+    let running = Arc::new(Running {
+        channel: Arc::new(InteractionChannel::default()),
+        configured_instance: "interaction-fixture:account-a".into(),
+        send,
+        cancel,
+        worker: Mutex::new(None),
+        finished: Arc::new(AtomicBool::new(false)),
+    });
+    let adapter = running.adapter_handle();
+    let task = tokio::spawn(async move {
+        adapter
+            .send(tinychannels_bus::ChannelOutboundIntent {
+                channel_id: "interaction-fixture".into(),
+                channel_ref: Some(tinychannels_bus::ChannelRef {
+                    id: "interaction-fixture".into(),
+                    account_id: Some("interaction-fixture:account-a".into()),
+                }),
+                conversation_id: "chat-1".into(),
+                conversation_ref: Some(tinychannels_bus::ConversationRef {
+                    id: "chat-1".into(),
+                    thread_id: Some("thread-2".into()),
+                    ..Default::default()
+                }),
+                thread_id: Some("thread-2".into()),
+                payload: tinychannels_bus::OutboundPayload::Text { text: "hello".into() },
+                ..Default::default()
+            })
+            .await
+    });
+    let command = commands.recv().await.expect("adapter dispatch");
+    let tinychannels_bus::module_interaction::ChannelInteractionResult::Sent(mut outcome) =
+        tinychannels_bus::module_interaction::ChannelInteractionResult::Sent(Box::new(
+            tinychannels_bus::ChannelSendOutcome {
+                receipt: tinychannels_bus::MessageReceipt {
+                    primary_platform_message_id: Some("msg-1".into()),
+                    platform_message_ids: vec!["msg-1".into()],
+                    ..Default::default()
+                },
+                error: Some(tinychannels_bus::ChannelSendError {
+                    message: "second chunk failed".into(),
+                    retryable: true,
+                    ..Default::default()
+                }),
+            },
+        ))
+    else {
+        unreachable!()
+    };
+    command.started.send(()).unwrap();
+    command
+        .reply
+        .send(Ok(tinychannels_bus::module_interaction::ChannelInteractionResult::Sent(
+            outcome,
+        )))
+        .unwrap();
+    let outcome = task.await.unwrap().unwrap();
+    assert_eq!(outcome.receipt.primary_platform_message_id.as_deref(), Some("msg-1"));
+    let error = outcome.error.expect("partial send error");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
 }
