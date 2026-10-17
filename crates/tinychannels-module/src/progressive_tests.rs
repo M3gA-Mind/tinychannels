@@ -2523,6 +2523,137 @@ async fn configured_progressive_channel_posts_and_edits_one_draft() {
     replies.shutdown().await.unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn module_outcome_receipts_keep_all_draft_edit_and_close_tokens() {
+    let (replies, callback) = fixture(false).await;
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
+    let receipt = tinychannels_bus::channel::MessageReceipt {
+        idempotency_key: Some("draft-op-1".into()),
+        channel: Some(tinychannels_bus::ChannelRef {
+            id: "discord".into(),
+            account_id: Some("discord:receipt-account".into()),
+        }),
+        conversation: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Thread,
+            id: "room".into(),
+            thread_id: Some("thread-7".into()),
+            ..Default::default()
+        }),
+        primary_platform_message_id: Some("draft-a".into()),
+        platform_message_ids: vec!["draft-a".into(), "draft-b".into()],
+        parts: vec![
+            tinychannels_bus::channel::MessageReceiptPart {
+                platform_message_id: "draft-a".into(),
+                kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                index: 0,
+                edit_token: Some("edit-a".into()),
+                delete_token: Some("delete-a".into()),
+                ..Default::default()
+            },
+            tinychannels_bus::channel::MessageReceiptPart {
+                platform_message_id: "draft-b".into(),
+                kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                index: 1,
+                edit_token: Some("edit-b".into()),
+                delete_token: Some("delete-b".into()),
+                ..Default::default()
+            },
+        ],
+        thread_id: Some("thread-7".into()),
+        reply_to_id: Some("reply-1".into()),
+        ..Default::default()
+    };
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Outcome(Box::new(
+        tinychannels_bus::channel::ChannelSendOutcome {
+            receipt: receipt.clone(),
+            ..Default::default()
+        },
+    )));
+
+    let handle = open_scoped(
+        &replies,
+        "discord:receipt-account",
+        "receipt-turn",
+        capabilities,
+    )
+    .await;
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![
+                ChannelOutputEvent::ThinkingDelta {
+                    text: "thinking".into(),
+                    iteration: Some(1),
+                },
+                ChannelOutputEvent::TextDelta {
+                    text: "draft".into(),
+                    iteration: Some(1),
+                },
+            ],
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: " updated".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+
+    let edits = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .filter_map(|request| match request {
+            ProgressiveTransportRequest::Edit { receipt, .. } => receipt.as_ref(),
+            _ => None,
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(edits.len(), 2, "both draft and thinking bubble are edited");
+    assert!(edits.iter().all(|actual| actual == &receipt));
+
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+    let requests = callback.requests.lock().await;
+    let deletes = requests
+        .iter()
+        .filter_map(|request| match request {
+            ProgressiveTransportRequest::Delete { receipt, .. } => receipt.as_ref(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(deletes.len(), 4, "both parts of both bubbles are deleted");
+    for (id, token) in [("draft-a", "delete-a"), ("draft-b", "delete-b")] {
+        assert!(deletes.iter().any(|receipt| {
+            receipt.platform_message_ids == [id]
+                && receipt.parts.len() == 1
+                && receipt.parts[0].delete_token.as_deref() == Some(token)
+                && receipt.idempotency_key.as_deref() == Some("draft-op-1")
+                && receipt.thread_id.as_deref() == Some("thread-7")
+        }));
+    }
+    replies.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn open_output_uses_configured_account_and_preserves_full_conversation_scope() {
     use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
