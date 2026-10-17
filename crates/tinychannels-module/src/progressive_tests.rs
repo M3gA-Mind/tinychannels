@@ -2612,6 +2612,60 @@ async fn unsupported_rich_final_returns_the_unflattened_parts() {
 }
 
 #[tokio::test]
+async fn unsupported_media_is_retained_with_later_final_receipt_in_same_batch() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    let unsupported = tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                kind: tinychannels_bus::MediaKind::Image,
+                url: Some("https://media.invalid/unsupported.png".into()),
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    };
+    let mut final_outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+    final_outcome.receipt.platform_message_ids = vec!["final-receipt".into()];
+    callback.send_queue.lock().await.extend([
+        ProgressiveTransportResult::UnsupportedContent,
+        ProgressiveTransportResult::Outcome(Box::new(final_outcome.clone())),
+    ]);
+
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![
+                ChannelOutputEvent::Media {
+                    text: None,
+                    parts: vec![match unsupported.clone() {
+                        tinychannels_bus::OutboundContentPart::Content { part } => part,
+                        _ => unreachable!(),
+                    }],
+                },
+                ChannelOutputEvent::FinalMessage {
+                    text: "delivered final".into(),
+                    parts: vec![],
+                    receipt: None,
+                },
+            ],
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(
+        result,
+        ProgressiveResult::DeliveryBatch {
+            outcomes: vec![final_outcome],
+            unsupported: vec![unsupported],
+            failure: None,
+        }
+    );
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn media_and_voice_events_use_ordered_typed_provider_sends() {
     let (replies, callback) = fixture(false).await;
     let handle = open(&replies).await;
