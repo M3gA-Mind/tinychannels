@@ -1543,14 +1543,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
 
     let mut no_reply = scoped_typed_media_message("stored-photo-1");
     no_reply.reply_to_id = Some("not-a-platform-id".into());
-    assert!(
-        channel
-            .send_typed_with_receipt(&no_reply)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("reply_to_id")
-    );
+    assert!(channel.send_typed_with_receipt(&no_reply).await.unwrap_err().to_string().contains("before provider dispatch"));
 
     let mut unsupported = scoped_typed_media_message("stored-photo-1");
     for voice_id in ["voice-a", "voice-b"] {
