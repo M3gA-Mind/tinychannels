@@ -46,6 +46,7 @@ struct ReadState {
 pub(crate) struct MediaReads {
     state: Arc<Mutex<ReadState>>,
     capacity: Arc<Semaphore>,
+    expiry_janitor_running: Arc<AtomicBool>,
 }
 
 impl Default for MediaReads {
@@ -55,6 +56,7 @@ impl Default for MediaReads {
             capacity: Arc::new(Semaphore::new(
                 tinychannels_bus::module_media::MEDIA_READ_CAPACITY,
             )),
+            expiry_janitor_running: Arc::new(AtomicBool::new(false)),
         }
     }
 }
@@ -173,14 +175,8 @@ impl MediaReads {
                 _permit: reservation.0,
             },
         );
-        let state = Arc::downgrade(&self.state);
-        let expiry_handle = info.handle.0.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep_until(expires).await;
-            if let Some(state) = state.upgrade() {
-                state.lock().await.reads.remove(&expiry_handle);
-            }
-        });
+        drop(state);
+        self.start_expiry_janitor();
         Ok(info)
     }
 
@@ -250,6 +246,35 @@ impl MediaReads {
             .await
             .reads
             .retain(|_, read| read.instance != instance);
+    }
+
+    fn start_expiry_janitor(&self) {
+        if self.expiry_janitor_running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let state = Arc::downgrade(&self.state);
+        let running = Arc::clone(&self.expiry_janitor_running);
+        tokio::spawn(async move {
+            loop {
+                let Some(state) = state.upgrade() else {
+                    running.store(false, Ordering::SeqCst);
+                    return;
+                };
+                let next_expiry = {
+                    let mut state = state.lock().await;
+                    Self::prune(&mut state);
+                    let next_expiry = state.reads.values().map(|read| read.expires).min();
+                    if next_expiry.is_none() {
+                        running.store(false, Ordering::SeqCst);
+                    }
+                    next_expiry
+                };
+                let Some(next_expiry) = next_expiry else {
+                    return;
+                };
+                tokio::time::sleep_until(next_expiry).await;
+            }
+        });
     }
 
     fn prune(state: &mut ReadState) {

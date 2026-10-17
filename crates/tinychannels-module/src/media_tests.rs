@@ -186,32 +186,64 @@ async fn oversized_resolved_metadata_drops_the_reserved_capacity() {
 
 #[tokio::test]
 async fn canceled_and_timed_out_scoped_reads_release_their_pending_slots() {
-    use std::{future::pending, sync::Arc};
-    use tokio::sync::Notify;
+    use std::{
+        future::pending,
+        sync::Arc,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::sync::Semaphore;
 
     let reads = Arc::new(MediaReads::default());
-    let entered = Arc::new(Notify::new());
-    let task_reads = Arc::clone(&reads);
-    let task_entered = Arc::clone(&entered);
-    let first = tokio::spawn(async move {
-        task_reads
-            .resolve_with_deadline(
-                read_request_fixture(),
-                "activation".into(),
-                Duration::from_secs(600),
-                || async move {
-                    task_entered.notify_one();
-                    pending::<tinybus::Result<tinychannels::host::StoredMedia>>().await
-                },
-                || async { true },
-            )
-            .await
-    });
-    entered.notified().await;
-    first.abort();
-    let _ = first.await;
+    let entered = Arc::new(Semaphore::new(0));
+    let mut pending_reads = Vec::new();
+    for _ in 0..tinychannels_bus::module_media::MEDIA_READ_CAPACITY {
+        let task_reads = Arc::clone(&reads);
+        let task_entered = Arc::clone(&entered);
+        pending_reads.push(tokio::spawn(async move {
+            task_reads
+                .resolve_with_deadline(
+                    read_request_fixture(),
+                    "activation".into(),
+                    Duration::from_secs(600),
+                    || async move {
+                        task_entered.add_permits(1);
+                        pending::<tinybus::Result<tinychannels::host::StoredMedia>>().await
+                    },
+                    || async { true },
+                )
+                .await
+        }));
+    }
+    entered
+        .acquire_many(tinychannels_bus::module_media::MEDIA_READ_CAPACITY as u32)
+        .await
+        .unwrap()
+        .forget();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let third_loads = Arc::clone(&loads);
+    let third = reads
+        .resolve(
+            read_request_fixture(),
+            "activation".into(),
+            || async move {
+                third_loads.fetch_add(1, Ordering::SeqCst);
+                Ok(stored(vec![1]))
+            },
+            || async { true },
+        )
+        .await;
+    assert!(third.is_err());
+    assert_eq!(
+        loads.load(Ordering::SeqCst),
+        0,
+        "capacity must be reserved before storage I/O"
+    );
+    for pending_read in pending_reads {
+        pending_read.abort();
+        let _ = pending_read.await;
+    }
 
-    let entered = Arc::new(Notify::new());
+    let entered = Arc::new(Semaphore::new(0));
     let task_reads = Arc::clone(&reads);
     let task_entered = Arc::clone(&entered);
     let timed_out = task_reads
@@ -220,7 +252,7 @@ async fn canceled_and_timed_out_scoped_reads_release_their_pending_slots() {
             "activation".into(),
             Duration::from_millis(1),
             || async move {
-                task_entered.notify_one();
+                task_entered.add_permits(1);
                 pending::<tinybus::Result<tinychannels::host::StoredMedia>>().await
             },
             || async { true },
@@ -228,6 +260,36 @@ async fn canceled_and_timed_out_scoped_reads_release_their_pending_slots() {
         .await;
     assert!(timed_out.is_err());
 
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn failed_and_panicking_scoped_reads_release_the_pending_reservation() {
+    use futures_util::FutureExt;
+    use std::panic::AssertUnwindSafe;
+
+    let reads = MediaReads::default();
+    let failed = reads
+        .resolve(
+            read_request_fixture(),
+            "activation".into(),
+            || async { Err(tinybus::Error::failed("fixture storage failure")) },
+            || async { true },
+        )
+        .await;
+    assert!(failed.is_err());
+    let panicked = AssertUnwindSafe(reads.resolve(
+        read_request_fixture(),
+        "activation".into(),
+        || async { panic!("fixture storage panic") },
+        || async { true },
+    ))
+    .catch_unwind()
+    .await;
+    assert!(panicked.is_err());
     let first = reads.reserve().await.unwrap();
     let second = reads.reserve().await.unwrap();
     assert!(reads.reserve().await.is_err());
@@ -248,6 +310,30 @@ async fn activation_replacement_discards_the_pending_read_before_retaining_bytes
         )
         .await;
     assert!(result.is_err());
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn rapid_read_close_cycles_keep_expiry_cleanup_bounded() {
+    let reads = MediaReads::default();
+    for _ in 0..64 {
+        let info = reads
+            .complete(
+                read_request_fixture(),
+                "activation".into(),
+                stored(vec![7]),
+                reads.reserve().await.unwrap(),
+            )
+            .await
+            .unwrap();
+        reads
+            .abort(tinychannels_bus::MediaReadFinish(info.handle))
+            .await
+            .unwrap();
+    }
     let first = reads.reserve().await.unwrap();
     let second = reads.reserve().await.unwrap();
     assert!(reads.reserve().await.is_err());
