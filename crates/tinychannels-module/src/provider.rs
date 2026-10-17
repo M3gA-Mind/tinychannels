@@ -7,7 +7,9 @@ use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::host::{LifecycleRegistry, ShutdownHook};
 use tinychannels::{Channel, ChannelHostBuilder, SendMessage};
-use tinychannels_bus::{ChannelSupervisionPolicy, HostEventPublication, HostTranscriptionRequest};
+use tinychannels_bus::{
+    ChannelSupervisionPolicy, ChannelsConfig, HostEventPublication, HostTranscriptionRequest,
+};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
@@ -157,6 +159,7 @@ impl Hooks {
         self: &Arc<Self>,
         callbacks: HostChannels,
         configured_instance: String,
+        media_account_scope: Option<String>,
     ) -> Arc<dyn tinychannels::host::ChannelHost> {
         *self
             .configured_instance
@@ -167,18 +170,22 @@ impl Hooks {
             .transcriber(Arc::new(ModuleTranscriber(
                 callbacks.clone(),
                 configured_instance.clone(),
+                media_account_scope.clone(),
             )))
             .synthesizer(Arc::new(ModuleSynthesizer(
                 callbacks.clone(),
                 configured_instance.clone(),
+                media_account_scope.clone(),
             )))
             .voice_media_store(Arc::new(ModuleVoiceMediaStore(
                 callbacks.clone(),
                 configured_instance.clone(),
+                media_account_scope.clone(),
             )))
             .media_repository(Arc::new(ModuleMediaRepository(
                 callbacks.clone(),
                 configured_instance.clone(),
+                media_account_scope,
             )))
             .voice_codec(Arc::new(ModuleVoiceCodec(callbacks.clone())))
             .events(Arc::new(ModuleEvents(
@@ -268,8 +275,108 @@ impl tinychannels::host::StorageProvider for ModuleStorage {
     }
 }
 
+/// Return a stable, opaque media authority for the selected provider's
+/// configured identity material. Mutable policy fields are deliberately
+/// excluded so changing allowed users or presentation settings does not
+/// orphan durable media. A credential rotation creates a new authority unless
+/// the provider later exposes an authenticated stable account identifier.
+pub(crate) fn configured_media_account_scope(
+    instance: &str,
+    config: &ChannelsConfig,
+) -> Option<String> {
+    let provider = tinychannels_bus::provider_id(instance);
+    let identity: Vec<&str> = match provider {
+        "telegram" => vec![config.telegram.as_ref()?.bot_token.as_str()],
+        "discord" => vec![config.discord.as_ref()?.bot_token.as_str()],
+        "slack" => {
+            let c = config.slack.as_ref()?;
+            vec![c.bot_token.as_str(), c.app_token.as_deref().unwrap_or("")]
+        }
+        "mattermost" => {
+            let c = config.mattermost.as_ref()?;
+            vec![c.url.as_str(), c.bot_token.as_str()]
+        }
+        "webhook" => {
+            let c = config.webhook.as_ref()?;
+            vec![c.port.to_string().leak(), c.secret.as_deref().unwrap_or("")]
+        }
+        "matrix" => {
+            let c = config.matrix.as_ref()?;
+            vec![c.homeserver.as_str(), c.user_id.as_deref().unwrap_or(""), c.access_token.as_str()]
+        }
+        "signal" => {
+            let c = config.signal.as_ref()?;
+            vec![c.http_url.as_str(), c.account.as_str()]
+        }
+        "email" => {
+            let c = config.email.as_ref()?;
+            vec![c.imap_host.as_str(), c.username.as_str(), c.password.as_str()]
+        }
+        "whatsapp" => {
+            let c = config.whatsapp.as_ref()?;
+            vec![
+                c.phone_number_id.as_deref().unwrap_or(""),
+                c.access_token.as_deref().unwrap_or(""),
+                c.app_secret.as_deref().unwrap_or(""),
+                c.session_path.as_deref().unwrap_or(""),
+            ]
+        }
+        "linq" => {
+            let c = config.linq.as_ref()?;
+            vec![c.from_phone.as_str(), c.api_token.as_str()]
+        }
+        "irc" => {
+            let c = config.irc.as_ref()?;
+            vec![
+                c.server.as_str(),
+                c.nickname.as_str(),
+                c.username.as_deref().unwrap_or(""),
+                c.server_password.as_deref().unwrap_or(""),
+                c.nickserv_password.as_deref().unwrap_or(""),
+                c.sasl_password.as_deref().unwrap_or(""),
+            ]
+        }
+        "lark" => {
+            let c = config.lark.as_ref()?;
+            vec![c.app_id.as_str(), c.app_secret.as_str()]
+        }
+        "dingtalk" => {
+            let c = config.dingtalk.as_ref()?;
+            vec![c.client_id.as_str(), c.client_secret.as_str()]
+        }
+        "qq" => {
+            let c = config.qq.as_ref()?;
+            vec![c.app_id.as_str(), c.app_secret.as_str()]
+        }
+        "yuanbao" => {
+            let c = config.yuanbao.as_ref()?;
+            vec![c.api_domain.as_str(), c.app_key.as_str(), c.app_secret.as_str()]
+        }
+        // The current iMessage configuration has no stable account identity.
+        // Do not silently turn a provider name into cross-runtime authority.
+        _ => return None,
+    };
+    if identity.iter().all(|part| part.trim().is_empty()) {
+        return None;
+    }
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"tinychannels-media-account-v1\0");
+    digest.update((provider.len() as u64).to_le_bytes());
+    digest.update(provider.as_bytes());
+    for part in identity {
+        digest.update((part.len() as u64).to_le_bytes());
+        digest.update(part.as_bytes());
+    }
+    Some(format!("{provider}:media-v1:{}", hex::encode(digest.finalize())))
+}
+
 #[derive(Clone)]
-pub(crate) struct ModuleMediaRepository(pub(crate) HostChannels, pub(crate) String);
+pub(crate) struct ModuleMediaRepository(
+    pub(crate) HostChannels,
+    pub(crate) String,
+    Option<String>,
+);
 
 impl ModuleMediaRepository {
     async fn scoped_store(&self) -> anyhow::Result<tinychannels::host::ScopedMediaStore> {
