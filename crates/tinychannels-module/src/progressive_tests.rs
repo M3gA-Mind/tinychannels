@@ -4178,6 +4178,48 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     )), "size fallback note must exist in canonical provider-rendered content.parts");
     drop(requests);
 
+    let duration_context = ProgressiveOutputContext {
+        turn_id: "duration-limit-fallback".into(),
+        ..context.clone()
+    };
+    capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
+    capabilities.voice_out.max_duration_ms = Some(1_000);
+    let sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(duration_context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut duration_limited = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        sender,
+        "telegram:bot-1",
+        capabilities.clone(),
+        duration_context,
+    );
+    duration_limited.send_parts(
+        &[tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "spoken words".into(),
+                markdown_dialect: None,
+            },
+        }],
+        "spoken words",
+    ).await.expect("too-long audio duration falls back to text");
+    let requests = callback.requests.lock().await;
+    let duration_request = requests.iter().rev().find_map(|request| match request {
+        ProgressiveTransportRequest::SendTyped {
+            turn_id: Some(turn_id), parts, ..
+        } if turn_id == "duration-limit-fallback" => Some(parts),
+        _ => None,
+    }).expect("duration-limit text send");
+    assert!(duration_request.iter().any(|part| matches!(part,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text { text, .. }
+        } if text.contains("Audio reply was too long to send")
+    )), "duration limit note must exist in canonical provider-rendered content.parts");
+    drop(requests);
+
     *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
         mode: tinychannels_bus::HostVoiceReplyMode::Always,
         inbound_has_voice: false,
