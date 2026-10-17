@@ -2957,11 +2957,12 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
 
 #[test]
 fn callback_event_keeps_authenticated_actor_message_and_topic_identity() {
+    let action_id = tinychannels_bus::channel::approval_action_id("request-42", 1).unwrap();
     let update = serde_json::json!({
         "update_id": 12,
         "callback_query": {
             "id": "query-5",
-            "data": "approval:opaque-id",
+            "data": action_id,
             "from": { "id": 31, "username": "alice", "is_bot": false },
             "message": {
                 "message_id": 81,
@@ -2984,7 +2985,12 @@ fn callback_event_keeps_authenticated_actor_message_and_topic_identity() {
         ref action_id,
         provider_message_id: Some(ref message_id),
         ref actor,
-    } if query_id == "query-5" && action_id == "approval:opaque-id" && message_id == "81" && actor.id == "31" && actor.name.as_deref() == Some("alice"))
+        } if query_id == "query-5" && action_id == "approval-v1:request-42:1" && message_id == "81" && actor.id == "31" && actor.name.as_deref() == Some("alice"))
+    );
+    assert_eq!(
+        tinychannels_bus::channel::parse_approval_action_id("approval-v1:request-42:1"),
+        Some(("request-42", 1)),
+        "the host can correlate the opaque callback with its pending choice without provider policy"
     );
 }
 
