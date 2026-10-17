@@ -493,6 +493,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             Feature::NativeData => tinychannels_bus::OutboundPayload::NativeChannelData { data: serde_json::json!({"kind":"provider_specific"}) },
             Feature::VoiceOut => tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Media { media: media(), audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: Some(1000) } },
             Feature::VoiceSynthesis => tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Synthesize { text: "speak this".into(), voice: None } },
+            Feature::Typing | Feature::Reactions | Feature::Edit | Feature::Delete | Feature::StreamingDraft => tinychannels_bus::OutboundPayload::Text { text: "operation fixture".into() },
             Feature::ReadReceipts => return Err(tinychannels_bus::channel::ChannelSendError {
                 kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
                 message: "Telegram Bot API has no read-receipt operation".into(),
@@ -541,8 +542,10 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 match feature {
                     Feature::Edit => {
                         let edit = tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "edited kit".into() }, ..intent.clone() };
-                        self.running.interact(tinychannels_bus::ChannelInteraction::EditMessage { receipt, intent: edit }).await
+                        let result = self.running.interact(tinychannels_bus::ChannelInteraction::EditMessage { receipt, intent: edit }).await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        let tinychannels_bus::ChannelInteractionResult::Sent(outcome) = result else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
+                        Ok(*outcome)
                     }
                     Feature::Delete => {
                         self.running.interact(tinychannels_bus::ChannelInteraction::DeleteMessage { receipt }).await
