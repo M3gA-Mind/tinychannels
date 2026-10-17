@@ -4861,7 +4861,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     let mut explicit_allowed_context = context.clone();
     explicit_allowed_context.turn_id = "explicit-synthesis-mid-turn".into();
     let explicit_allowed_sender = Sender {
-        media_account_scope: None,
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(explicit_allowed_context.clone()),
         capabilities: capabilities.clone(),
