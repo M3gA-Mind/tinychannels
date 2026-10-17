@@ -906,12 +906,6 @@ async fn run(
                         let _ = response.send(result);
                         break;
                     }
-                    if delivery_has_failure(&result) {
-                        reply.abort().await;
-                        record_terminal(&terminal_feed, fingerprint, &result).await;
-                        let _ = response.send(result);
-                        break;
-                    }
                     if let Some((text, event_parts, has_typed_parts)) = final_message {
                         let (mut prior_outcomes, mut prior_unsupported) =
                             delivery_facts(&result);
