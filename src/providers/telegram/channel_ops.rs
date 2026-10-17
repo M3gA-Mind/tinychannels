@@ -433,8 +433,8 @@ impl TelegramChannel {
             ContentPart::Location {
                 latitude,
                 longitude,
-                label: _,
-                address: _,
+                label,
+                address,
                 accuracy_meters,
                 live_until_unix_ms,
             } => {
@@ -445,9 +445,22 @@ impl TelegramChannel {
                 {
                     anyhow::bail!("Telegram location coordinates are invalid");
                 }
-                method = "sendLocation";
+                if label.is_some() != address.is_some() {
+                    anyhow::bail!("Telegram place requires both a title and address");
+                }
+                if label.is_some() && (accuracy_meters.is_some() || live_until_unix_ms.is_some()) {
+                    anyhow::bail!("Telegram venue cannot also be a live or accuracy-scoped location");
+                }
+                method = if label.is_some() { "sendVenue" } else { "sendLocation" };
                 body["latitude"] = serde_json::json!(latitude);
                 body["longitude"] = serde_json::json!(longitude);
+                if let (Some(title), Some(address)) = (label, address) {
+                    if title.chars().count() > 128 || address.chars().count() > 256 {
+                        anyhow::bail!("Telegram venue title or address exceeds Bot API limits");
+                    }
+                    body["title"] = serde_json::json!(title);
+                    body["address"] = serde_json::json!(address);
+                }
                 if let Some(accuracy) = accuracy_meters {
                     if !accuracy.is_finite() || !(0.0..=1500.0).contains(accuracy) {
                         anyhow::bail!("Telegram location accuracy is invalid");
@@ -491,14 +504,14 @@ impl TelegramChannel {
                 for entry in phone_numbers {
                     lines.push(format!(
                         "TEL;TYPE={}:{}",
-                        entry.label.as_deref().unwrap_or("CELL"),
+                        safe_vcard_type(entry.label.as_deref(), "CELL"),
                         vcard_escape(&entry.value)
                     ));
                 }
                 for entry in emails {
                     lines.push(format!(
                         "EMAIL;TYPE={}:{}",
-                        entry.label.as_deref().unwrap_or("INTERNET"),
+                        safe_vcard_type(entry.label.as_deref(), "INTERNET"),
                         vcard_escape(&entry.value)
                     ));
                 }
