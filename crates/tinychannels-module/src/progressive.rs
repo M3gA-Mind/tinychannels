@@ -58,10 +58,11 @@ impl Sender {
                 message_id,
                 ..
             } => receipt.clone().or_else(|| {
-                let mut receipt = tinychannels_bus::channel::MessageReceipt::default();
-                receipt.primary_platform_message_id = Some(message_id.clone());
-                receipt.platform_message_ids.push(message_id.clone());
-                Some(receipt)
+                Some(tinychannels_bus::channel::MessageReceipt {
+                    primary_platform_message_id: Some(message_id.clone()),
+                    platform_message_ids: vec![message_id.clone()],
+                    ..Default::default()
+                })
             }),
             _ => None,
         };
@@ -364,13 +365,15 @@ async fn send_typed_part(
         )))
         .await
         .map_err(|_| {
-            let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-            outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                message: "typed progressive callback failed after an unknown side effect".into(),
-                sent_before_error: true,
+            let outcome = tinychannels_bus::channel::ChannelSendOutcome {
+                error: Some(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                    message: "typed progressive callback failed after an unknown side effect".into(),
+                    sent_before_error: true,
+                    ..Default::default()
+                }),
                 ..Default::default()
-            });
+            };
             ProgressiveSendError::PartialOutcome(Box::new(outcome))
         })? {
         ChannelBackendResult::ProgressiveTransport(result) => match *result {
@@ -383,14 +386,16 @@ async fn send_typed_part(
                 Err(ProgressiveSendError::UnsupportedContent)
             }
             _ => {
-                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-                outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                    message: "typed progressive callback returned an invalid acknowledgement"
-                        .into(),
-                    sent_before_error: true,
+                let outcome = tinychannels_bus::channel::ChannelSendOutcome {
+                    error: Some(tinychannels_bus::channel::ChannelSendError {
+                        kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                        message: "typed progressive callback returned an invalid acknowledgement"
+                            .into(),
+                        sent_before_error: true,
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                });
+                };
                 Err(ProgressiveSendError::PartialOutcome(Box::new(outcome)))
             }
         },
