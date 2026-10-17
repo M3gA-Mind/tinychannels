@@ -204,10 +204,11 @@ impl MediaReads {
             .get_mut(&request.handle.0)
             .ok_or_else(|| Error::failed("media read is unknown or expired"))?;
         let sequence = request.sequence as usize;
-        if let Some(last) = &read.last_chunk {
-            if sequence + 1 == read.next_sequence && sequence == last.sequence as usize {
-                return Ok(last.clone());
-            }
+        if let Some(last) = &read.last_chunk
+            && sequence + 1 == read.next_sequence
+            && sequence == last.sequence as usize
+        {
+            return Ok(last.clone());
         }
         if sequence != read.next_sequence {
             return Err(Error::failed("media chunks must be read in order"));
