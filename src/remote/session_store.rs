@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tinystoragedrivers_core::{
     CollectionSpec, DocumentStore, DocumentStoreExt, Key, Precondition, WriteOptions,
 };

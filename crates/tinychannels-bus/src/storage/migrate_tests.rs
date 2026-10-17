@@ -4,7 +4,6 @@ use tinystoragedrivers_core::{
     CollectionSpec, MemoryStorage, Precondition, Scope, ScopedStorage, StorageBackend, WriteOptions,
 };
 
-use super::*;
 use crate::storage::schema::{self, storage_schema};
 
 /// A migrated copy of `seed`: v1 documents written under their legacy names,
