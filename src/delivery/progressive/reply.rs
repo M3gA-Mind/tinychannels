@@ -205,7 +205,9 @@ impl ProgressiveReply {
         event: &tinychannels_bus::module_progressive::ChannelOutputEvent,
     ) -> Result<super::ProgressiveOutputDispatch, super::ProgressiveSendError> {
         let tinychannels_bus::module_progressive::ChannelOutputEvent::FinalMessage {
-            text, parts, ..
+            text,
+            parts,
+            ..
         } = event
         else {
             return Ok(super::ProgressiveOutputDispatch::default());

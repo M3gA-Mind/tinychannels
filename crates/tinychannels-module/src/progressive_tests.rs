@@ -1339,9 +1339,21 @@ async fn native_approval_and_clarification_events_deliver_prompts() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert!(delivered.iter().any(|text| text.contains("May I run the command?")));
-    assert!(delivered.iter().any(|text| text.contains("Allow once, Deny")));
-    assert!(delivered.iter().any(|text| text.contains("Which folder should I use?")));
+    assert!(
+        delivered
+            .iter()
+            .any(|text| text.contains("May I run the command?"))
+    );
+    assert!(
+        delivered
+            .iter()
+            .any(|text| text.contains("Allow once, Deny"))
+    );
+    assert!(
+        delivered
+            .iter()
+            .any(|text| text.contains("Which folder should I use?"))
+    );
     assert!(requests.iter().any(|request| matches!(request,
         ProgressiveTransportRequest::OutputEvent { event: ChannelOutputEvent::ApprovalRequest { id, .. }, .. }
             if id == "approval-7"

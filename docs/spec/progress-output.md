@@ -1,5 +1,10 @@
 # Harness progress output contract
 
+`ExecuteProgressive` is the confidential module member (`module operation
+version 1.25`); hosts need this minimum version for `OpenOutput`, `FeedOutput`,
+typed sends, and receipt-aware edit/delete. The legacy `Feed` command keeps its
+one-release `{event,value}` wire shape. New producers use `FeedOutput`.
+
 `ChannelOutputEvent` is the portable output vocabulary at the channel host
 boundary. A host adapts its concrete harness enum by an exhaustive match and
 constructs these DTOs; it must not serialize or debug-print the source enum.
@@ -14,7 +19,12 @@ acknowledges delivery. An explicitly unsupported typed payload returns
 `DeliveryUnsupported` with the original ordered parts. Other failures remain
 failures, and the engine does not retry an ambiguous send. A terminal feed is
 unique and last in its batch, closes the handle, and rejects later feeds. Its
-result includes every receipt and any partial-send error.
+result includes every receipt and any partial-send error. Multi-event terminal
+batches retain prior outcomes in order; an uncertain or partial event stops
+the batch before later provider sends. Approval and clarification events are
+shown as native text prompts, while observation retains the original
+correlation ID. Tool progress stays active until a completion event arrives;
+opaque call IDs are not rendered as user text.
 
 Scoped opens carry the host-selected turn ID, configured `ChannelRef` including
 account identity, and complete `ConversationRef`. The module checks the
@@ -30,6 +40,16 @@ content is rejected. `Close` and shutdown remove ephemeral state without
 sending a synthetic cancellation message. Scoped opens currently resolve a
 local configured channel instance. Managed/relay provider descriptors and web
 surface registration are supplied by their owning host integrations.
+
+When `FinalMessage.parts` is non-empty, that ordered list is authoritative.
+`text` is a display/compatibility projection and must not be appended as another
+part or deduplicated by comparing content. If the parts contain only text and
+exceed the configured account's length limit, the engine splits each text part
+at UTF-8 scalar boundaries using its declared Characters, Utf8Bytes, or
+Utf16Units unit. Part order and markdown dialect are preserved. Mixed rich
+content is delivered intact; if the provider cannot accept it, the complete
+ordered payload is returned as unsupported rather than flattened. Each
+segment's idempotency key includes its event sequence and segment index.
 
 The TinyAgents `AgentProgress` source variants map as follows:
 
