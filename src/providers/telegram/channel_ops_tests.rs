@@ -339,6 +339,12 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
                 "audio.mp3",
                 valid_mp3_frame(),
             ),
+            "stored-wav-1" => (
+                tinychannels_bus::MediaKind::Audio,
+                "audio/wav",
+                "audio.wav",
+                BASE64.decode("UklGRgAAAABXQVZF").unwrap(),
+            ),
             _ => panic!("unexpected typed media id: {opaque_id}"),
         };
         assert!(bytes.len() as u64 <= max_bytes);
@@ -1139,6 +1145,45 @@ async fn typed_audio_upload_preserves_caption_title_and_duration() {
     assert!(body.contains("name=\"title\"\r\n\r\nOriginal title"));
     assert!(body.contains("name=\"duration\"\r\n\r\n2"));
     assert!(body.contains("Content-Type: audio/mpeg"));
+}
+
+#[tokio::test]
+async fn telegram_rejects_wav_audio_before_native_upload() {
+    let server = mock_api().await;
+    let channel = channel_for(&server, &["*"])
+        .with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("unsupported-wav", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Audio {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-wav-1".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            },
+            codec: Some("wav_pcm16".into()),
+            duration_ms: None,
+            title: None,
+            transcript: None,
+        },
+    }];
+
+    let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
+
+    assert!(error.to_string().contains("MP3 or M4A"));
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 fn valid_mp3_frame() -> Vec<u8> {

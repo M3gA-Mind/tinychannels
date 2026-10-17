@@ -1408,6 +1408,44 @@ fn telegram_receipt_part(
     }
 }
 
+fn telegram_image_dimensions(content_type: &str, bytes: &[u8]) -> Option<(u32, u32)> {
+    match content_type {
+        "image/png" if bytes.get(..8) == Some(b"\x89PNG\r\n\x1a\n") => Some((
+            u32::from_be_bytes(bytes.get(16..20)?.try_into().ok()?),
+            u32::from_be_bytes(bytes.get(20..24)?.try_into().ok()?),
+        )),
+        "image/jpeg" if bytes.starts_with(&[0xff, 0xd8]) => {
+            let mut offset = 2;
+            while offset + 4 <= bytes.len() {
+                if bytes[offset] != 0xff {
+                    offset += 1;
+                    continue;
+                }
+                while bytes.get(offset) == Some(&0xff) {
+                    offset += 1;
+                }
+                let marker = *bytes.get(offset)?;
+                offset += 1;
+                if matches!(marker, 0xd8 | 0xd9 | 0x01 | 0xd0..=0xd7) {
+                    continue;
+                }
+                let segment_len = u16::from_be_bytes(bytes.get(offset..offset + 2)?.try_into().ok()?) as usize;
+                if segment_len < 2 || offset + segment_len > bytes.len() {
+                    return None;
+                }
+                if matches!(marker, 0xc0..=0xc3 | 0xc5..=0xc7 | 0xc9..=0xcb | 0xcd..=0xcf) {
+                    let height = u16::from_be_bytes(bytes.get(offset + 3..offset + 5)?.try_into().ok()?) as u32;
+                    let width = u16::from_be_bytes(bytes.get(offset + 5..offset + 7)?.try_into().ok()?) as u32;
+                    return Some((width, height));
+                }
+                offset += segment_len;
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 async fn send_typed_media_with_receipt(
     channel: &TelegramChannel,
     message: &tinychannels_bus::ChannelOutboundMessage,
@@ -1667,7 +1705,8 @@ async fn send_typed_media_with_receipt(
             ));
             break;
         }
-        let (upload_method, upload_field, upload_limit, upload_duration) = match media_kind {
+        let upload_plan = (|| -> anyhow::Result<(&str, &str, usize, Option<u64>)> {
+            Ok(match media_kind {
             tinychannels_bus::MediaKind::Image if method == "sendSticker" => {
                 anyhow::bail!("Telegram sticker upload is not enabled for this format")
             }
@@ -1677,7 +1716,9 @@ async fn send_typed_media_with_receipt(
                 let Some((width, height)) = telegram_image_dimensions(&stored.content_type, &stored.bytes) else {
                     anyhow::bail!("Telegram photo dimensions could not be validated")
                 };
-                if width.saturating_add(height) > 10_000
+                if width == 0
+                    || height == 0
+                    || width.saturating_add(height) > 10_000
                     || width.max(height) > width.min(height).saturating_mul(20)
                 {
                     anyhow::bail!("Telegram photo dimensions exceed provider limits")
@@ -1706,6 +1747,15 @@ async fn send_typed_media_with_receipt(
             }
             tinychannels_bus::MediaKind::Unknown => {
                 anyhow::bail!("Telegram media kind is unsupported")
+            }
+            })
+        })();
+        let (upload_method, upload_field, upload_limit, upload_duration) = match upload_plan {
+            Ok(plan) => plan,
+            Err(error) if receipt_parts.is_empty() => return Err(error),
+            Err(error) => {
+                failed = Some(error);
+                break;
             }
         };
         if stored.bytes.len() > upload_limit {
