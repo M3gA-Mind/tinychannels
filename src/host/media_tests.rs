@@ -184,6 +184,7 @@ fn media_request(
             content_type: "image/png".into(),
             file_name: file_name.map(str::to_owned),
             duration_ms: None,
+            codec: None,
             voice_direction: None,
             dedupe_key: dedupe_key.map(str::to_owned),
             max_bytes: 1024,
