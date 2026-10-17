@@ -155,8 +155,8 @@ pub(super) async fn flush_thinking_message(
                     id,
                 );
                 state.thinking_message_id = Some(id);
-                state.thinking_message_ids = ids;
-                state.thinking_message_receipt = receipt;
+                state.thinking_message_ids = vec![state.thinking_message_id.clone().unwrap()];
+                state.thinking_message_receipt = None;
             } else {
                 tracing::warn!(
                     "[channel-inbound][thinking] thinking msg sent but response lacked id — disabling further thinking flushes (message won't be deletable) channel='{}' receipt_parts={} response_fields={}",
@@ -241,10 +241,14 @@ pub(super) async fn send_filler_message(
             }
         }
         Err(ProgressiveSendError::Unavailable) => {}
-        Err(ProgressiveSendError::PartialOutcome(_outcome)) => {
-            state.filler_failures = state.filler_failures.saturating_add(1);
+        Err(ProgressiveSendError::PartialOutcome(outcome)) => {
+            let ids = message_receipt_ids(&outcome.receipt);
+            state.filler_message_ids.extend(ids);
+            if !message_receipt_ids(&outcome.receipt).is_empty() {
+                state.filler_message_receipts.push(outcome.receipt);
+            }
             state.filler_delivery_uncertain = true;
-            state.filler_disabled = state.filler_failures >= super::MAX_FILLER_FAILURES;
+            state.filler_disabled = true;
         }
         Err(_err) => {
             state.filler_delivery_uncertain = true;
