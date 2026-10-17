@@ -985,6 +985,7 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
         let (send, mut commands) = mpsc::channel::<SendCommand>(1);
         let (cancel, _) = watch::channel(false);
         let running = Arc::new(Running {
+            media_account_scope: None,
             channel: Arc::new(InteractionChannel::default()),
             configured_instance: "interaction-fixture:account-a".into(),
             send,
@@ -1025,6 +1026,7 @@ async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
     let (send, mut commands) = mpsc::channel::<SendCommand>(1);
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
+        media_account_scope: None,
         channel: Arc::new(InteractionChannel::default()),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
@@ -1057,6 +1059,7 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
     let (send, mut commands) = mpsc::channel::<SendCommand>(1);
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
+        media_account_scope: None,
         channel: Arc::new(InteractionChannel::default()),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
@@ -1123,6 +1126,7 @@ async fn send_configured_outcome(
     let (send, mut commands) = mpsc::channel::<SendCommand>(1);
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
+        media_account_scope: None,
         channel: Arc::new(InteractionChannel::default()),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
