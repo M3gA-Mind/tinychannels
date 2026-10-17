@@ -920,7 +920,9 @@ async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
                 account_id: Some("interaction-fixture:account-b".into()),
             }),
             conversation_id: "chat-1".into(),
-            payload: tinychannels_bus::OutboundPayload::Text { text: "hello".into() },
+            payload: tinychannels_bus::OutboundPayload::Text {
+                text: "hello".into(),
+            },
             ..Default::default()
         })
         .await
@@ -957,7 +959,9 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
                     ..Default::default()
                 }),
                 thread_id: Some("thread-2".into()),
-                payload: tinychannels_bus::OutboundPayload::Text { text: "hello".into() },
+                payload: tinychannels_bus::OutboundPayload::Text {
+                    text: "hello".into(),
+                },
                 ..Default::default()
             })
             .await
@@ -984,12 +988,15 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
     command.started.send(()).unwrap();
     command
         .reply
-        .send(Ok(tinychannels_bus::module_interaction::ChannelInteractionResult::Sent(
-            outcome,
-        )))
+        .send(Ok(
+            tinychannels_bus::module_interaction::ChannelInteractionResult::Sent(outcome),
+        ))
         .unwrap();
     let outcome = task.await.unwrap().unwrap();
-    assert_eq!(outcome.receipt.primary_platform_message_id.as_deref(), Some("msg-1"));
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("msg-1")
+    );
     let error = outcome.error.expect("partial send error");
     assert!(error.sent_before_error);
     assert!(!error.retryable);

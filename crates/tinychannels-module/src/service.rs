@@ -39,7 +39,7 @@ use std::sync::Arc;
 use tinychannels::config::WhatsAppConfigExt as _;
 
 use crate::delivery::HostDeliveryStore;
-use crate::provider::{Hooks, Running, RunningSendError};
+use crate::provider::{Hooks, Running};
 use crate::relay::Relays;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tinybus::{Connection, Error as BusError, Result as BusResult};

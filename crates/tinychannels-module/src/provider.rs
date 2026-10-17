@@ -671,6 +671,7 @@ impl Running {
             .clone()
             .unwrap_or_else(|| listen_channel.name().to_owned());
         let worker_cancel = cancel.clone();
+        let worker_instance = configured_instance.clone();
         let worker = tokio::spawn(async move {
             let name = listen_channel.name().to_owned();
             host.report_status(&name, "connecting", None).await;
@@ -716,9 +717,8 @@ impl Running {
                                 outcome.receipt.idempotency_key =
                                     Some(message.idempotency_key.clone());
                                 outcome.receipt.channel = Some(tinychannels_bus::ChannelRef {
-                                    id: tinychannels_bus::provider_id(&configured_instance)
-                                        .to_owned(),
-                                    account_id: Some(configured_instance.clone()),
+                                    id: tinychannels_bus::provider_id(&worker_instance).to_owned(),
+                                    account_id: Some(worker_instance.clone()),
                                 });
                                 if outcome.receipt.conversation.is_none() {
                                     outcome.receipt.conversation =
@@ -809,9 +809,9 @@ impl Running {
         }
     }
 
-    fn adapter_descriptor(&self) -> tinychannels_bus::ChannelDescriptor {
+    fn adapter_descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
         let channel_id = tinychannels_bus::provider_id(&self.configured_instance).to_owned();
-        tinychannels_bus::ChannelDescriptor {
+        tinychannels_bus::channel::ChannelDescriptor {
             id: channel_id,
             display_name: self.channel.name().to_owned(),
             account_id: Some(self.configured_instance.clone()),
@@ -926,7 +926,7 @@ fn adapter_scope_error(message: &str) -> tinychannels::channel::ChannelSendError
 /// It reuses the already-running listener and typed send worker.
 #[async_trait::async_trait]
 impl tinychannels::channel::ChannelAdapter for Running {
-    fn descriptor(&self) -> tinychannels_bus::ChannelDescriptor {
+    fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
         self.adapter_descriptor()
     }
 
