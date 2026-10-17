@@ -339,6 +339,28 @@ async fn rapid_read_close_cycles_keep_expiry_cleanup_bounded() {
     assert!(reads.reserve().await.is_err());
     drop((first, second));
 }
+
+#[tokio::test]
+async fn expiry_janitor_does_not_keep_read_state_alive_after_resolver_drop() {
+    let reads = MediaReads::default();
+    let info = reads
+        .complete(
+            read_request_fixture(),
+            "activation".into(),
+            stored(vec![7; 1024]),
+            reads.reserve().await.unwrap(),
+        )
+        .await
+        .unwrap();
+    let state = Arc::downgrade(&reads.state);
+    // Let the single janitor enter its expiry wait while the resolver remains
+    // the only strong owner of the bytes and their capacity permit.
+    tokio::task::yield_now().await;
+    assert!(state.upgrade().is_some());
+    drop(reads);
+    assert!(state.upgrade().is_none());
+    drop(info);
+}
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
 
