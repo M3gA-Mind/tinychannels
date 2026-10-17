@@ -335,5 +335,5 @@ fn tool_progress_projection_preserves_call_identity_arguments_and_result() {
     let OutboundPayload::NativeChannelData { data } = &intents[0].payload else {
         panic!("rich progress must remain typed data until the host projects it")
     };
-    assert_eq!(data, serde_json::to_value(event).unwrap());
+    assert_eq!(*data, serde_json::to_value(event).unwrap());
 }
