@@ -236,7 +236,9 @@ fn web_events_keep_ordered_typed_media_and_voice_parts() {
 fn schema_export_is_deterministic_and_contains_every_variant() {
     let schema = web_event_schema_json().unwrap();
     assert_eq!(schema, web_event_schema_json().unwrap());
-    assert_eq!(schema, WEB_SCHEMA.trim_end());
+    // Model a Windows checkout, where Git expands the checked-in LF file to CRLF.
+    let windows_checkout = WEB_SCHEMA.replace('\n', "\r\n");
+    assert_eq!(schema, windows_checkout.trim_end());
     let schema: serde_json::Value = serde_json::from_str(&schema).unwrap();
     let schema_text = schema.to_string();
     for event in HISTORICAL_EVENT_NAMES {
