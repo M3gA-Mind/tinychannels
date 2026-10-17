@@ -108,6 +108,8 @@ fn fixture(feature: ConformanceFeature) -> Fixture {
         operation: feature.required_operations()[0].into(),
         channel: channel.clone(),
         conversation: conversation.clone(),
+        reply_to_id: None,
+        thread_id: None,
         payload_kinds: feature
             .payload_kind()
             .map(|kind| vec![kind.into()])
@@ -120,6 +122,8 @@ fn fixture(feature: ConformanceFeature) -> Fixture {
         scope: ExpectedScope {
             channel,
             conversation,
+            reply_to_id: None,
+            thread_id: None,
         },
         result: Ok(Some(ChannelSendOutcome {
             receipt,

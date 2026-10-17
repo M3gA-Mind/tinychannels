@@ -101,6 +101,8 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     operation: "send".into(),
                     channel: self.scope.channel.clone(),
                     conversation,
+            reply_to_id: body.get("reply_to_message_id").map(|value| value.as_str().unwrap_or_default().to_owned()),
+            thread_id: body.get("message_thread_id").map(|value| value.as_str().unwrap_or_default().to_owned()),
                     payload_kinds,
                     platform_message_ids: vec!["321".into()],
                     request: body,
@@ -1150,10 +1152,13 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
                 account_id: Some(instance),
             },
             conversation: ConversationRef {
-                kind: ConversationKind::Dm,
+                kind: ConversationKind::Group,
                 id: "100".into(),
+                thread_id: Some("77".into()),
                 ..Default::default()
             },
+            reply_to_id: Some("5".into()),
+            thread_id: Some("77".into()),
         },
         observed: std::sync::Mutex::new(Vec::new()),
         request_cursor: std::sync::Mutex::new(0),
@@ -1165,6 +1170,12 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     assert_eq!(observation.request["chat_id"], "100");
     assert_eq!(observation.request["text"], "module-kit");
     assert_eq!(observation.platform_message_ids, ["321"]);
+    check_feature(&fixture, ConformanceFeature::ThreadAddressing)
+        .await
+        .unwrap();
+    let observation = fixture.observations().pop().unwrap();
+    assert_eq!(observation.reply_to_id.as_deref(), Some("5"));
+    assert_eq!(observation.thread_id.as_deref(), Some("77"));
     check_feature(&fixture, ConformanceFeature::Image)
         .await
         .unwrap();

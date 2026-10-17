@@ -120,6 +120,8 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                     operation: "send".into(),
                     channel: self.scope.channel.clone(),
                     conversation,
+                    reply_to_id: body.get("reply_to_message_id").map(|value| value.as_str().unwrap_or_default().to_owned()),
+                    thread_id: body.get("message_thread_id").map(|value| value.as_str().unwrap_or_default().to_owned()),
                     payload_kinds,
                     platform_message_ids: vec!["321".into()],
                     request: body,
@@ -809,6 +811,8 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
             id: "100".into(),
             ..Default::default()
         },
+        reply_to_id: None,
+        thread_id: None,
     };
     let adapter = tinychannels_runtime::adapters::LocalChannelAdapter::new(
         tinychannels_bus::ChannelDescriptor {
