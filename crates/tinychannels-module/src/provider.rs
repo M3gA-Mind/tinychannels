@@ -311,15 +311,16 @@ pub(crate) fn configured_media_account_scope(
         }
         "slack" => {
             let c = config.slack.as_ref()?;
-            let app_token = c.app_token.as_deref()?;
-            if c.bot_token.trim().is_empty() || app_token.trim().is_empty() {
+            if c.bot_token.trim().is_empty() {
                 return None;
             }
-            vec![c.bot_token.clone(), app_token.to_owned()]
+            // Socket Mode's app token is an optional transport credential; the
+            // bot token identifies the account that owns media.
+            vec![c.bot_token.clone()]
         }
         "mattermost" => {
             let c = config.mattermost.as_ref()?;
-            if c.bot_token.trim().is_empty() {
+            if c.url.trim().is_empty() || c.bot_token.trim().is_empty() {
                 return None;
             }
             vec![c.url.clone(), c.bot_token.clone()]
@@ -334,7 +335,7 @@ pub(crate) fn configured_media_account_scope(
         }
         "matrix" => {
             let c = config.matrix.as_ref()?;
-            if c.access_token.trim().is_empty() {
+            if c.homeserver.trim().is_empty() || c.access_token.trim().is_empty() {
                 return None;
             }
             vec![
@@ -348,7 +349,10 @@ pub(crate) fn configured_media_account_scope(
         "signal" => return None,
         "email" => {
             let c = config.email.as_ref()?;
-            if c.username.trim().is_empty() || c.password.trim().is_empty() {
+            if c.imap_host.trim().is_empty()
+                || c.username.trim().is_empty()
+                || c.password.trim().is_empty()
+            {
                 return None;
             }
             vec![
@@ -380,6 +384,9 @@ pub(crate) fn configured_media_account_scope(
         }
         "irc" => {
             let c = config.irc.as_ref()?;
+            if c.server.trim().is_empty() {
+                return None;
+            }
             let principal = if c
                 .sasl_password
                 .as_deref()
