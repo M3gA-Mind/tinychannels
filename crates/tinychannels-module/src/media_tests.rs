@@ -102,10 +102,12 @@ async fn reservations_and_metadata_are_bounded_before_retaining_media() {
         .begin(request(1), "activation-a".into())
         .await
         .unwrap();
-    uploads
-        .begin(request(1), "activation-a".into())
-        .await
-        .expect("finalization must release its reservation");
+    assert!(
+        uploads
+            .begin(request(1), "activation-a".into())
+            .await
+            .is_err()
+    );
     assert_eq!(uploads.state.lock().await.uploads.len(), 2);
 }
 
@@ -206,12 +208,10 @@ async fn finalizing_upload_keeps_capacity_and_abort_cannot_race_persistence() {
         })
     };
     repository.entered.notified().await;
-    assert!(
-        uploads
-            .begin(request(1), "activation-a".into())
-            .await
-            .is_err()
-    );
+    uploads
+        .begin(request(1), "activation-a".into())
+        .await
+        .expect("finalization must release its reservation");
     assert!(
         uploads
             .abort(MediaUploadFinish(handle.clone()))
