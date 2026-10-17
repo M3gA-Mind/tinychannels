@@ -296,6 +296,8 @@ pub enum ProgressiveTransportRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         sequence: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        segment_index: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         idempotency_key: Option<String>,
         parts: Vec<crate::channel::OutboundContentPart>,
         text: String,

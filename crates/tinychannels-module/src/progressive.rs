@@ -157,20 +157,43 @@ impl ProgressiveSender for Sender {
             } else {
                 parts.to_vec()
             };
-            let outcome = send_typed_part(self,
+            let outcome = match send_typed_part(
+                self,
                 channel,
                 &segment_parts,
                 segment,
                 context,
-                sequence.saturating_add(index as u64),
-            ).await?;
-            aggregate.receipt.platform_message_ids.extend(outcome.receipt.platform_message_ids);
-            aggregate.receipt.parts.extend(outcome.receipt.parts);
-            if aggregate.receipt.primary_platform_message_id.is_none() {
-                aggregate.receipt.primary_platform_message_id = outcome.receipt.primary_platform_message_id;
-            }
+                sequence,
+                index as u32,
+            ).await {
+                Ok(outcome) => outcome,
+                Err(ProgressiveSendError::PartialOutcome(outcome)) => outcome,
+                Err(error) if index > 0 => {
+                    aggregate.error = Some(tinychannels_bus::channel::ChannelSendError {
+                        kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                        message: error.to_string(),
+                        sent_before_error: true,
+                        ..Default::default()
+                    });
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
+            let missing_receipt = outcome.receipt.platform_message_ids.is_empty()
+                && outcome.receipt.parts.is_empty()
+                && outcome.error.is_none();
+            merge_receipt(&mut aggregate.receipt, outcome.receipt, index == 0);
             if outcome.error.is_some() {
                 aggregate.error = outcome.error;
+                break;
+            }
+            if missing_receipt {
+                aggregate.error = Some(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                    message: "provider accepted a progressive send without a receipt id".into(),
+                    sent_before_error: true,
+                    ..Default::default()
+                });
                 break;
             }
         }
@@ -270,6 +293,7 @@ async fn send_typed_part(
     text: &str,
     context: Option<&ProgressiveOutputContext>,
     sequence: u64,
+    segment_index: u32,
 ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
     let idempotency_key = context.map(|context| {
         let scope = serde_json::to_vec(&(
@@ -277,6 +301,7 @@ async fn send_typed_part(
             &context.channel,
             &context.conversation,
             sequence,
+            segment_index,
             "provider_send",
         ))
         .expect("scoped channel identity serializes");
@@ -291,6 +316,7 @@ async fn send_typed_part(
                 channel_ref: context.map(|context| context.channel.clone()),
                 conversation: context.map(|context| context.conversation.clone()),
                 sequence: context.map(|_| sequence),
+                segment_index: context.map(|_| segment_index),
                 idempotency_key,
                 parts: parts.to_vec(),
                 text: text.into(),
@@ -314,6 +340,33 @@ async fn send_typed_part(
             Err(ProgressiveSendError::UnsupportedContent)
         }
         _ => Err(ProgressiveSendError::UnsupportedContent),
+    }
+}
+
+fn merge_receipt(
+    aggregate: &mut tinychannels_bus::channel::MessageReceipt,
+    next: tinychannels_bus::channel::MessageReceipt,
+    first: bool,
+) {
+    if first {
+        *aggregate = next;
+        return;
+    }
+    aggregate.platform_message_ids.extend(next.platform_message_ids);
+    aggregate.parts.extend(next.parts);
+    if aggregate.primary_platform_message_id.is_none() {
+        aggregate.primary_platform_message_id = next.primary_platform_message_id;
+    }
+    if aggregate.channel.is_none() { aggregate.channel = next.channel; }
+    if aggregate.conversation.is_none() { aggregate.conversation = next.conversation; }
+    if aggregate.idempotency_key.is_none() { aggregate.idempotency_key = next.idempotency_key; }
+    if aggregate.thread_id.is_none() { aggregate.thread_id = next.thread_id; }
+    if aggregate.reply_to_id.is_none() { aggregate.reply_to_id = next.reply_to_id; }
+    if aggregate.edit_token.is_none() { aggregate.edit_token = next.edit_token; }
+    if aggregate.delete_token.is_none() { aggregate.delete_token = next.delete_token; }
+    aggregate.sent_at = aggregate.sent_at.max(next.sent_at);
+    if let Some(mut raw) = next.raw {
+        aggregate.raw.get_or_insert_with(Vec::new).append(&mut raw);
     }
 }
 
