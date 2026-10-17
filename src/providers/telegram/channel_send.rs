@@ -201,21 +201,20 @@ impl TelegramChannel {
             .json(&body)
             .send()
             .await?;
-        if resp.status().is_success() {
+        let status = resp.status();
+        let response = resp.json::<serde_json::Value>().await?;
+        if status.is_success() && super::channel_ops::response_status_ok(&response) {
             self.publish_reaction_sent(chat_id, message_id, emoji, true)
                 .await;
             tracing::info!(chat_id, message_id, emoji, "Telegram reaction sent");
             return Ok(true);
         }
 
-        let status = resp.status();
-        let err = resp.text().await.unwrap_or_default();
         tracing::warn!(
             chat_id,
             message_id,
             emoji,
             status = ?status,
-            error = err,
             "Telegram reaction not applied; continuing without failure"
         );
         self.publish_reaction_sent(chat_id, message_id, emoji, false)

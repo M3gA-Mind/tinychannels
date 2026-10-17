@@ -268,8 +268,11 @@ impl TelegramChannel {
             let response = self.http_client().post(self.api_url("sendChatAction"))
                 .json(&body).send().await.map_err(|_| anyhow::Error::new(super::channel_ops::TelegramAttemptedError))?;
             let status = response.status();
-            let value = response.json::<serde_json::Value>().await
-                .map_err(|_| anyhow::Error::new(super::channel_ops::TelegramAttemptedError))?;
+            let value = match response.json::<serde_json::Value>().await {
+                Ok(value) => value,
+                Err(_) if status.is_client_error() => return Ok(false),
+                Err(_) => return Err(anyhow::Error::new(super::channel_ops::TelegramAttemptedError)),
+            };
             if status.is_server_error() {
                 return Err(anyhow::Error::new(super::channel_ops::TelegramAttemptedError));
             }

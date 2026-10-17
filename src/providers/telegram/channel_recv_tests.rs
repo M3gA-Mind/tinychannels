@@ -186,7 +186,7 @@ async fn typing_action_retries_without_thread_when_thread_scoped_action_rejected
     mount_post(&server, "sendChatAction", ok_with(serde_json::json!(true))).await;
     let ch = channel_for(&server, &["*"]);
 
-    ch.send_typing_action_once("100:4").await;
+    assert!(ch.send_typing_action_once("100:4").await.unwrap());
 
     let bodies = json_bodies(&server, "sendChatAction").await;
     assert_eq!(bodies.len(), 2);
@@ -208,8 +208,8 @@ async fn typing_action_fallback_rejection_is_tolerated() {
     .await;
     let ch = channel_for(&server, &["*"]);
 
-    ch.send_typing_action_once("100:4").await;
-    ch.send_typing_action_once("100").await;
+    assert!(!ch.send_typing_action_once("100:4").await.unwrap());
+    assert!(!ch.send_typing_action_once("100").await.unwrap());
 
     // Thread-scoped: original + fallback; plain chat: no fallback.
     assert_eq!(json_bodies(&server, "sendChatAction").await.len(), 3);
@@ -219,7 +219,7 @@ async fn typing_action_fallback_rejection_is_tolerated() {
 async fn typing_action_transport_error_is_tolerated() {
     let mut ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
     ch.api_base = dead_base();
-    ch.send_typing_action_once("100:4").await;
+    assert!(ch.send_typing_action_once("100:4").await.is_err());
 }
 
 // ── mention parsing ──────────────────────────────────────────────────────
