@@ -1138,13 +1138,13 @@ impl Channels {
         let encoded = serde_json::to_vec(&request)
             .map_err(|_| BusError::failed("media resolution request is invalid"))?;
         if encoded.len() > tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES {
-            return Err(BusError::failed("media resolution request exceeds its limit"));
+            return Err(BusError::failed(
+                "media resolution request exceeds its limit",
+            ));
         }
         let instance = request.instance.clone();
-        let repository = crate::provider::ModuleMediaRepository(
-            self.host.clone(),
-            instance.clone(),
-        );
+        let repository =
+            crate::provider::ModuleMediaRepository(self.host.clone(), instance.clone());
         let media_id = request
             .media
             .opaque_id
@@ -1195,10 +1195,7 @@ impl Channels {
 
     /// Release a resolved media read and its temporary byte buffer.
     #[tinybus(confidential)]
-    async fn abort_media_read(
-        &self,
-        request: tinychannels_bus::MediaReadFinish,
-    ) -> BusResult<()> {
+    async fn abort_media_read(&self, request: tinychannels_bus::MediaReadFinish) -> BusResult<()> {
         if self.terminal.load(Ordering::SeqCst) {
             return Err(BusError::failed("module is shutting down"));
         }

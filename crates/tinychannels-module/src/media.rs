@@ -1,16 +1,16 @@
 //! Bounded, runtime-local host-to-module media uploads.
 use futures_util::FutureExt;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::{collections::HashMap, time::Duration};
 use std::future::Future;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::{collections::HashMap, time::Duration};
 use tinybus::{Error, Result};
 use tinychannels_bus::{
     MediaUploadBegin, MediaUploadChunk, MediaUploadFinish, MediaUploadHandle, MediaUploadResult,
 };
 use tokio::sync::Mutex;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::sync::Notify;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
 #[async_trait::async_trait]
@@ -109,7 +109,9 @@ impl MediaReads {
             .await
             .map_err(|_| Error::failed("media resolution timed out"))??;
         if !still_active().await {
-            return Err(Error::failed("media provider activation changed during resolution"));
+            return Err(Error::failed(
+                "media provider activation changed during resolution",
+            ));
         }
         self.complete(request, activation, media, reservation).await
     }
@@ -179,7 +181,9 @@ impl MediaReads {
     ) -> Result<(String, String)> {
         let mut state = self.state.lock().await;
         Self::prune(&mut state);
-        state.reads.get(&handle.0)
+        state
+            .reads
+            .get(&handle.0)
             .map(|read| (read.instance.clone(), read.activation.clone()))
             .ok_or_else(|| Error::failed("media read is unknown or expired"))
     }
@@ -190,7 +194,9 @@ impl MediaReads {
     ) -> Result<tinychannels_bus::MediaReadChunkResult> {
         let mut state = self.state.lock().await;
         Self::prune(&mut state);
-        let read = state.reads.get_mut(&request.handle.0)
+        let read = state
+            .reads
+            .get_mut(&request.handle.0)
             .ok_or_else(|| Error::failed("media read is unknown or expired"))?;
         let sequence = request.sequence as usize;
         if let Some(last) = &read.last_chunk {
@@ -202,7 +208,8 @@ impl MediaReads {
             return Err(Error::failed("media chunks must be read in order"));
         }
         let size = tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES;
-        let start = sequence.checked_mul(size)
+        let start = sequence
+            .checked_mul(size)
             .ok_or_else(|| Error::failed("media chunk sequence exceeds its limit"))?;
         if start >= read.bytes.len() {
             return Err(Error::failed("media chunk sequence exceeds its limit"));
@@ -218,11 +225,12 @@ impl MediaReads {
         Ok(result)
     }
 
-    pub(crate) async fn abort(
-        &self,
-        request: tinychannels_bus::MediaReadFinish,
-    ) -> Result<()> {
-        self.state.lock().await.reads.remove(&request.0.0)
+    pub(crate) async fn abort(&self, request: tinychannels_bus::MediaReadFinish) -> Result<()> {
+        self.state
+            .lock()
+            .await
+            .reads
+            .remove(&request.0.0)
             .map(|_| ())
             .ok_or_else(|| Error::failed("media read is unknown or expired"))
     }

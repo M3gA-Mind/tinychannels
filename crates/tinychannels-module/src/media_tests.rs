@@ -52,7 +52,12 @@ async fn media_reads_return_bounded_ordered_retryable_chunks_and_release_bytes()
     let bytes = vec![0x5a; tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES + 7];
     begin.max_bytes = bytes.len() as u64;
     let info = reads
-        .complete(begin, "activation".into(), stored(bytes.clone()), reads.reserve().await.unwrap())
+        .complete(
+            begin,
+            "activation".into(),
+            stored(bytes.clone()),
+            reads.reserve().await.unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(info.byte_count, bytes.len());
@@ -62,16 +67,21 @@ async fn media_reads_return_bounded_ordered_retryable_chunks_and_release_bytes()
         sequence: 0,
     };
     let first = reads.chunk(first_request.clone()).await.unwrap();
-    assert_eq!(first.bytes.len(), tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES);
+    assert_eq!(
+        first.bytes.len(),
+        tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES
+    );
     assert!(!first.done);
     assert_eq!(reads.chunk(first_request).await.unwrap(), first);
-    assert!(reads
-        .chunk(tinychannels_bus::MediaReadChunk {
-            handle: info.handle.clone(),
-            sequence: 2,
-        })
-        .await
-        .is_err());
+    assert!(
+        reads
+            .chunk(tinychannels_bus::MediaReadChunk {
+                handle: info.handle.clone(),
+                sequence: 2,
+            })
+            .await
+            .is_err()
+    );
     let last = reads
         .chunk(tinychannels_bus::MediaReadChunk {
             handle: info.handle.clone(),
@@ -79,7 +89,10 @@ async fn media_reads_return_bounded_ordered_retryable_chunks_and_release_bytes()
         })
         .await
         .unwrap();
-    assert_eq!(last.bytes, bytes[tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES..]);
+    assert_eq!(
+        last.bytes,
+        bytes[tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES..]
+    );
     assert!(last.done);
     assert_eq!(
         reads
@@ -107,10 +120,17 @@ async fn media_reads_reject_claimed_size_mismatch_without_retaining_the_slot() {
     let reads = MediaReads::default();
     let mut wrong = stored(vec![1, 2, 3]);
     wrong.media.size_bytes = Some(4);
-    assert!(reads
-        .complete(read_request_fixture(), "activation".into(), wrong, reads.reserve().await.unwrap())
-        .await
-        .is_err());
+    assert!(
+        reads
+            .complete(
+                read_request_fixture(),
+                "activation".into(),
+                wrong,
+                reads.reserve().await.unwrap()
+            )
+            .await
+            .is_err()
+    );
     let first = reads.reserve().await.unwrap();
     let second = reads.reserve().await.unwrap();
     assert!(reads.reserve().await.is_err());
@@ -145,13 +165,19 @@ async fn expired_read_leases_release_capacity_without_being_touched() {
 async fn oversized_resolved_metadata_drops_the_reserved_capacity() {
     let reads = MediaReads::default();
     let mut media = stored(vec![1, 2, 3]);
-    media.file_name = Some("x".repeat(
-        tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES + 1,
-    ));
-    assert!(reads
-        .complete(read_request_fixture(), "activation".into(), media, reads.reserve().await.unwrap())
-        .await
-        .is_err());
+    media.file_name =
+        Some("x".repeat(tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES + 1));
+    assert!(
+        reads
+            .complete(
+                read_request_fixture(),
+                "activation".into(),
+                media,
+                reads.reserve().await.unwrap()
+            )
+            .await
+            .is_err()
+    );
     let first = reads.reserve().await.unwrap();
     let second = reads.reserve().await.unwrap();
     assert!(reads.reserve().await.is_err());
