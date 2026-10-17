@@ -1308,6 +1308,56 @@ impl Running {
         &self,
         interaction: tinychannels_bus::ChannelInteraction,
     ) -> std::result::Result<tinychannels_bus::ChannelInteractionResult, RunningSendError> {
+        let expected_channel = tinychannels_bus::ChannelRef {
+            id: tinychannels_bus::provider_id(self.channel.name()).to_owned(),
+            account_id: Some(self.configured_instance.clone()),
+        };
+        let valid_receipt = |receipt: &tinychannels_bus::channel::MessageReceipt| {
+            receipt.channel.as_ref() == Some(&expected_channel)
+                && receipt.conversation.as_ref().is_some_and(|conversation| {
+                    !conversation.id.trim().is_empty()
+                        && receipt
+                            .parts
+                            .iter()
+                            .all(|part| part.platform_message_id.trim().len() > 0)
+                })
+                && !tinychannels_bus::channel::resolve_message_receipt_primary_id(receipt)
+                    .unwrap_or_default()
+                    .is_empty()
+        };
+        match &interaction {
+            tinychannels_bus::ChannelInteraction::SendReaction {
+                channel,
+                conversation,
+                provider_message_id,
+                ..
+            } if channel != &expected_channel
+                || conversation.id.trim().is_empty()
+                || provider_message_id.trim().is_empty() =>
+            {
+                return Err(RunningSendError::NotDispatched(
+                    "provider reaction scope is incomplete or does not match configured account"
+                        .into(),
+                ));
+            }
+            tinychannels_bus::ChannelInteraction::EditMessage { receipt, intent }
+                if !valid_receipt(receipt)
+                    || self.validate_adapter_intent(intent).is_err()
+                    || intent.conversation_ref.as_ref() != receipt.conversation.as_ref() =>
+            {
+                return Err(RunningSendError::NotDispatched(
+                    "provider edit receipt and intent scope do not match configured account".into(),
+                ));
+            }
+            tinychannels_bus::ChannelInteraction::DeleteMessage { receipt }
+                if !valid_receipt(receipt) =>
+            {
+                return Err(RunningSendError::NotDispatched(
+                    "provider delete receipt does not match configured account".into(),
+                ));
+            }
+            _ => {}
+        }
         self.submit(ProviderOperation::Interaction(interaction))
             .await
     }

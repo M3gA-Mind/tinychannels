@@ -205,9 +205,10 @@ pub trait Channel: Send + Sync {
     /// Send one native reaction through the provider's ordered operation path.
     async fn send_reaction(
         &self,
-        _conversation_id: &str,
-        _message_id: &str,
-        _reaction: &str,
+        _conversation: &tinychannels_bus::channel::ConversationRef,
+        _provider_message_id: &str,
+        _reaction: &tinychannels_bus::channel::ChannelReaction,
+        _remove: bool,
     ) -> anyhow::Result<()> {
         anyhow::bail!("provider does not support native reactions")
     }

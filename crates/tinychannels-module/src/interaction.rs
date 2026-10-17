@@ -87,10 +87,11 @@ pub(crate) async fn dispatch(
             conversation,
             provider_message_id,
             reaction,
+            remove,
             ..
         } => {
             return provider
-                .send_reaction(&conversation.id, &provider_message_id, &reaction.value)
+                .send_reaction(&conversation, &provider_message_id, &reaction, remove)
                 .await
                 .map(|()| ChannelInteractionResult::Completed)
                 .map_err(|_| tinybus::Error::failed("provider reaction failed"));

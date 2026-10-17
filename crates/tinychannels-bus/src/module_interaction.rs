@@ -54,6 +54,7 @@ pub enum ChannelInteraction {
         conversation: crate::channel::ConversationRef,
         provider_message_id: String,
         reaction: crate::channel::ChannelReaction,
+        remove: bool,
     },
     EditMessage {
         receipt: crate::channel::MessageReceipt,
