@@ -240,12 +240,16 @@ pub enum ProgressiveCommand {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum ProgressiveResult {
-    Opened { handle: String },
+    Opened {
+        handle: String,
+    },
     Updated,
     Closed,
     /// V2 terminal delivery acknowledgement; carries every known platform
     /// receipt and any partial-send failure from the provider.
-    DeliveryOutcome { outcome: crate::channel::ChannelSendOutcome },
+    DeliveryOutcome {
+        outcome: crate::channel::ChannelSendOutcome,
+    },
 }
 
 /// The host supplies its managed REST transport and captured credential.

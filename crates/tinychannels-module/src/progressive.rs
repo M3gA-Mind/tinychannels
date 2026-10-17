@@ -132,7 +132,7 @@ impl ProgressiveSender for Sender {
     ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
     {
         match self
-            .0
+            .host
             .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(
                 ProgressiveTransportRequest::SendTyped {
                     channel: channel.into(),
@@ -212,7 +212,11 @@ impl ProgressiveSender for Sender {
 }
 
 enum Command {
-    Feed(Vec<ChannelOutputEvent>, bool, oneshot::Sender<Result<()>>),
+    Feed(
+        Vec<ChannelOutputEvent>,
+        bool,
+        oneshot::Sender<Result<ProgressiveResult>>,
+    ),
     Finish(String, oneshot::Sender<()>),
 }
 
@@ -311,8 +315,7 @@ impl Replies {
             .map_err(|_| Error::failed("progressive reply is closed"))?;
         drop(closing);
         wait.await
-            .map_err(|_| Error::failed("progressive worker stopped"))??;
-        Ok(ProgressiveResult::Updated)
+            .map_err(|_| Error::failed("progressive worker stopped"))??
     }
 
     async fn entry(&self, handle: &str) -> Result<Arc<Entry>> {
@@ -605,29 +608,42 @@ async fn run(
                         .any(|event| matches!(event, ChannelOutputEvent::Cancellation { .. }));
                     let final_message = events.iter().find_map(|event| match event {
                         ChannelOutputEvent::FinalMessage { text, parts, .. } => {
-                            Some((text.clone(), !parts.is_empty()))
+                            Some((text.clone(), parts.clone(), !parts.is_empty()))
                         }
                         _ => None,
                     });
-                    let result = apply(&mut reply, events, forward).await;
+                    let mut result = apply(&mut reply, events, forward).await.map(|()| ProgressiveResult::Updated);
                     let failed = result.is_err();
-                    let _ = response.send(result);
                     if failed {
                         reply.abort().await;
+                        let _ = response.send(result);
                         break;
                     }
                     if cancellation {
                         reply.abort().await;
+                        let _ = response.send(Ok(ProgressiveResult::Closed));
                         break;
                     }
-                    if let Some((text, has_typed_parts)) = final_message {
-                        if has_typed_parts {
-                            reply.abort().await;
+                    if let Some((text, event_parts, has_typed_parts)) = final_message {
+                        if forward {
+                            let parts = if has_typed_parts {
+                                event_parts
+                            } else {
+                                vec![tinychannels_bus::OutboundContentPart::Content {
+                                    part: tinychannels_bus::ContentPart::Text { text: text.clone(), markdown_dialect: None },
+                                }]
+                            };
+                            result = reply.send_parts(&parts, &text).await
+                                .map(|outcome| ProgressiveResult::DeliveryOutcome { outcome })
+                                .map_err(|error| Error::failed(error.to_string()));
                         } else {
                             reply.finalize(&text).await;
+                            result = Ok(ProgressiveResult::Closed);
                         }
+                        let _ = response.send(result);
                         break;
                     }
+                    let _ = response.send(result);
                 }
                 Some(Command::Finish(text, response)) => {
                     reply.finalize(&text).await;

@@ -155,6 +155,21 @@ impl ProgressiveReply {
         abort_channel_reply(self.sender.as_ref(), &self.channel, &mut self.state).await;
     }
 
+    /// Deliver ordered typed content through the provider send port, then
+    /// clean up drafts. The returned outcome is the provider's retained receipt.
+    pub async fn send_parts(
+        &mut self,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, super::ProgressiveSendError> {
+        let outcome = self
+            .sender
+            .send_parts(&self.channel, parts, text, self.output_context.as_ref())
+            .await?;
+        abort_channel_reply(self.sender.as_ref(), &self.channel, &mut self.state).await;
+        Ok(outcome)
+    }
+
     /// Send a standalone reply without touching the turn's draft state (for a
     /// turn that failed to start).
     pub async fn send_reply(&self, text: &str) {
