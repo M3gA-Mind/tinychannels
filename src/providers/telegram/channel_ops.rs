@@ -520,6 +520,7 @@ impl Channel for TelegramChannel {
                         .as_deref()
                         .or(conversation.topic_id.as_deref())
                         .or(conversation.thread_id.as_deref()),
+                    message.reply_to_id.as_deref(),
                     audio,
                     resolved.file_name.as_deref().unwrap_or("voice.ogg"),
                 )

@@ -53,7 +53,7 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
             id: "100".into(),
             ..Default::default()
         }),
-        reply_to_id: None,
+        reply_to_id: Some("42".into()),
         thread_id: None,
         idempotency_key: "turn-7".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Voice {
@@ -85,6 +85,8 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
     assert!(uploads[0].contains("name=\"voice\""));
     assert!(uploads[0].contains("reply.ogg"));
     assert!(uploads[0].contains("\u{1}\u{2}\u{3}\u{4}"));
+    assert!(uploads[0].contains("reply_parameters"));
+    assert!(uploads[0].contains("\"message_id\":42"));
 }
 
 /// Hang guard for loops that must terminate on their own.
