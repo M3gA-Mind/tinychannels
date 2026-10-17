@@ -307,22 +307,35 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
         assert_eq!(scope.conversation.id, "-10042");
         assert_eq!(scope.conversation.topic_id.as_deref(), Some("topic-77"));
         assert_eq!(scope.turn_id, "turn-42");
-        assert_eq!(opaque_id, "stored-photo-1");
-        let bytes = BASE64
-            .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
-            .unwrap();
+        let (kind, content_type, file_name, bytes) = match opaque_id.as_str() {
+            "stored-photo-1" => (
+                tinychannels_bus::MediaKind::Image,
+                "image/png",
+                "photo.png",
+                BASE64
+                    .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
+                    .unwrap(),
+            ),
+            "stored-audio-1" => (
+                tinychannels_bus::MediaKind::Audio,
+                "audio/wav",
+                "audio.wav",
+                BASE64.decode("UklGRgAAAABXQVZF").unwrap(),
+            ),
+            _ => panic!("unexpected typed media id: {opaque_id}"),
+        };
         assert!(bytes.len() as u64 <= max_bytes);
         Ok(crate::host::StoredMedia {
             media: tinychannels_bus::MediaReference {
                 opaque_id: Some(opaque_id),
-                kind: tinychannels_bus::MediaKind::Image,
-                content_type: Some("image/png".into()),
-                file_name: Some("photo.png".into()),
+                kind,
+                content_type: Some(content_type.into()),
+                file_name: Some(file_name.into()),
                 size_bytes: Some(bytes.len() as u64),
                 ..Default::default()
             },
-            content_type: "image/png".into(),
-            file_name: Some("photo.png".into()),
+            content_type: content_type.into(),
+            file_name: Some(file_name.into()),
             bytes,
         })
     }
@@ -1057,6 +1070,56 @@ async fn configured_local_adapter_accepts_and_delivers_typed_telegram_media() {
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
     assert!(requests[0].url.path().ends_with("/sendPhoto"));
+}
+
+#[tokio::test]
+async fn typed_audio_upload_preserves_caption_title_and_duration() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendAudio",
+        ok_with(serde_json::json!({"message_id": 44})),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("audio-metadata", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        topic_id: Some("topic-77".into()),
+        thread_id: Some("77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Audio {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-audio-1".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            },
+            codec: Some("wav_pcm16".into()),
+            duration_ms: Some(1_250),
+            title: Some("Original title".into()),
+            transcript: Some("spoken words".into()),
+        },
+    }];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["44"]);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].url.path().ends_with("/sendAudio"));
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(body.contains("name=\"caption\"\r\n\r\nspoken words"));
+    assert!(body.contains("name=\"title\"\r\n\r\nOriginal title"));
+    assert!(body.contains("name=\"duration\"\r\n\r\n2"));
+    assert!(body.contains("Content-Type: audio/wav"));
 }
 
 #[tokio::test]
