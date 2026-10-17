@@ -494,11 +494,7 @@ async fn send_typed_part(
             });
             if should_speak {
                 let instance = sender.channel.clone();
-                let synthesizer = crate::provider::ModuleSynthesizer(
-                    sender.host.clone(),
-                    instance.clone(),
-                    sender.media_account_scope.clone(),
-                );
+                let synthesizer = crate::provider::ModuleSynthesizer(sender.host.clone());
                 let codec = crate::provider::ModuleVoiceCodec(sender.host.clone());
                 let store = crate::provider::ModuleVoiceMediaStore(
                     sender.host.clone(),
