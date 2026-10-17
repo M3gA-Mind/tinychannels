@@ -886,8 +886,13 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
         outcome.receipt.parts[1].kind,
         tinychannels_bus::channel::MessageReceiptPartKind::Media
     );
+    assert_eq!(outcome.receipt.parts[1].thread_id.as_deref(), Some("77"));
     assert_eq!(
-        outcome.receipt.parts[1].thread_id.as_deref(),
+        outcome
+            .receipt
+            .conversation
+            .as_ref()
+            .and_then(|conversation| conversation.topic_id.as_deref()),
         Some("topic-77")
     );
     assert_eq!(outcome.receipt.parts[1].reply_to_id.as_deref(), Some("5"));
@@ -898,9 +903,18 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
     assert_eq!(requests[2].url.path(), "/bottest-token/sendMessage");
     let multipart = String::from_utf8_lossy(&requests[1].body);
     assert!(multipart.contains("photo caption"));
-    assert!(multipart.contains("reply_parameters"));
-    assert!(multipart.contains("message_thread_id"));
+    assert!(multipart.contains("name=\"chat_id\"\r\n\r\n-10042"));
+    assert!(multipart.contains("name=\"reply_parameters\"\r\n\r\n{\\"message_id\\":5}"));
+    assert!(multipart.contains("name=\"message_thread_id\"\r\n\r\n77"));
     assert!(multipart.contains("photo.png"));
+    assert!(multipart.contains("Content-Type: image/png"));
+    let expected_bytes = BASE64
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
+        .unwrap();
+    assert!(requests[1]
+        .body
+        .windows(expected_bytes.len())
+        .any(|window| window == expected_bytes));
 }
 
 #[tokio::test]
