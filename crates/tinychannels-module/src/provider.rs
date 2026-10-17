@@ -1057,7 +1057,8 @@ fn adapter_payload_supported(
     match payload {
         OutboundPayload::Text { .. } => capabilities.content.text.outbound,
         OutboundPayload::Media { text, media_urls } => {
-            text.as_ref().is_none_or(|_| capabilities.content.text.outbound)
+            text.as_ref()
+                .is_none_or(|_| capabilities.content.text.outbound)
                 && (media_urls.is_empty() || capabilities.content.image.outbound)
         }
         OutboundPayload::Voice { .. } => capabilities.voice_out.supported,

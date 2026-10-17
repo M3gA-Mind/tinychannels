@@ -35,9 +35,9 @@ pub use intent::{
     outbound_intent_from_send_message,
 };
 pub use receipt::{
-    ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind, MessageReceiptSourceResult,
-    create_message_receipt_from_outbound_results, list_message_receipt_platform_ids,
-    resolve_message_receipt_primary_id,
+    ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind,
+    MessageReceiptSourceResult, create_message_receipt_from_outbound_results,
+    list_message_receipt_platform_ids, resolve_message_receipt_primary_id,
 };
 pub use session::{
     LegacySessionKeys, SessionKeyPolicy, build_session_key, build_session_key_for_inbound_envelope,

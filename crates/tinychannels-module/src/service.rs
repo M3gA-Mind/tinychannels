@@ -95,11 +95,7 @@ async fn configured_capabilities(
     running
         .get(name)
         .or_else(|| running.get(tinychannels_bus::provider_id(name)))
-        .map(|provider| {
-            crate::interaction::configured_capabilities_from_v2(
-                &provider.adapter_handle().declared_capabilities(),
-            )
-        })
+        .map(|provider| crate::interaction::configured_capabilities(provider.channel.as_ref()))
         .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
 }
 
