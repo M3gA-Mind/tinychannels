@@ -4501,8 +4501,8 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
         sender,
         "telegram:bot-1",
-        capabilities: capabilities.clone(),
-        context: context.clone(),
+        capabilities.clone(),
+        context.clone(),
     );
     reply
         .send_parts(
