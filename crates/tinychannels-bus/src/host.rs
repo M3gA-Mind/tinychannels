@@ -100,7 +100,11 @@ pub struct HostStoreVoiceMediaRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct HostStoreVoiceMediaResult {
+    /// Durable opaque reference used in history and normalized envelopes.
     pub media: MediaReference,
+    /// Optional host-authorized URL that another peer can actually open.
+    /// Omit it unless link access is intentionally granted for this media.
+    pub accessible_url: Option<String>,
 }
 
 /// An event published by a provider through the host's event sink.

@@ -24,7 +24,10 @@ pub struct VoiceMediaRequest {
 /// references they authorize for the scoped conversation.
 #[async_trait]
 pub trait VoiceMediaStore: Send + Sync {
-    async fn store_voice(&self, request: VoiceMediaRequest) -> anyhow::Result<tinychannels_bus::MediaReference>;
+    async fn store_voice(
+        &self,
+        request: VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult>;
 }
 
 // ---------------------------------------------------------------------------

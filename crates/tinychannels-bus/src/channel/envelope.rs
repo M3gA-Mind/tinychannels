@@ -74,6 +74,9 @@ pub enum MediaKind {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MediaReference {
+    /// Stable host-owned identifier for media stored outside the channel
+    /// provider. It is safe to persist and does not imply a shared filesystem.
+    pub opaque_id: Option<String>,
     pub path: Option<String>,
     pub url: Option<String>,
     pub content_type: Option<String>,

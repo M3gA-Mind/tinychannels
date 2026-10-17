@@ -113,10 +113,11 @@ impl Callback {
         self.voice_scopes.lock().await.push(request.scope);
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
             media: tinychannels_bus::MediaReference {
-                url: Some("https://media.example.test/authorized/voice-1".into()),
+                opaque_id: Some("voice-1".into()),
                 kind: tinychannels_bus::MediaKind::Audio,
                 ..Default::default()
             },
+            accessible_url: Some("https://media.example.test/authorized/voice-1".into()),
         })
     }
 
@@ -469,7 +470,11 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         .await
         .unwrap();
     assert_eq!(
-        stored.url.as_deref(),
+        stored.media.opaque_id.as_deref(),
+        Some("voice-1")
+    );
+    assert_eq!(
+        stored.accessible_url.as_deref(),
         Some("https://media.example.test/authorized/voice-1")
     );
     let scopes = callback.voice_scopes.lock().await;

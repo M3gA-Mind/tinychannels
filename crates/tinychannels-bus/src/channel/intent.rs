@@ -148,6 +148,10 @@ impl<'de> Deserialize<'de> for OutboundPayload {
 pub enum OutboundVoice {
     Media {
         media: MediaReference,
+        /// Optional bounded inline payload for one native upload. The durable
+        /// reference remains the canonical media identity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audio_base64: Option<String>,
         codec: Option<String>,
         duration_ms: Option<u64>,
     },

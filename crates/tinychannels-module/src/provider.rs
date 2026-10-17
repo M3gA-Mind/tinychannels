@@ -228,8 +228,21 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
         &self,
         request: tinychannels::host::TranscriptionRequest,
     ) -> anyhow::Result<tinychannels::host::TranscriptionResult> {
-        self.transcribe_scoped(tinychannels_bus::HostVoiceScope::default(), request)
+        let result = self
+            .0
+            .transcribe(HostTranscriptionRequest {
+                audio_base64: request.audio_base64,
+                mime_type: request.mime_type,
+                file_name: request.file_name,
+                language: request.language,
+            })
             .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(tinychannels::host::TranscriptionResult {
+            text: result.text,
+            language: result.language,
+            duration_secs: result.duration_secs,
+        })
     }
 
     async fn transcribe_scoped(
@@ -237,6 +250,7 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
         mut scope: tinychannels_bus::HostVoiceScope,
         request: tinychannels::host::TranscriptionRequest,
     ) -> anyhow::Result<tinychannels::host::TranscriptionResult> {
+        validate_voice_scope(&scope)?;
         scope.configured_instance.clone_from(&self.1);
         scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         scope.channel.account_id = Some(self.1.clone());
@@ -265,10 +279,9 @@ struct ModuleSynthesizer(HostChannels, String);
 impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
     async fn synthesize(
         &self,
-        request: tinychannels::host::SpeechRequest,
+        _request: tinychannels::host::SpeechRequest,
     ) -> anyhow::Result<tinychannels::host::SpeechResult> {
-        self.synthesize_scoped(tinychannels_bus::HostVoiceScope::default(), request)
-            .await
+        anyhow::bail!("scoped voice synthesis requires a conversation and turn identity")
     }
 
     async fn synthesize_scoped(
@@ -276,6 +289,7 @@ impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
         mut scope: tinychannels_bus::HostVoiceScope,
         request: tinychannels::host::SpeechRequest,
     ) -> anyhow::Result<tinychannels::host::SpeechResult> {
+        validate_voice_scope(&scope)?;
         scope.configured_instance.clone_from(&self.1);
         scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         scope.channel.account_id = Some(self.1.clone());
@@ -304,7 +318,8 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
     async fn store_voice(
         &self,
         mut request: tinychannels::host::VoiceMediaRequest,
-    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        validate_voice_scope(&request.scope)?;
         request.scope.configured_instance.clone_from(&self.1);
         request.scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         request.scope.channel.account_id = Some(self.1.clone());
@@ -323,19 +338,32 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
         let has_durable_reference = result
             .media
-            .url
+            .opaque_id
             .as_deref()
-            .is_some_and(|url| !url.trim().is_empty())
-            || result
-                .media
-                .path
-                .as_deref()
-                .is_some_and(|path| !path.trim().is_empty());
+            .is_some_and(|id| !id.trim().is_empty());
         if !has_durable_reference {
             anyhow::bail!("host did not return a durable voice media reference");
         }
-        Ok(result.media)
+        let mut result = result;
+        result.media.path = None;
+        result.media.local_cache_path = None;
+        result.media.url = None;
+        if result
+            .accessible_url
+            .as_deref()
+            .is_some_and(|url| url.trim().is_empty())
+        {
+            result.accessible_url = None;
+        }
+        Ok(result)
     }
+}
+
+fn validate_voice_scope(scope: &tinychannels_bus::HostVoiceScope) -> anyhow::Result<()> {
+    if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
+        anyhow::bail!("voice callback requires a conversation and turn identity");
+    }
+    Ok(())
 }
 
 pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String);
