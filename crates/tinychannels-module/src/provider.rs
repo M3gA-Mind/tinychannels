@@ -853,6 +853,7 @@ impl tinychannels::host::EventSink for ModuleEvents {
             tinychannels_bus::ChannelEventKind::OutboundReaction { .. } => "outbound_reaction",
             tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "message_updated",
             tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",
+            tinychannels_bus::ChannelEventKind::ButtonCallback { .. } => "button_callback",
             tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
             tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
         };
