@@ -75,6 +75,9 @@ fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> Chann
         conversation: ConversationRef {
             kind: ConversationKind::Thread,
             id: "chat-43".into(),
+            scope_id: Some("community-7".into()),
+            parent_id: Some("chat-parent".into()),
+            thread_id: Some("thread-8".into()),
             topic_id: Some("topic-9".into()),
             ..Default::default()
         },
@@ -116,8 +119,17 @@ async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
     assert_eq!(stt[0].scope.configured_instance, "telegram:bot-a");
     assert_eq!(stt[0].scope.channel.id, "telegram");
     assert_eq!(stt[0].scope.channel.account_id.as_deref(), Some("telegram:bot-a"));
-    assert_eq!(stt[0].scope.conversation.id, "chat-43");
-    assert_eq!(stt[0].scope.conversation.topic_id.as_deref(), Some("topic-9"));
+    assert_eq!(
+        stt[0].scope.conversation,
+        ConversationRef {
+            kind: ConversationKind::Thread,
+            id: "chat-43".into(),
+            scope_id: Some("community-7".into()),
+            parent_id: Some("chat-parent".into()),
+            thread_id: Some("thread-8".into()),
+            topic_id: Some("topic-9".into()),
+        }
+    );
     assert_eq!(stt[0].scope.turn_id, "message-voice-13");
     drop(stt);
     drop(read);

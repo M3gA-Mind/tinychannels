@@ -1,4 +1,5 @@
 use super::*;
+use base64::Engine as _;
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 
@@ -92,6 +93,50 @@ impl tinychannels::Channel for CaptureTypedChannel {
     ) -> anyhow::Result<()> {
         self.0.send(message.clone()).await?;
         Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
+struct CaptureVoiceReceiptChannel(
+    tokio::sync::mpsc::Sender<tinychannels_bus::ChannelOutboundMessage>,
+);
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for CaptureVoiceReceiptChannel {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        anyhow::bail!("voice intents must stay typed")
+    }
+
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<()> {
+        self.0.send(message.clone()).await?;
+        Ok(())
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+        self.0.send(message.clone()).await?;
+        let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+        outcome.receipt.primary_platform_message_id = Some("voice-message".into());
+        outcome
+            .receipt
+            .platform_message_ids
+            .push("voice-message".into());
+        Ok(outcome)
     }
 
     async fn listen(
@@ -1175,6 +1220,80 @@ async fn required_send_refuses_invalid_and_oversized_intents_before_persistence(
     );
     assert!(received.try_recv().is_err());
     assert!(callbacks.storage.snapshot().await.is_empty());
+    channels.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn large_voice_bytes_use_compact_scoped_reference_in_best_effort_and_required_intents() {
+    let (sent, mut received) = tokio::sync::mpsc::channel(4);
+    let (channels, callbacks, _server) =
+        channels_with_store(Arc::new(CaptureVoiceReceiptChannel(sent))).await;
+    let voice_intent = |id: &str, durability, audio_base64| ChannelOutboundIntent {
+        idempotency_key: id.into(),
+        channel_id: "fixture".into(),
+        conversation_id: "room-1".into(),
+        durability,
+        payload: tinychannels_bus::OutboundPayload::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("host-media-opaque".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    content_type: Some("audio/ogg".into()),
+                    ..Default::default()
+                },
+                audio_base64,
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1_200),
+            },
+        },
+        ..Default::default()
+    };
+
+    let raw_audio = base64::engine::general_purpose::STANDARD.encode(vec![7_u8; 128 * 1024 + 1]);
+    let oversized = voice_intent(
+        "large-inline-voice",
+        tinychannels::DeliveryDurability::BestEffort,
+        Some(raw_audio),
+    );
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), oversized)
+            .await
+            .is_err(),
+        "raw audio above the relay envelope limit must be rejected before sending"
+    );
+    assert!(received.try_recv().is_err());
+
+    for durability in [
+        tinychannels::DeliveryDurability::BestEffort,
+        tinychannels::DeliveryDurability::Required,
+    ] {
+        let id = match durability {
+            tinychannels::DeliveryDurability::BestEffort => "compact-best-effort",
+            tinychannels::DeliveryDurability::Required => "compact-required",
+        };
+        let intent = voice_intent(id, durability, None);
+        let encoded = serde_json::to_vec(&intent).unwrap();
+        assert!(encoded.len() < tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
+        assert!(encoded.len() < tinychannels_bus::module_delivery::DELIVERY_RECORD_BYTES);
+        assert!(!String::from_utf8_lossy(&encoded).contains("audioBase64"));
+
+        let result = channels
+            .send_channel_intent("fixture".into(), intent)
+            .await
+            .expect("compact durable reference fits normal and required paths");
+        if durability == tinychannels::DeliveryDurability::Required {
+            assert_eq!(result.message_id.as_deref(), Some("voice-message"));
+        }
+        let message = received.recv().await.expect("typed provider send");
+        assert!(matches!(
+            &message.parts[0],
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media { media, audio_base64: None, .. }
+            } if media.opaque_id.as_deref() == Some("host-media-opaque")
+        ));
+    }
+    assert!(!callbacks.storage.snapshot().await.is_empty());
     channels.shutdown().await.unwrap();
 }
 
