@@ -4492,7 +4492,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
     capabilities.voice_out.max_duration_ms = Some(10_000);
     let sender = Arc::new(Sender {
-        host,
+        host: host.clone(),
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
@@ -4501,8 +4501,8 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
         sender,
         "telegram:bot-1",
-        capabilities,
-        context,
+        capabilities: capabilities.clone(),
+        context: context.clone(),
     );
     reply
         .send_parts(
