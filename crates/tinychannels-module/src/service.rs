@@ -1221,7 +1221,7 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let (instance, activation) = self.media_reads.binding(&request.0).await?;
-        if self.media_activation(&instance).await? != activation {
+        if self.media_activation(&instance).await?.generation != activation {
             return Err(BusError::failed("media read belongs to another activation"));
         }
         self.media_reads.abort(request).await

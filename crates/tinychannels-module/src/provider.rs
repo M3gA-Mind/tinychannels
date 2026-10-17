@@ -863,6 +863,7 @@ async fn listen_with_supervision(
 /// A resource is retained until its owning task acknowledges cleanup.
 pub(crate) struct Running {
     pub(crate) channel: Arc<dyn Channel>,
+    pub(crate) media_account_scope: Option<String>,
     configured_instance: String,
     send: mpsc::Sender<SendCommand>,
     cancel: watch::Sender<bool>,
@@ -938,28 +939,32 @@ impl Running {
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
+        media_account_scope: Option<String>,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, None, false)
+        Self::start_inner(channel, hooks, host, media_account_scope, None, false)
     }
     pub(crate) fn start_supervised(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
+        media_account_scope: Option<String>,
         policy: ChannelSupervisionPolicy,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, Some(policy), false)
+        Self::start_inner(channel, hooks, host, media_account_scope, Some(policy), false)
     }
     pub(crate) fn start_outbound(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
+        media_account_scope: Option<String>,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, None, true)
+        Self::start_inner(channel, hooks, host, media_account_scope, None, true)
     }
     fn start_inner(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
+        media_account_scope: Option<String>,
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
     ) -> Arc<Self> {
@@ -1084,6 +1089,7 @@ impl Running {
         });
         Arc::new(Self {
             channel,
+            media_account_scope,
             configured_instance,
             send,
             cancel,
