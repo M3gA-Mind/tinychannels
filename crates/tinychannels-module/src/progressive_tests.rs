@@ -164,7 +164,9 @@ impl StubTinyVoiceCodec {
         request: tinyvoice_bus::codec::WaveformRequest,
     ) -> tinyvoice_bus::Result<tinyvoice_bus::codec::WaveformResult> {
         Ok(tinyvoice_bus::codec::WaveformResult {
-            peaks: vec![0, 255; request.buckets.min(2)],
+            peaks: (0..request.buckets.min(2))
+                .map(|index| if index == 0 { 0 } else { 255 })
+                .collect(),
         })
     }
 }
