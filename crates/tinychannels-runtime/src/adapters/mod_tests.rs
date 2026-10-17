@@ -476,7 +476,7 @@ async fn local_adapter_forwards_typed_turn_and_delivery_scope_unchanged() {
         reply_to_id: Some("message-3".into()),
         thread_id: Some("thread-7".into()),
         turn_id: Some("turn-2".into()),
-        durability: DeliveryDurability::Durable,
+        durability: DeliveryDurability::Required,
         payload: OutboundPayload::Text { text: "hello".into() },
     };
 
