@@ -132,11 +132,11 @@ pub async fn check_feature(
 
     if !declared {
         let explicitly_unsupported = match &result {
-            Err(error) => error.kind == SendErrorKind::BadFormat && !error.retryable,
+            Err(error) => error.kind == SendErrorKind::Unsupported && !error.retryable,
             Ok(Some(outcome)) => outcome
                 .error
                 .as_ref()
-                .is_some_and(|error| error.kind == SendErrorKind::BadFormat && !error.retryable),
+                .is_some_and(|error| error.kind == SendErrorKind::Unsupported && !error.retryable),
             Ok(None) => false,
         };
         if !explicitly_unsupported {

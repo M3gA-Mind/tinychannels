@@ -8,6 +8,8 @@ use serde_json::Value;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum SendErrorKind {
+    /// The adapter intentionally does not expose this operation or payload.
+    Unsupported,
     TooLong,
     BadFormat,
     Forbidden,
