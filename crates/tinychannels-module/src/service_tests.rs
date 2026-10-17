@@ -83,6 +83,36 @@ impl tinychannels::Channel for CaptureTypedChannel {
         "fixture"
     }
 
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        let outbound = tinychannels_bus::ContentCapability {
+            outbound: true,
+            ..Default::default()
+        };
+        tinychannels_bus::ChannelCapabilities {
+            content: tinychannels_bus::ContentCapabilities {
+                text: outbound.clone(),
+                image: outbound.clone(),
+                video: outbound.clone(),
+                audio: outbound.clone(),
+                file: outbound.clone(),
+                sticker: outbound.clone(),
+                location: outbound.clone(),
+                contact: outbound.clone(),
+                buttons: outbound.clone(),
+                poll: outbound.clone(),
+                presentation: outbound.clone(),
+                native: outbound,
+                ..Default::default()
+            },
+            voice_out: tinychannels_bus::VoiceCapabilities {
+                supported: true,
+                synthesis: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
         anyhow::bail!("typed test provider expects typed sends")
     }
