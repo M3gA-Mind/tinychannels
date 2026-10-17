@@ -218,8 +218,17 @@ impl tinychannels::host::VoiceCodec for ModuleVoiceCodec {
             })
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let info = self.0.probe_voice(tinyvoice_bus::codec::CodecInput {
+            audio_base64: result.audio_base64.clone(),
+        }).await.map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let waveform = self.0.waveform_voice(tinyvoice_bus::codec::WaveformRequest {
+            audio_base64: result.audio_base64.clone(),
+            buckets: 64,
+        }).await.ok().map(|result| result.peaks.into_iter().map(|peak| f32::from(peak) / 255.0).collect());
         Ok(tinychannels::host::VoiceCodecResult {
             audio_base64: result.audio_base64,
+            duration_ms: Some(info.duration_ms),
+            waveform,
         })
     }
 }
