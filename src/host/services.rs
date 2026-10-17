@@ -17,6 +17,8 @@ pub struct VoiceCodecRequest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VoiceCodecResult {
     pub audio_base64: String,
+    pub duration_ms: Option<u64>,
+    pub waveform: Option<Vec<f32>>,
 }
 
 #[async_trait]

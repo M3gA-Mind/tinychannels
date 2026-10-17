@@ -510,6 +510,28 @@ impl HostChannels {
         Ok(response)
     }
 
+    /// Probe media through the loaded TinyVoice codec module.
+    pub async fn probe_voice(
+        &self,
+        request: tinyvoice_bus::codec::CodecInput,
+    ) -> Result<tinyvoice_bus::codec::CodecInfo> {
+        const LIMIT: usize = 12 * 1024 * 1024;
+        if serde_json::to_vec(&request).map_or(true, |bytes| bytes.len() > LIMIT) {
+            return Err(Error::failed("voice codec probe exceeds byte limit"));
+        }
+        let proxy = self.connection.proxy(
+            tinyvoice_bus::BUS_NAME,
+            tinyvoice_bus::OBJECT_PATH,
+            tinyvoice_bus::BUS_NAME,
+        )?;
+        tokio::time::timeout(
+            HOST_VOICE_CALLBACK_TIMEOUT,
+            proxy.call(tinyvoice_bus::names::methods::CODEC_PROBE, (request,)),
+        )
+        .await
+        .map_err(|_| Error::failed("TinyVoice codec probe timed out"))?
+    }
+
     /// Invoke one bounded host-owned credential, persistence, or managed API
     /// capability required by the module's controller adapter.
     pub async fn dispatch_controller_backend(
