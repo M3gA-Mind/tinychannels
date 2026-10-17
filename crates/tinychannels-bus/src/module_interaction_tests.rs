@@ -1,3 +1,4 @@
+use crate::ChannelOutboundIntent;
 use super::*;
 
 #[test]
