@@ -1395,7 +1395,7 @@ impl TelegramChannel {
                 }
                 texts.join("\n")
             }
-            _ => anyhow::bail!("Telegram message editing supports text content only"),
+            _ => return Err(anyhow::Error::new(TelegramPreDispatchError)),
         };
         let conversation = receipt
             .conversation
