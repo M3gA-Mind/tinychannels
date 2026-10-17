@@ -169,7 +169,7 @@ fn timing_state_keeps_firsts_round_one_counts_snapshot_and_throttle() {
     let snapshot = timing.snapshot(100);
     assert_eq!(snapshot.first_token_ms, Some(20));
     assert_eq!(snapshot.first_tool_ms, Some(40));
-    assert_eq!(snapshot.round_one_narration_chars, 7);
+    assert_eq!(snapshot.round_one_narration_chars, 9);
     assert_eq!(snapshot.into_payload(Some(4)).tokens_per_second, Some(40.0));
 
     let mut throttle = TurnCostThrottle::default();
@@ -297,7 +297,8 @@ fn every_historical_discriminator_has_a_strongly_tagged_variant() {
             "event": name,
             "client_id": "client",
             "thread_id": "thread",
-            "request_id": "request"
+            "request_id": "request",
+            "suggestions": []
         });
         let parsed: WebChannelEvent = serde_json::from_value(fixture)
             .unwrap_or_else(|error| panic!("{name} rejected: {error}"));
