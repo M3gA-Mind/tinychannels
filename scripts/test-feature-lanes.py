@@ -19,7 +19,7 @@ class FeatureLaneTests(unittest.TestCase):
             result = subprocess.run(
                 [os.environ.get("FEATURE_TEST_BASH", "bash"), "-c", '\n'.join([
                     'cargo() { printf "%s\\n" "$*" >> "$FEATURE_LANE_CALLS"; }',
-                    'python3() { return 0; }',
+                    'python3() { printf "%s\\n" "$*" >> "$FEATURE_LANE_CALLS"; }',
                     'export -f cargo python3',
                     'source "$1"',
                 ]), "feature-lanes", (ROOT / "scripts/test-features.sh").as_posix()],
@@ -28,6 +28,8 @@ class FeatureLaneTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             commands = [shlex.split(line) for line in calls.read_text().splitlines()]
+            self.assertIn(["scripts/check-bus-purity.py"], commands)
+            self.assertIn(["scripts/__tests__/check_bus_purity_tests.py"], commands)
             self.assertIn(
                 ["test", "--locked", "-p", "tinychannels", "--no-default-features", "--features", "email-send"],
                 commands,
