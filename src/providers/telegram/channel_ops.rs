@@ -2119,3 +2119,129 @@ async fn send_typed_media_with_receipt(
 #[cfg(test)]
 #[path = "channel_ops_tests.rs"]
 mod tests;
+
+#[async_trait]
+impl crate::channel::ChannelAdapter for TelegramChannel {
+    fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
+        tinychannels_bus::channel::ChannelDescriptor {
+            id: "telegram".into(),
+            display_name: "Telegram".into(),
+            metadata: std::collections::BTreeMap::from([("adapterMode".into(), "native-v2".into())]),
+            ..Default::default()
+        }
+    }
+
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.capabilities()
+    }
+
+    fn proactive_target(&self) -> Option<String> {
+        Channel::proactive_target(self)
+    }
+
+    async fn start(
+        &self,
+        _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        Err(crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::Forbidden,
+            message: "Telegram polling is owned by the configured provider runtime".into(),
+            retryable: false,
+            ..Default::default()
+        })
+    }
+
+    async fn stop(&self) -> Result<(), crate::channel::ChannelSendError> {
+        Ok(())
+    }
+
+    async fn send(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
+        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+        self.send_v2_with_receipt(&message)
+            .await
+            .map_err(|error| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Unknown,
+                message: error.to_string(),
+                retryable: false,
+                ..Default::default()
+            })
+    }
+
+    async fn status(
+        &self,
+    ) -> Result<tinychannels_runtime::controllers::ChannelAccountSnapshot, crate::channel::ChannelSendError> {
+        Channel::status(self).await.map_err(|error| crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::Transient,
+            message: error.to_string(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
+}
+
+#[async_trait]
+impl crate::channel::ChannelReaction for TelegramChannel {
+    async fn send_reaction(
+        &self,
+        channel: &tinychannels_bus::channel::ChannelRef,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        if channel.id != "telegram" {
+            return Err(crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Forbidden,
+                message: "reaction channel does not match Telegram".into(),
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        self.send_reaction_v2(conversation, provider_message_id, reaction, remove)
+            .await
+            .map_err(|error| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Unknown,
+                message: error.to_string(),
+                retryable: false,
+                ..Default::default()
+            })
+    }
+}
+
+#[async_trait]
+impl crate::channel::ChannelEdit for TelegramChannel {
+    async fn edit(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError> {
+        self.edit_message_v2(receipt, &intent)
+            .await
+            .map_err(|error| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Unknown,
+                message: error.to_string(),
+                retryable: false,
+                ..Default::default()
+            })
+    }
+}
+
+#[async_trait]
+impl crate::channel::ChannelDelete for TelegramChannel {
+    async fn delete(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.delete_message_v2(receipt)
+            .await
+            .map_err(|error| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Unknown,
+                message: error.to_string(),
+                retryable: false,
+                ..Default::default()
+            })
+    }
+}
