@@ -75,6 +75,33 @@ impl TelegramChannel {
             .get("date")
             .and_then(serde_json::Value::as_u64)
             .map(|seconds| seconds.saturating_mul(1000));
+        let mut parts = Vec::new();
+        if !message.content.trim().is_empty() {
+            parts.push(tinychannels_bus::ContentPart::Text {
+                text: message.content.clone(),
+                markdown_dialect: None,
+            });
+        }
+        if let Some(voice_note) = voice_note {
+            parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
+        }
+        parts.extend(media_parts);
+        let media = parts
+            .iter()
+            .flat_map(|part| match part {
+                tinychannels_bus::ContentPart::Image { media, .. }
+                | tinychannels_bus::ContentPart::Audio { media, .. }
+                | tinychannels_bus::ContentPart::File { media, .. }
+                | tinychannels_bus::ContentPart::Sticker { media, .. } => vec![media.clone()],
+                tinychannels_bus::ContentPart::Video {
+                    media, thumbnail, ..
+                } => std::iter::once(media.clone()).chain(thumbnail.clone()).collect(),
+                tinychannels_bus::ContentPart::VoiceNote { voice_note } => {
+                    vec![voice_note.media.clone()]
+                }
+                _ => Vec::new(),
+            })
+            .collect();
         tinychannels_bus::ChannelInboundEnvelope {
             channel: tinychannels_bus::ChannelRef {
                 id: "telegram".into(),
@@ -95,20 +122,8 @@ impl TelegramChannel {
                 ..Default::default()
             },
             text: message.content.clone(),
-            parts: {
-                let mut parts = Vec::new();
-                if !message.content.trim().is_empty() {
-                    parts.push(tinychannels_bus::ContentPart::Text {
-                        text: message.content.clone(),
-                        markdown_dialect: None,
-                    });
-                }
-                if let Some(voice_note) = voice_note {
-                    parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
-                }
-                parts.extend(media_parts);
-                parts
-            },
+            parts,
+            media,
             raw: Some(serde_json::json!({"providerMessageId": provider_message_id})),
             ..Default::default()
         }
