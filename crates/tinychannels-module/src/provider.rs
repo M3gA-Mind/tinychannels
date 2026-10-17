@@ -634,6 +634,7 @@ pub(crate) struct ConfiguredAdapterHandle {
 }
 
 impl ConfiguredAdapterHandle {
+    #[cfg(test)]
     pub(crate) fn adapter(&self) -> &dyn tinychannels::channel::ChannelAdapter {
         self.adapter.as_ref()
     }
