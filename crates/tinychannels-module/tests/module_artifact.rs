@@ -1798,6 +1798,13 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     wrong_topic.conversation_ref.as_mut().unwrap().topic_id = Some("other-topic".into());
     let mut wrong_turn = send.clone();
     wrong_turn.turn_id = Some("turn-from-another-message".into());
+    let before_account_reject = telegram_api
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path().ends_with("/sendPhoto"))
+        .count();
     assert!(runtime_proxy
         .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
             "SendChannelIntent",
@@ -1805,6 +1812,14 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         )
         .await
         .is_err(), "account mismatch should be rejected at the module boundary");
+    let after_account_reject = telegram_api
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path().ends_with("/sendPhoto"))
+        .count();
+    assert_eq!(after_account_reject, before_account_reject);
     let invalid_scopes = [
         wrong_conversation,
         wrong_scope,
