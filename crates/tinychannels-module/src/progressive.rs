@@ -470,7 +470,11 @@ impl Replies {
                 channel,
                 conversation,
                 turn_id,
-            } => self.open_output(channel, conversation, turn_id).await,
+                lifetime_ms,
+            } => {
+                self.open_output(channel, conversation, turn_id, lifetime_ms)
+                    .await
+            }
             ProgressiveCommand::Feed { handle, events } => {
                 let events = events.into_iter().map(compat_event).collect();
                 self.feed(handle, events, false).await
@@ -652,6 +656,7 @@ impl Replies {
         channel: tinychannels_bus::ChannelRef,
         conversation: tinychannels_bus::ConversationRef,
         turn_id: String,
+        _lifetime_ms: u64,
     ) -> Result<ProgressiveResult> {
         if channel.id.is_empty()
             || conversation.id.is_empty()

@@ -263,8 +263,9 @@ async fn open_scoped(
                 ..Default::default()
             },
             turn_id: turn_id.to_owned(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap()
     else {
@@ -1062,8 +1063,9 @@ async fn no_edit_channel_sends_final_text_in_configured_segments() {
                 ..Default::default()
             },
             turn_id: "segmented-turn".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap();
     let ProgressiveResult::Opened { handle } = handle else {
@@ -1154,8 +1156,9 @@ async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts
                 ..Default::default()
             },
             turn_id: "partial-segments".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap();
     let ProgressiveResult::Opened { handle } = opened else {
@@ -1254,8 +1257,9 @@ async fn terminal_text_edits_existing_draft_without_duplicate_send() {
                 ..Default::default()
             },
             turn_id: "final-draft-turn".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap();
     let ProgressiveResult::Opened { handle } = opened else {
@@ -1336,8 +1340,9 @@ async fn failed_terminal_edit_retains_the_existing_draft_receipt() {
                 ..Default::default()
             },
             turn_id: "failed-final-edit-turn".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap()
     else {
@@ -1436,8 +1441,9 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
                 ..Default::default()
             },
             turn_id: "partial-batch-turn".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap()
     else {
@@ -1512,8 +1518,9 @@ async fn media_without_receipt_is_unknown_and_stops_terminal_batch() {
                 ..Default::default()
             },
             turn_id: "no-receipt-turn".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap()
     else {
@@ -1572,8 +1579,9 @@ async fn cancellation_retains_prior_media_receipt() {
                 ..Default::default()
             },
             turn_id: "media-cancel-turn".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap()
     else {
@@ -1625,8 +1633,9 @@ async fn cancellation_retains_prior_media_receipt() {
                 ..Default::default()
             },
             turn_id: "partial-media-cancel-turn".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap()
     else {
@@ -1683,8 +1692,9 @@ async fn typed_callback_error_after_acceptance_is_unknown_and_stops_batch() {
                 ..Default::default()
             },
             turn_id: "typed-unknown-turn".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap()
     else {
@@ -1906,6 +1916,43 @@ async fn filler_multipart_receipt_drives_per_part_token_cleanup() {
     replies.shutdown().await.unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn scoped_output_survives_more_than_two_hundred_seconds_until_host_lease() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open_scoped(
+        &replies,
+        "discord:long-turn",
+        "long-turn",
+        tinychannels_bus::ChannelCapabilities::default(),
+    )
+    .await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    tokio::time::advance(Duration::from_secs(201)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "long turn complete".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        result,
+        ProgressiveResult::DeliveryOutcome { outcome }
+            if outcome.receipt.platform_message_ids == ["fixture-message"]
+    ));
+    assert_eq!(callback.sends.lock().await.len(), 1);
+    replies.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn native_approval_and_clarification_events_deliver_prompts() {
     let (base, callback) = fixture(false).await;
@@ -1934,8 +1981,9 @@ async fn native_approval_and_clarification_events_deliver_prompts() {
                 ..Default::default()
             },
             turn_id: "prompt-turn".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap()
     else {
@@ -2276,8 +2324,9 @@ async fn configured_progressive_channel_posts_and_edits_one_draft() {
                 ..Default::default()
             },
             turn_id: "editable-turn".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap();
     let ProgressiveResult::Opened { handle } = opened else {
@@ -2364,8 +2413,9 @@ async fn configured_progressive_channel_posts_and_edits_one_draft() {
                 ..Default::default()
             },
             turn_id: "editable-turn-b".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap();
     let ProgressiveResult::Opened { handle: handle_b } = opened_b else {
@@ -2459,8 +2509,9 @@ async fn open_output_uses_configured_account_and_preserves_full_conversation_sco
             },
             conversation: conversation.clone(),
             turn_id: "forged-turn".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap_err();
     assert!(forged.to_string().contains("not configured"));
@@ -2469,8 +2520,9 @@ async fn open_output_uses_configured_account_and_preserves_full_conversation_sco
             channel: channel_ref.clone(),
             conversation: conversation.clone(),
             turn_id: "turn-topic-9".into(),
-        
-            lifetime_ms: 210_000,})
+
+            lifetime_ms: 210_000,
+        })
         .await
         .unwrap()
     {
