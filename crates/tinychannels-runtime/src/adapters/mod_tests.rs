@@ -51,6 +51,13 @@ fn local_adapter(sink: Arc<RecordingOutboundSink>) -> LocalChannelAdapter {
             ..Default::default()
         },
         tinychannels_bus::ChannelCapabilities {
+            content: tinychannels_bus::ContentCapabilities {
+                text: tinychannels_bus::ContentCapability {
+                    outbound: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
             actions: tinychannels_bus::ActionCapabilities {
                 supported: vec!["reply".into()],
                 ..Default::default()
