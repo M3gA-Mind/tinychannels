@@ -3,12 +3,12 @@
 
 use super::latch::{channel_edits_unsupported, mark_channel_edits_unsupported};
 use super::state::{
-    StreamingState, TypingState, extract_message_id, extract_message_receipt,
+    StreamingState, TypingState, extract_message_ids, extract_message_receipt,
     extract_message_receipt_or_ids, latest_thinking_snippet, message_receipt_ids,
 };
 use super::{
-    MAX_FILLER_FAILURES, MAX_THINKING_DISPLAY_CHARS, MAX_TYPING_FAILURES, ProgressiveSendError,
-    ProgressiveSender, STATIC_FILLERS,
+    MAX_THINKING_DISPLAY_CHARS, MAX_TYPING_FAILURES, ProgressiveSendError, ProgressiveSender,
+    STATIC_FILLERS,
 };
 
 /// Fire one typing indicator. Latches `disabled` after repeated failures so a

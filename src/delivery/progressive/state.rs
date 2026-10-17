@@ -110,8 +110,6 @@ impl StreamingState {
     /// Thinking-bubble counterpart of [`Self::forget_draft`].
     pub fn forget_thinking(&mut self) {
         self.thinking_message_id = None;
-        self.thinking_message_ids.clear();
-        self.thinking_message_receipt = None;
         self.thinking_edit_disabled = true;
     }
 

@@ -409,22 +409,29 @@ impl ProgressiveReply {
                     )
                     .await;
                 }
-                for id in std::mem::take(&mut self.state.filler_message_ids) {
-                    super::finalize::delete_channel_message(
-                        self.sender.as_ref(),
-                        &self.channel,
-                        &id,
-                    )
-                    .await;
-                }
+                super::finalize::delete_ephemeral_messages(
+                    self.sender.as_ref(),
+                    &self.channel,
+                    std::mem::take(&mut self.state.filler_message_ids),
+                    std::mem::take(&mut self.state.filler_message_receipts),
+                )
+                .await;
+                let mut thinking_ids = std::mem::take(&mut self.state.thinking_message_ids);
                 if let Some(id) = self.state.thinking_message_id.take() {
-                    super::finalize::delete_channel_message(
-                        self.sender.as_ref(),
-                        &self.channel,
-                        &id,
-                    )
-                    .await;
+                    if !thinking_ids.contains(&id) {
+                        thinking_ids.push(id);
+                    }
                 }
+                let thinking_receipts = std::mem::take(&mut self.state.thinking_message_receipt)
+                    .into_iter()
+                    .collect();
+                super::finalize::delete_ephemeral_messages(
+                    self.sender.as_ref(),
+                    &self.channel,
+                    thinking_ids,
+                    thinking_receipts,
+                )
+                .await;
                 self.state.content = final_text.to_owned();
                 self.state.dirty = false;
                 self.state.message_ids = vec![message_id.clone()];

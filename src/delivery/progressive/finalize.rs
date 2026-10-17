@@ -75,6 +75,38 @@ pub(super) async fn delete_channel_message_with_receipt(
     }
 }
 
+/// Delete an ephemeral output and preserve per-part provider authority.
+pub(super) async fn delete_ephemeral_messages(
+    sender: &dyn ProgressiveSender,
+    channel: &str,
+    message_ids: Vec<String>,
+    receipts: Vec<tinychannels_bus::channel::MessageReceipt>,
+) {
+    let mut deleted = Vec::new();
+    for receipt in receipts {
+        for message_id in super::state::message_receipt_ids(&receipt) {
+            if deleted.contains(&message_id) {
+                continue;
+            }
+            let part_receipt = receipt_for_part(&receipt, &message_id);
+            delete_channel_message_with_receipt(
+                sender,
+                channel,
+                &message_id,
+                Some(&part_receipt),
+            )
+            .await;
+            deleted.push(message_id);
+        }
+    }
+    for message_id in message_ids {
+        if !deleted.contains(&message_id) {
+            delete_channel_message(sender, channel, &message_id).await;
+            deleted.push(message_id);
+        }
+    }
+}
+
 /// Replace an on-screen draft: delete it, then post the reply fresh.
 async fn replace_draft(
     sender: &dyn ProgressiveSender,
@@ -185,12 +217,23 @@ pub(super) async fn finalize_channel_reply(
     }
 
     // Fillers first (oldest first), then the thinking bubble.
-    for id in std::mem::take(&mut state.filler_message_ids) {
-        delete_channel_message(sender, channel, &id).await;
+    delete_ephemeral_messages(
+        sender,
+        channel,
+        std::mem::take(&mut state.filler_message_ids),
+        std::mem::take(&mut state.filler_message_receipts),
+    )
+    .await;
+    let mut thinking_ids = std::mem::take(&mut state.thinking_message_ids);
+    if let Some(id) = state.thinking_message_id.take() {
+        if !thinking_ids.contains(&id) {
+            thinking_ids.push(id);
+        }
     }
-    if let Some(thinking_id) = state.thinking_message_id.take() {
-        delete_channel_message(sender, channel, &thinking_id).await;
-    }
+    let thinking_receipts = std::mem::take(&mut state.thinking_message_receipt)
+        .into_iter()
+        .collect();
+    delete_ephemeral_messages(sender, channel, thinking_ids, thinking_receipts).await;
 }
 
 /// Remove only drafts and ephemeral status messages after an ambiguous or
@@ -222,12 +265,23 @@ pub(super) async fn abort_channel_reply(
         }
         state.message_id = None;
     }
-    for id in std::mem::take(&mut state.filler_message_ids) {
-        delete_channel_message(sender, channel, &id).await;
+    delete_ephemeral_messages(
+        sender,
+        channel,
+        std::mem::take(&mut state.filler_message_ids),
+        std::mem::take(&mut state.filler_message_receipts),
+    )
+    .await;
+    let mut thinking_ids = std::mem::take(&mut state.thinking_message_ids);
+    if let Some(id) = state.thinking_message_id.take() {
+        if !thinking_ids.contains(&id) {
+            thinking_ids.push(id);
+        }
     }
-    if let Some(thinking_id) = state.thinking_message_id.take() {
-        delete_channel_message(sender, channel, &thinking_id).await;
-    }
+    let thinking_receipts = std::mem::take(&mut state.thinking_message_receipt)
+        .into_iter()
+        .collect();
+    delete_ephemeral_messages(sender, channel, thinking_ids, thinking_receipts).await;
 }
 
 pub(super) fn receipt_for_part(
