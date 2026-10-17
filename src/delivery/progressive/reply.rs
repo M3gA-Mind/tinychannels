@@ -6,7 +6,7 @@ use super::bubbles::{flush_thinking_message, send_filler_message, send_typing_in
 use super::draft::flush_streaming_edit;
 use super::finalize::{abort_channel_reply, finalize_channel_reply, send_channel_reply};
 use super::state::{StreamingState, TypingState};
-use super::{ProgressiveSender, channel_supports_progressive_ui};
+use super::{ProgressiveOutputContext, ProgressiveSender, channel_supports_progressive_ui};
 use tinychannels_bus::ChannelCapabilities;
 
 /// Progressive delivery of one agent turn to one channel.
@@ -21,6 +21,8 @@ pub struct ProgressiveReply {
     progressive_ui: bool,
     pub(super) state: StreamingState,
     typing: TypingState,
+    output_context: Option<ProgressiveOutputContext>,
+    output_sequence: u64,
 }
 
 impl ProgressiveReply {
@@ -44,7 +46,21 @@ impl ProgressiveReply {
             progressive_ui,
             state: StreamingState::default(),
             typing: TypingState::default(),
+            output_context: None,
+            output_sequence: 0,
         }
+    }
+
+    /// Start a turn with its complete host-authoritative address and identity.
+    pub fn new_scoped(
+        sender: Arc<dyn ProgressiveSender>,
+        channel: impl Into<String>,
+        capabilities: ChannelCapabilities,
+        context: ProgressiveOutputContext,
+    ) -> Self {
+        let mut reply = Self::new(sender, channel, capabilities);
+        reply.output_context = Some(context);
+        reply
     }
 
     /// The channel this turn replies to.
@@ -54,10 +70,13 @@ impl ProgressiveReply {
 
     /// Forward one canonical output event to the host event adapter.
     pub async fn on_output_event(
-        &self,
+        &mut self,
         event: &tinychannels_bus::module_progressive::ChannelOutputEvent,
     ) -> Result<(), super::ProgressiveSendError> {
-        self.sender.output_event(&self.channel, event).await
+        self.output_sequence = self.output_sequence.saturating_add(1);
+        self.sender
+            .output_event(&self.channel, self.output_context.as_ref(), self.output_sequence, event)
+            .await
     }
 
     /// Current per-turn state (for logging and tests).

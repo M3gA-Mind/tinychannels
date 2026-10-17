@@ -10,7 +10,7 @@ use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::delivery::progressive::{
     EDIT_FLUSH_INTERVAL, FILLER_INTERVAL, ProgressiveReply, ProgressiveSendError,
-    ProgressiveSender, TYPING_REFRESH_INTERVAL,
+    ProgressiveOutputContext, ProgressiveSender, TYPING_REFRESH_INTERVAL,
 };
 use tinychannels_bus::module_progressive::{
     ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
@@ -76,10 +76,16 @@ impl ProgressiveSender for Sender {
     async fn output_event(
         &self,
         channel: &str,
+        context: Option<&ProgressiveOutputContext>,
+        sequence: u64,
         event: &ChannelOutputEvent,
     ) -> std::result::Result<(), ProgressiveSendError> {
         self.invoke(ProgressiveTransportRequest::OutputEvent {
             channel: channel.to_owned(),
+            turn_id: context.map(|context| context.turn_id.clone()),
+            channel_ref: context.map(|context| context.channel.clone()),
+            conversation: context.map(|context| context.conversation.clone()),
+            sequence,
             event: event.clone(),
         })
         .await
@@ -184,6 +190,9 @@ impl Replies {
         }
         match request {
             ProgressiveCommand::Open { channel } => self.open(channel).await,
+            ProgressiveCommand::OpenOutput { channel, conversation, turn_id } => {
+                self.open_output(channel, conversation, turn_id).await
+            }
             ProgressiveCommand::Feed { handle, events } => {
                 let events = events.into_iter().map(compat_event).collect();
                 self.feed(handle, events, false).await
@@ -248,17 +257,51 @@ impl Replies {
     }
 
     async fn open(&self, channel: String) -> Result<ProgressiveResult> {
+        self.open_inner(channel, None).await
+    }
+
+    async fn open_output(
+        &self,
+        channel: tinychannels_bus::ChannelRef,
+        conversation: tinychannels_bus::ConversationRef,
+        turn_id: String,
+    ) -> Result<ProgressiveResult> {
+        if channel.id.is_empty() || conversation.id.is_empty() || turn_id.is_empty()
+            || channel.id.len() > 4096 || conversation.id.len() > 4096 || turn_id.len() > 256
+        {
+            return Err(Error::failed("invalid scoped progressive target"));
+        }
+        let route = format!("{}:{}", channel.id, conversation.id);
+        self.open_inner(route, Some(ProgressiveOutputContext {
+            turn_id,
+            channel,
+            conversation,
+        })).await
+    }
+
+    async fn open_inner(
+        &self,
+        channel: String,
+        context: Option<ProgressiveOutputContext>,
+    ) -> Result<ProgressiveResult> {
         if channel.is_empty() || channel.len() > 4096 {
             return Err(Error::failed("invalid progressive target"));
         }
         let provider_id = tinychannels_bus::provider_id(&channel);
-        let capabilities = self
-            .running
-            .lock()
-            .await
-            .get(provider_id)
-            .map(|provider| provider.channel.capabilities())
-            .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown);
+        let running = self.running.lock().await;
+        let capabilities = if let Some(context) = context.as_ref() {
+            running
+                .get(&context.channel.id)
+                .ok_or_else(|| Error::failed("scoped channel instance is not configured"))?
+                .channel
+                .capabilities()
+        } else {
+            running
+                .get(provider_id)
+                .map(|provider| provider.channel.capabilities())
+                .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
+        };
+        drop(running);
         let mut state = self.state.lock().await;
         if state.terminal {
             return Err(Error::failed("progressive replies are shutting down"));
@@ -298,7 +341,7 @@ impl Replies {
         let handle = uuid::Uuid::new_v4().simple().to_string();
         let (commands, inbox) = mpsc::channel(16);
         let host = self.host.clone();
-        let worker = tokio::spawn(run(host, channel, capabilities, inbox));
+        let worker = tokio::spawn(run(host, channel, capabilities, context, inbox));
         state.entries.insert(
             handle.clone(),
             Arc::new(Entry {
@@ -431,9 +474,14 @@ async fn run(
     host: HostChannels,
     channel: String,
     capabilities: tinychannels_bus::ChannelCapabilities,
+    context: Option<ProgressiveOutputContext>,
     mut inbox: mpsc::Receiver<Command>,
 ) {
-    let mut reply = ProgressiveReply::new(Arc::new(Sender(host)), channel, capabilities);
+    let mut reply = if let Some(context) = context {
+        ProgressiveReply::new_scoped(Arc::new(Sender(host)), channel, capabilities, context)
+    } else {
+        ProgressiveReply::new(Arc::new(Sender(host)), channel, capabilities)
+    };
     let mut edits = tokio::time::interval(EDIT_FLUSH_INTERVAL);
     let mut typing = tokio::time::interval(TYPING_REFRESH_INTERVAL);
     let mut fillers = tokio::time::interval(FILLER_INTERVAL);

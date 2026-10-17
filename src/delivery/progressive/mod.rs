@@ -102,6 +102,8 @@ pub trait ProgressiveSender: Send + Sync {
     async fn output_event(
         &self,
         _channel: &str,
+        _context: Option<&ProgressiveOutputContext>,
+        _sequence: u64,
         _event: &tinychannels_bus::module_progressive::ChannelOutputEvent,
     ) -> Result<(), ProgressiveSendError> {
         Ok(())
@@ -123,6 +125,14 @@ pub trait ProgressiveSender: Send + Sync {
 
     /// Show the typing indicator once.
     async fn typing(&self, channel: &str) -> Result<(), ProgressiveSendError>;
+}
+
+/// Host-authoritative identity attached to each event in a scoped v2 turn.
+#[derive(Debug, Clone)]
+pub struct ProgressiveOutputContext {
+    pub turn_id: String,
+    pub channel: tinychannels_bus::ChannelRef,
+    pub conversation: tinychannels_bus::ConversationRef,
 }
 
 /// Whether one configured channel instance supports progressive placeholders.

@@ -207,6 +207,12 @@ pub enum ProgressiveCommand {
     Open {
         channel: String,
     },
+    /// Open a turn-scoped output stream using the full configured address.
+    OpenOutput {
+        channel: crate::channel::ChannelRef,
+        conversation: crate::channel::ConversationRef,
+        turn_id: String,
+    },
     Feed {
         handle: String,
         events: Vec<ProgressiveEvent>,
@@ -242,6 +248,10 @@ pub enum ProgressiveTransportRequest {
     /// Ordered, host-authorized projection of one canonical turn event.
     OutputEvent {
         channel: String,
+        turn_id: Option<String>,
+        channel_ref: Option<crate::channel::ChannelRef>,
+        conversation: Option<crate::channel::ConversationRef>,
+        sequence: u64,
         event: ChannelOutputEvent,
     },
     Send {
