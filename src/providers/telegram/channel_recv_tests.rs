@@ -863,7 +863,11 @@ async fn telegram_document_download_infers_type_and_name_from_getfile_path() {
         .await
         .unwrap();
     let envelope = TelegramChannel::inbound_envelope_with_media(&update, &message, None, parts);
-    let [tinychannels_bus::ContentPart::File { media, file_name, .. }] = envelope.parts.as_slice()
+    let [
+        tinychannels_bus::ContentPart::File {
+            media, file_name, ..
+        },
+    ] = envelope.parts.as_slice()
     else {
         panic!("downloaded Telegram document should be retained as a typed file");
     };
