@@ -1,5 +1,4 @@
 //! Bounded, runtime-local host-to-module media uploads.
-use crate::provider::ModuleMediaRepository;
 use std::{collections::HashMap, time::Duration};
 use tinybus::{Error, Result};
 use tinychannels_bus::{
@@ -8,6 +7,14 @@ use tinychannels_bus::{
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
 use tokio::time::Instant;
+
+#[async_trait::async_trait]
+pub(crate) trait MediaPersistence: Send + Sync {
+    async fn store_public_media(
+        &self,
+        request: tinychannels::host::MediaStoreRequest,
+    ) -> Result<MediaUploadResult>;
+}
 
 const UPLOAD_LIFETIME: Duration = Duration::from_secs(60);
 const TERMINAL_LIFETIME: Duration = Duration::from_secs(5 * 60);
@@ -176,11 +183,11 @@ impl MediaUploads {
         Ok(upload.next_sequence as u32)
     }
 
-    pub(crate) async fn finish(
+    pub(crate) async fn finish<P: MediaPersistence>(
         &self,
         request: MediaUploadFinish,
         activation: usize,
-        repository: &ModuleMediaRepository,
+        repository: &P,
     ) -> Result<MediaUploadResult> {
         let mut state = self.state.lock().await;
         Self::prune(&mut state);
@@ -244,8 +251,7 @@ impl MediaUploads {
                 },
                 bytes,
             })
-            .await
-            .map_err(|_| Error::failed("media could not be stored"));
+            .await;
         let mut state = self.state.lock().await;
         Self::prune(&mut state);
         let Some(upload) = state.uploads.remove(&request.0.0) else {
@@ -328,3 +334,7 @@ impl MediaUploads {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "media_tests.rs"]
+mod tests;

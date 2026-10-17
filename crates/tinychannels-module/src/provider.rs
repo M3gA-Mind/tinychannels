@@ -290,6 +290,18 @@ impl ModuleMediaRepository {
 }
 
 #[async_trait::async_trait]
+impl crate::media::MediaPersistence for ModuleMediaRepository {
+    async fn store_public_media(
+        &self,
+        request: tinychannels::host::MediaStoreRequest,
+    ) -> tinybus::Result<tinychannels_bus::MediaReference> {
+        <Self as tinychannels::host::MediaRepository>::store_media(self, request)
+            .await
+            .map_err(|_| tinybus::Error::failed("media could not be stored"))
+    }
+}
+
+#[async_trait::async_trait]
 impl tinychannels::host::MediaRepository for ModuleMediaRepository {
     async fn store_media(
         &self,
