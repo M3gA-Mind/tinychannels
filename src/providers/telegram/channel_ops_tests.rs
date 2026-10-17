@@ -19,7 +19,7 @@ impl tinychannels_runtime::adapters::LocalOutboundSink for TelegramConformanceSi
         tinychannels_bus::channel::MessageReceipt,
         tinychannels_bus::channel::ChannelSendError,
     > {
-        let outcome = tinychannels::channel::ChannelAdapter::send(self.0.as_ref(), intent).await?;
+        let outcome = crate::channel::ChannelAdapter::send(self.0.as_ref(), intent).await?;
         if let Some(error) = outcome.error {
             return Err(error);
         }
