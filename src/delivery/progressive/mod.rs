@@ -126,6 +126,7 @@ pub trait ProgressiveSender: Send + Sync {
         _parts: &[tinychannels_bus::OutboundContentPart],
         _text: &str,
         _context: Option<&ProgressiveOutputContext>,
+        _sequence: u64,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
         Err(ProgressiveSendError::UnsupportedContent)
     }
