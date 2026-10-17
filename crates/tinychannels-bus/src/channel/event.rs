@@ -88,6 +88,14 @@ pub enum ChannelEventKind {
         #[serde(skip_serializing_if = "Option::is_none")]
         provider_message_id: Option<String>,
     },
+    /// A user activated an opaque provider button. The host applies any
+    /// approval or business policy after validating this actor and scope.
+    ButtonCallback {
+        query_id: String,
+        action_id: String,
+        provider_message_id: Option<String>,
+        actor: SenderRef,
+    },
     /// Account or user presence changed.
     Presence {
         actor: SenderRef,
