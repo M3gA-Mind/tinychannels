@@ -128,25 +128,45 @@ pub(super) async fn flush_streaming_edit(
                 }
             } else {
                 tracing::warn!(
-                    "[channel-inbound][stream] initial draft sent but response lacked id — disabling progressive edits (finalize will skip sending a duplicate) channel='{}' resp={}",
+                    "[channel-inbound][stream] initial draft response lacked an id — disabling progressive edits and preserving the response as uncertain channel='{}' receipt_parts={} response_fields={}",
                     channel,
-                    resp,
+                    state.message_receipt.as_ref().map_or(0, |receipt| receipt.parts.len()),
+                    resp.as_object().map_or(0, serde_json::Map::len),
                 );
                 state.edit_disabled = true;
+                state.delivery_uncertain = true;
             }
         }
         Err(ProgressiveSendError::Unavailable) => {}
+        Err(ProgressiveSendError::PartialOutcome(outcome)) => {
+            state.draft_sent = true;
+            state.delivery_uncertain = true;
+            state.edit_disabled = true;
+            let receipt = outcome.receipt;
+            let mut ids = receipt.platform_message_ids.clone();
+            ids.extend(
+                receipt
+                    .parts
+                    .iter()
+                    .map(|part| part.platform_message_id.clone()),
+            );
+            ids.dedup();
+            state.message_id = receipt
+                .primary_platform_message_id
+                .clone()
+                .or_else(|| ids.first().cloned());
+            state.message_ids = ids;
+            state.message_receipt = Some(receipt);
+        }
         Err(err) => {
-            state.edit_failures += 1;
+            state.draft_sent = true;
+            state.delivery_uncertain = true;
+            state.edit_disabled = true;
             tracing::warn!(
-                "[channel-inbound][stream] initial send failed channel='{}' err={} (failures={})",
+                "[channel-inbound][stream] initial send outcome is uncertain channel='{}' err={}",
                 channel,
                 err,
-                state.edit_failures,
             );
-            if state.edit_failures >= MAX_EDIT_FAILURES {
-                state.edit_disabled = true;
-            }
         }
     }
 }

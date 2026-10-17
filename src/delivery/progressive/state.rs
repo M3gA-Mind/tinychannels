@@ -26,6 +26,9 @@ pub struct StreamingState {
     /// it" so `finalize_channel_reply` won't post a duplicate bubble
     /// when the id was lost.
     pub draft_sent: bool,
+    /// A draft request may have reached the provider but returned no usable
+    /// receipt. Final output must not blindly create another message.
+    pub delivery_uncertain: bool,
     /// New content has arrived since the last edit flush.
     pub dirty: bool,
     /// Consecutive edit failures. Reset to zero on every success.
