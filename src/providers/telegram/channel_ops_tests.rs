@@ -1188,17 +1188,30 @@ async fn bridge_approval_presentation_renders_scoped_inline_choice_actions() {
     )
     .await;
     let channel = channel_for(&server, &["*"]);
+    let intent = crate::harness::translate_output_event(
+        &crate::harness::ChannelTurn::default(),
+        crate::harness::ChannelOutputEvent::ApprovalRequest {
+            id: "request-42".into(),
+            prompt: "Run the command?".into(),
+            choices: vec!["Allow once".into(), "Deny".into()],
+        },
+        &Default::default(),
+        &tinychannels_bus::ChannelPresentationCapabilities {
+            max_actions: Some(2),
+            max_actions_per_row: Some(1),
+            ..Default::default()
+        },
+        Default::default(),
+    )
+    .unwrap()
+    .remove(0);
+    let tinychannels_bus::OutboundPayload::PresentationBlocks { blocks } = intent.payload else {
+        panic!("bridge should preserve native approval presentation blocks");
+    };
     let message = typed_parts(
         "approval-presentation",
         vec![tinychannels_bus::OutboundContentPart::Content {
-            part: tinychannels_bus::ContentPart::Presentation {
-                blocks: serde_json::json!({
-                    "kind": "approval",
-                    "id": "request-42",
-                    "prompt": "Run the command?",
-                    "choices": ["Allow once", "Deny"]
-                }),
-            },
+            part: tinychannels_bus::ContentPart::Presentation { blocks },
         }],
     );
 

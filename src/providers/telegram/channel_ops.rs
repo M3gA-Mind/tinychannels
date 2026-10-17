@@ -49,7 +49,51 @@ fn safe_vcard_type<'a>(label: Option<&'a str>, fallback: &'a str) -> &'a str {
     }
 }
 
-fn presentation_text(value: &serde_json::Value) -> anyhow::Result<String> {
+fn presentation_content(
+    value: &serde_json::Value,
+) -> anyhow::Result<(String, Option<serde_json::Value>)> {
+    if let Some(object) = value.as_object().filter(|object| {
+        object.get("kind").and_then(serde_json::Value::as_str) == Some("approval")
+    }) {
+        if object.len() != 4
+            || object.keys().any(|key| !["kind", "id", "prompt", "choices"].contains(&key.as_str()))
+        {
+            anyhow::bail!("Telegram approval presentation has unsupported fields");
+        }
+        let request_id = object
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| !id.is_empty())
+            .ok_or_else(|| anyhow::anyhow!("Telegram approval request ID is invalid"))?;
+        let prompt = object
+            .get("prompt")
+            .and_then(serde_json::Value::as_str)
+            .filter(|prompt| !prompt.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("Telegram approval prompt is invalid"))?;
+        let choices = object
+            .get("choices")
+            .and_then(serde_json::Value::as_array)
+            .filter(|choices| !choices.is_empty() && choices.len() <= 100)
+            .ok_or_else(|| anyhow::anyhow!("Telegram approval choices are invalid"))?;
+        let mut keyboard = Vec::with_capacity(choices.len());
+        for (index, choice) in choices.iter().enumerate() {
+            let label = choice
+                .as_str()
+                .filter(|label| !label.trim().is_empty() && label.chars().count() <= 64)
+                .ok_or_else(|| anyhow::anyhow!("Telegram approval choice label is invalid"))?;
+            let action_id = tinychannels_bus::channel::approval_action_id(request_id, index)
+                .ok_or_else(|| anyhow::anyhow!("Telegram approval action exceeds 64 bytes"))?;
+            keyboard.push(vec![serde_json::json!({
+                "text": label,
+                "callback_data": action_id,
+            })]);
+        }
+        return Ok((
+            prompt.to_owned(),
+            Some(serde_json::json!({"inline_keyboard": keyboard})),
+        ));
+    }
+
     fn collect(value: &serde_json::Value, out: &mut Vec<String>) -> anyhow::Result<()> {
         match value {
             serde_json::Value::String(text) if !text.trim().is_empty() => out.push(text.clone()),
@@ -101,7 +145,7 @@ fn presentation_text(value: &serde_json::Value) -> anyhow::Result<String> {
     }
     let mut parts = Vec::new();
     collect(value, &mut parts)?;
-    Ok(parts.join("\n"))
+    Ok((parts.join("\n"), None))
 }
 
 fn response_status_ok(value: &serde_json::Value) -> bool {
@@ -648,12 +692,15 @@ impl TelegramChannel {
                 tinychannels_bus::channel::MessageReceiptPartKind::Poll
             }
             ContentPart::Presentation { blocks } => {
-                let text = presentation_text(blocks)?;
+                let (text, keyboard) = presentation_content(blocks)?;
                 if text.trim().is_empty() {
                     anyhow::bail!("Telegram presentation contains no renderable text");
                 }
                 body["text"] = serde_json::json!(markdown_v2_text(&strip_tool_call_tags(&text)));
                 body["parse_mode"] = serde_json::json!("MarkdownV2");
+                if let Some(keyboard) = keyboard {
+                    body["reply_markup"] = keyboard;
+                }
                 tinychannels_bus::channel::MessageReceiptPartKind::Text
             }
             ContentPart::Native { .. } => return Err(anyhow::Error::new(TelegramUnsupportedError)),
