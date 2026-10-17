@@ -811,8 +811,6 @@ impl Running {
 
     fn adapter_descriptor(&self) -> tinychannels_bus::ChannelDescriptor {
         let channel_id = tinychannels_bus::provider_id(&self.configured_instance).to_owned();
-        let capabilities =
-            serde_json::to_string(&self.channel.capabilities()).unwrap_or_else(|_| "{}".into());
         tinychannels_bus::ChannelDescriptor {
             id: channel_id,
             display_name: self.channel.name().to_owned(),
@@ -823,7 +821,6 @@ impl Running {
                     self.configured_instance.clone(),
                 ),
                 ("adapterMode".into(), "legacy-backed".into()),
-                ("capabilities".into(), capabilities),
             ]),
             ..Default::default()
         }
@@ -933,6 +930,10 @@ impl tinychannels::channel::ChannelAdapter for Running {
         self.adapter_descriptor()
     }
 
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.channel.capabilities()
+    }
+
     async fn start(
         &self,
         _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
@@ -1001,7 +1002,9 @@ impl tinychannels::channel::ChannelAdapter for Running {
             }
         })?;
         if let Some(error) = &mut outcome.error {
-            let partial = !outcome.receipt.platform_message_ids.is_empty()
+            let partial = error.sent_before_error
+                || outcome.receipt.primary_platform_message_id.is_some()
+                || !outcome.receipt.platform_message_ids.is_empty()
                 || !outcome.receipt.parts.is_empty();
             error.sent_before_error |= partial;
             if partial {
