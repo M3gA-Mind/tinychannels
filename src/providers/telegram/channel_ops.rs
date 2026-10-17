@@ -172,9 +172,9 @@ impl Channel for TelegramChannel {
                     supported: true,
                     max_size_bytes: Some(8 * 1024 * 1024),
                     transcript_sources: vec![
-                tinychannels_bus::VoiceTranscriptSource::Provider,
-                tinychannels_bus::VoiceTranscriptSource::HostStt,
-            ];
+                        tinychannels_bus::VoiceTranscriptSource::Provider,
+                        tinychannels_bus::VoiceTranscriptSource::HostStt,
+                    ],
                     ..Default::default()
                 },
                 tinychannels_bus::VoiceCapabilities {

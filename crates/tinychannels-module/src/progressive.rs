@@ -523,9 +523,11 @@ async fn send_typed_part(
                     &synthesizer,
                     &codec,
                     &store,
-                    accepted_codecs,
-                    max_size_bytes,
-                    max_duration_ms,
+                    tinychannels::host::VoiceReplyConstraints {
+                        accepted_codecs,
+                        max_size_bytes,
+                        max_duration_ms,
+                    },
                 )
                 .await
                 {
