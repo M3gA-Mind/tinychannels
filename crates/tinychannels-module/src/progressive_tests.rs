@@ -3,6 +3,24 @@ use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tokio::sync::Notify;
 
+#[test]
+fn legacy_feed_retains_the_v1_event_wire_shape() {
+    let command = ProgressiveCommand::Feed {
+        handle: "turn-handle".into(),
+        events: vec![
+            tinychannels_bus::module_progressive::ProgressiveEvent::TextDelta("chunk".into()),
+        ],
+    };
+    assert_eq!(
+        serde_json::to_value(command).unwrap(),
+        serde_json::json!({
+            "operation": "feed",
+            "handle": "turn-handle",
+            "events": [{"event": "text_delta", "value": "chunk"}]
+        })
+    );
+}
+
 #[derive(Clone, Default)]
 struct Callback {
     sends: Arc<Mutex<Vec<Value>>>,
