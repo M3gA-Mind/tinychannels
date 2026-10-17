@@ -13,6 +13,36 @@ fn relay_passthrough_body_preserves_base64_wire_and_legacy_invalid_input() {
 }
 
 #[test]
+fn unsupported_send_flag_is_additive_to_legacy_error_wire_shape() {
+    let old_wire = json!({
+        "kind": "forbidden",
+        "message": "not authorized",
+        "retryable": false
+    });
+    let decoded: channel::ChannelSendError = serde_json::from_value(old_wire).unwrap();
+    assert!(!decoded.unsupported);
+
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct FrozenOldReader {
+        kind: channel::SendErrorKind,
+        message: String,
+        retryable: bool,
+    }
+    let current = channel::ChannelSendError {
+        kind: channel::SendErrorKind::BadFormat,
+        message: "payload is not supported".into(),
+        unsupported: true,
+        ..Default::default()
+    };
+    let current_wire = serde_json::to_value(current).unwrap();
+    let old_reader: FrozenOldReader = serde_json::from_value(current_wire).unwrap();
+    assert_eq!(old_reader.kind, channel::SendErrorKind::BadFormat);
+    assert_eq!(old_reader.message, "payload is not supported");
+    assert!(!old_reader.retryable);
+}
+
+#[test]
 fn host_capability_payloads_keep_typed_snake_case_wire() {
     let request = HostTranscriptionRequest {
         audio_base64: "UklGRg==".into(),

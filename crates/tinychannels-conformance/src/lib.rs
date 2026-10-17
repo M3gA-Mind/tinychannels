@@ -164,11 +164,13 @@ pub async fn check_feature(
 
     if !declared {
         let explicitly_unsupported = match &result {
-            Err(error) => error.unsupported
-                && !error.retryable
-                && !error.sent_before_error
-                && error.continuation_message_ids.is_empty()
-                && error.partial_overflow.is_none(),
+            Err(error) => {
+                error.unsupported
+                    && !error.retryable
+                    && !error.sent_before_error
+                    && error.continuation_message_ids.is_empty()
+                    && error.partial_overflow.is_none()
+            }
             Ok(Some(outcome)) => outcome.error.as_ref().is_some_and(|error| {
                 error.unsupported
                     && !error.retryable
@@ -268,7 +270,10 @@ pub async fn check_feature(
     }
     if feature == ConformanceFeature::VoiceIn
         && !(observation.payload_kinds.iter().any(|kind| kind == "audio")
-            && observation.payload_kinds.iter().any(|kind| kind == "transcript"))
+            && observation
+                .payload_kinds
+                .iter()
+                .any(|kind| kind == "transcript"))
     {
         return Err("VoiceIn ingress omitted audio or transcript evidence".into());
     }
@@ -313,7 +318,12 @@ impl ConformanceFeature {
             Self::Edit => &["edit"],
             Self::Delete => &["delete"],
             Self::ReadReceipts => &["read_receipt"],
-            Self::StreamingDraft => &["draft_create", "draft_update", "draft_finalize", "draft_cancel_cleanup"],
+            Self::StreamingDraft => &[
+                "draft_create",
+                "draft_update",
+                "draft_finalize",
+                "draft_cancel_cleanup",
+            ],
             _ => &["send"],
         }
     }

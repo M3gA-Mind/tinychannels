@@ -20,7 +20,10 @@ impl ChannelAdapter for FixtureAdapter {
         self.0.clone()
     }
 
-    async fn start(&self, _: &(dyn tinychannels_runtime::channel::ChannelInboundSink + Send + Sync)) -> Result<(), ChannelSendError> {
+    async fn start(
+        &self,
+        _: &(dyn tinychannels_runtime::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
         Ok(())
     }
 
@@ -60,7 +63,10 @@ impl AdapterFixture for Fixture {
         self.observations.clone()
     }
 
-    async fn exercise(&self, _: ConformanceFeature) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+    async fn exercise(
+        &self,
+        _: ConformanceFeature,
+    ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         self.result.clone()
     }
 }
@@ -81,13 +87,19 @@ fn fixture(feature: ConformanceFeature) -> Fixture {
     capabilities.actions.supported.push("typing".into());
     capabilities.events.supported.push("read_receipt".into());
     capabilities.voice_in.supported = true;
-    capabilities.voice_in.transcript_sources.push(tinychannels_bus::channel::VoiceTranscriptSource::Provider);
+    capabilities
+        .voice_in
+        .transcript_sources
+        .push(tinychannels_bus::channel::VoiceTranscriptSource::Provider);
     let mut receipt = MessageReceipt {
         channel: Some(channel.clone()),
         conversation: Some(conversation.clone()),
         primary_platform_message_id: Some("321".into()),
         platform_message_ids: vec!["321".into()],
-        parts: vec![MessageReceiptPart { platform_message_id: "321".into(), ..Default::default() }],
+        parts: vec![MessageReceiptPart {
+            platform_message_id: "321".into(),
+            ..Default::default()
+        }],
         ..Default::default()
     };
     receipt.idempotency_key = Some("fixture-op".into());
@@ -96,14 +108,23 @@ fn fixture(feature: ConformanceFeature) -> Fixture {
         operation: feature.required_operations()[0].into(),
         channel: channel.clone(),
         conversation: conversation.clone(),
-        payload_kinds: feature.payload_kind().map(|kind| vec![kind.into()]).unwrap_or_default(),
+        payload_kinds: feature
+            .payload_kind()
+            .map(|kind| vec![kind.into()])
+            .unwrap_or_default(),
         platform_message_ids: vec!["321".into()],
         request: serde_json::json!({"chat_id": "100", "text": "fixture"}),
     };
     Fixture {
         adapter: FixtureAdapter(capabilities),
-        scope: ExpectedScope { channel, conversation },
-        result: Ok(Some(ChannelSendOutcome { receipt, error: None })),
+        scope: ExpectedScope {
+            channel,
+            conversation,
+        },
+        result: Ok(Some(ChannelSendOutcome {
+            receipt,
+            error: None,
+        })),
         observations: vec![observation],
     }
 }
@@ -119,21 +140,43 @@ async fn check_feature_rejects_auth_failure_as_unsupported() {
         ..Default::default()
     });
     fixture.observations.clear();
-    assert!(check_feature(&fixture, ConformanceFeature::Image)
-        .await
-        .unwrap_err()
-        .contains("explicit unsupported"));
+    assert!(
+        check_feature(&fixture, ConformanceFeature::Image)
+            .await
+            .unwrap_err()
+            .contains("explicit unsupported")
+    );
 }
 
 #[tokio::test]
 async fn check_feature_rejects_wrong_receipt_scope_and_platform_ids() {
     let mut wrong_scope = fixture(ConformanceFeature::Text);
-    wrong_scope.result.as_mut().unwrap().as_mut().unwrap().receipt.channel.as_mut().unwrap().account_id = Some("telegram:account-b".into());
-    assert!(check_feature(&wrong_scope, ConformanceFeature::Text).await.unwrap_err().contains("incomplete or mis-scoped"));
+    wrong_scope
+        .result
+        .as_mut()
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .receipt
+        .channel
+        .as_mut()
+        .unwrap()
+        .account_id = Some("telegram:account-b".into());
+    assert!(
+        check_feature(&wrong_scope, ConformanceFeature::Text)
+            .await
+            .unwrap_err()
+            .contains("incomplete or mis-scoped")
+    );
 
     let mut wrong_id = fixture(ConformanceFeature::Text);
     wrong_id.observations[0].platform_message_ids = vec!["999".into()];
-    assert!(check_feature(&wrong_id, ConformanceFeature::Text).await.unwrap_err().contains("receipt IDs differ"));
+    assert!(
+        check_feature(&wrong_id, ConformanceFeature::Text)
+            .await
+            .unwrap_err()
+            .contains("receipt IDs differ")
+    );
 }
 
 #[tokio::test]
@@ -152,27 +195,36 @@ async fn check_feature_rejects_unknown_partial_effect_as_unsupported() {
         }),
     }));
     fixture.observations.clear();
-    assert!(check_feature(&fixture, ConformanceFeature::Image).await.unwrap_err().contains("explicit unsupported"));
+    assert!(
+        check_feature(&fixture, ConformanceFeature::Image)
+            .await
+            .unwrap_err()
+            .contains("explicit unsupported")
+    );
 }
 
 #[tokio::test]
 async fn check_feature_rejects_missing_declared_send_receipt() {
     let mut fixture = fixture(ConformanceFeature::Text);
     fixture.result = Ok(Some(ChannelSendOutcome::default()));
-    assert!(check_feature(&fixture, ConformanceFeature::Text)
-        .await
-        .unwrap_err()
-        .contains("incomplete or mis-scoped receipt"));
+    assert!(
+        check_feature(&fixture, ConformanceFeature::Text)
+            .await
+            .unwrap_err()
+            .contains("incomplete or mis-scoped receipt")
+    );
 }
 
 #[tokio::test]
 async fn check_feature_rejects_wrong_payload_even_with_matching_scope() {
     let mut fixture = fixture(ConformanceFeature::Image);
     fixture.observations[0].payload_kinds = vec!["text".into()];
-    assert!(check_feature(&fixture, ConformanceFeature::Image)
-        .await
-        .unwrap_err()
-        .contains("omitted image"));
+    assert!(
+        check_feature(&fixture, ConformanceFeature::Image)
+            .await
+            .unwrap_err()
+            .contains("omitted image")
+    );
 }
 
 #[tokio::test]
@@ -181,7 +233,11 @@ async fn check_feature_allows_declared_events_without_message_receipts() {
     fixture.result = Ok(None);
     fixture.observations[0].operation = "typing".into();
     fixture.observations[0].platform_message_ids.clear();
-    assert!(check_feature(&fixture, ConformanceFeature::Typing).await.is_ok());
+    assert!(
+        check_feature(&fixture, ConformanceFeature::Typing)
+            .await
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -190,8 +246,10 @@ async fn voice_in_requires_audio_and_transcript_on_the_observed_ingress() {
     fixture.result = Ok(None);
     fixture.observations[0].operation = "voice_in".into();
     fixture.observations[0].payload_kinds = vec!["audio".into()];
-    assert!(check_feature(&fixture, ConformanceFeature::VoiceIn)
-        .await
-        .unwrap_err()
-        .contains("audio or transcript"));
+    assert!(
+        check_feature(&fixture, ConformanceFeature::VoiceIn)
+            .await
+            .unwrap_err()
+            .contains("audio or transcript")
+    );
 }
