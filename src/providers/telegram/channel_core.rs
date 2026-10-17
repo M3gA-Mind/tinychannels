@@ -120,7 +120,10 @@ impl TelegramChannel {
         self
     }
 
-    pub fn with_speech_synthesizer(mut self, synthesizer: Arc<dyn crate::host::SpeechSynthesizer>) -> Self {
+    pub fn with_speech_synthesizer(
+        mut self,
+        synthesizer: Arc<dyn crate::host::SpeechSynthesizer>,
+    ) -> Self {
         self.synthesizer = Some(synthesizer);
         self
     }

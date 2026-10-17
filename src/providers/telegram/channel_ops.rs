@@ -7,6 +7,7 @@ use crate::config::StreamMode;
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use base64::Engine;
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
 
 impl TelegramChannel {
@@ -462,27 +463,53 @@ impl Channel for TelegramChannel {
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
-        if let [tinychannels_bus::OutboundContentPart::Voice {
-            voice: tinychannels_bus::OutboundVoice::Synthesize { text, voice },
-        }] = message.parts.as_slice() {
+        if let [
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Synthesize { text, voice },
+            },
+        ] = message.parts.as_slice()
+        {
             let scope = tinychannels_bus::HostVoiceScope {
                 configured_instance: String::new(),
-                channel: tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None },
-                conversation: message.conversation_ref.clone().unwrap_or_else(|| tinychannels_bus::ConversationRef {
-                    id: message.conversation_id.clone(), thread_id: message.thread_id.clone(), ..Default::default()
+                channel: tinychannels_bus::ChannelRef {
+                    id: "telegram".into(),
+                    account_id: None,
+                },
+                conversation: message.conversation_ref.clone().unwrap_or_else(|| {
+                    tinychannels_bus::ConversationRef {
+                        id: message.conversation_id.clone(),
+                        thread_id: message.thread_id.clone(),
+                        ..Default::default()
+                    }
                 }),
                 turn_id: message.idempotency_key.clone(),
             };
             if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
                 anyhow::bail!("voice synthesis requires conversation and turn identity");
             }
-            let synthesizer = self.synthesizer.as_ref().ok_or_else(|| anyhow::anyhow!("speech synthesis is unavailable"))?;
-            let codec = self.voice_codec.as_ref().ok_or_else(|| anyhow::anyhow!("TinyVoice codec module is unavailable"))?;
-            let store = self.voice_media_store.as_ref().ok_or_else(|| anyhow::anyhow!("host voice media storage is unavailable"))?;
-            let synthesized = synthesizer.synthesize_scoped(scope.clone(), crate::host::SpeechRequest {
-                text: text.clone(), voice: voice.clone(), format: None,
-                thread_id: scope.conversation.thread_id.clone(),
-            }).await?;
+            let synthesizer = self
+                .synthesizer
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("speech synthesis is unavailable"))?;
+            let codec = self
+                .voice_codec
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("TinyVoice codec module is unavailable"))?;
+            let store = self
+                .voice_media_store
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("host voice media storage is unavailable"))?;
+            let synthesized = synthesizer
+                .synthesize_scoped(
+                    scope.clone(),
+                    crate::host::SpeechRequest {
+                        text: text.clone(),
+                        voice: voice.clone(),
+                        format: None,
+                        thread_id: scope.conversation.thread_id.clone(),
+                    },
+                )
+                .await?;
             let from = match synthesized.mime_type.as_str() {
                 "audio/wav" | "audio/wave" => "wav_pcm16",
                 "audio/ogg" => "ogg_opus",
@@ -490,17 +517,30 @@ impl Channel for TelegramChannel {
                 "audio/mpeg" => "mp3",
                 _ => anyhow::bail!("synthesizer returned an unsupported audio format"),
             };
-            let encoded = codec.transcode(crate::host::VoiceCodecRequest {
-                audio_base64: synthesized.audio_base64, from: from.into(), target: "ogg_opus".into(),
-            }).await?;
-            let stored = store.store_voice(crate::host::VoiceMediaRequest {
-                audio_base64: encoded.audio_base64, mime_type: "audio/ogg".into(),
-                codec: Some("ogg_opus".into()), duration_ms: None,
-                file_name: Some("voice.ogg".into()),
-                direction: tinychannels_bus::HostVoiceMediaDirection::Outbound, scope,
-            }).await?;
+            let encoded = codec
+                .transcode(crate::host::VoiceCodecRequest {
+                    audio_base64: synthesized.audio_base64,
+                    from: from.into(),
+                    target: "ogg_opus".into(),
+                })
+                .await?;
+            let stored = store
+                .store_voice(crate::host::VoiceMediaRequest {
+                    audio_base64: encoded.audio_base64,
+                    mime_type: "audio/ogg".into(),
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: None,
+                    file_name: Some("voice.ogg".into()),
+                    direction: tinychannels_bus::HostVoiceMediaDirection::Outbound,
+                    scope,
+                })
+                .await?;
             let mut media = stored.media;
-            if !media.opaque_id.as_deref().is_some_and(|id| !id.trim().is_empty()) {
+            if !media
+                .opaque_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty())
+            {
                 anyhow::bail!("host voice storage returned no durable opaque reference");
             }
             media.url = None;
@@ -509,7 +549,10 @@ impl Channel for TelegramChannel {
             let mut delivered = message.clone();
             delivered.parts = vec![tinychannels_bus::OutboundContentPart::Voice {
                 voice: tinychannels_bus::OutboundVoice::Media {
-                    media, audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: None,
+                    media,
+                    audio_base64: None,
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: None,
                 },
             }];
             return Box::pin(self.send_typed_with_receipt(&delivered)).await;

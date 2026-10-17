@@ -209,12 +209,18 @@ impl tinychannels::host::VoiceCodec for ModuleVoiceCodec {
             "mp3" | "audio/mpeg" => Ok(AudioCodec::Mp3),
             _ => anyhow::bail!("unsupported TinyVoice codec format"),
         };
-        let result = self.0.transcode_voice(CodecTranscodeRequest {
-            audio_base64: request.audio_base64,
-            from: parse(&request.from)?,
-            target: parse(&request.target)?,
-        }).await.map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        Ok(tinychannels::host::VoiceCodecResult { audio_base64: result.audio_base64 })
+        let result = self
+            .0
+            .transcode_voice(CodecTranscodeRequest {
+                audio_base64: request.audio_base64,
+                from: parse(&request.from)?,
+                target: parse(&request.target)?,
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(tinychannels::host::VoiceCodecResult {
+            audio_base64: result.audio_base64,
+        })
     }
 }
 
