@@ -135,7 +135,10 @@ async fn legacy_voice_ports_delegate_scoped_calls_and_media_resolution_fails_clo
         .read_voice(scope, "opaque-id".into())
         .await
         .unwrap_err();
-    assert_eq!(error.to_string(), "host voice media resolution is unavailable");
+    assert_eq!(
+        error.to_string(),
+        "host voice media resolution is unavailable"
+    );
 }
 
 struct DefaultVoiceMediaStore;

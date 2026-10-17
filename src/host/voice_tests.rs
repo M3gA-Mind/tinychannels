@@ -1,7 +1,7 @@
 use super::*;
 use async_trait::async_trait;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tinychannels_bus::{MediaKind, MediaReference};
 
 struct StubTranscriber {
@@ -165,7 +165,8 @@ fn constraints(codecs: &[String]) -> VoiceReplyConstraints<'_> {
 
 #[tokio::test]
 async fn prepare_voice_reply_transcodes_and_persists_scoped_opaque_audio() {
-    let (synth, codec, store) = voice_pipeline_stubs("audio/wav", "AQIDBA==", None, Some("opaque-1"));
+    let (synth, codec, store) =
+        voice_pipeline_stubs("audio/wav", "AQIDBA==", None, Some("opaque-1"));
     let accepted = vec!["ogg_opus".into()];
     let prepared = prepare_voice_reply(
         scope(),
@@ -188,8 +189,14 @@ async fn prepare_voice_reply_transcodes_and_persists_scoped_opaque_audio() {
     assert_eq!(codec_request.target, "ogg_opus");
     let stored = &store.requests.lock().unwrap()[0];
     assert_eq!(stored.scope.turn_id, "message-3");
-    assert_eq!(stored.scope.conversation.topic_id.as_deref(), Some("topic-2"));
-    assert_eq!(stored.direction, tinychannels_bus::HostVoiceMediaDirection::Outbound);
+    assert_eq!(
+        stored.scope.conversation.topic_id.as_deref(),
+        Some("topic-2")
+    );
+    assert_eq!(
+        stored.direction,
+        tinychannels_bus::HostVoiceMediaDirection::Outbound
+    );
     assert_eq!(prepared.note.media.opaque_id.as_deref(), Some("opaque-1"));
     assert_eq!(prepared.note.media.url, None);
     assert_eq!(prepared.note.media.path, None);
@@ -197,12 +204,16 @@ async fn prepare_voice_reply_transcodes_and_persists_scoped_opaque_audio() {
     assert_eq!(prepared.note.media.size_bytes, Some(4));
     assert_eq!(prepared.note.duration_ms, Some(1_250));
     assert_eq!(prepared.note.waveform, Some(vec![0.2, 0.8]));
-    assert_eq!(prepared.accessible_url.as_deref(), Some("https://authorized.example/voice"));
+    assert_eq!(
+        prepared.accessible_url.as_deref(),
+        Some("https://authorized.example/voice")
+    );
 }
 
 #[tokio::test]
 async fn prepare_voice_reply_rejects_empty_scope_before_synthesis() {
-    let (synth, codec, store) = voice_pipeline_stubs("audio/wav", "AQIDBA==", None, Some("opaque-1"));
+    let (synth, codec, store) =
+        voice_pipeline_stubs("audio/wav", "AQIDBA==", None, Some("opaque-1"));
     let accepted = vec!["ogg_opus".into()];
     let mut invalid_scope = scope();
     invalid_scope.turn_id.clear();
@@ -225,24 +236,56 @@ async fn prepare_voice_reply_rejects_empty_scope_before_synthesis() {
 #[tokio::test]
 async fn prepare_voice_reply_enforces_size_duration_and_durable_reference() {
     let accepted = vec!["ogg_opus".into()];
-    let (synth, codec, store) = voice_pipeline_stubs("audio/wav", "AQIDBA==", Some(1_251), Some("id"));
+    let (synth, codec, store) =
+        voice_pipeline_stubs("audio/wav", "AQIDBA==", Some(1_251), Some("id"));
     let error = prepare_voice_reply(
-        scope(), "reply".into(), None, &synth, &codec, &store,
-        VoiceReplyConstraints { accepted_codecs: &accepted, max_size_bytes: Some(3), max_duration_ms: None },
-    ).await.unwrap_err();
+        scope(),
+        "reply".into(),
+        None,
+        &synth,
+        &codec,
+        &store,
+        VoiceReplyConstraints {
+            accepted_codecs: &accepted,
+            max_size_bytes: Some(3),
+            max_duration_ms: None,
+        },
+    )
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("size limit"));
 
-    let (synth, codec, store) = voice_pipeline_stubs("audio/wav", "AQIDBA==", Some(1_251), Some("id"));
+    let (synth, codec, store) =
+        voice_pipeline_stubs("audio/wav", "AQIDBA==", Some(1_251), Some("id"));
     let error = prepare_voice_reply(
-        scope(), "reply".into(), None, &synth, &codec, &store,
-        VoiceReplyConstraints { accepted_codecs: &accepted, max_size_bytes: None, max_duration_ms: Some(1_250) },
-    ).await.unwrap_err();
+        scope(),
+        "reply".into(),
+        None,
+        &synth,
+        &codec,
+        &store,
+        VoiceReplyConstraints {
+            accepted_codecs: &accepted,
+            max_size_bytes: None,
+            max_duration_ms: Some(1_250),
+        },
+    )
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("duration limit"));
 
     let (synth, codec, store) = voice_pipeline_stubs("audio/wav", "AQIDBA==", None, Some("  "));
     let error = prepare_voice_reply(
-        scope(), "reply".into(), None, &synth, &codec, &store, constraints(&accepted),
-    ).await.unwrap_err();
+        scope(),
+        "reply".into(),
+        None,
+        &synth,
+        &codec,
+        &store,
+        constraints(&accepted),
+    )
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("no durable opaque reference"));
 }
 
@@ -268,16 +311,25 @@ async fn prepare_voice_reply_uses_provider_codec_and_encoded_duration_metadata()
     .unwrap();
 
     let codec_request = codec.requests.lock().unwrap()[0].clone();
-    assert_eq!((codec_request.from.as_str(), codec_request.target.as_str()), ("m4a_aac", "m4a_aac"));
+    assert_eq!(
+        (codec_request.from.as_str(), codec_request.target.as_str()),
+        ("m4a_aac", "m4a_aac")
+    );
     let stored = &store.requests.lock().unwrap()[0];
     assert_eq!(stored.mime_type, "audio/mp4");
     assert_eq!(stored.file_name.as_deref(), Some("voice.m4a"));
     assert_eq!(stored.duration_ms, Some(800));
     assert_eq!(prepared.note.media.opaque_id.as_deref(), Some("media-2"));
-    assert_eq!(prepared.note.media.content_type.as_deref(), Some("audio/mp4"));
+    assert_eq!(
+        prepared.note.media.content_type.as_deref(),
+        Some("audio/mp4")
+    );
     assert_eq!(prepared.note.media.codec.as_deref(), Some("m4a_aac"));
     assert_eq!(prepared.note.duration_ms, Some(800));
-    assert_eq!(prepared.accessible_url.as_deref(), Some("https://authorized.example/voice"));
+    assert_eq!(
+        prepared.accessible_url.as_deref(),
+        Some("https://authorized.example/voice")
+    );
 }
 
 #[tokio::test]
@@ -285,16 +337,32 @@ async fn prepare_voice_reply_stops_before_storage_when_host_pipeline_cannot_proc
     let accepted = vec!["ogg_opus".into()];
     let (synth, codec, store) = voice_pipeline_stubs("audio/aac", "AQIDBA==", None, Some("id"));
     let error = prepare_voice_reply(
-        scope(), "reply".into(), None, &synth, &codec, &store, constraints(&accepted),
-    ).await.unwrap_err();
+        scope(),
+        "reply".into(),
+        None,
+        &synth,
+        &codec,
+        &store,
+        constraints(&accepted),
+    )
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("unsupported audio format"));
     assert!(codec.requests.lock().unwrap().is_empty());
     assert!(store.requests.lock().unwrap().is_empty());
 
     let (synth, codec, store) = voice_pipeline_stubs("audio/wav", "AQIDBA==", None, Some("id"));
     let error = prepare_voice_reply(
-        scope(), "reply".into(), None, &synth, &codec, &store, constraints(&[]),
-    ).await.unwrap_err();
+        scope(),
+        "reply".into(),
+        None,
+        &synth,
+        &codec,
+        &store,
+        constraints(&[]),
+    )
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("no supported voice codec"));
     assert!(codec.requests.lock().unwrap().is_empty());
     assert!(store.requests.lock().unwrap().is_empty());
@@ -302,8 +370,16 @@ async fn prepare_voice_reply_stops_before_storage_when_host_pipeline_cannot_proc
     let (synth, codec, mut store) = voice_pipeline_stubs("audio/wav", "AQIDBA==", None, Some("id"));
     store.result = Err(anyhow::anyhow!("fixture"));
     let error = prepare_voice_reply(
-        scope(), "reply".into(), None, &synth, &codec, &store, constraints(&accepted),
-    ).await.unwrap_err();
+        scope(),
+        "reply".into(),
+        None,
+        &synth,
+        &codec,
+        &store,
+        constraints(&accepted),
+    )
+    .await
+    .unwrap_err();
     assert!(error.to_string().contains("fixture storage failure"));
     assert_eq!(store.requests.lock().unwrap().len(), 1);
 }
