@@ -218,7 +218,6 @@ impl TelegramChannel {
         reaction: serde_json::Value,
         log_value: &str,
     ) -> anyhow::Result<bool> {
-
         let body = serde_json::json!({
             "chat_id": chat_id,
             "message_id": message_id,
@@ -236,7 +235,12 @@ impl TelegramChannel {
         if status.is_success() && super::channel_ops::response_status_ok(&response) {
             self.publish_reaction_sent(chat_id, message_id, log_value, true)
                 .await;
-            tracing::info!(chat_id, message_id, reaction = log_value, "Telegram reaction sent");
+            tracing::info!(
+                chat_id,
+                message_id,
+                reaction = log_value,
+                "Telegram reaction sent"
+            );
             return Ok(true);
         }
 

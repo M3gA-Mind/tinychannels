@@ -1511,7 +1511,10 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
 
     let mut no_conversation = scoped_typed_media_message("stored-photo-1");
     no_conversation.conversation_ref.as_mut().unwrap().id = "  ".into();
-    let error = channel.send_typed_with_receipt(&no_conversation).await.unwrap_err();
+    let error = channel
+        .send_typed_with_receipt(&no_conversation)
+        .await
+        .unwrap_err();
     assert!(error.to_string().contains("preflight"));
     assert!(server.received_requests().await.unwrap().is_empty());
 
@@ -3730,6 +3733,37 @@ async fn native_reaction_edit_and_delete_failures_preserve_attempt_uncertainty()
             "expected the native request to reach {endpoint}"
         );
     }
+}
+
+#[tokio::test]
+async fn native_custom_emoji_reaction_uses_telegram_custom_emoji_type() {
+    let server = mock_api().await;
+    mount_post(&server, "setMessageReaction", ok()).await;
+    let channel = channel_for(&server, &["*"]);
+    let conversation = tinychannels_bus::channel::ConversationRef {
+        id: "100".into(),
+        ..Default::default()
+    };
+
+    channel
+        .send_reaction_v2(
+            &conversation,
+            "7",
+            &tinychannels_bus::channel::ChannelReaction {
+                value: "ignored display text".into(),
+                custom_emoji_id: Some("custom-emoji-42".into()),
+            },
+            false,
+        )
+        .await
+        .unwrap();
+
+    let bodies = json_bodies(&server, "setMessageReaction").await;
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(
+        bodies[0]["reaction"],
+        serde_json::json!([{"type":"custom_emoji", "custom_emoji_id":"custom-emoji-42"}])
+    );
 }
 
 #[tokio::test]

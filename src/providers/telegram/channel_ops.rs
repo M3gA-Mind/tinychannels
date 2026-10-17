@@ -1330,12 +1330,8 @@ impl TelegramChannel {
         }
         if !remove {
             let applied = if let Some(custom_emoji_id) = reaction.custom_emoji_id.as_deref() {
-                self.send_message_custom_reaction(
-                    &conversation.id,
-                    message_id,
-                    custom_emoji_id,
-                )
-                .await?
+                self.send_message_custom_reaction(&conversation.id, message_id, custom_emoji_id)
+                    .await?
             } else if !reaction.value.trim().is_empty() {
                 self.send_message_reaction(&conversation.id, message_id, &reaction.value)
                     .await?
