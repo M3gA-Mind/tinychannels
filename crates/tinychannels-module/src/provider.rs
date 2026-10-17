@@ -1102,6 +1102,12 @@ fn adapter_payload_supported(
     capabilities: &tinychannels_bus::ChannelCapabilities,
 ) -> bool {
     use tinychannels_bus::{ContentPart, OutboundContentPart, OutboundPayload};
+    let supports_voice = |voice: &tinychannels_bus::OutboundVoice| match voice {
+        tinychannels_bus::OutboundVoice::Media { .. } => capabilities.voice_out.supported,
+        tinychannels_bus::OutboundVoice::Synthesize { .. } => {
+            capabilities.voice_out.supported && capabilities.voice_out.synthesis
+        }
+    };
     let supports_part = |part: &ContentPart| match part {
         ContentPart::Text { .. } => capabilities.content.text.outbound,
         ContentPart::Image { .. } => capabilities.content.image.outbound,
@@ -1124,14 +1130,14 @@ fn adapter_payload_supported(
                 .is_none_or(|_| capabilities.content.text.outbound)
                 && (media_urls.is_empty() || capabilities.content.image.outbound)
         }
-        OutboundPayload::Voice { .. } => capabilities.voice_out.supported,
+        OutboundPayload::Voice { voice } => supports_voice(voice),
         OutboundPayload::Files { .. } => capabilities.content.file.outbound,
         OutboundPayload::Poll { .. } => capabilities.content.poll.outbound,
         OutboundPayload::PresentationBlocks { .. } => capabilities.content.presentation.outbound,
         OutboundPayload::NativeChannelData { .. } => capabilities.content.native.outbound,
         OutboundPayload::Parts { parts } => parts.iter().all(|part| match part {
             OutboundContentPart::Content { part } => supports_part(part),
-            OutboundContentPart::Voice { .. } => capabilities.voice_out.supported,
+            OutboundContentPart::Voice { voice } => supports_voice(voice),
         }),
     }
 }

@@ -1100,6 +1100,22 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
     assert!(!error.retryable);
 }
 
+#[test]
+fn raw_voice_synthesis_requires_the_configured_native_synthesis_capability() {
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.voice_out.supported = true;
+    capabilities.voice_out.synthesis = false;
+    let payload = tinychannels_bus::OutboundPayload::Voice {
+        voice: tinychannels_bus::OutboundVoice::Synthesize {
+            text: "spoken text".into(),
+            voice: None,
+        },
+    };
+    assert!(!adapter_payload_supported(&payload, &capabilities));
+    capabilities.voice_out.synthesis = true;
+    assert!(adapter_payload_supported(&payload, &capabilities));
+}
+
 #[tokio::test]
 async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance() {
     use tinychannels_conformance::{ConformanceFeature, ExpectedScope, check_feature};
