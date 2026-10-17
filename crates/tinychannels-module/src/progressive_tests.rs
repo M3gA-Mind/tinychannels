@@ -154,7 +154,7 @@ impl Callback {
         Ok(tinychannels_bus::HostSpeechSynthesisResult {
             audio_base64: base64::engine::general_purpose::STANDARD.encode(progressive_test_wav()),
             mime_type: "audio/wav".into(),
-            duration_ms: Some(1_000),
+            duration_ms: Some(8_000),
         })
     }
 
@@ -3640,7 +3640,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     capabilities.progressive_edits = true;
     capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
     capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
-    capabilities.voice_out.max_duration_ms = Some(2_000);
+    capabilities.voice_out.max_duration_ms = Some(10_000);
     let cases = [
         (
             tinychannels_bus::HostVoiceReplyMode::Mirror,
@@ -3729,6 +3729,20 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         assert_eq!(has_media, expected_voice, "policy case {index}: {mode:?}");
         if expected_voice {
             assert!(request.1.contains("https://media.example/authorized/voice"));
+            let encoded = serde_json::to_vec(&requests.iter().rev().find(|candidate| {
+                matches!(candidate, ProgressiveTransportRequest::SendTyped { parts, .. }
+                    if parts.iter().any(|part| matches!(part,
+                        tinychannels_bus::OutboundContentPart::Voice {
+                            voice: tinychannels_bus::OutboundVoice::Media {
+                                audio_base64: None,
+                                media,
+                                ..
+                            }
+                        } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                    )))
+            }).unwrap()).unwrap();
+            assert!(encoded.len() < tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
+            assert!(!String::from_utf8_lossy(&encoded).contains("audioBase64"));
         }
         drop(requests);
     }
@@ -3910,7 +3924,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
 
 fn progressive_test_wav() -> Vec<u8> {
     let rate = 16_000u32;
-    let count = rate as usize;
+    let count = rate as usize * 8;
     let data_len = count * 2;
     let mut wav = Vec::with_capacity(44 + data_len);
     wav.extend_from_slice(b"RIFF");
