@@ -1348,19 +1348,27 @@ async fn typed_video_and_file_upload_use_native_multipart_with_real_receipts() {
 
 #[tokio::test]
 async fn unsupported_native_video_and_image_formats_fall_back_to_documents() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
     let server = mock_api().await;
-    mount_post(
-        &server,
-        "sendDocument",
-        ok_with(serde_json::json!({"message_id": 61})),
-    )
-    .await;
-    mount_post(
-        &server,
-        "sendDocument",
-        ok_with(serde_json::json!({"message_id": 62})),
-    )
-    .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendDocument"))
+        .up_to_n_times(1)
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {"message_id": 61}
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendDocument"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {"message_id": 62}
+        })))
+        .mount(&server)
+        .await;
     let channel =
         channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
     let mut message = typed_text("document-fallbacks", String::new());
