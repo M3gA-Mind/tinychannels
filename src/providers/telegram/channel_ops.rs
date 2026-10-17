@@ -172,6 +172,7 @@ impl Channel for TelegramChannel {
         let streaming_reply_pipeline = self.supports_draft_updates();
         let reply_to_id = self.supports_reply_to_id();
         let thread_id = self.supports_thread_id();
+        let media_enabled = self.media_repository.is_some();
         let mut actions = vec!["send".into()];
         if progressive_edits {
             actions.push("draft-update".into());
@@ -187,6 +188,22 @@ impl Channel for TelegramChannel {
         }
         actions.extend(["react".into(), "reactions".into()]);
         let mut parts = vec!["text".into()];
+        let media_capability = if media_enabled {
+            parts.extend([
+                "image".into(),
+                "video".into(),
+                "audio".into(),
+                "file".into(),
+                "sticker".into(),
+            ]);
+            tinychannels_bus::ContentCapability {
+                inbound: true,
+                outbound: true,
+                ..Default::default()
+            }
+        } else {
+            tinychannels_bus::ContentCapability::default()
+        };
         let (voice_in, voice_out) = if self.voice_media_store.is_some() {
             parts.push("voice_note".into());
             (
@@ -231,6 +248,19 @@ impl Channel for TelegramChannel {
                     inbound: true,
                     outbound: true,
                     ..Default::default()
+                },
+                image: media_capability.clone(),
+                video: media_capability.clone(),
+                audio: media_capability.clone(),
+                file: media_capability,
+                sticker: if media_enabled {
+                    tinychannels_bus::ContentCapability {
+                        inbound: true,
+                        outbound: true,
+                        ..Default::default()
+                    }
+                } else {
+                    tinychannels_bus::ContentCapability::default()
                 },
                 ..Default::default()
             },
