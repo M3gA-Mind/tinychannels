@@ -67,7 +67,7 @@ impl Sender {
         };
         let result = self
             .host
-            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(request))
+            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(request)))
             .await
             .map_err(|_| {
                 if scoped_effect {
@@ -81,25 +81,20 @@ impl Sender {
                         sent_before_error: true,
                         ..Default::default()
                     });
-                    ProgressiveSendError::PartialOutcome(outcome)
+                    ProgressiveSendError::PartialOutcome(Box::new(outcome))
                 } else {
                     ProgressiveSendError::Unavailable
                 }
             })?;
         match result {
-            ChannelBackendResult::ProgressiveTransport(
-                ProgressiveTransportResult::Acknowledged,
-            ) => Ok(Value::Null),
-            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Outcome(
-                outcome,
-            )) => match outcome.error {
+            ChannelBackendResult::ProgressiveTransport(result) => match *result {
+            ProgressiveTransportResult::Acknowledged => Ok(Value::Null),
+            ProgressiveTransportResult::Outcome(outcome) => match outcome.error {
                 None => serde_json::to_value(outcome.receipt)
                     .map_err(|error| ProgressiveSendError::Other(error.into())),
                 Some(_) => Err(ProgressiveSendError::PartialOutcome(outcome)),
             },
-            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Success(
-                value,
-            )) => {
+            ProgressiveTransportResult::Success(value) => {
                 if value.get("error").is_some_and(|error| !error.is_null())
                     || value.get("success").and_then(Value::as_bool) == Some(false)
                     || value.get("status").and_then(Value::as_str) == Some("unknown_after_send")
@@ -111,18 +106,18 @@ impl Sender {
                     Ok(value)
                 }
             }
-            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Unavailable) => {
+            ProgressiveTransportResult::Unavailable => {
                 Err(ProgressiveSendError::Unavailable)
             }
-            ChannelBackendResult::ProgressiveTransport(
-                ProgressiveTransportResult::EditUnsupported,
-            ) => Err(ProgressiveSendError::EditUnsupported),
-            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::MessageGone) => {
+            ProgressiveTransportResult::EditUnsupported => Err(ProgressiveSendError::EditUnsupported),
+            ProgressiveTransportResult::MessageGone => {
                 Err(ProgressiveSendError::MessageGone)
             }
             _ => Err(ProgressiveSendError::Other(anyhow::anyhow!(
                 "progressive transport failed"
             ))),
+            },
+            _ => Err(ProgressiveSendError::Other(anyhow::anyhow!("progressive transport failed"))),
         }
     }
 }
@@ -142,7 +137,7 @@ impl ProgressiveSender for Sender {
             channel_ref: context.map(|context| context.channel.clone()),
             conversation: context.map(|context| context.conversation.clone()),
             sequence,
-            event: event.clone(),
+            event: Box::new(event.clone()),
         })
         .await
         .map(drop)
@@ -352,7 +347,7 @@ async fn send_typed_part(
     });
     match sender
         .host
-        .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(
+        .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
             ProgressiveTransportRequest::SendTyped {
                 channel: channel.into(),
                 turn_id: context.map(|context| context.turn_id.clone()),
@@ -364,6 +359,7 @@ async fn send_typed_part(
                 parts: parts.to_vec(),
                 text: text.into(),
             },
+        )))
         ))
         .await
         .map_err(|_| {
@@ -374,22 +370,19 @@ async fn send_typed_part(
                 sent_before_error: true,
                 ..Default::default()
             });
-            ProgressiveSendError::PartialOutcome(outcome)
+            ProgressiveSendError::PartialOutcome(Box::new(outcome))
         })? {
-        ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Outcome(
-            outcome,
-        )) => Ok(outcome),
-        ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Unavailable) => {
+        ChannelBackendResult::ProgressiveTransport(result) => match *result {
+        ProgressiveTransportResult::Outcome(outcome) => Ok(*outcome),
+        ProgressiveTransportResult::Unavailable => {
             Err(ProgressiveSendError::Unavailable)
         }
-        ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Failed) => {
+        ProgressiveTransportResult::Failed => {
             Err(ProgressiveSendError::Other(anyhow::anyhow!(
                 "typed provider send failed with unknown outcome"
             )))
         }
-        ChannelBackendResult::ProgressiveTransport(
-            ProgressiveTransportResult::UnsupportedContent,
-        ) => Err(ProgressiveSendError::UnsupportedContent),
+        ProgressiveTransportResult::UnsupportedContent => Err(ProgressiveSendError::UnsupportedContent),
         _ => {
             let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
             outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
@@ -398,8 +391,10 @@ async fn send_typed_part(
                 sent_before_error: true,
                 ..Default::default()
             });
-            Err(ProgressiveSendError::PartialOutcome(outcome))
+            Err(ProgressiveSendError::PartialOutcome(Box::new(outcome)))
         }
+        },
+        _ => Err(ProgressiveSendError::Other(anyhow::anyhow!("typed provider send failed with unknown outcome"))),
     }
 }
 
@@ -1135,7 +1130,7 @@ fn absorb_progressive_error(dispatch: &mut ProgressiveOutputDispatch, error: Pro
                     sent_before_error: true,
                     ..Default::default()
                 });
-            dispatch.outcomes.push(outcome);
+            dispatch.outcomes.push(*outcome);
             dispatch.failure = Some(ProgressiveOutputFailure::ProviderTransport);
         }
         ProgressiveSendError::UnsupportedContent => {}
