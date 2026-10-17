@@ -1815,15 +1815,14 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
             .iter()
             .filter(|request| request.url.path().ends_with("/sendPhoto"))
             .count();
-        assert!(
-            runtime_proxy
-                .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
-                    "SendChannelIntent",
-                    ("telegram", invalid),
-                )
-                .await
-                .is_err()
-        );
+        let rejected = runtime_proxy
+            .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                "SendChannelIntent",
+                ("telegram", invalid),
+            )
+            .await
+            .unwrap();
+        assert!(rejected.error.is_some(), "out-of-scope media should return a typed dispatch error");
         let after = telegram_api
             .received_requests()
             .await
