@@ -4739,7 +4739,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         let mut case_context = context.clone();
         case_context.turn_id = turn_id.into();
         let case_sender = Arc::new(Sender {
-            media_account_scope: None,
+            media_account_scope: Some("telegram:media-v1:fixture".into()),
             host: host.clone(),
             context: Some(case_context.clone()),
             capabilities: capabilities.clone(),
