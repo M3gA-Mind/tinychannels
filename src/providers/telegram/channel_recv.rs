@@ -1052,22 +1052,6 @@ impl TelegramChannel {
     }
 
     #[cfg(test)]
-    pub(crate) async fn send_voice_transcription_failure(
-        &self,
-        ctx: &TelegramIncomingMessageContext,
-    ) {
-        let _ = self
-            .send_with_outbound_intent(
-                &SendMessage::new(
-                    "Voice transcription failed. Please try again or send text.",
-                    &ctx.reply_target,
-                )
-                .in_thread(Some(ctx.message_id.to_string())),
-            )
-            .await;
-    }
-
-    #[cfg(test)]
     pub(crate) async fn transcribe_telegram_voice(
         &self,
         voice: &TelegramVoiceAttachment,

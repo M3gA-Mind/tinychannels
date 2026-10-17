@@ -1,6 +1,5 @@
 use super::*;
 use crate::providers::telegram::fixtures::*;
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
