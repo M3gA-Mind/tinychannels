@@ -107,7 +107,7 @@ async fn send_text_chunks_single_chunk_carries_thread_and_reply_ids() {
         vec![serde_json::json!({
             "chat_id": "100",
             "text": "hello *world*",
-            "parse_mode": "Markdown",
+            "parse_mode": "MarkdownV2",
             "message_thread_id": "9",
             "reply_to_message_id": 42,
         })]
@@ -168,7 +168,7 @@ async fn send_text_chunks_retries_only_explicit_markdown_parse_rejection() {
     Mock::given(method("POST"))
         .and(path(api_path("sendMessage")))
         .and(body_partial_json(
-            serde_json::json!({"parse_mode":"Markdown"}),
+            serde_json::json!({"parse_mode":"MarkdownV2"}),
         ))
         .respond_with(markdown_failure)
         .with_priority(1)
@@ -193,7 +193,7 @@ async fn send_text_chunks_retries_only_explicit_markdown_parse_rejection() {
     );
     let bodies = json_bodies(&server, "sendMessage").await;
     assert_eq!(bodies.len(), 2);
-    assert_eq!(bodies[0]["parse_mode"], "Markdown");
+    assert_eq!(bodies[0]["parse_mode"], "MarkdownV2");
     assert!(bodies[1].get("parse_mode").is_none());
 }
 
@@ -226,7 +226,7 @@ async fn send_text_chunks_retries_without_markdown_when_markdown_rejected() {
     Mock::given(method("POST"))
         .and(path(api_path("sendMessage")))
         .and(body_partial_json(
-            serde_json::json!({ "parse_mode": "Markdown" }),
+            serde_json::json!({ "parse_mode": "MarkdownV2" }),
         ))
         .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
             "ok": false,
@@ -261,7 +261,7 @@ async fn send_text_chunks_fails_when_markdown_fallback_is_rejected() {
     Mock::given(method("POST"))
         .and(path(api_path("sendMessage")))
         .and(body_partial_json(
-            serde_json::json!({"parse_mode":"Markdown"}),
+            serde_json::json!({"parse_mode":"MarkdownV2"}),
         ))
         .respond_with(ResponseTemplate::new(400).set_body_json(serde_json::json!({
             "ok": false,

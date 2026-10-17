@@ -2458,7 +2458,7 @@ async fn finalize_draft_edits_with_markdown_and_clears_rate_limit() {
 
     let bodies = json_bodies(&server, "editMessageText").await;
     assert_eq!(bodies.len(), 1);
-    assert_eq!(bodies[0]["parse_mode"], "Markdown");
+    assert_eq!(bodies[0]["parse_mode"], "MarkdownV2");
     assert_eq!(bodies[0]["text"], "done");
     assert!(ch.last_draft_edit.lock().is_empty());
     assert!(json_bodies(&server, "sendMessage").await.is_empty());
@@ -2470,7 +2470,7 @@ async fn finalize_draft_retries_plain_edit_when_markdown_rejected() {
     Mock::given(method("POST"))
         .and(path(api_path("editMessageText")))
         .and(body_partial_json(
-            serde_json::json!({ "parse_mode": "Markdown" }),
+            serde_json::json!({ "parse_mode": "MarkdownV2" }),
         ))
         .respond_with(ResponseTemplate::new(400))
         .with_priority(1)
