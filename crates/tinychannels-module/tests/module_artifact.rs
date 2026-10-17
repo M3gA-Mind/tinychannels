@@ -2055,8 +2055,13 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         )
         .await
         .unwrap();
-    let invalid_error = invalid_result.error.expect("missing media reference should be a typed rejection");
-    assert_eq!(invalid_error.kind, tinychannels_bus::channel::SendErrorKind::Forbidden);
+    let invalid_error = invalid_result
+        .error
+        .expect("missing media reference should be a typed rejection");
+    assert_eq!(
+        invalid_error.kind,
+        tinychannels_bus::channel::SendErrorKind::Forbidden
+    );
     assert!(!invalid_error.sent_before_error);
     assert!(invalid_result.message_id.is_none());
     assert!(invalid_result.receipt.is_none());

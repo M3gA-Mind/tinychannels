@@ -607,15 +607,17 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
 async fn typed_voice_wire_failure_keeps_remote_uncertainty() {
     let server = mock_api().await;
     mount_post(&server, "sendVoice", ok_with(serde_json::json!({}))).await;
-    let channel = channel_for(&server, &["*"])
-        .with_voice_media_store(Arc::new(VoiceReadFixture));
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
     let message = outbound_voice_message(Some("host-media-1"), Some("turn-7"));
 
     let error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
         .await
         .unwrap_err();
 
-    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Unknown);
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Unknown
+    );
     assert!(error.sent_before_error);
     assert!(!error.retryable);
     assert_eq!(json_bodies(&server, "sendVoice").await.len(), 1);

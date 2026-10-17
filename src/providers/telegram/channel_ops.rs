@@ -8,6 +8,39 @@ use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
 
+#[derive(Debug)]
+struct TelegramPreDispatchError;
+
+impl std::fmt::Display for TelegramPreDispatchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Telegram send was rejected before provider dispatch")
+    }
+}
+
+impl std::error::Error for TelegramPreDispatchError {}
+
+fn typed_send_error(error: anyhow::Error) -> crate::channel::ChannelSendError {
+    if let Some(partial) = error.downcast_ref::<super::channel_send::PartialTextSendError>() {
+        return partial.error.clone();
+    }
+    if error.downcast_ref::<TelegramPreDispatchError>().is_some() {
+        return crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::Forbidden,
+            message: "Telegram typed send was rejected before provider dispatch".into(),
+            retryable: false,
+            sent_before_error: false,
+            ..Default::default()
+        };
+    }
+    crate::channel::ChannelSendError {
+        kind: crate::channel::SendErrorKind::Unknown,
+        message: "Telegram typed send outcome is uncertain".into(),
+        retryable: false,
+        sent_before_error: true,
+        ..Default::default()
+    }
+}
+
 impl TelegramChannel {
     fn callback_event(update: &serde_json::Value) -> Option<tinychannels_bus::ChannelEvent> {
         let query = update.get("callback_query")?;
@@ -352,6 +385,14 @@ impl TelegramChannel {
                     ("sendAudio", "audio")
                 };
             let (chat_id, thread_id) = Self::parse_reply_target(&conversation.id);
+            if audio.len() > 8 * 1024 * 1024 {
+                anyhow::bail!("Telegram voice upload exceeds its size limit");
+            }
+            if let Some(reply_to) = message.reply_to_id.as_deref() {
+                reply_to
+                    .parse::<i64>()
+                    .map_err(|_| anyhow::anyhow!("Telegram reply target is invalid"))?;
+            }
             let message_id = self
                 .send_voice_bytes_with_id(super::channel_send::TelegramVoiceUpload {
                     method,
@@ -367,7 +408,15 @@ impl TelegramChannel {
                     bytes: audio,
                     file_name: resolved.file_name.as_deref().unwrap_or("voice.ogg"),
                 })
-                .await?;
+                .await
+                .map_err(|_| {
+                    super::channel_send::partial_text_send_error(
+                        Vec::new(),
+                        "Telegram voice upload outcome is uncertain".into(),
+                        false,
+                        true,
+                    )
+                })?;
             let kind = tinychannels_bus::channel::MessageReceiptPartKind::Voice;
             let receipt_part = tinychannels_bus::channel::MessageReceiptPart {
                 platform_message_id: message_id.clone(),
@@ -512,7 +561,18 @@ impl TelegramChannel {
                 }
             )
         }) {
-            return send_typed_media_with_receipt(self, message).await;
+            return send_typed_media_with_receipt(self, message)
+                .await
+                .map_err(|error| {
+                    if error
+                        .downcast_ref::<super::channel_send::PartialTextSendError>()
+                        .is_some()
+                    {
+                        error
+                    } else {
+                        anyhow::Error::new(TelegramPreDispatchError)
+                    }
+                });
         }
         let text_parts = message
             .parts
@@ -2160,14 +2220,9 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, crate::channel::ChannelSendError>
     {
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
-        self.send_v2_with_receipt(&message).await.map_err(|_error| {
-            crate::channel::ChannelSendError {
-                kind: crate::channel::SendErrorKind::Unknown,
-                message: "Telegram send failed after dispatch".into(),
-                retryable: false,
-                ..Default::default()
-            }
-        })
+        self.send_v2_with_receipt(&message)
+            .await
+            .map_err(typed_send_error)
     }
 
     async fn status(
@@ -2529,19 +2584,8 @@ impl crate::channel::ChannelTypedSend for TelegramChannel {
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, crate::channel::ChannelSendError>
     {
-        self.send_v2_with_receipt(message).await.map_err(|error| {
-            if let Some(partial) = error.downcast_ref::<super::channel_send::PartialTextSendError>()
-            {
-                partial.error.clone()
-            } else {
-                crate::channel::ChannelSendError {
-                    kind: crate::channel::SendErrorKind::Forbidden,
-                    message: "Telegram typed send was rejected before provider dispatch".into(),
-                    retryable: false,
-                    sent_before_error: false,
-                    ..Default::default()
-                }
-            }
-        })
+        self.send_v2_with_receipt(message)
+            .await
+            .map_err(typed_send_error)
     }
 }
