@@ -990,6 +990,38 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
 }
 
 #[tokio::test]
+async fn typed_image_rejects_non_numeric_platform_thread_before_upload() {
+    let server = mock_api().await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("invalid-thread", "caption".into());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        thread_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-photo-1".into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    }];
+
+    assert!(channel.send_typed_with_receipt(&message).await.is_err());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn typed_media_failure_after_text_keeps_real_partial_ids_and_forbids_retry() {
     let server = mock_api().await;
     mount_post(
