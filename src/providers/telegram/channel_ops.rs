@@ -1537,7 +1537,7 @@ async fn send_typed_media_with_receipt(
     let mut receipt_parts = Vec::new();
     let mut failed = None;
     for part in &message.parts {
-        let (method, field, media_kind, media, caption, title, duration_ms, fallback_name) =
+        let (method, media_kind, media, caption, title, duration_ms, fallback_name) =
             match part {
                 tinychannels_bus::OutboundContentPart::Content {
                     part: tinychannels_bus::ContentPart::Text { text, .. },
@@ -1594,7 +1594,6 @@ async fn send_typed_media_with_receipt(
                     part: tinychannels_bus::ContentPart::Image { media, caption, .. },
                 } => (
                     "sendPhoto",
-                    "photo",
                     tinychannels_bus::MediaKind::Image,
                     media,
                     caption.as_deref(),
@@ -1612,7 +1611,6 @@ async fn send_typed_media_with_receipt(
                         },
                 } => (
                     "sendVideo",
-                    "video",
                     tinychannels_bus::MediaKind::Video,
                     media,
                     caption.as_deref(),
@@ -1631,7 +1629,6 @@ async fn send_typed_media_with_receipt(
                         },
                 } => (
                     "sendAudio",
-                    "audio",
                     tinychannels_bus::MediaKind::Audio,
                     media,
                     transcript.as_deref(),
@@ -1648,7 +1645,6 @@ async fn send_typed_media_with_receipt(
                         },
                 } => (
                     "sendDocument",
-                    "document",
                     tinychannels_bus::MediaKind::Document,
                     media,
                     caption.as_deref(),
@@ -1660,7 +1656,6 @@ async fn send_typed_media_with_receipt(
                     part: tinychannels_bus::ContentPart::Sticker { media, .. },
                 } => (
                     "sendSticker",
-                    "sticker",
                     tinychannels_bus::MediaKind::Image,
                     media,
                     None,
