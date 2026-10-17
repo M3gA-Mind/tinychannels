@@ -288,6 +288,20 @@ async fn local_adapter_capability_gate_covers_canonical_payload_kinds() {
                 },
             },
         },
+        tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: media.clone(),
+                audio_base64: None,
+                codec: None,
+                duration_ms: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Synthesize {
+                text: "part voice".into(),
+                voice: None,
+            },
+        },
         tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Sticker {
                 media: media.clone(),
