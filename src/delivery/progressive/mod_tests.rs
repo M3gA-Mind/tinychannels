@@ -472,6 +472,20 @@ async fn uncertain_filler_send_disables_retries_immediately() {
 }
 
 #[tokio::test]
+async fn filler_sends_are_bounded_independently_of_the_turn_lease() {
+    use super::bubbles::send_filler_message;
+
+    let sender = FakeSender::default();
+    let mut state = StreamingState::default();
+    for _ in 0..12 {
+        send_filler_message(&sender, "telegram:bounded-fillers", &mut state).await;
+    }
+    assert_eq!(sender.calls().len(), 8);
+    assert!(state.filler_disabled);
+    assert_eq!(state.filler_send_count, 8);
+}
+
+#[tokio::test]
 async fn typing_indicator_latches_after_repeated_failures_and_recovers_before() {
     let (sender, mut reply) = turn("discord:1");
     FakeSender::script(&sender.typings, Outcome::Err(other));

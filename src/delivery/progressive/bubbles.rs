@@ -218,6 +218,9 @@ pub(super) async fn send_filler_message(
         return;
     }
     state.filler_send_count += 1;
+    if state.filler_send_count >= MAX_FILLER_SENDS_PER_TURN {
+        state.filler_disabled = true;
+    }
     let text = next_filler_text(state);
     match sender.send(channel, &text).await {
         Ok(resp) => {
