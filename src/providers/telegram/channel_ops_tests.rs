@@ -337,6 +337,12 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
         assert_eq!(scope.conversation.topic_id.as_deref(), Some("topic-77"));
         assert_eq!(scope.turn_id, "turn-42");
         let (kind, content_type, file_name, bytes) = match opaque_id.as_str() {
+            "stored-sticker-webp" => (
+                tinychannels_bus::MediaKind::Image,
+                "image/webp",
+                "sticker.webp",
+                b"RIFF\x0c\0\0\0WEBPVP8 \x04\0\0\0\0\0\0\0".to_vec(),
+            ),
             "stored-photo-1" => (
                 tinychannels_bus::MediaKind::Image,
                 "image/png",
@@ -1610,6 +1616,43 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
     );
 
     assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn native_webp_sticker_uses_send_sticker_and_returns_its_message_id() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendSticker",
+        ok_with(serde_json::json!({ "message_id": 811 })),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"])
+        .with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = scoped_typed_media_message("stored-sticker-webp");
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Sticker {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-sticker-webp".into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            pack_id: None,
+            sticker_id: None,
+            emoji: Some("🌟".into()),
+            alt_text: None,
+        },
+    }];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert!(outcome.error.is_none());
+    assert_eq!(outcome.receipt.platform_message_ids, ["811"]);
+    let bodies = raw_bodies(&server, "sendSticker").await;
+    assert_eq!(bodies.len(), 1);
+    assert!(bodies[0].contains("name=\"sticker\""));
+    assert!(bodies[0].contains("sticker.webp"));
+    assert!(bodies[0].contains("message_thread_id"));
 }
 
 #[tokio::test]
