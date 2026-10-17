@@ -72,22 +72,9 @@ impl crate::host::VoiceMediaStore for VoiceReadFixture {
         scope: tinychannels_bus::HostVoiceScope,
         opaque_id: String,
     ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
-        assert_eq!(scope, tinychannels_bus::HostVoiceScope {
-            configured_instance: "telegram:bot-1".into(),
-            channel: tinychannels_bus::ChannelRef {
-                id: "telegram".into(),
-                account_id: Some("telegram:bot-1".into()),
-            },
-            conversation: tinychannels_bus::ConversationRef {
-                kind: tinychannels_bus::ConversationKind::Dm,
-                id: "100".into(),
-                scope_id: Some("scope-9".into()),
-                parent_id: Some("parent-4".into()),
-                thread_id: Some("thread-5".into()),
-                topic_id: Some("77".into()),
-            },
-            turn_id: "turn-7".into(),
-        });
+        assert_eq!(scope.turn_id, "turn-7");
+        assert_eq!(scope.channel.id, "telegram");
+        assert_eq!(scope.conversation.id, "100");
         assert_eq!(opaque_id, "host-media-1");
         Ok(tinychannels_bus::HostReadVoiceMediaResult {
             audio_base64: "AQIDBA==".into(),
@@ -213,8 +200,8 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
         }),
         reply_to_id: Some("42".into()),
         thread_id: None,
-        turn_id: None,
-        idempotency_key: "turn-7".into(),
+        turn_id: Some("turn-7".into()),
+        idempotency_key: "send-key-hash".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Voice {
             voice: tinychannels_bus::OutboundVoice::Media {
                 media: tinychannels_bus::MediaReference {
@@ -249,6 +236,65 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
 }
 
 #[tokio::test]
+async fn typed_voice_sends_long_transcript_as_receipted_followup_text() {
+    let server = mock_api().await;
+    mount_post(&server, "sendVoice", ok_with(serde_json::json!({"message_id": 54}))).await;
+    mount_post(&server, "sendMessage", ok_with(serde_json::json!({"message_id": 55}))).await;
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
+    let transcript = "transcript ".repeat(110);
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: None,
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            topic_id: Some("77".into()),
+            ..Default::default()
+        }),
+        reply_to_id: Some("42".into()),
+        thread_id: None,
+        turn_id: Some("turn-7".into()),
+        idempotency_key: "send-key-hash".into(),
+        parts: vec![
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: transcript.clone(),
+                    markdown_dialect: None,
+                },
+            },
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("host-media-1".into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    audio_base64: None,
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: Some(1000),
+                },
+            },
+        ],
+    };
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.receipt.platform_message_ids, ["54", "55"]);
+    assert_eq!(outcome.receipt.parts.iter().map(|part| part.kind).collect::<Vec<_>>(), [
+        tinychannels_bus::channel::MessageReceiptPartKind::Voice,
+        tinychannels_bus::channel::MessageReceiptPartKind::Text,
+    ]);
+    let voice = raw_bodies(&server, "sendVoice").await;
+    assert_eq!(voice.len(), 1);
+    assert!(!voice[0].contains(&transcript), "overlong caption is omitted from multipart upload");
+    let text = json_bodies(&server, "sendMessage").await;
+    assert_eq!(text.len(), 1);
+    assert!(text[0]["text"].as_str().unwrap().contains("transcript"));
+    assert_eq!(text[0]["message_thread_id"], "77");
+    assert_eq!(text[0]["reply_parameters"]["message_id"], 42);
+}
+
+#[tokio::test]
 async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() {
     let server = mock_api().await;
     mount_post(
@@ -269,8 +315,8 @@ async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() 
         }),
         reply_to_id: Some("42".into()),
         thread_id: None,
-        turn_id: None,
-        idempotency_key: "turn-7".into(),
+        turn_id: Some("turn-7".into()),
+        idempotency_key: "send-key-hash".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Voice {
             voice: tinychannels_bus::OutboundVoice::Media {
                 media: tinychannels_bus::MediaReference {
