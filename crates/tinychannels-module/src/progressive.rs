@@ -811,12 +811,13 @@ async fn run(
     terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
     mut inbox: mpsc::Receiver<Command>,
 ) {
+    let text_limit = capabilities.text.text_limit.map(|limit| (limit, capabilities.text.length_unit));
     let mut reply = if let Some(context) = context {
         ProgressiveReply::new_scoped(
             Arc::new(Sender {
                 host,
                 context: Some(context.clone()),
-                text_limit: capabilities.text.text_limit.map(|limit| (limit, capabilities.text.length_unit)),
+                text_limit,
             }),
             channel,
             capabilities,
@@ -827,7 +828,7 @@ async fn run(
             Arc::new(Sender {
                 host,
                 context: None,
-                text_limit: capabilities.text.text_limit.map(|limit| (limit, capabilities.text.length_unit)),
+                text_limit,
             }),
             channel,
             capabilities,
