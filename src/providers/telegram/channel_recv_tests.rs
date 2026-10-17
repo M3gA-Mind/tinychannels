@@ -758,7 +758,7 @@ async fn telegram_media_only_update_persists_into_scoped_blobs() {
         .and(path(format!("/file/bot{TOKEN}/photos/one.png")))
         .respond_with(
             ResponseTemplate::new(200)
-                .insert_header("content-type", "image/png")
+                .insert_header("content-type", "application/octet-stream")
                 .set_body_bytes(png.clone()),
         )
         .mount(&server)
