@@ -33,6 +33,7 @@ struct Callback {
     transcription_started: Arc<tokio::sync::Notify>,
     transcription_gate: Arc<tokio::sync::Notify>,
     voice_scopes: Arc<Mutex<Vec<tinychannels_bus::HostVoiceScope>>>,
+    voice_requests: Arc<Mutex<Vec<serde_json::Value>>>,
     controller_blocked: Arc<AtomicBool>,
     controllers_started: Arc<AtomicUsize>,
     controller_started: Arc<tokio::sync::Notify>,
@@ -99,8 +100,9 @@ impl Callback {
         request: tinychannels_bus::HostSpeechSynthesisRequest,
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
         self.voice_scopes.lock().await.push(request.scope);
+        self.voice_requests.lock().await.push(serde_json::json!({"kind":"synthesize","text":request.text,"format":request.format}));
         Ok(tinychannels_bus::HostSpeechSynthesisResult {
-            audio_base64: "UklGRg==".into(),
+            audio_base64: if request.text == "oversized-response" { "x".repeat(super::MAX_VOICE_CALLBACK_BYTES + 1) } else { "UklGRg==".into() },
             mime_type: "audio/wav".into(),
             duration_ms: Some(1_250),
         })
@@ -111,6 +113,7 @@ impl Callback {
         request: tinychannels_bus::HostStoreVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         self.voice_scopes.lock().await.push(request.scope);
+        self.voice_requests.lock().await.push(serde_json::json!({"kind":"store","direction":request.direction,"codec":request.codec,"durationMs":request.duration_ms}));
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
             media: tinychannels_bus::MediaReference {
                 opaque_id: Some("voice-1".into()),
@@ -118,6 +121,32 @@ impl Callback {
                 ..Default::default()
             },
             accessible_url: Some("https://media.example.test/authorized/voice-1".into()),
+        })
+    }
+
+    async fn read_voice_media(
+        &self,
+        request: tinychannels_bus::HostReadVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        self.voice_scopes.lock().await.push(request.scope);
+        self.voice_requests.lock().await.push(serde_json::json!({"kind":"read","opaqueId":request.opaque_id,"maxBytes":request.max_bytes}));
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: "UklGRg==".into(),
+            mime_type: "audio/wav".into(),
+            file_name: Some("voice.wav".into()),
+        })
+    }
+
+    async fn get_voice_reply_policy(
+        &self,
+        request: tinychannels_bus::HostVoiceReplyPolicyRequest,
+    ) -> Result<tinychannels_bus::HostVoiceReplyPolicy> {
+        self.voice_scopes.lock().await.push(request.scope);
+        self.voice_requests.lock().await.push(serde_json::json!({"kind":"policy"}));
+        Ok(tinychannels_bus::HostVoiceReplyPolicy {
+            mode: tinychannels_bus::HostVoiceReplyMode::SpeakReply,
+            inbound_has_voice: true,
+            explicitly_requested: false,
         })
     }
 
@@ -219,6 +248,7 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         transcription_started: Arc::new(tokio::sync::Notify::new()),
         transcription_gate: Arc::new(tokio::sync::Notify::new()),
         voice_scopes: Arc::new(Mutex::new(Vec::new())),
+        voice_requests: Arc::new(Mutex::new(Vec::new())),
         controller_blocked: Arc::new(AtomicBool::new(false)),
         controllers_started: Arc::new(AtomicUsize::new(0)),
         controller_started: Arc::new(tokio::sync::Notify::new()),

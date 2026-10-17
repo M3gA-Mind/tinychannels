@@ -11,6 +11,38 @@ struct LargeVoiceReadFixture {
     expected_scope: tinychannels_bus::HostVoiceScope,
 }
 
+fn outbound_voice_message(opaque_id: Option<&str>, turn_id: Option<&str>) -> tinychannels_bus::ChannelOutboundMessage {
+    tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: turn_id.map(str::to_owned),
+        idempotency_key: "operation-key".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: opaque_id.map(str::to_owned),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                audio_base64: None,
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1000),
+            },
+        }],
+    }
+}
+
 #[test]
 fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() {
     let without_store = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).capabilities();
@@ -454,6 +486,31 @@ async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() 
             .as_deref(),
         Some("52")
     );
+}
+
+#[tokio::test]
+async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
+    let server = mock_api().await;
+    let message = outbound_voice_message(Some("voice-ref"), Some("turn-1"));
+    let missing_store = channel_for(&server, &["*"])
+        .send_typed_with_receipt(&message)
+        .await
+        .unwrap_err();
+    assert!(missing_store.to_string().contains("requires host media resolution"));
+
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
+    let missing_reference = channel
+        .send_typed_with_receipt(&outbound_voice_message(None, Some("turn-1")))
+        .await
+        .unwrap_err();
+    assert!(missing_reference.to_string().contains("no host-owned opaque reference"));
+
+    let missing_turn = channel
+        .send_typed_with_receipt(&outbound_voice_message(Some("voice-ref"), None))
+        .await
+        .unwrap_err();
+    assert!(missing_turn.to_string().contains("requires originating turn identity"));
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 /// Hang guard for loops that must terminate on their own.
