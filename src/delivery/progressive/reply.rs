@@ -490,7 +490,8 @@ impl ProgressiveReply {
                 }
                 Err(error) => return Err(error),
             };
-            let no_receipt = next.receipt.platform_message_ids.is_empty()
+            let no_receipt = next.receipt.primary_platform_message_id.is_none()
+                && next.receipt.platform_message_ids.is_empty()
                 && next.receipt.parts.is_empty()
                 && next.error.is_none();
             merge_receipt(&mut outcome.receipt, next.receipt, index == 0, index);
@@ -518,7 +519,7 @@ impl ProgressiveReply {
         parts: &[tinychannels_bus::OutboundContentPart],
         text: &str,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, super::ProgressiveSendError> {
-        self.sender
+        let mut outcome = self.sender
             .send_parts_with_segment(
                 &self.channel,
                 parts,
@@ -527,7 +528,20 @@ impl ProgressiveReply {
                 self.output_sequence,
                 0,
             )
-            .await
+            .await?;
+        if outcome.error.is_none()
+            && outcome.receipt.primary_platform_message_id.is_none()
+            && outcome.receipt.platform_message_ids.is_empty()
+            && outcome.receipt.parts.is_empty()
+        {
+            outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                message: "provider accepted a progressive send without a receipt id".into(),
+                sent_before_error: true,
+                ..Default::default()
+            });
+        }
+        Ok(outcome)
     }
 
     /// Send a standalone reply without touching the turn's draft state (for a
