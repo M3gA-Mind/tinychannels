@@ -4434,6 +4434,112 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     assert_eq!(callback.synthesis_calls.load(Ordering::SeqCst), before);
 }
 
+#[tokio::test]
+async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let _broker_task = broker.spawn(bus.clone());
+    let server = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let callback = Callback::default();
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    let codec_ops = Arc::new(AtomicUsize::new(0));
+    server
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            callback.clone(),
+        )
+        .await
+        .unwrap();
+    server
+        .serve_at(
+            tinyvoice_bus::OBJECT_PATH.try_into().unwrap(),
+            StubTinyVoiceCodec(codec_ops.clone()),
+        )
+        .await
+        .unwrap();
+    server
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    server.request_name(tinyvoice_bus::BUS_NAME).await.unwrap();
+    let client = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(client);
+    let context = ProgressiveOutputContext {
+        turn_id: "stub-codec-turn".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:bot-1".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "chat-1".into(),
+            topic_id: Some("topic-2".into()),
+            ..Default::default()
+        },
+    };
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.voice_out.supported = true;
+    capabilities.voice_out.synthesis = true;
+    capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
+    capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
+    capabilities.voice_out.max_duration_ms = Some(10_000);
+    let sender = Arc::new(Sender {
+        host,
+        context: Some(context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        sender,
+        "telegram:bot-1",
+        capabilities,
+        context,
+    );
+    reply
+        .send_parts(
+            &[tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "spoken response".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            "spoken response",
+        )
+        .await
+        .expect("stub codec bus supports the production final voice path");
+
+    let requests = callback.requests.lock().await;
+    let send = requests.iter().find_map(|request| match request {
+        ProgressiveTransportRequest::SendTyped {
+            turn_id: Some(turn_id),
+            parts,
+            ..
+        } if turn_id == "stub-codec-turn" => Some(parts),
+        _ => None,
+    });
+    assert!(send.is_some_and(|parts| parts.iter().any(|part| matches!(
+        part,
+        tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media,
+                codec: Some(codec),
+                ..
+            }
+        } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
+    ))));
+    assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
+    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 1);
+}
+
 fn progressive_test_wav() -> Vec<u8> {
     let rate = 16_000u32;
     let count = rate as usize * 8;
