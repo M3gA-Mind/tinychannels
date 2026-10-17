@@ -24,6 +24,38 @@ use std::path::Path;
 use std::time::Duration;
 
 impl TelegramChannel {
+    pub(crate) async fn send_voice_bytes_with_id(
+        &self,
+        method: &str,
+        field: &str,
+        chat_id: &str,
+        thread_id: Option<&str>,
+        bytes: Vec<u8>,
+        file_name: &str,
+    ) -> anyhow::Result<String> {
+        if bytes.len() > 8 * 1024 * 1024 {
+            anyhow::bail!("voice upload exceeds the supported inline limit");
+        }
+        let part = Part::bytes(bytes).file_name(file_name.to_owned());
+        let mut form = Form::new()
+            .text("chat_id", chat_id.to_owned())
+            .part(field.to_owned(), part);
+        if let Some(thread) = thread_id {
+            form = form.text("message_thread_id", thread.to_owned());
+        }
+        let response = self.http_client().post(self.api_url(method)).multipart(form).send().await?;
+        let status = response.status();
+        let body: serde_json::Value = response.json().await?;
+        if !status.is_success() || body.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+            anyhow::bail!("Telegram {method} returned an unsuccessful or unknown receipt");
+        }
+        body.get("result")
+            .and_then(|result| result.get("message_id"))
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string())
+            .ok_or_else(|| anyhow::anyhow!("Telegram {method} response omitted message receipt"))
+    }
+
     pub(crate) fn parse_reaction_marker(content: &str) -> (String, Option<String>) {
         // Marker format at the start of the message: [REACTION:😀] or [REACTION:😀|12345]
         // The marker may be followed by a text reply: [REACTION:👍] Great point!
