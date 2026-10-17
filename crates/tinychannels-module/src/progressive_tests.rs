@@ -3081,3 +3081,55 @@ async fn media_and_voice_events_use_ordered_typed_provider_sends() {
     );
     replies.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn typed_callback_acknowledgement_and_unavailability_keep_distinct_failure_facts() {
+    let (replies, callback) = fixture(false).await;
+    let events = vec![ChannelOutputEvent::Media {
+        text: None,
+        parts: vec![tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                kind: tinychannels_bus::MediaKind::Image,
+                url: Some("https://media.invalid/pending.png".into()),
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        }],
+    }];
+
+    for (provider_result, sent_before_error) in [
+        (ProgressiveTransportResult::Unavailable, false),
+        (ProgressiveTransportResult::Acknowledged, true),
+        (ProgressiveTransportResult::Failed, true),
+    ] {
+        let handle = open(&replies).await;
+        callback.send_queue.lock().await.push_back(provider_result);
+        let result = replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle,
+                events: events.clone(),
+            })
+            .await
+            .unwrap();
+        let ProgressiveResult::DeliveryBatch {
+            outcomes,
+            unsupported,
+            failure: Some(
+                tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport,
+            ),
+        } = result
+        else {
+            panic!("typed callback failures must remain visible in the batch result")
+        };
+        assert!(unsupported.is_empty());
+        assert_eq!(outcomes.len(), 1);
+        let error = outcomes[0].error.as_ref().expect("visible send failure");
+        assert_eq!(error.sent_before_error, sent_before_error);
+        assert_eq!(
+            error.kind,
+            tinychannels_bus::channel::SendErrorKind::Unknown
+        );
+    }
+    replies.shutdown().await.unwrap();
+}
