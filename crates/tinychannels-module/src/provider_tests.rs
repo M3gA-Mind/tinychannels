@@ -582,10 +582,11 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 let mut payload_kinds = Vec::new();
                 if voice.and_then(|v| v.get("media")).is_some() { payload_kinds.push("audio".into()); }
                 if voice.and_then(|v| v.get("transcript")).and_then(|t| t.get("text")).and_then(serde_json::Value::as_str).is_some() { payload_kinds.push("transcript".into()); }
+                let thread_id = conversation.thread_id.clone().or_else(|| conversation.topic_id.clone());
                 self.observed.lock().unwrap().push(tinychannels_conformance::WireObservation {
                     feature, operation: "voice_in".into(), channel, conversation,
                     reply_to_id: None,
-                    thread_id: conversation.thread_id.clone().or_else(|| conversation.topic_id.clone()),
+                    thread_id,
                     payload_kinds, platform_message_ids: Vec::new(), request: envelope,
                 });
                 return Ok(None);
