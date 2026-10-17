@@ -243,6 +243,9 @@ pub enum ProgressiveResult {
     Opened { handle: String },
     Updated,
     Closed,
+    /// V2 terminal delivery acknowledgement; carries every known platform
+    /// receipt and any partial-send failure from the provider.
+    DeliveryOutcome { outcome: crate::channel::ChannelSendOutcome },
 }
 
 /// The host supplies its managed REST transport and captured credential.
@@ -267,6 +270,19 @@ pub enum ProgressiveTransportRequest {
         #[serde(skip_serializing_if = "Option::is_none")]
         conversation: Option<crate::channel::ConversationRef>,
         message: Value,
+    },
+    /// Provider-facing typed delivery. Observation callbacks are separate and
+    /// cannot acknowledge or replace this send.
+    SendTyped {
+        channel: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        turn_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        channel_ref: Option<crate::channel::ChannelRef>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation: Option<crate::channel::ConversationRef>,
+        parts: Vec<crate::channel::OutboundContentPart>,
+        text: String,
     },
     Edit {
         channel: String,
