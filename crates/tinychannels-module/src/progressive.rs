@@ -773,7 +773,7 @@ async fn run(
                     let mut result = apply(&mut reply, events, forward).await;
                     let failed = result.is_err();
                     if failed {
-                        reply.abort().await;
+                        reply.finalize("Sorry, output failed").await;
                         record_terminal(&terminal_feed, fingerprint, &result).await;
                         let _ = response.send(result);
                         break;
