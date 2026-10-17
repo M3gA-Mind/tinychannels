@@ -44,7 +44,7 @@ impl IngressVoiceCallback {
     }
 }
 
-async fn ingress_fixture() -> (HostChannels, IngressVoiceCallback) {
+async fn ingress_fixture() -> (HostChannels, IngressVoiceCallback, tinybus::Connection) {
     let bus = MemoryBus::new();
     Broker::new().spawn(bus.clone());
     let server = tinybus::Connection::connect(bus.connect().await.unwrap())
@@ -62,7 +62,7 @@ async fn ingress_fixture() -> (HostChannels, IngressVoiceCallback) {
     let client = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    (HostChannels::new(client), callback)
+    (HostChannels::new(client), callback, server)
 }
 
 fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> ChannelInboundEnvelope {
@@ -99,7 +99,7 @@ fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> Chann
 
 #[tokio::test]
 async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
-    let (host, callback) = ingress_fixture().await;
+    let (host, callback, _server) = ingress_fixture().await;
     let events = ModuleEvents(host.clone(), "telegram:bot-a".into());
     assert!(events
         .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(None)))
@@ -136,7 +136,7 @@ async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
 
 #[tokio::test]
 async fn completed_provider_transcript_skips_media_read_and_host_stt() {
-    let (host, callback) = ingress_fixture().await;
+    let (host, callback, _server) = ingress_fixture().await;
     let events = ModuleEvents(host.clone(), "telegram:bot-a".into());
     let provider_transcript = tinychannels_bus::VoiceTranscript {
         text: "provider words".into(),
