@@ -55,8 +55,6 @@ impl TelegramChannel {
             client: reqwest::Client::new(),
             transcriber: None,
             voice_media_store: None,
-            synthesizer: None,
-            voice_codec: None,
             allowlist: None,
             events: None,
             stream_mode: StreamMode::Off,
@@ -119,18 +117,6 @@ impl TelegramChannel {
         self
     }
 
-    pub fn with_speech_synthesizer(
-        mut self,
-        synthesizer: Arc<dyn crate::host::SpeechSynthesizer>,
-    ) -> Self {
-        self.synthesizer = Some(synthesizer);
-        self
-    }
-
-    pub fn with_voice_codec(mut self, codec: Arc<dyn crate::host::VoiceCodec>) -> Self {
-        self.voice_codec = Some(codec);
-        self
-    }
 
     /// Inject a persisted allowlist store so first-run bind/pairing promotions
     /// survive restarts. Without it, allowlisting is runtime-only.

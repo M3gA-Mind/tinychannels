@@ -252,12 +252,6 @@ pub fn build_channels(
         if let Some(store) = host.voice_media_store() {
             telegram = telegram.with_voice_media_store(store);
         }
-        if let Some(synthesizer) = host.synthesizer() {
-            telegram = telegram.with_speech_synthesizer(synthesizer);
-        }
-        if let Some(codec) = host.voice_codec() {
-            telegram = telegram.with_voice_codec(codec);
-        }
         if let Some(allowlist) = host.allowlist() {
             telegram = telegram.with_allowlist(allowlist);
         }
