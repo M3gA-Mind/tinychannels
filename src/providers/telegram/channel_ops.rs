@@ -1088,7 +1088,10 @@ impl Channel for TelegramChannel {
                 failed = Some(anyhow::anyhow!("Telegram media failed upload validation"));
                 break;
             }
-            let file_name = stored.file_name.as_deref().unwrap_or(fallback_name);
+            let file_name = stored.file_name.as_deref().unwrap_or(fallback_name).to_owned();
+            let caption = caption.map(strip_tool_call_tags);
+            let content_type = stored.content_type.clone();
+            let receipt_index = receipt_parts.len();
             match self
                 .send_media_bytes_with_id(super::channel_send::TelegramMediaUpload {
                     method,
@@ -1096,16 +1099,17 @@ impl Channel for TelegramChannel {
                     chat_id: &conversation.id,
                     thread_id: thread_id.as_deref(),
                     reply_to_id: message.reply_to_id.as_deref(),
-                    caption: caption.map(strip_tool_call_tags).as_deref(),
+                    caption: caption.as_deref(),
                     bytes: stored.bytes,
-                    file_name,
+                    content_type: &content_type,
+                    file_name: &file_name,
                 })
                 .await
             {
                 Ok(id) => receipt_parts.push(telegram_receipt_part(
                     &id,
                     tinychannels_bus::channel::MessageReceiptPartKind::Media,
-                    receipt_parts.len(),
+                    receipt_index,
                     &conversation,
                     &thread_id,
                     message.reply_to_id.as_deref(),
@@ -1558,6 +1562,32 @@ Ensure only one `openhuman` process is using this bot token."
             task.handle.abort();
         }
         Ok(())
+    }
+}
+
+fn telegram_receipt_part(
+    id: &str,
+    kind: tinychannels_bus::channel::MessageReceiptPartKind,
+    index: usize,
+    conversation: &tinychannels_bus::ConversationRef,
+    thread_id: &Option<String>,
+    reply_to_id: Option<&str>,
+) -> tinychannels_bus::channel::MessageReceiptPart {
+    tinychannels_bus::channel::MessageReceiptPart {
+        platform_message_id: id.to_owned(),
+        kind,
+        index,
+        thread_id: thread_id.clone(),
+        reply_to_id: reply_to_id.map(str::to_owned),
+        edit_token: Some(id.to_owned()),
+        delete_token: Some(id.to_owned()),
+        raw: Some(tinychannels_bus::channel::MessageReceiptSourceResult {
+            channel: Some("telegram".into()),
+            message_id: Some(id.to_owned()),
+            chat_id: Some(conversation.id.clone()),
+            conversation_id: Some(conversation.id.clone()),
+            ..Default::default()
+        }),
     }
 }
 

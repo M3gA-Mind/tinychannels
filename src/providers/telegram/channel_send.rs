@@ -31,6 +31,7 @@ pub(crate) struct TelegramVoiceUpload<'a> {
     pub(crate) reply_to_id: Option<&'a str>,
     pub(crate) caption: Option<&'a str>,
     pub(crate) bytes: Vec<u8>,
+    pub(crate) content_type: &'a str,
     pub(crate) file_name: &'a str,
 }
 
@@ -53,7 +54,11 @@ impl TelegramChannel {
         if upload.bytes.is_empty() || upload.bytes.len() > 20 * 1024 * 1024 {
             anyhow::bail!("media upload exceeds the supported inline limit");
         }
-        let part = Part::bytes(upload.bytes).file_name(upload.file_name.to_owned());
+        let mime = upload.content_type.parse::<mime::Mime>()
+            .map_err(|_| anyhow::anyhow!("Telegram media has an invalid content type"))?;
+        let part = Part::bytes(upload.bytes)
+            .file_name(upload.file_name.to_owned())
+            .mime_str(mime.as_ref())?;
         let mut form = Form::new()
             .text("chat_id", upload.chat_id.to_owned())
             .part(upload.field.to_owned(), part);
