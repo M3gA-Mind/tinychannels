@@ -964,6 +964,12 @@ async fn typed_media_failure_after_text_keeps_real_partial_ids_and_forbids_retry
         account_id: Some("telegram-main".into()),
     });
     message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
     message
         .parts
         .push(tinychannels_bus::OutboundContentPart::Content {
