@@ -1948,7 +1948,15 @@ impl tracing::Subscriber for DeliveryDiagnostics {
 #[tokio::test]
 async fn uncertain_send_diagnostics_report_only_shape_counts_without_message_or_receipt_secrets() {
     let diagnostics = DeliveryDiagnostics::default();
+    // tracing's single-dispatch optimization registers shared callsites using
+    // the registering thread's subscriber. Another test thread has no local
+    // collector and can therefore cache Interest::never for our edit event.
+    // Keep two local registrations alive so tracing consults its dispatcher
+    // registry; only the scoped subscriber below receives this thread's events.
+    let _registration = tracing::Dispatch::new(diagnostics.clone());
     let _guard = tracing::subscriber::set_default(diagnostics.clone());
+    // Reproduce first registration on an unrelated, unobserved thread before
+    // checking that our scoped collector still sees the same delivery events.
     std::thread::spawn(|| {
         tokio::runtime::Builder::new_current_thread()
             .build()
@@ -2006,9 +2014,19 @@ async fn uncertain_send_diagnostics_report_only_shape_counts_without_message_or_
     reply.edit_tick().await;
     reply.on_text_delta(" update");
     reply.edit_tick().await;
-    assert_eq!(sender.calls().len(), 2);
+    assert_eq!(
+        sender.calls(),
+        [
+            Call::Send("private-edit-message".into()),
+            Call::Edit("m1".into(), "private-edit-message update".into()),
+        ]
+    );
 
     let messages = diagnostics.0.lock().unwrap().join("\n");
+    assert!(
+        !messages.contains("unobserved"),
+        "collector escaped its test thread"
+    );
     assert!(messages.contains("initial draft response lacked an id"));
     assert!(messages.contains("receipt_parts=0"));
     assert!(messages.contains("response_fields="));
