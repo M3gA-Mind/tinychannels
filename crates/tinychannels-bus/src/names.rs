@@ -49,13 +49,6 @@ pub mod host_methods {
     pub const DISPATCH_CONTROLLER_BACKEND: &str = "DispatchControllerBackend";
 }
 
-/// One method-name constant per member of [`BUS_NAME`].
-#[allow(
-    missing_docs,
-    reason = "generated from the canonical module method registry"
-)]
-pub mod methods {}
-
 /// The source-of-truth module method registry, shared with the module export generator.
 #[doc(hidden)]
 #[macro_export]
@@ -105,14 +98,11 @@ macro_rules! channel_method_registry {
 
 macro_rules! define_method_table {
     ([$($name:ident => $method:literal),* $(,)?]) => {
-        $(pub const $name: &str = $method;)*
+        #[allow(missing_docs, reason = "generated from the canonical module method registry")]
+        pub mod methods { $(pub const $name: &str = $method;)* }
         /// All module method names in the declaration order used by the interface.
         pub const METHODS: [&str; 37] = [$(methods::$name),*];
     };
-}
-// The exported registry generates this module's constants and `METHODS`.
-mod generated_methods {
-    pub use super::methods::*;
 }
 
 /// All host-callback method names in declaration order.
