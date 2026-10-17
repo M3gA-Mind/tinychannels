@@ -396,7 +396,11 @@ pub(crate) fn configured_media_account_scope(
 }
 
 #[derive(Clone)]
-pub(crate) struct ModuleMediaRepository(pub(crate) HostChannels, pub(crate) String, Option<String>);
+pub(crate) struct ModuleMediaRepository(
+    pub(crate) HostChannels,
+    pub(crate) String,
+    pub(crate) Option<String>,
+);
 
 fn bind_configured_media_scope(
     scope: &mut tinychannels_bus::HostVoiceScope,
