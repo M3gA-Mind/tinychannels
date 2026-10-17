@@ -2,7 +2,7 @@
 
 use super::attachments::{parse_attachment_markers, parse_path_only_attachment};
 use super::channel_types::{TelegramChannel, TelegramTypingTask};
-use super::text::{TELEGRAM_MAX_MESSAGE_LENGTH, strip_tool_call_tags};
+use super::text::{TELEGRAM_MAX_MESSAGE_LENGTH, markdown_v2_text, strip_tool_call_tags};
 use crate::config::StreamMode;
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
@@ -527,8 +527,8 @@ impl Channel for TelegramChannel {
         let body = serde_json::json!({
             "chat_id": chat_id,
             "message_id": msg_id,
-            "text": text,
-            "parse_mode": "Markdown",
+            "text": markdown_v2_text(text),
+            "parse_mode": "MarkdownV2",
         });
 
         let resp = self
@@ -542,7 +542,7 @@ impl Channel for TelegramChannel {
             return Ok(());
         }
 
-        // Markdown failed — retry without parse_mode
+        // MarkdownV2 failed — retry without parse_mode
         let plain_body = serde_json::json!({
             "chat_id": chat_id,
             "message_id": msg_id,

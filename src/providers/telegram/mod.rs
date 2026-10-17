@@ -14,6 +14,10 @@ mod channel_send;
 mod channel_types;
 mod text;
 
+#[cfg(test)]
+#[path = "text_tests.rs"]
+mod text_tests;
+
 pub use channel_types::TelegramChannel;
 
 /// Approval-context client id for Telegram turns: the channel name, as for

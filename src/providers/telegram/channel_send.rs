@@ -18,7 +18,7 @@ impl std::fmt::Display for PartialTextSendError {
 }
 
 impl std::error::Error for PartialTextSendError {}
-use super::text::split_message_for_telegram;
+use super::text::{markdown_v2_text, split_message_for_telegram};
 use reqwest::multipart::{Form, Part};
 use std::path::Path;
 use std::time::Duration;
@@ -324,8 +324,8 @@ impl TelegramChannel {
 
             let mut markdown_body = serde_json::json!({
                 "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "Markdown"
+                "text": markdown_v2_text(&text),
+                "parse_mode": "MarkdownV2"
             });
 
             // Add message_thread_id for forum topic support
@@ -387,7 +387,7 @@ impl TelegramChannel {
             }
             tracing::warn!(
                 status = ?markdown_status,
-                "Telegram rejected Markdown formatting; retrying once without parse_mode"
+                "Telegram rejected MarkdownV2 formatting; retrying once without parse_mode"
             );
 
             let mut plain_body = serde_json::json!({
