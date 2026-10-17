@@ -4811,6 +4811,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     audio_capabilities.content.audio.outbound = true;
     audio_capabilities.content.audio.accepted_types = vec!["audio/wav".into()];
     audio_capabilities.content.parts.push("audio".into());
+    let before_audio_publications = callback.published_voice_media.lock().await.len();
     let audio_parts = send_final_voice_case(
         &host,
         &callback,
@@ -4821,6 +4822,9 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         "audio fallback transcript",
     )
     .await;
+    let audio_media_id = callback.published_voice_media.lock().await[before_audio_publications]
+        .opaque_id
+        .clone();
     assert!(audio_parts.iter().any(|part| matches!(
         part,
         tinychannels_bus::OutboundContentPart::Content {
@@ -4830,7 +4834,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
                 transcript: Some(transcript),
                 ..
             }
-        } if media.opaque_id.as_deref() == Some("durable-host-voice")
+        } if media.opaque_id == audio_media_id
             && codec == "wav_pcm16"
             && transcript == "audio fallback transcript"
     )));
