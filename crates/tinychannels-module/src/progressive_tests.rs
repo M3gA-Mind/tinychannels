@@ -688,25 +688,21 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
         .unwrap_err();
     assert!(error.to_string().contains("progressive content exceeds its limit"));
 
-    replies
-        .execute(ProgressiveCommand::Feed {
-            handle: handle.clone(),
-            events: vec![tinychannels_bus::module_progressive::ProgressiveEvent::TextDelta(
-                "legacy chunk".into(),
-            ),
-            tinychannels_bus::module_progressive::ProgressiveEvent::ThinkingDelta(
-                "legacy thought".into(),
-            ),
-            tinychannels_bus::module_progressive::ProgressiveEvent::ToolCall(
-                "search".into(),
-            ),
-            tinychannels_bus::module_progressive::ProgressiveEvent::ToolResult {
-                tool_name: "search".into(),
-                success: true,
-            }],
-        })
-        .await
-        .unwrap();
+    let legacy_feed: ProgressiveCommand = serde_json::from_value(serde_json::json!({
+        "operation": "feed",
+        "handle": handle,
+        "events": [
+            {"event": "text_delta", "value": "legacy chunk"},
+            {"event": "thinking_delta", "value": "legacy thought"},
+            {"event": "tool_call", "value": "search"},
+            {"event": "tool_result", "tool_name": "search", "success": true}
+        ]
+    }))
+    .unwrap();
+    assert_eq!(
+        replies.execute(legacy_feed).await.unwrap(),
+        ProgressiveResult::Updated
+    );
     replies
         .execute(ProgressiveCommand::Finish {
             handle,
@@ -718,6 +714,17 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
     assert_eq!(sends.len(), 1);
     assert_eq!(sends[0]["text"], "legacy final");
     drop(sends);
+    let requests = callback.requests.lock().await;
+    assert!(requests
+        .iter()
+        .all(|request| !matches!(request, ProgressiveTransportRequest::OutputEvent { .. })));
+    assert!(requests
+        .iter()
+        .all(|request| !matches!(request, ProgressiveTransportRequest::SendTyped { .. })));
+    assert!(requests
+        .iter()
+        .any(|request| matches!(request, ProgressiveTransportRequest::Send { .. })));
+    drop(requests);
     replies.shutdown().await.unwrap();
 }
 
