@@ -23,29 +23,33 @@ use reqwest::multipart::{Form, Part};
 use std::path::Path;
 use std::time::Duration;
 
+pub(crate) struct TelegramVoiceUpload<'a> {
+    pub(crate) method: &'a str,
+    pub(crate) field: &'a str,
+    pub(crate) chat_id: &'a str,
+    pub(crate) thread_id: Option<&'a str>,
+    pub(crate) reply_to_id: Option<&'a str>,
+    pub(crate) caption: Option<&'a str>,
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) file_name: &'a str,
+}
+
 impl TelegramChannel {
     pub(crate) async fn send_voice_bytes_with_id(
         &self,
-        method: &str,
-        field: &str,
-        chat_id: &str,
-        thread_id: Option<&str>,
-        reply_to_id: Option<&str>,
-        caption: Option<&str>,
-        bytes: Vec<u8>,
-        file_name: &str,
+        upload: TelegramVoiceUpload<'_>,
     ) -> anyhow::Result<String> {
-        if bytes.len() > 8 * 1024 * 1024 {
+        if upload.bytes.len() > 8 * 1024 * 1024 {
             anyhow::bail!("voice upload exceeds the supported inline limit");
         }
-        let part = Part::bytes(bytes).file_name(file_name.to_owned());
+        let part = Part::bytes(upload.bytes).file_name(upload.file_name.to_owned());
         let mut form = Form::new()
-            .text("chat_id", chat_id.to_owned())
-            .part(field.to_owned(), part);
-        if let Some(thread) = thread_id {
+            .text("chat_id", upload.chat_id.to_owned())
+            .part(upload.field.to_owned(), part);
+        if let Some(thread) = upload.thread_id {
             form = form.text("message_thread_id", thread.to_owned());
         }
-        if let Some(reply_to) = reply_to_id {
+        if let Some(reply_to) = upload.reply_to_id {
             let message_id = reply_to
                 .parse::<i64>()
                 .map_err(|_| anyhow::anyhow!("Telegram reply target is invalid"))?;
@@ -54,12 +58,12 @@ impl TelegramChannel {
                 serde_json::json!({"message_id": message_id}).to_string(),
             );
         }
-        if let Some(caption) = caption {
+        if let Some(caption) = upload.caption {
             form = form.text("caption", caption.to_owned());
         }
         let response = self
             .http_client()
-            .post(self.api_url(method))
+            .post(self.api_url(upload.method))
             .multipart(form)
             .send()
             .await?;
