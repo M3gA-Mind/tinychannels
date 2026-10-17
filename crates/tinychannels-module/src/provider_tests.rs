@@ -687,14 +687,6 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     ..Default::default()
                 });
             }
-            _ => {
-                return Err(tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
-                    message: format!("{feature:?} fixture operation has not been invoked"),
-                    unsupported: true,
-                    ..Default::default()
-                });
-            }
         };
         let intent = tinychannels_bus::ChannelOutboundIntent {
             idempotency_key: "module-kit-send".into(),
