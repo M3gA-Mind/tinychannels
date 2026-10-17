@@ -1330,90 +1330,11 @@ impl tinychannels::channel::ChannelStreamingDraft for TelegramNativeAdapter {
         &self,
         previous: Option<&tinychannels_bus::channel::MessageReceipt>,
         intent: tinychannels_bus::ChannelOutboundIntent,
-    ) -> std::result::Result<
-        tinychannels_bus::channel::MessageReceipt,
-        tinychannels::channel::ChannelSendError,
-    > {
-        let text = match &intent.payload {
-            tinychannels_bus::OutboundPayload::Text { text } => text.clone(),
-            tinychannels_bus::OutboundPayload::Parts { parts } => parts
-                .iter()
-                .filter_map(|part| match part {
-                    tinychannels_bus::OutboundContentPart::Content {
-                        part: tinychannels_bus::ContentPart::Text { text, .. },
-                    } => Some(text.as_str()),
-                    _ => None,
-                })
-                .collect::<Vec<_>>()
-                .join("\n"),
-            _ => {
-                return Err(tinychannels::channel::ChannelSendError {
-                    kind: tinychannels::channel::SendErrorKind::BadFormat,
-                    message: "Telegram drafts support text only".into(),
-                    unsupported: true,
-                    ..Default::default()
-                });
-            }
-        };
-        if let Some(previous) = previous {
-            let message_id = previous
-                .primary_platform_message_id
-                .as_deref()
-                .or_else(|| {
-                    previous
-                        .parts
-                        .first()
-                        .map(|part| part.platform_message_id.as_str())
-                })
-                .ok_or_else(|| tinychannels::channel::ChannelSendError {
-                    kind: tinychannels::channel::SendErrorKind::BadFormat,
-                    message: "Telegram draft receipt has no provider message ID".into(),
-                    ..Default::default()
-                })?;
-            self.running
-                .interact(tinychannels_bus::ChannelInteraction::UpdateDraft {
-                    recipient: intent.conversation_id.clone(),
-                    message_id: message_id.into(),
-                    text,
-                })
-                .await
-                .map_err(adapter_operation_error)?;
-            Ok(previous.clone())
-        } else {
-            let mut message = tinychannels_bus::SendMessage::new(text, intent.conversation_id);
-            message.thread_ts = intent.thread_id;
-            message.reply_to_id = intent.reply_to_id;
-            match self
-                .running
-                .interact(tinychannels_bus::ChannelInteraction::SendDraft { message })
-                .await
-                .map_err(adapter_operation_error)?
-            {
-                tinychannels_bus::ChannelInteractionResult::Draft(Some(message_id)) => {
-                    Ok(tinychannels_bus::channel::MessageReceipt {
-                        primary_platform_message_id: Some(message_id.clone()),
-                        platform_message_ids: vec![message_id.clone()],
-                        parts: vec![tinychannels_bus::channel::MessageReceiptPart {
-                            platform_message_id: message_id,
-                            kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
-                            ..Default::default()
-                        }],
-                        channel: Some(tinychannels_bus::ChannelRef {
-                            id: "telegram".into(),
-                            account_id: Some(self.running.configured_instance.clone()),
-                        }),
-                        conversation: intent.conversation_ref,
-                        ..Default::default()
-                    })
-                }
-                _ => Err(tinychannels::channel::ChannelSendError {
-                    kind: tinychannels::channel::SendErrorKind::Unknown,
-                    message: "Telegram draft creation returned no provider ID".into(),
-                    retryable: false,
-                    ..Default::default()
-                }),
-            }
-        }
+    ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, tinychannels::channel::ChannelSendError> {
+        self.running
+            .upsert_native_draft(previous.cloned(), intent)
+            .await
+            .map_err(adapter_operation_error)
     }
 }
 
