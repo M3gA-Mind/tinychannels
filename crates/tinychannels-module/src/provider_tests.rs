@@ -424,11 +424,18 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
         feature: tinychannels_conformance::ConformanceFeature,
     ) -> tinychannels_conformance::ExpectedScope {
         let mut scope = self.scope.clone();
-        if matches!(feature, tinychannels_conformance::ConformanceFeature::InboundReactions) {
-            // Telegram MessageReactionUpdated has no message_thread_id field.
+        if matches!(feature,
+            tinychannels_conformance::ConformanceFeature::InboundReactions
+                | tinychannels_conformance::ConformanceFeature::Typing
+                | tinychannels_conformance::ConformanceFeature::Reactions
+                | tinychannels_conformance::ConformanceFeature::Edit
+                | tinychannels_conformance::ConformanceFeature::Delete
+        ) {
+            // These Bot API operations/events carry no message_thread_id.
             scope.conversation.thread_id = None;
             scope.conversation.topic_id = None;
             scope.thread_id = None;
+            scope.reply_to_id = None;
         }
         scope
     }
@@ -452,11 +459,12 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
         use tinychannels_bus::{ContentPart as Part, OutboundContentPart as OutPart};
         let media = || self.media.get(&feature).cloned().unwrap_or_else(|| {
             let (kind, content_type, file_name) = match feature {
-                Feature::Image => (tinychannels_bus::MediaKind::Image, "image/webp", "fixture.webp"),
+                Feature::Image => (tinychannels_bus::MediaKind::Image, "image/png", "fixture.png"),
                 Feature::Video => (tinychannels_bus::MediaKind::Video, "video/mp4", "fixture.mp4"),
-                Feature::Audio | Feature::VoiceOut => (tinychannels_bus::MediaKind::Audio, "audio/ogg", "fixture.ogg"),
+                Feature::Audio => (tinychannels_bus::MediaKind::Audio, "audio/mpeg", "fixture.mp3"),
+                Feature::VoiceOut => (tinychannels_bus::MediaKind::Audio, "audio/ogg", "voice.ogg"),
                 Feature::Sticker => (tinychannels_bus::MediaKind::Image, "image/webp", "sticker-512.webp"),
-                _ => (tinychannels_bus::MediaKind::Document, "application/pdf", "fixture.pdf"),
+                _ => (tinychannels_bus::MediaKind::Document, "text/plain", "fixture.txt"),
             };
             tinychannels_bus::MediaReference {
                 url: Some(format!("https://fixtures.invalid/{file_name}")),
@@ -475,7 +483,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             }
             Feature::Image => content(Part::Image { media: media(), caption: Some("image case".into()), alt_text: None }),
             Feature::Video => content(Part::Video { media: media(), caption: Some("video case".into()), duration_ms: Some(1000), thumbnail: None }),
-            Feature::Audio => content(Part::Audio { media: media(), codec: Some("ogg_opus".into()), duration_ms: Some(200), title: Some("audio case".into()), transcript: None }),
+            Feature::Audio => content(Part::Audio { media: media(), codec: Some("mp3".into()), duration_ms: Some(1000), title: Some("audio case".into()), transcript: None }),
             Feature::File => content(Part::File { media: media(), file_name: Some("fixture.pdf".into()), caption: Some("file case".into()) }),
             Feature::Sticker => content(Part::Sticker { media: media(), pack_id: None, sticker_id: None, emoji: Some("🙂".into()), alt_text: None }),
             Feature::Location => content(Part::Location { latitude: 29.3759, longitude: 47.9774, label: None, address: None, accuracy_meters: Some(10.0), live_until_unix_ms: None }),
@@ -594,11 +602,11 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             };
             let chat = field("chat_id").unwrap_or_default();
             let mut conversation = self.scope.conversation.clone();
-            if !chat.is_empty() { conversation.id = chat; }
+            if !chat.is_empty() { conversation.id = chat.clone(); }
             let thread_id = field("message_thread_id");
             conversation.thread_id = thread_id.clone();
             conversation.topic_id = thread_id.clone();
-            let (operation, payload_kind) = match endpoint {
+            let (operation, endpoint_kind) = match endpoint {
                 "sendMessage" => ("send", "text"), "sendPhoto" => ("send", "image"),
                 "sendVideo" => ("send", "video"), "sendAudio" => ("send", "audio"),
                 "sendVoice" => ("send", "voice"), "sendDocument" => ("send", "file"),
@@ -608,6 +616,25 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 "setMessageReaction" => ("reaction_send", ""), "sendChatAction" => ("typing", ""),
                 _ => continue,
             };
+            let payload_kind = if feature == Feature::Buttons {
+                "buttons"
+            } else if feature == Feature::Presentation {
+                "presentation"
+            } else {
+                endpoint_kind
+            };
+            let request_summary = serde_json::json!({
+                "endpoint": endpoint,
+                "chat_id": chat,
+                "message_thread_id": field("message_thread_id"),
+                "reply_to_message_id": field("reply_to_message_id"),
+                "reply_parameters": body.get("reply_parameters"),
+                "message_id": field("message_id"),
+                "text": body.get("text"),
+                "reply_markup": body.get("reply_markup"),
+                "multipart_fields": ["photo", "video", "audio", "voice", "document", "sticker", "latitude", "phone_number", "question"]
+                    .into_iter().filter(|name| raw_body.contains(&format!("name=\"{name}\""))).collect::<Vec<_>>(),
+            });
             let ids = self.response_ids.lock().unwrap();
             let platform_message_ids = ids.iter().rev().find(|(path, _)| path == endpoint)
                 .map(|(_, id)| vec![id.clone()]).unwrap_or_default();
@@ -624,7 +651,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     thread_id,
                     payload_kinds: if payload_kind.is_empty() { vec![] } else { vec![payload_kind.into()] },
                     platform_message_ids,
-                    request: body,
+                    request: request_summary,
                 });
         }
         *cursor = requests.len();
@@ -651,7 +678,7 @@ impl IngressVoiceCallback {
     ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
         self.read_requests.lock().await.push(request);
         Ok(tinychannels_bus::HostReadVoiceMediaResult {
-            audio_base64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
             mime_type: "audio/ogg".into(),
             file_name: Some("voice.oga".into()),
         })
@@ -679,7 +706,7 @@ impl IngressVoiceCallback {
         _request: tinychannels_bus::HostSpeechSynthesisRequest,
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
         Ok(tinychannels_bus::HostSpeechSynthesisResult {
-            audio_base64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
             mime_type: "audio/ogg".into(),
             duration_ms: Some(1000),
         })
@@ -1858,10 +1885,11 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         conversation: ConversationRef { kind: ConversationKind::Group, id: "-100".into(), thread_id: Some("77".into()), topic_id: Some("77".into()), ..Default::default() },
         turn_id: "turn-kit".into(),
     };
-    let media_inputs: [(ConformanceFeature, tinychannels_bus::MediaKind, &str, &str, &[u8]); 6] = [
-        (ConformanceFeature::Image, tinychannels_bus::MediaKind::Image, "image/webp", "fixture.webp", include_bytes!("../../../src/providers/telegram/fixtures/sticker-512.webp")),
+    let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=").unwrap();
+    let media_inputs: [(ConformanceFeature, tinychannels_bus::MediaKind, &str, &str, &[u8]); 7] = [
+        (ConformanceFeature::Image, tinychannels_bus::MediaKind::Image, "image/png", "fixture.png", &png),
         (ConformanceFeature::Video, tinychannels_bus::MediaKind::Video, "video/mp4", "fixture.mp4", include_bytes!("../../../src/providers/telegram/fixtures/cc0-flower.mp4")),
-        (ConformanceFeature::Audio, tinychannels_bus::MediaKind::Audio, "audio/ogg", "fixture.ogg", include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
+        (ConformanceFeature::Audio, tinychannels_bus::MediaKind::Audio, "audio/mpeg", "fixture.mp3", include_bytes!("../../../../tinyvoice/crates/tinyvoice/tests/fixtures/mp3-test.bit")),
         (ConformanceFeature::VoiceOut, tinychannels_bus::MediaKind::Audio, "audio/ogg", "voice.ogg", include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
         (ConformanceFeature::File, tinychannels_bus::MediaKind::Document, "text/plain", "fixture.txt", b"Telegram module conformance document\n"),
         (ConformanceFeature::Sticker, tinychannels_bus::MediaKind::Image, "image/webp", "sticker-512.webp", include_bytes!("../../../src/providers/telegram/fixtures/sticker-512.webp")),
