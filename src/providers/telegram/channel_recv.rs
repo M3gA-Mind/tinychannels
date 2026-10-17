@@ -20,6 +20,12 @@ pub(crate) struct TelegramIncomingMessageContext {
     pub(crate) mention_text: Option<String>,
 }
 
+struct TelegramDownloadedMedia {
+    bytes: Vec<u8>,
+    file_name: Option<String>,
+    content_type: Option<String>,
+}
+
 impl TelegramChannel {
     fn update_media_attachment(
         update: &serde_json::Value,
@@ -105,7 +111,7 @@ impl TelegramChannel {
             .media_repository
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("host media storage is unavailable"))?;
-        let (bytes, response_mime, downloaded_name) = self
+        let downloaded = self
             .download_telegram_media_file(&file_id, TELEGRAM_MAX_VOICE_FILE_BYTES)
             .await?;
         let source = update
@@ -153,9 +159,10 @@ impl TelegramChannel {
             .as_deref()
             .and_then(super::attachments::infer_attachment_mime)
             .or(mime_hint.as_deref())
-            .or(response_mime.as_deref())
+            .or(downloaded.content_type.as_deref())
             .unwrap_or("");
-        if let Some(actual) = response_mime.as_deref()
+        if let Some(actual) = downloaded.content_type.as_deref()
+            && actual != "application/octet-stream"
             && !actual.eq_ignore_ascii_case(hint)
         {
             anyhow::bail!("Telegram media response MIME does not match its declared type");
@@ -167,14 +174,14 @@ impl TelegramChannel {
                     scope,
                     kind,
                     content_type: hint.to_owned(),
-                    file_name: file_name.or(downloaded_name),
+                    file_name: file_name.or(downloaded.file_name),
                     duration_ms,
                     codec: None,
                     voice_direction: None,
                     dedupe_key: Some(dedupe_key),
                     max_bytes: TELEGRAM_MAX_VOICE_FILE_BYTES,
                 },
-                bytes,
+                bytes: downloaded.bytes,
             })
             .await?;
         let part = match kind {
@@ -1154,7 +1161,7 @@ impl TelegramChannel {
         &self,
         file_id: &str,
         max_bytes: u64,
-    ) -> anyhow::Result<(Vec<u8>, Option<String>, Option<String>)> {
+    ) -> anyhow::Result<TelegramDownloadedMedia> {
         let file_response = self
             .http_client()
             .post(self.api_url("getFile"))
@@ -1229,7 +1236,11 @@ impl TelegramChannel {
         if bytes.is_empty() {
             anyhow::bail!("Telegram returned an empty media body");
         }
-        Ok((bytes, file_name, response_mime))
+        Ok(TelegramDownloadedMedia {
+            bytes,
+            file_name,
+            content_type: response_mime,
+        })
     }
 
     pub(crate) async fn download_telegram_voice_file(
