@@ -3,6 +3,7 @@ members = [
     "crates/tinychannels-bus",
     "crates/tinychannels-module",
     "crates/tinychannels-runtime",
+    "crates/tinychannels-conformance",
 ]
 default-members = [
     ".",
