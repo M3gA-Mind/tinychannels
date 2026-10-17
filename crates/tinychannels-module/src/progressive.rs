@@ -157,7 +157,7 @@ impl ProgressiveSender for Sender {
             } else {
                 parts.to_vec()
             };
-            let outcome = self.send_typed_part(
+            let outcome = send_typed_part(self,
                 channel,
                 &segment_parts,
                 segment,
@@ -177,59 +177,6 @@ impl ProgressiveSender for Sender {
         Ok(aggregate)
     }
 
-    async fn send_typed_part(
-        &self,
-        channel: &str,
-        parts: &[tinychannels_bus::OutboundContentPart],
-        text: &str,
-        context: Option<&ProgressiveOutputContext>,
-        sequence: u64,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
-        let idempotency_key = context.map(|context| {
-            let scope = serde_json::to_vec(&(
-                &context.turn_id,
-                &context.channel,
-                &context.conversation,
-                sequence,
-                "provider_send",
-            ))
-            .expect("scoped channel identity serializes");
-            hex::encode(Sha256::digest(scope))
-        });
-        match self
-            .host
-            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(
-                ProgressiveTransportRequest::SendTyped {
-                    channel: channel.into(),
-                    turn_id: context.map(|context| context.turn_id.clone()),
-                    channel_ref: context.map(|context| context.channel.clone()),
-                    conversation: context.map(|context| context.conversation.clone()),
-                    sequence: context.map(|_| sequence),
-                    idempotency_key,
-                    parts: parts.to_vec(),
-                    text: text.into(),
-                },
-            ))
-            .await
-            .map_err(|_| ProgressiveSendError::Unavailable)?
-        {
-            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Outcome(
-                outcome,
-            )) => Ok(outcome),
-            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Unavailable) => {
-                Err(ProgressiveSendError::Unavailable)
-            }
-            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Failed) => {
-                Err(ProgressiveSendError::Other(anyhow::anyhow!(
-                    "typed provider send failed with unknown outcome"
-                )))
-            }
-            ChannelBackendResult::ProgressiveTransport(
-                ProgressiveTransportResult::UnsupportedContent,
-            ) => Err(ProgressiveSendError::UnsupportedContent),
-            _ => Err(ProgressiveSendError::UnsupportedContent),
-        }
-    }
     async fn edit(
         &self,
         channel: &str,
@@ -314,6 +261,60 @@ fn split_text_by_limit(
         segments.push(current);
     }
     Ok(segments)
+}
+
+async fn send_typed_part(
+    sender: &Sender,
+    channel: &str,
+    parts: &[tinychannels_bus::OutboundContentPart],
+    text: &str,
+    context: Option<&ProgressiveOutputContext>,
+    sequence: u64,
+) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
+    let idempotency_key = context.map(|context| {
+        let scope = serde_json::to_vec(&(
+            &context.turn_id,
+            &context.channel,
+            &context.conversation,
+            sequence,
+            "provider_send",
+        ))
+        .expect("scoped channel identity serializes");
+        hex::encode(Sha256::digest(scope))
+    });
+    match sender
+        .host
+        .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(
+            ProgressiveTransportRequest::SendTyped {
+                channel: channel.into(),
+                turn_id: context.map(|context| context.turn_id.clone()),
+                channel_ref: context.map(|context| context.channel.clone()),
+                conversation: context.map(|context| context.conversation.clone()),
+                sequence: context.map(|_| sequence),
+                idempotency_key,
+                parts: parts.to_vec(),
+                text: text.into(),
+            },
+        ))
+        .await
+        .map_err(|_| ProgressiveSendError::Unavailable)?
+    {
+        ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Outcome(outcome)) => {
+            Ok(outcome)
+        }
+        ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Unavailable) => {
+            Err(ProgressiveSendError::Unavailable)
+        }
+        ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Failed) => {
+            Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                "typed provider send failed with unknown outcome"
+            )))
+        }
+        ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::UnsupportedContent) => {
+            Err(ProgressiveSendError::UnsupportedContent)
+        }
+        _ => Err(ProgressiveSendError::UnsupportedContent),
+    }
 }
 
 enum Command {
