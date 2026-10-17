@@ -1,5 +1,5 @@
 //! In-process provider seams and legacy send helpers.
-use tinychannels_bus::{ChannelMessage, SendMessage};
+pub use tinychannels_bus::{ChannelMessage, SendMessage};
 
 use async_trait::async_trait;
 
@@ -33,7 +33,7 @@ pub trait Channel: Send + Sync {
     /// default is the explicit text-only one-release compatibility projection.
     async fn send_typed(
         &self,
-        message: &crate::channel::ChannelOutboundMessage,
+        message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> anyhow::Result<()> {
         self.send(&message.to_legacy_message()?).await
     }
@@ -43,7 +43,7 @@ pub trait Channel: Send + Sync {
     /// they return an empty receipt rather than guessing an ID.
     async fn send_typed_with_receipt(
         &self,
-        message: &crate::channel::ChannelOutboundMessage,
+        message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
         self.send_typed(message).await?;
         Ok(crate::channel::ChannelSendOutcome::default())
