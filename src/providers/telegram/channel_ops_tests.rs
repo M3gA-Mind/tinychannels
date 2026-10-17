@@ -868,6 +868,12 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
         topic_id: Some("topic-77".into()),
         ..Default::default()
     });
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
     message.parts = vec![
         tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Text {
