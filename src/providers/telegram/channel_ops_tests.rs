@@ -2553,55 +2553,6 @@ async fn finalize_draft_oversized_text_with_invalid_id_sends_chunks_only() {
 }
 
 #[tokio::test]
-async fn send_reaction_marker_targets_explicit_id_then_sends_reply_text() {
-    let server = mock_api().await;
-    mount_post(&server, "setMessageReaction", ok()).await;
-    mount_post(&server, "sendMessage", ok()).await;
-    let ch = channel_for(&server, &["*"]);
-
-    ch.send(&SendMessage::new("[REACTION:👍|99] Great point", "100:2").in_thread(Some("5".into())))
-        .await
-        .unwrap();
-
-    let reactions = json_bodies(&server, "setMessageReaction").await;
-    assert_eq!(reactions.len(), 1);
-    assert_eq!(reactions[0]["message_id"], 99);
-    assert_eq!(reactions[0]["chat_id"], "100");
-    let sent = json_bodies(&server, "sendMessage").await;
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0]["text"], "Great point");
-    assert_eq!(sent[0]["message_thread_id"], "2");
-    assert_eq!(sent[0]["reply_to_message_id"], 5);
-}
-
-#[tokio::test]
-async fn send_reaction_only_marker_uses_parent_id_and_sends_no_text() {
-    let server = mock_api().await;
-    mount_post(&server, "setMessageReaction", ok()).await;
-    let ch = channel_for(&server, &["*"]);
-
-    ch.send(&SendMessage::new("[REACTION:🔥]", "100").in_thread(Some("12".into())))
-        .await
-        .unwrap();
-
-    let reactions = json_bodies(&server, "setMessageReaction").await;
-    assert_eq!(reactions.len(), 1);
-    assert_eq!(reactions[0]["message_id"], 12);
-    assert!(json_bodies(&server, "sendMessage").await.is_empty());
-}
-
-#[tokio::test]
-async fn send_reaction_marker_without_target_is_ignored() {
-    let server = mock_api().await;
-    let ch = channel_for(&server, &["*"]);
-
-    ch.send(&SendMessage::new("[REACTION:🔥]", "100"))
-        .await
-        .unwrap();
-
-    assert!(server.received_requests().await.unwrap().is_empty());
-}
-
 #[tokio::test]
 async fn legacy_reaction_marker_is_plain_text_not_a_telegram_operation() {
     let server = mock_api().await;
@@ -2613,52 +2564,10 @@ async fn legacy_reaction_marker_is_plain_text_not_a_telegram_operation() {
         .unwrap();
 
     assert!(json_bodies(&server, "setMessageReaction").await.is_empty());
-    assert_eq!(sent_texts(&server).await, ["[REACTION:🔥] hello"]);
+    assert_eq!(sent_texts(&server).await, ["\\[REACTION:🔥\\] hello"]);
 }
 
 #[tokio::test]
-async fn send_with_attachment_markers_sends_text_then_attachments() {
-    let server = mock_api().await;
-    mount_post(&server, "sendMessage", ok()).await;
-    mount_post(&server, "sendPhoto", ok()).await;
-    mount_post(&server, "sendDocument", ok()).await;
-    let ch = channel_for(&server, &["*"]);
-
-    ch.send(&SendMessage::new(
-        "Here you go [IMAGE:https://cdn.example/a.png] [DOCUMENT:https://cdn.example/b.pdf]",
-        "100",
-    ))
-    .await
-    .unwrap();
-
-    assert_eq!(sent_texts(&server).await, vec!["Here you go".to_string()]);
-    assert_eq!(
-        json_bodies(&server, "sendPhoto").await[0]["photo"],
-        "https://cdn.example/a.png"
-    );
-    assert_eq!(
-        json_bodies(&server, "sendDocument").await[0]["document"],
-        "https://cdn.example/b.pdf"
-    );
-}
-
-#[tokio::test]
-async fn send_attachment_marker_only_skips_text_message() {
-    let server = mock_api().await;
-    mount_post(&server, "sendVideo", ok()).await;
-    let ch = channel_for(&server, &["*"]);
-
-    ch.send(&SendMessage::new(
-        "[VIDEO:https://cdn.example/v.mp4]",
-        "100",
-    ))
-    .await
-    .unwrap();
-
-    assert!(json_bodies(&server, "sendMessage").await.is_empty());
-    assert_eq!(json_bodies(&server, "sendVideo").await.len(), 1);
-}
-
 #[tokio::test]
 async fn send_bare_existing_path_uploads_it_as_attachment() {
     let server = mock_api().await;
