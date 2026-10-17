@@ -988,7 +988,9 @@ async fn run(
                     }
                     if cancellation {
                         reply.abort().await;
-                        let result = Ok(ProgressiveResult::Closed);
+                        if matches!(result, Ok(ProgressiveResult::Updated)) {
+                            result = Ok(ProgressiveResult::Closed);
+                        }
                         record_terminal(&terminal_feed, fingerprint, &result).await;
                         let _ = response.send(result);
                         break;
