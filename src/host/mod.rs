@@ -42,7 +42,9 @@ mod services;
 mod voice;
 
 pub use dispatch::{DispatchOptions, DispatchRequest, TurnDispatcher, TurnHandle};
-pub use media::{MediaScope, ScopedMediaStore, StoredMedia};
+pub use media::{
+    MediaMetadata, MediaScope, MediaStoreRequest, MediaStreamRequest, ScopedMediaStore, StoredMedia,
+};
 pub use noop::{ChannelHostBuilder, NoopHost};
 pub use services::{
     AllowlistStore, ApprovalAsk, ApprovalDecision, ApprovalGate, ConversationMessage,

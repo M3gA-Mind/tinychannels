@@ -138,20 +138,34 @@ fn valid_png() -> Vec<u8> {
         .unwrap()
 }
 
+fn media_request(
+    bytes: Vec<u8>,
+    file_name: Option<&str>,
+    dedupe_key: Option<&str>,
+) -> MediaStoreRequest {
+    MediaStoreRequest {
+        metadata: MediaMetadata {
+            scope: media_scope(),
+            kind: tinychannels_bus::MediaKind::Image,
+            content_type: "image/png".into(),
+            file_name: file_name.map(str::to_owned),
+            duration_ms: None,
+            dedupe_key: dedupe_key.map(str::to_owned),
+            max_bytes: 1024,
+        },
+        bytes,
+    }
+}
+
 #[tokio::test]
 async fn stored_media_roundtrips_through_a_scoped_opaque_blob_reference() {
     let store = store();
     let reference = store
-        .store(
-            media_scope(),
-            tinychannels_bus::MediaKind::Image,
-            "image/png".into(),
-            Some("photo.png".into()),
-            None,
+        .store(media_request(
             valid_png(),
-            Some("telegram:91:photo:0".into()),
-            1024,
-        )
+            Some("photo.png"),
+            Some("telegram:91:photo:0"),
+        ))
         .await
         .unwrap();
 
@@ -171,16 +185,7 @@ async fn stored_media_roundtrips_through_a_scoped_opaque_blob_reference() {
 async fn media_reference_requires_the_original_configured_full_turn_scope() {
     let store = store();
     let reference = store
-        .store(
-            media_scope(),
-            tinychannels_bus::MediaKind::Image,
-            "image/png".into(),
-            None,
-            None,
-            valid_png(),
-            None,
-            1024,
-        )
+        .store(media_request(valid_png(), None, None))
         .await
         .unwrap();
     let mut wrong_scopes = Vec::new();
@@ -224,18 +229,53 @@ async fn media_reference_requires_the_original_configured_full_turn_scope() {
 async fn media_store_rejects_oversized_bytes_before_persisting_them() {
     let store = store();
     assert!(store
-        .store(
-            media_scope(),
-            tinychannels_bus::MediaKind::Image,
-            "image/png".into(),
-            None,
-            None,
-            vec![0; 1025],
-            None,
-            1024,
-        )
+        .store(media_request(vec![0; 1025], None, None))
         .await
         .is_err());
+}
+
+#[tokio::test]
+async fn streamed_media_accepts_actual_length_and_rejects_unknown_length_over_cap() {
+    let store = store();
+    let reference = store
+        .store_stream(MediaStreamRequest {
+            metadata: media_request(valid_png(), None, None).metadata,
+            reader: Box::pin(std::io::Cursor::new(valid_png())),
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .read(media_scope(), reference.opaque_id.as_deref().unwrap(), 1024)
+            .await
+            .unwrap()
+            .bytes,
+        valid_png()
+    );
+
+    let mut metadata = media_request(Vec::new(), None, None).metadata;
+    metadata.max_bytes = 64;
+    assert!(store
+        .store_stream(MediaStreamRequest {
+            metadata,
+            reader: Box::pin(std::io::Cursor::new(vec![b'x'; 4096])),
+        })
+        .await
+        .is_err());
+}
+
+#[tokio::test]
+async fn invalid_stream_scope_is_rejected_before_reading_body() {
+    let store = store();
+    let mut metadata = media_request(Vec::new(), None, None).metadata;
+    metadata.scope.turn_id.clear();
+    let result = store
+        .store_stream(MediaStreamRequest {
+            metadata,
+            reader: Box::pin(std::io::Cursor::new(valid_png())),
+        })
+        .await;
+    assert!(result.is_err());
 }
 
 #[tokio::test]
@@ -246,17 +286,10 @@ async fn media_store_rejects_spoofed_mime_and_truncated_image_bodies() {
         ("application/pdf", valid_png()),
         ("image/png", b"\x89PNG\r\n\x1a\n".to_vec()),
     ] {
+        let mut request = media_request(bytes, None, None);
+        request.metadata.content_type = content_type.into();
         assert!(store
-            .store(
-                media_scope(),
-                tinychannels_bus::MediaKind::Image,
-                content_type.into(),
-                None,
-                None,
-                bytes,
-                None,
-                1024,
-            )
+            .store(request)
             .await
             .is_err());
     }
@@ -287,30 +320,20 @@ async fn independent_store_instances_cannot_replace_a_deduplicated_blob() {
         let first = Arc::clone(&first);
         let key = key.clone();
         tokio::spawn(async move {
-            first.store(
-            media_scope(),
-            tinychannels_bus::MediaKind::Image,
-            "image/png".into(),
-            Some("photo.png".into()),
-            None,
-            valid_png(),
-            key.clone(),
-            1024,
-            ).await
+            first.store(media_request(
+                valid_png(),
+                Some("photo.png"),
+                key.as_deref(),
+            )).await
         })
     };
     paused.entered.notified().await;
     let competing = second
-        .store(
-            media_scope(),
-            tinychannels_bus::MediaKind::Image,
-            "image/png".into(),
-            Some("photo.png".into()),
-            None,
+        .store(media_request(
             valid_png(),
-            key,
-            1024,
-        )
+            Some("photo.png"),
+            key.as_deref(),
+        ))
         .await;
     paused.release.notify_one();
     let reference = left.await.unwrap().expect("first writer should finish");
@@ -346,16 +369,7 @@ async fn deleting_an_inflight_media_write_cannot_orphan_its_blob() {
         let writer = Arc::clone(&writer);
         tokio::spawn(async move {
             writer
-                .store(
-                    media_scope(),
-                    tinychannels_bus::MediaKind::Image,
-                    "image/png".into(),
-                    None,
-                    None,
-                    valid_png(),
-                    Some(dedupe_key.into()),
-                    1024,
-                )
+                .store(media_request(valid_png(), None, Some(dedupe_key)))
                 .await
         })
     };
@@ -382,16 +396,7 @@ async fn failed_blob_cleanup_can_be_retried_after_reopening_the_store() {
         failing_blobs.clone(),
     );
     let reference = writer
-        .store(
-            media_scope(),
-            tinychannels_bus::MediaKind::Image,
-            "image/png".into(),
-            None,
-            None,
-            valid_png(),
-            None,
-            1024,
-        )
+        .store(media_request(valid_png(), None, None))
         .await
         .unwrap();
     let opaque_id = reference.opaque_id.unwrap();
