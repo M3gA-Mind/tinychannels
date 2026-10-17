@@ -49,6 +49,18 @@ pub enum ChannelInteraction {
         text: String,
         thread_ts: Option<String>,
     },
+    SendReaction {
+        conversation_id: String,
+        message_id: String,
+        reaction: String,
+    },
+    EditMessage {
+        receipt: crate::channel::MessageReceipt,
+        intent: crate::channel::ChannelOutboundIntent,
+    },
+    DeleteMessage {
+        receipt: crate::channel::MessageReceipt,
+    },
 }
 
 /// Frozen v21 interaction information returned by the existing `Describe`
