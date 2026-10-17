@@ -2806,7 +2806,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "base64 0.23.1",
- "chrono",
  "schemars",
  "serde",
  "serde_json",
@@ -2814,7 +2813,6 @@ dependencies = [
  "tinystoragedrivers-core",
  "tokio",
  "toml",
- "tracing",
 ]
 
 [[package]]
