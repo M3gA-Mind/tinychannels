@@ -203,43 +203,6 @@ impl ProgressiveSender for Sender {
     }
 }
 
-fn split_text_by_limit(
-    text: &str,
-    limit: u64,
-    unit: tinychannels_bus::LengthUnit,
-) -> std::result::Result<Vec<String>, ProgressiveSendError> {
-    if limit == 0 {
-        return Err(ProgressiveSendError::Other(anyhow::anyhow!(
-            "configured text limit is zero"
-        )));
-    }
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut used = 0u64;
-    for scalar in text.chars() {
-        let cost = match unit {
-            tinychannels_bus::LengthUnit::Characters => 1,
-            tinychannels_bus::LengthUnit::Utf8Bytes => scalar.len_utf8() as u64,
-            tinychannels_bus::LengthUnit::Utf16Units => scalar.len_utf16() as u64,
-        };
-        if cost > limit {
-            return Err(ProgressiveSendError::Other(anyhow::anyhow!(
-                "one text scalar exceeds configured text limit"
-            )));
-        }
-        if used > 0 && used + cost > limit {
-            segments.push(std::mem::take(&mut current));
-            used = 0;
-        }
-        current.push(scalar);
-        used += cost;
-    }
-    if !current.is_empty() || segments.is_empty() {
-        segments.push(current);
-    }
-    Ok(segments)
-}
-
 async fn send_typed_part(
     sender: &Sender,
     channel: &str,
@@ -294,64 +257,6 @@ async fn send_typed_part(
             ProgressiveTransportResult::UnsupportedContent,
         ) => Err(ProgressiveSendError::UnsupportedContent),
         _ => Err(ProgressiveSendError::UnsupportedContent),
-    }
-}
-
-fn merge_receipt(
-    aggregate: &mut tinychannels_bus::channel::MessageReceipt,
-    next: tinychannels_bus::channel::MessageReceipt,
-    first: bool,
-    segment_index: usize,
-) {
-    if first {
-        *aggregate = next;
-        return;
-    }
-    if next.parts.is_empty() && (next.edit_token.is_some() || next.delete_token.is_some()) {
-        for (offset, platform_message_id) in next.platform_message_ids.iter().enumerate() {
-            aggregate
-                .parts
-                .push(tinychannels_bus::channel::MessageReceiptPart {
-                    platform_message_id: platform_message_id.clone(),
-                    kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
-                    index: segment_index + offset,
-                    edit_token: next.edit_token.clone(),
-                    delete_token: next.delete_token.clone(),
-                    ..Default::default()
-                });
-        }
-    }
-    aggregate
-        .platform_message_ids
-        .extend(next.platform_message_ids);
-    aggregate.parts.extend(next.parts);
-    if aggregate.primary_platform_message_id.is_none() {
-        aggregate.primary_platform_message_id = next.primary_platform_message_id;
-    }
-    if aggregate.channel.is_none() {
-        aggregate.channel = next.channel;
-    }
-    if aggregate.conversation.is_none() {
-        aggregate.conversation = next.conversation;
-    }
-    if aggregate.idempotency_key.is_none() {
-        aggregate.idempotency_key = next.idempotency_key;
-    }
-    if aggregate.thread_id.is_none() {
-        aggregate.thread_id = next.thread_id;
-    }
-    if aggregate.reply_to_id.is_none() {
-        aggregate.reply_to_id = next.reply_to_id;
-    }
-    if aggregate.edit_token.is_none() {
-        aggregate.edit_token = next.edit_token;
-    }
-    if aggregate.delete_token.is_none() {
-        aggregate.delete_token = next.delete_token;
-    }
-    aggregate.sent_at = aggregate.sent_at.max(next.sent_at);
-    if let Some(mut raw) = next.raw {
-        aggregate.raw.get_or_insert_with(Vec::new).append(&mut raw);
     }
 }
 
