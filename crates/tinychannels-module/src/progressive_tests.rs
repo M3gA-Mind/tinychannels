@@ -1017,7 +1017,10 @@ async fn typed_final_delivery_returns_partial_receipt_without_retrying() {
         })
         .await
         .unwrap();
-    assert_eq!(result, ProgressiveResult::DeliveryOutcome { outcome });
+    assert!(matches!(result,
+        ProgressiveResult::DeliveryBatch { outcomes, failure: Some(_), .. }
+            if outcomes == [outcome]
+    ));
     let sends = callback.sends.lock().await;
     assert_eq!(sends.len(), 1, "partial sends must not be retried");
     assert_eq!(sends[0]["text"], "caption");
@@ -1164,9 +1167,10 @@ async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts
         })
         .await
         .unwrap();
-    let ProgressiveResult::DeliveryOutcome { outcome } = result else {
+    let ProgressiveResult::DeliveryBatch { outcomes, failure: Some(_), .. } = result else {
         panic!("expected retained delivery outcome")
     };
+    let outcome = &outcomes[0];
     assert_eq!(outcome.receipt.platform_message_ids, ["seg-1", "seg-2"]);
     assert!(outcome.error.is_some());
     assert_eq!(
@@ -1803,6 +1807,9 @@ async fn scoped_draft_keys_differ_for_identical_text_across_turns_and_accounts()
         .iter()
         .filter_map(|request| match request {
             ProgressiveTransportRequest::Send {
+                idempotency_key, ..
+            }
+            | ProgressiveTransportRequest::SendTyped {
                 idempotency_key, ..
             } => idempotency_key.as_deref(),
             _ => None,
