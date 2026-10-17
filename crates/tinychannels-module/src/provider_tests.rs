@@ -403,8 +403,11 @@ use tinychannels_conformance::AdapterFixture as _;
 
 struct RunningTelegramConformance {
     adapter: ConfiguredAdapterHandle,
+    running: Arc<Running>,
     server: wiremock::MockServer,
     scope: tinychannels_conformance::ExpectedScope,
+    media: std::collections::HashMap<tinychannels_conformance::ConformanceFeature, tinychannels_bus::MediaReference>,
+    callbacks: IngressVoiceCallback,
     observed: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
     request_cursor: std::sync::Mutex<usize>,
 }
@@ -506,7 +509,12 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     reply_to_id: wire_id("reply_to_message_id"),
                     thread_id: wire_id("message_thread_id"),
                     payload_kinds,
-                    platform_message_ids: vec!["321".into()],
+                    platform_message_ids: result
+                        .as_ref()
+                        .ok()
+                        .and_then(|outcome| outcome.as_ref())
+                        .map(|outcome| outcome.receipt.platform_message_ids.clone())
+                        .unwrap_or_default(),
                     request: body,
                 });
         }
@@ -522,6 +530,7 @@ struct IngressVoiceCallback {
     inbound: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
     events: Arc<Mutex<Vec<tinychannels_bus::ChannelEvent>>>,
     ingress_changed: Arc<tokio::sync::Notify>,
+    transcription_result: Arc<Mutex<Option<String>>>,
     stt_calls: Arc<AtomicUsize>,
 }
 
@@ -545,7 +554,43 @@ impl IngressVoiceCallback {
     ) -> Result<tinychannels_bus::HostTranscriptionResult> {
         self.stt_calls.fetch_add(1, Ordering::SeqCst);
         self.stt_requests.lock().await.push(request);
-        Err(tinybus::Error::failed("fixture STT unavailable"))
+        if let Some(text) = self.transcription_result.lock().await.clone() {
+            Ok(tinychannels_bus::HostTranscriptionResult {
+                text,
+                language: Some("en".into()),
+                duration_secs: Some(1.0),
+            })
+        } else {
+            Err(tinybus::Error::failed("fixture STT unavailable"))
+        }
+    }
+
+    async fn synthesize_speech(
+        &self,
+        _request: tinychannels_bus::HostSpeechSynthesisRequest,
+    ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
+        Ok(tinychannels_bus::HostSpeechSynthesisResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+            mime_type: "audio/ogg".into(),
+            duration_ms: Some(1000),
+        })
+    }
+
+    async fn store_voice_media(
+        &self,
+        request: tinychannels_bus::HostStoreVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        let media = request.media_reference.unwrap_or(tinychannels_bus::MediaReference {
+            opaque_id: Some("fixture-voice-media".into()),
+            kind: tinychannels_bus::MediaKind::Audio,
+            content_type: Some(request.mime_type),
+            file_name: request.file_name,
+            ..Default::default()
+        });
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media,
+            accessible_url: None,
+        })
     }
 
     async fn deliver_inbound(&self, channel: String, message: serde_json::Value) -> Result<()> {

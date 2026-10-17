@@ -2264,7 +2264,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         .unwrap();
     let observation = fixture.observations().pop().unwrap();
     assert_eq!(observation.request["chat_id"], "100");
-    assert_eq!(observation.request["text"], "hello-kit");
+    assert_eq!(observation.request["text"], "hello\\-kit");
     assert_eq!(observation.platform_message_ids, ["321"]);
 
     check_feature(&fixture, ConformanceFeature::VoiceSynthesis)
