@@ -172,13 +172,16 @@ impl ChannelAdapter for LocalChannelAdapter {
             id: self.descriptor.id.clone(),
             account_id: self.descriptor.account_id.clone(),
         };
-        let expected_conversation = intent.conversation_ref.clone().unwrap_or_else(|| {
+        let mut expected_conversation = intent.conversation_ref.clone().unwrap_or_else(|| {
             tinychannels_bus::ConversationRef {
                 id: intent.conversation_id.clone(),
                 thread_id: intent.thread_id.clone(),
                 ..Default::default()
             }
         });
+        if expected_conversation.thread_id.is_none() {
+            expected_conversation.thread_id.clone_from(&intent.thread_id);
+        }
         if outcome.receipt.channel.as_ref() != Some(&expected_channel)
             || outcome.receipt.conversation.as_ref() != Some(&expected_conversation)
         {
