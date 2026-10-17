@@ -736,15 +736,22 @@ async fn apply(
             ChannelOutputEvent::FinalMessage { .. }
             | ChannelOutputEvent::ToolCallArgsDelta { .. }
             | ChannelOutputEvent::ApprovalRequest { .. }
-            | ChannelOutputEvent::Clarification { .. }
+            | ChannelOutputEvent::Clarification { .. } => {}
             ChannelOutputEvent::Media { text, parts } if forward => {
                 let mut outbound = Vec::new();
                 if let Some(text) = text {
                     outbound.push(tinychannels_bus::OutboundContentPart::Content {
-                        part: tinychannels_bus::ContentPart::Text { text, markdown_dialect: None },
+                        part: tinychannels_bus::ContentPart::Text {
+                            text,
+                            markdown_dialect: None,
+                        },
                     });
                 }
-                outbound.extend(parts.into_iter().map(|part| tinychannels_bus::OutboundContentPart::Content { part }));
+                outbound.extend(
+                    parts
+                        .into_iter()
+                        .map(|part| tinychannels_bus::OutboundContentPart::Content { part }),
+                );
                 match reply.send_content_parts(&outbound, "").await {
                     Ok(outcome) => outcomes.push(outcome),
                     Err(ProgressiveSendError::UnsupportedContent) => unsupported.extend(outbound),
@@ -753,9 +760,17 @@ async fn apply(
             }
             ChannelOutputEvent::VoiceNote { text, voice } if forward => {
                 let mut outbound = Vec::new();
-                if let Some(text) = text.or_else(|| voice.transcript.as_ref().map(|transcript| transcript.text.clone())) {
+                if let Some(text) = text.or_else(|| {
+                    voice
+                        .transcript
+                        .as_ref()
+                        .map(|transcript| transcript.text.clone())
+                }) {
                     outbound.push(tinychannels_bus::OutboundContentPart::Content {
-                        part: tinychannels_bus::ContentPart::Text { text, markdown_dialect: None },
+                        part: tinychannels_bus::ContentPart::Text {
+                            text,
+                            markdown_dialect: None,
+                        },
                     });
                 }
                 outbound.push(tinychannels_bus::OutboundContentPart::Voice {
@@ -771,7 +786,8 @@ async fn apply(
                     Err(error) => return Err(Error::failed(error.to_string())),
                 }
             }
-            ChannelOutputEvent::Media { .. } | ChannelOutputEvent::VoiceNote { .. }
+            ChannelOutputEvent::Media { .. }
+            | ChannelOutputEvent::VoiceNote { .. }
             | ChannelOutputEvent::Subagent { .. }
             | ChannelOutputEvent::Usage { .. }
             | ChannelOutputEvent::ModelUsage { .. }
