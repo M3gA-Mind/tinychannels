@@ -76,13 +76,13 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
             tinychannels_bus::ChannelsConfig {
                 slack: Some(SlackConfig {
                     bot_token: "bot".into(),
-                    app_token: Some("app".into()),
+                    app_token: None,
                     channel_id: None,
                     allowed_users: vec![],
                 }),
                 ..Default::default()
             },
-            |c| c.slack.as_mut().unwrap().app_token = None,
+            |c| c.slack.as_mut().unwrap().bot_token.clear(),
         ),
         (
             "mattermost",
@@ -303,6 +303,86 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
         configured_media_account_scope("email", &email),
         configured_media_account_scope("email", &alternate_imap),
         "endpoint authority participates in the account binding"
+    );
+
+    let mut missing_authority = email.clone();
+    missing_authority.email.as_mut().unwrap().imap_host.clear();
+    assert!(configured_media_account_scope("email", &missing_authority).is_none());
+
+    let mut missing_authority = tinychannels_bus::ChannelsConfig {
+        mattermost: Some(MattermostConfig {
+            url: "https://chat.example".into(),
+            bot_token: "secret".into(),
+            channel_id: None,
+            allowed_users: vec![],
+            thread_replies: None,
+            mention_only: None,
+        }),
+        ..Default::default()
+    };
+    assert!(configured_media_account_scope("mattermost", &missing_authority).is_some());
+    missing_authority.mattermost.as_mut().unwrap().url.clear();
+    assert!(configured_media_account_scope("mattermost", &missing_authority).is_none());
+
+    let mut missing_authority = tinychannels_bus::ChannelsConfig {
+        matrix: Some(MatrixConfig {
+            homeserver: "https://matrix.example".into(),
+            access_token: "secret".into(),
+            user_id: Some("@bot:example".into()),
+            device_id: None,
+            room_id: "!room:example".into(),
+            allowed_users: vec![],
+        }),
+        ..Default::default()
+    };
+    assert!(configured_media_account_scope("matrix", &missing_authority).is_some());
+    missing_authority.matrix.as_mut().unwrap().homeserver.clear();
+    assert!(configured_media_account_scope("matrix", &missing_authority).is_none());
+
+    let mut missing_authority = tinychannels_bus::ChannelsConfig {
+        irc: Some(IrcConfig {
+            server: "irc.example".into(),
+            port: 6697,
+            nickname: "bot".into(),
+            username: Some("auth-user".into()),
+            channels: vec![],
+            allowed_users: vec![],
+            server_password: None,
+            nickserv_password: None,
+            sasl_password: Some("secret".into()),
+            verify_tls: Some(true),
+        }),
+        ..Default::default()
+    };
+    assert!(configured_media_account_scope("irc", &missing_authority).is_some());
+    missing_authority.irc.as_mut().unwrap().server.clear();
+    assert!(configured_media_account_scope("irc", &missing_authority).is_none());
+}
+
+#[test]
+fn slack_optional_socket_mode_token_does_not_change_media_account_scope() {
+    use tinychannels_bus::config::SlackConfig;
+
+    let mut config = tinychannels_bus::ChannelsConfig {
+        slack: Some(SlackConfig {
+            bot_token: "slack-bot-account-secret".into(),
+            app_token: None,
+            channel_id: None,
+            allowed_users: vec![],
+        }),
+        ..Default::default()
+    };
+    let bot_only_scope = configured_media_account_scope("slack", &config).unwrap();
+    config.slack.as_mut().unwrap().app_token = Some("xapp-first".into());
+    assert_eq!(
+        configured_media_account_scope("slack", &config).as_deref(),
+        Some(bot_only_scope.as_str())
+    );
+    config.slack.as_mut().unwrap().app_token = Some("xapp-rotated".into());
+    assert_eq!(
+        configured_media_account_scope("slack", &config).as_deref(),
+        Some(bot_only_scope.as_str()),
+        "optional transport auth rotation preserves the bot account binding"
     );
 }
 use base64::Engine as _;
