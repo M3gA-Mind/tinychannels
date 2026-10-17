@@ -1094,6 +1094,96 @@ async fn typed_image_rejects_non_numeric_platform_thread_before_upload() {
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn typed_media_preserves_legacy_address_and_requires_host_opaque_id() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendPhoto",
+        ok_with(serde_json::json!({ "message_id": 701 })),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"])
+        .with_media_repository(Arc::new(UncheckedMediaReadFixture));
+    let mut message = typed_text("legacy-address", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-legacy".into());
+    message.thread_id = Some("77".into());
+    message.conversation_ref = None;
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-photo-1".into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    }];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    assert_eq!(outcome.receipt.platform_message_ids, ["701"]);
+    assert_eq!(outcome.receipt.thread_id.as_deref(), Some("77"));
+
+    let mut missing_reference = scoped_typed_media_message("stored-photo-1");
+    if let tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image { media, .. },
+    } = &mut missing_reference.parts[0]
+    {
+        media.opaque_id = None;
+    }
+    let error = channel
+        .send_typed_with_receipt(&missing_reference)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("no host-owned opaque reference"));
+    assert_eq!(json_bodies(&server, "sendPhoto").await.len(), 1);
+}
+
+#[tokio::test]
+async fn typed_text_partial_failure_keeps_real_ids_and_stops_before_media() {
+    let server = mock_api().await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .respond_with(ok_with(serde_json::json!({ "message_id": 702 })))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .respond_with(ResponseTemplate::new(500).set_body_string("temporary failure"))
+        .mount(&server)
+        .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = scoped_typed_media_message("stored-photo-1");
+    let image = message.parts.remove(0);
+    message.parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "x".repeat(5_000),
+                markdown_dialect: None,
+            },
+        },
+        image,
+    ];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["702"]);
+    assert_eq!(outcome.receipt.parts.len(), 1);
+    let error = outcome.error.expect("second text chunk failed");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    assert!(error.message.contains("only part"));
+    assert!(json_bodies(&server, "sendPhoto").await.is_empty());
+    assert_eq!(json_bodies(&server, "sendMessage").await.len(), 2);
+}
+
 fn scoped_typed_media_message(id: &str) -> tinychannels_bus::ChannelOutboundMessage {
     let mut message = typed_text(id, String::new());
     message.channel_ref = Some(tinychannels_bus::ChannelRef {
