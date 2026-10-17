@@ -60,7 +60,7 @@ exact-version: a v21 host cannot bind a v22 module, so this shim is for source
 migration and same-version legacy provider adapters, not cross-version callback
 compatibility.
 
-Contract version 23 adds confidential `BeginMediaUpload`,
+Contract version 24 includes confidential `BeginMediaUpload`,
 `AppendMediaUploadChunk`, `FinishMediaUpload`, and `AbortMediaUpload` calls for
 host-to-module media. An upload is accepted only on its owning runtime object
 while the named configured provider instance is active. The caller supplies
@@ -85,6 +85,17 @@ and full logical conversation/turn, not a runtime activation ID: a resumed
 conversation can keep using its opaque reference after provider/runtime restart.
 In-flight upload handles remain activation-bound and cannot authorize against a
 replacement provider activation.
+
+Version 24 adds confidential `BeginMediaRead`, `ReadMediaChunk`, and
+`AbortMediaRead` operations. Begin resolves the opaque ID through the module's
+existing scoped repository using the full conversation and turn; provider and
+account are derived from the active configured instance. The repository is read
+once under a 30-second deadline. At most two 20 MiB objects are held in memory
+per runtime, and each short-lived (60-second) handle returns ordered, retryable
+chunks capped at 512 KiB. Callers must abort after EOF; stopping the provider
+invalidates its handles. The reply contains validated bytes and normalized
+metadata only, without a host cache path or storage key. Hosts can write those
+bytes through their own guarded file ports.
 
 This source contract still requires a compatible published native module before
 a downstream host can claim released composition.
