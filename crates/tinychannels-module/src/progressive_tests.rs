@@ -1494,6 +1494,59 @@ async fn cancellation_retains_prior_media_receipt() {
             if outcome.receipt.platform_message_ids == ["fixture-message"]
     ));
     assert_eq!(callback.sends.lock().await.len(), 1);
+
+    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(
+        tinychannels_bus::channel::ChannelSendOutcome {
+            receipt: tinychannels_bus::channel::MessageReceipt {
+                platform_message_ids: vec!["partial-before-cancel".into()],
+                ..Default::default()
+            },
+            error: Some(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                message: "partial media delivery".into(),
+                sent_before_error: true,
+                ..Default::default()
+            }),
+        },
+    )]
+    .into();
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:media-cancel".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "partial-media-cancel-turn".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected opened output")
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![
+                ChannelOutputEvent::Media {
+                    text: None,
+                    parts: vec![],
+                },
+                ChannelOutputEvent::Cancellation { reason: None },
+            ],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result,
+        ProgressiveResult::DeliveryBatch { outcomes, failure: Some(_), .. }
+            if outcomes.len() == 1
+                && outcomes[0].receipt.platform_message_ids == ["partial-before-cancel"]
+                && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
+    ));
     replies.shutdown().await.unwrap();
 }
 
