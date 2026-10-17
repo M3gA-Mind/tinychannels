@@ -7,6 +7,30 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 struct VoiceReadFixture;
 
+#[test]
+fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() {
+    let without_store = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
+        .capabilities();
+    assert!(!without_store.voice_in.supported);
+    assert!(!without_store.voice_out.supported);
+    assert!(!without_store.voice_out.synthesis);
+
+    let with_storage = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
+        .with_voice_media_store(Arc::new(VoiceReadFixture))
+        .capabilities();
+    assert!(with_storage.voice_in.supported);
+    assert!(with_storage.voice_out.supported);
+    assert!(!with_storage.voice_out.synthesis);
+    assert_eq!(with_storage.voice_out.accepted_codecs, ["ogg_opus", "m4a_aac", "mp3"]);
+    assert_eq!(with_storage.voice_out.max_size_bytes, Some(8 * 1024 * 1024));
+
+    let with_all_ports = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
+        .with_voice_media_store(Arc::new(VoiceReadFixture))
+        .with_voice_synthesis(true)
+        .capabilities();
+    assert!(with_all_ports.voice_out.synthesis);
+}
+
 #[async_trait::async_trait]
 impl crate::host::VoiceMediaStore for VoiceReadFixture {
     async fn store_voice(
