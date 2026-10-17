@@ -155,8 +155,8 @@ pub(super) async fn flush_thinking_message(
                     id,
                 );
                 state.thinking_message_id = Some(id);
-                state.thinking_message_ids = vec![state.thinking_message_id.clone().unwrap()];
-                state.thinking_message_receipt = None;
+                state.thinking_message_ids = ids;
+                state.thinking_message_receipt = receipt;
             } else {
                 tracing::warn!(
                     "[channel-inbound][thinking] thinking msg sent but response lacked id — disabling further thinking flushes (message won't be deletable) channel='{}' receipt_parts={} response_fields={}",
