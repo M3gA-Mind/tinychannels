@@ -109,8 +109,13 @@ async fn provider_transcript_wins_without_replacing_stored_audio() {
         }),
     });
 
-    let status = enrich_voice_note(&mut note, scope(), Some(request()), Some(transcriber.clone()))
-        .await;
+    let status = enrich_voice_note(
+        &mut note,
+        scope(),
+        Some(request()),
+        Some(transcriber.clone()),
+    )
+    .await;
 
     assert_eq!(status, VoiceEnrichmentStatus::ProviderTranscript);
     assert_eq!(note.media, media);
@@ -135,7 +140,11 @@ async fn host_transcription_attaches_text_to_the_existing_media_reference() {
 
     assert_eq!(status, VoiceEnrichmentStatus::HostTranscription);
     assert_eq!(note.media, media);
-    assert_eq!(note.duration_ms, Some(900), "provider duration remains authoritative");
+    assert_eq!(
+        note.duration_ms,
+        Some(900),
+        "provider duration remains authoritative"
+    );
     let transcript = note.transcript.unwrap();
     assert_eq!(transcript.text, "host words");
     assert_eq!(transcript.state, VoiceTranscriptState::Complete);
@@ -145,9 +154,25 @@ async fn host_transcription_attaches_text_to_the_existing_media_reference() {
 #[test]
 fn reply_mode_respects_inbound_voice_and_explicit_turn_request() {
     assert!(should_synthesize_reply(VoiceReplyMode::Mirror, true, false));
-    assert!(!should_synthesize_reply(VoiceReplyMode::Mirror, false, true));
-    assert!(should_synthesize_reply(VoiceReplyMode::Always, false, false));
+    assert!(!should_synthesize_reply(
+        VoiceReplyMode::Mirror,
+        false,
+        true
+    ));
+    assert!(should_synthesize_reply(
+        VoiceReplyMode::Always,
+        false,
+        false
+    ));
     assert!(!should_synthesize_reply(VoiceReplyMode::Never, true, true));
-    assert!(should_synthesize_reply(VoiceReplyMode::SpeakReply, false, true));
-    assert!(!should_synthesize_reply(VoiceReplyMode::SpeakReply, true, false));
+    assert!(should_synthesize_reply(
+        VoiceReplyMode::SpeakReply,
+        false,
+        true
+    ));
+    assert!(!should_synthesize_reply(
+        VoiceReplyMode::SpeakReply,
+        true,
+        false
+    ));
 }

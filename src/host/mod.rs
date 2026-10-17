@@ -49,7 +49,9 @@ pub use services::{
     SpeechSynthesizer, StorageProvider, Transcriber, TranscriptionRequest, TranscriptionResult,
     VoiceMediaRequest, VoiceMediaStore,
 };
-pub use voice::{VoiceEnrichmentStatus, VoiceReplyMode, enrich_voice_note, should_synthesize_reply};
+pub use voice::{
+    VoiceEnrichmentStatus, VoiceReplyMode, enrich_voice_note, should_synthesize_reply,
+};
 
 use crate::config::ChannelsConfig;
 use crate::context::Memory;
