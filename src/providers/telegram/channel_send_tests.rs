@@ -115,6 +115,21 @@ async fn send_text_chunks_single_chunk_carries_thread_and_reply_ids() {
 }
 
 #[tokio::test]
+async fn send_text_uses_markdown_v2_for_formatted_content() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &["*"]);
+
+    ch.send_text_chunks("*bold* and _italic_", "100", None, None)
+        .await
+        .unwrap();
+
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(bodies[0]["parse_mode"], "MarkdownV2");
+    assert_eq!(bodies[0]["text"], "*bold* and _italic_");
+}
+
+#[tokio::test]
 async fn send_text_chunks_does_not_retry_unknown_or_non_format_rejections() {
     for status in [429, 500] {
         let server = mock_api().await;
