@@ -1023,7 +1023,8 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
 async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference() {
     use tinychannels_bus::{
         ChannelRef, ConversationKind, ConversationRef, MediaKind, MediaUploadBegin,
-        MediaUploadChunk, MediaUploadFinish, MediaUploadHandle, OutboundContentPart,
+        MediaReadBegin, MediaReadChunk, MediaReadFinish, MediaUploadChunk, MediaUploadFinish,
+        MediaUploadHandle, OutboundContentPart,
         module_media::{MEDIA_UPLOAD_CHUNK_BYTES, MediaUploadResult},
     };
     use wiremock::matchers::{method, path_regex};
@@ -1279,6 +1280,108 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .await
         .unwrap();
     assert_eq!(replay, reference);
+
+    // The compiled module resolves the durable opaque reference through the
+    // same scoped store and returns bytes only in confidential bounded replies.
+    let mut read_request = MediaReadBegin {
+        instance: "telegram".into(),
+        scope: scope.clone(),
+        media: reference.clone(),
+        max_bytes: 1024,
+    };
+    assert_eq!(
+        runtime_proxy
+            .call::<tinychannels_bus::MediaReadInfo>("BeginMediaRead", read_request.clone())
+            .await
+            .unwrap_err()
+            .wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    let mut wrong_conversation = read_request.clone();
+    wrong_conversation.scope.conversation.topic_id = Some("different-topic".into());
+    assert!(runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadInfo>("BeginMediaRead", wrong_conversation)
+        .await
+        .is_err());
+    let mut wrong_turn = read_request.clone();
+    wrong_turn.scope.turn_id = "different-turn".into();
+    assert!(runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadInfo>("BeginMediaRead", wrong_turn)
+        .await
+        .is_err());
+    let mut foreign_account = read_request.clone();
+    foreign_account.instance = "telegram:foreign".into();
+    assert!(runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadInfo>("BeginMediaRead", foreign_account)
+        .await
+        .is_err());
+    let mut unknown_media = read_request.clone();
+    unknown_media.media.opaque_id = Some("tinychannels_media_v1_unknown".into());
+    assert!(runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadInfo>("BeginMediaRead", unknown_media)
+        .await
+        .is_err());
+    read_request.max_bytes = 67;
+    assert!(runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadInfo>("BeginMediaRead", read_request)
+        .await
+        .is_err());
+    let read: tinychannels_bus::MediaReadInfo = runtime_proxy
+        .call_confidential(
+            "BeginMediaRead",
+            MediaReadBegin {
+                instance: "telegram".into(),
+                scope: scope.clone(),
+                media: reference.clone(),
+                max_bytes: 1024,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(read.content_type, "image/png");
+    assert_eq!(read.byte_count, png_for_wire_check.len());
+    assert_eq!(read.chunk_count, 1);
+    assert!(read.media.local_cache_path.is_none());
+    let chunk_request = MediaReadChunk {
+        handle: read.handle.clone(),
+        sequence: 0,
+    };
+    let chunk: tinychannels_bus::MediaReadChunkResult = runtime_proxy
+        .call_confidential("ReadMediaChunk", chunk_request.clone())
+        .await
+        .unwrap();
+    assert_eq!(chunk.bytes, png_for_wire_check);
+    assert!(chunk.done);
+    let retry: tinychannels_bus::MediaReadChunkResult = runtime_proxy
+        .call_confidential("ReadMediaChunk", chunk_request)
+        .await
+        .unwrap();
+    assert_eq!(retry, chunk, "a lost chunk reply must be safely retryable");
+    let foreign_runtime_error = other_runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadChunk>(
+            "ReadMediaChunk",
+            MediaReadChunk {
+                handle: read.handle.clone(),
+                sequence: 0,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(foreign_runtime_error.wire_name(), tinybus::Error::FAILED);
+    runtime_proxy
+        .call_confidential::<()>("AbortMediaRead", MediaReadFinish(read.handle.clone()))
+        .await
+        .unwrap();
+    assert!(runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadChunk>(
+            "ReadMediaChunk",
+            MediaReadChunk {
+                handle: read.handle,
+                sequence: 0,
+            },
+        )
+        .await
+        .is_err());
 
     // Exercise the public framed request boundary at the advertised maximum
     // chunk, followed by a final partial chunk. The ordinary channel message
