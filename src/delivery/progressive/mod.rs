@@ -39,6 +39,17 @@ pub struct ProgressiveOutputDispatch {
 }
 
 impl ProgressiveOutputDispatch {
+    /// Retain a provider receipt and fence the batch when delivery is partial
+    /// or its side effect is uncertain.
+    pub fn push_outcome(&mut self, outcome: tinychannels_bus::channel::ChannelSendOutcome) {
+        if outcome.error.is_some() {
+            self.failure = Some(
+                tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport,
+            );
+        }
+        self.outcomes.push(outcome);
+    }
+
     /// Append one event's delivery facts while preserving event and part order.
     pub fn absorb(&mut self, mut other: Self) {
         self.outcomes.append(&mut other.outcomes);
