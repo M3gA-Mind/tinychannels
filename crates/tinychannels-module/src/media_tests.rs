@@ -365,3 +365,147 @@ async fn panicking_storage_releases_the_reservation_without_ready_media() {
     );
     assert_eq!(uploads.state.lock().await.uploads.len(), 0);
 }
+
+#[tokio::test]
+async fn terminal_success_replays_and_terminal_state_is_pruned_and_bounded() {
+    let uploads = std::sync::Arc::new(MediaUploads::default());
+    let repository = std::sync::Arc::new(BlockingPersistence::default());
+    repository.release.notify_one();
+
+    let handle = ready_upload(&uploads).await;
+    assert_eq!(
+        uploads.binding_handle(&handle).await.unwrap(),
+        ("telegram:primary".into(), "activation-a".into())
+    );
+    assert_eq!(
+        uploads
+            .binding(&MediaUploadFinish(handle.clone()))
+            .await
+            .unwrap(),
+        ("telegram:primary".into(), "activation-a".into())
+    );
+    let stored = uploads
+        .clone()
+        .finish(
+            MediaUploadFinish(handle.clone()),
+            "activation-a".into(),
+            repository.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        uploads
+            .clone()
+            .finish(
+                MediaUploadFinish(handle.clone()),
+                "activation-a".into(),
+                repository.clone(),
+            )
+            .await
+            .unwrap(),
+        stored
+    );
+    assert!(uploads.abort(MediaUploadFinish(handle.clone())).await.is_err());
+    assert_eq!(repository.calls.load(Ordering::SeqCst), 1);
+
+    for _ in 0..(TERMINAL_CAPACITY + 1) {
+        let aborted = uploads
+            .begin(request(1), "activation-a".into())
+            .await
+            .unwrap();
+        uploads.abort(MediaUploadFinish(aborted)).await.unwrap();
+    }
+    assert_eq!(uploads.state.lock().await.terminal.len(), TERMINAL_CAPACITY);
+    tokio::time::pause();
+    tokio::time::advance(TERMINAL_LIFETIME + Duration::from_millis(1)).await;
+    assert!(uploads.binding(&MediaUploadFinish(handle)).await.is_err());
+    assert!(uploads.state.lock().await.terminal.is_empty());
+}
+
+#[tokio::test]
+async fn metadata_and_chunk_rejection_paths_do_not_retain_invalid_state() {
+    let uploads = std::sync::Arc::new(MediaUploads::default());
+    for invalid in [
+        MediaUploadBegin {
+            instance: "  ".into(),
+            ..request(1)
+        },
+        MediaUploadBegin {
+            scope: tinychannels_bus::HostVoiceScope {
+                conversation: tinychannels_bus::ConversationRef {
+                    id: " ".into(),
+                    ..request(1).scope.conversation
+                },
+                ..request(1).scope
+            },
+            ..request(1)
+        },
+        MediaUploadBegin {
+            scope: tinychannels_bus::HostVoiceScope {
+                turn_id: " ".into(),
+                ..request(1).scope
+            },
+            ..request(1)
+        },
+        request(0),
+    ] {
+        assert!(uploads.begin(invalid, "activation-a".into()).await.is_err());
+    }
+    let handle = ready_upload(&uploads).await;
+    for (sequence, bytes) in [(0, vec![]), (0, vec![0, 1]), (1, vec![0]), (u32::MAX, vec![0])] {
+        assert!(
+            uploads
+                .append(MediaUploadChunk {
+                    handle: handle.clone(),
+                    sequence,
+                    bytes,
+                })
+                .await
+                .is_err()
+        );
+    }
+    assert!(uploads
+        .clone()
+        .finish(
+            MediaUploadFinish(handle.clone()),
+            "another-activation".into(),
+            std::sync::Arc::new(BlockingPersistence::default()),
+        )
+        .await
+        .is_err());
+    assert!(uploads
+        .clone()
+        .finish(
+            MediaUploadFinish(handle.clone()),
+            "activation-a".into(),
+            std::sync::Arc::new(BlockingPersistence::default()),
+        )
+        .await
+        .is_err());
+    assert!(uploads
+        .clone()
+        .finish(
+            MediaUploadFinish(MediaUploadHandle("unknown".into())),
+            "activation-a".into(),
+            std::sync::Arc::new(BlockingPersistence::default()),
+        )
+        .await
+        .is_err());
+    assert!(uploads
+        .abort(MediaUploadFinish(MediaUploadHandle("unknown".into())))
+        .await
+        .is_err());
+}
+
+#[tokio::test(start_paused = true)]
+async fn terminal_replay_expires_after_its_retention_window() {
+    let uploads = std::sync::Arc::new(MediaUploads::default());
+    let handle = ready_upload(&uploads).await;
+    uploads.abort(MediaUploadFinish(handle.clone())).await.unwrap();
+    tokio::time::advance(TERMINAL_LIFETIME + Duration::from_millis(1)).await;
+    assert!(uploads
+        .abort(MediaUploadFinish(handle.clone()))
+        .await
+        .is_err());
+    assert!(uploads.binding(&MediaUploadFinish(handle)).await.is_err());
+}
