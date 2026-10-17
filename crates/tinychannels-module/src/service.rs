@@ -1067,7 +1067,9 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let activation = self.media_activation(&request.instance).await?;
-        self.media_uploads.begin(request, activation).await
+        self.media_uploads
+            .begin(request, activation.generation)
+            .await
     }
 
     /// Append one ordered, retry-safe media chunk over confidential TinyBus.
@@ -1080,7 +1082,7 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let (instance, activation) = self.media_uploads.binding_handle(&chunk.handle).await?;
-        if self.media_activation(&instance).await? != activation {
+        if self.media_activation(&instance).await?.generation != activation {
             return Err(BusError::failed(
                 "media upload belongs to another provider activation",
             ));
@@ -1098,7 +1100,8 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let (instance, activation) = self.media_uploads.binding(&request).await?;
-        if self.media_activation(&instance).await? != activation {
+        let current = self.media_activation(&instance).await?;
+        if current.generation != activation {
             return Err(BusError::failed(
                 "media upload belongs to another provider activation",
             ));
@@ -1106,6 +1109,7 @@ impl Channels {
         let repository = Arc::new(crate::provider::ModuleMediaRepository(
             self.host.clone(),
             instance,
+            current.media_account_scope,
         ));
         self.media_uploads
             .clone()
@@ -1123,7 +1127,7 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let (instance, activation) = self.media_uploads.binding(&request).await?;
-        if self.media_activation(&instance).await? != activation {
+        if self.media_activation(&instance).await?.generation != activation {
             return Err(BusError::failed(
                 "media upload belongs to another provider activation",
             ));
@@ -1157,8 +1161,11 @@ impl Channels {
             ));
         }
         let instance = request.instance.clone();
-        let repository =
-            crate::provider::ModuleMediaRepository(self.host.clone(), instance.clone());
+        let repository = crate::provider::ModuleMediaRepository(
+            self.host.clone(),
+            instance.clone(),
+            activation.media_account_scope.clone(),
+        );
         let media_id = request
             .media
             .opaque_id
@@ -1169,7 +1176,7 @@ impl Channels {
         self.media_reads
             .resolve(
                 request,
-                activation.clone(),
+                activation.generation.clone(),
                 || async move {
                 <crate::provider::ModuleMediaRepository as tinychannels::host::MediaRepository>::read_media(
                     &repository,
@@ -1201,7 +1208,7 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let (instance, activation) = self.media_reads.binding(&request.handle).await?;
-        if self.media_activation(&instance).await? != activation {
+        if self.media_activation(&instance).await?.generation != activation {
             return Err(BusError::failed("media read belongs to another activation"));
         }
         self.media_reads.chunk(request).await
