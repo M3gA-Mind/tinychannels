@@ -11,7 +11,10 @@ struct LargeVoiceReadFixture {
     expected_scope: tinychannels_bus::HostVoiceScope,
 }
 
-fn outbound_voice_message(opaque_id: Option<&str>, turn_id: Option<&str>) -> tinychannels_bus::ChannelOutboundMessage {
+fn outbound_voice_message(
+    opaque_id: Option<&str>,
+    turn_id: Option<&str>,
+) -> tinychannels_bus::ChannelOutboundMessage {
     tinychannels_bus::ChannelOutboundMessage {
         channel_id: "telegram".into(),
         conversation_id: "100".into(),
@@ -496,20 +499,32 @@ async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
         .send_typed_with_receipt(&message)
         .await
         .unwrap_err();
-    assert!(missing_store.to_string().contains("requires host media resolution"));
+    assert!(
+        missing_store
+            .to_string()
+            .contains("requires host media resolution")
+    );
 
     let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
     let missing_reference = channel
         .send_typed_with_receipt(&outbound_voice_message(None, Some("turn-1")))
         .await
         .unwrap_err();
-    assert!(missing_reference.to_string().contains("no host-owned opaque reference"));
+    assert!(
+        missing_reference
+            .to_string()
+            .contains("no host-owned opaque reference")
+    );
 
     let missing_turn = channel
         .send_typed_with_receipt(&outbound_voice_message(Some("voice-ref"), None))
         .await
         .unwrap_err();
-    assert!(missing_turn.to_string().contains("requires originating turn identity"));
+    assert!(
+        missing_turn
+            .to_string()
+            .contains("requires originating turn identity")
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
