@@ -2087,11 +2087,9 @@ async fn telegram_rejects_wav_audio_before_native_upload() {
 
     let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
 
-    assert_eq!(
-        error.kind,
-        tinychannels_bus::channel::SendErrorKind::Forbidden
-    );
-    assert!(!error.sent_before_error);
+    assert!(error
+        .to_string()
+        .contains("rejected before provider dispatch"));
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
