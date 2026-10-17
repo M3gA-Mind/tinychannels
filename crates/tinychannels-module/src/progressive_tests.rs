@@ -149,7 +149,8 @@ impl Callback {
             }
             _ => {}
         }
-        if (typed_send || matches!(request, ProgressiveTransportRequest::Send { .. })) && self.block {
+        if (typed_send || matches!(request, ProgressiveTransportRequest::Send { .. })) && self.block
+        {
             self.entered.notify_one();
             self.released.notified().await;
         }
@@ -500,8 +501,10 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
 #[tokio::test]
 async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     let (replies, _) = fixture(false).await;
-    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
-    capabilities.progressive_edits = true;
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
     let mut reply = ProgressiveReply::new(
         Arc::new(Sender {
             host: replies.host.clone(),
@@ -1223,8 +1226,10 @@ async fn terminal_text_edits_existing_draft_without_duplicate_send() {
                 }]
             }
         })));
-    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
-    capabilities.progressive_edits = true;
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
     let mut configured = HashMap::new();
     configured.insert(
         "discord:final-draft".to_owned(),
@@ -1302,8 +1307,10 @@ async fn terminal_text_edits_existing_draft_without_duplicate_send() {
 #[tokio::test(start_paused = true)]
 async fn failed_terminal_edit_retains_the_existing_draft_receipt() {
     let (base, callback) = fixture(false).await;
-    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
-    capabilities.progressive_edits = true;
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
     let mut configured = HashMap::new();
     configured.insert(
         "discord:failed-final-edit".to_owned(),
@@ -1349,13 +1356,15 @@ async fn failed_terminal_edit_retains_the_existing_draft_receipt() {
     for _ in 0..5 {
         tokio::task::yield_now().await;
     }
-    let mut edit_error = tinychannels_bus::channel::ChannelSendOutcome::default();
-    edit_error.error = Some(tinychannels_bus::channel::ChannelSendError {
-        kind: tinychannels_bus::channel::SendErrorKind::Transient,
-        message: "edit failed".into(),
-        sent_before_error: true,
+    let edit_error = tinychannels_bus::channel::ChannelSendOutcome {
+        error: Some(tinychannels_bus::channel::ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Transient,
+            message: "edit failed".into(),
+            sent_before_error: true,
+            ..Default::default()
+        }),
         ..Default::default()
-    });
+    };
     *callback.send_result.lock().await =
         Some(ProgressiveTransportResult::Outcome(Box::new(edit_error)));
     let result = replies
@@ -1474,10 +1483,8 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
 #[tokio::test]
 async fn media_without_receipt_is_unknown_and_stops_terminal_batch() {
     let (base, callback) = fixture(false).await;
-    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(Box::new(
-        tinychannels_bus::channel::ChannelSendOutcome::default(),
-    ))]
-    .into();
+    *callback.send_queue.lock().await =
+        [ProgressiveTransportResult::Outcome(Box::default())].into();
     let configured = Arc::new(Mutex::new(HashMap::new()));
     configured.lock().await.insert(
         "discord:no-receipt".to_owned(),
@@ -1724,8 +1731,10 @@ async fn thinking_multipart_receipt_drives_per_part_token_cleanup() {
             }
         }),
     ));
-    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
-    capabilities.progressive_edits = true;
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
     let handle = open_scoped(
         &replies,
         "discord:thinking-receipt",
@@ -1788,8 +1797,10 @@ async fn thinking_multipart_receipt_drives_per_part_token_cleanup() {
 async fn filler_callback_error_after_acceptance_is_not_retried() {
     let (replies, callback) = fixture(false).await;
     *callback.rpc_error_after_send.lock().await = true;
-    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
-    capabilities.progressive_edits = true;
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
     let mut reply = ProgressiveReply::new(
         Arc::new(Sender {
             host: replies.host.clone(),
@@ -1840,8 +1851,10 @@ async fn filler_multipart_receipt_drives_per_part_token_cleanup() {
                 ]
             }
         })));
-    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
-    capabilities.progressive_edits = true;
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
     let handle = open_scoped(
         &replies,
         "discord:filler-receipt",
@@ -2097,8 +2110,10 @@ async fn later_observation_failure_retains_prior_receipt_and_stops_terminal_batc
 async fn callback_error_after_accepting_draft_is_not_retried_or_resent() {
     let (replies, callback) = fixture(false).await;
     *callback.rpc_error_after_send.lock().await = true;
-    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
-    capabilities.progressive_edits = true;
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
     let handle = open_scoped(
         &replies,
         "discord:ambiguous-draft",
@@ -2166,8 +2181,10 @@ async fn callback_error_after_accepting_draft_is_not_retried_or_resent() {
 #[tokio::test(start_paused = true)]
 async fn scoped_draft_keys_differ_for_identical_text_across_turns_and_accounts() {
     let (replies, callback) = fixture(false).await;
-    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
-    capabilities.progressive_edits = true;
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
     for (account, turn) in [("discord:key-a", "turn-a"), ("discord:key-b", "turn-b")] {
         let handle = open_scoped(&replies, account, turn, capabilities.clone()).await;
         replies
@@ -2209,8 +2226,10 @@ async fn scoped_draft_keys_differ_for_identical_text_across_turns_and_accounts()
 #[tokio::test(start_paused = true)]
 async fn configured_progressive_channel_posts_and_edits_one_draft() {
     let (base, callback) = fixture(false).await;
-    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
-    capabilities.progressive_edits = true;
+    let capabilities = tinychannels_bus::ChannelCapabilities {
+        progressive_edits: true,
+        ..Default::default()
+    };
     let mut configured = HashMap::new();
     configured.insert(
         "discord:editable".to_owned(),
