@@ -138,6 +138,8 @@ fn harness_outbound_intent_preserves_full_turn_address() {
         &turn,
         ChannelOutputEvent::FinalMessage {
             text: "reply".into(),
+            parts: vec![],
+            receipt: None,
         },
         &ChannelStaticCapabilities::default(),
         &ChannelPresentationCapabilities::default(),
@@ -158,6 +160,8 @@ fn harness_events_preserve_text_and_routing_metadata() {
         (
             ChannelOutputEvent::FinalMessage {
                 text: "final".into(),
+                parts: vec![],
+                receipt: None,
             },
             "final",
         ),

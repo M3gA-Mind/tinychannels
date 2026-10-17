@@ -31,6 +31,8 @@ async fn handle_streams_events_in_order_and_closes_after_completion() {
     };
     let final_event = ChannelOutputEvent::FinalMessage {
         text: "final".into(),
+        parts: vec![],
+        receipt: None,
     };
     sender.send(first.clone()).await.unwrap();
     sender.send(final_event.clone()).await.unwrap();

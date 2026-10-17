@@ -25,6 +25,8 @@ impl TurnDispatcher for MockDispatcher {
             let _ = tx
                 .send(ChannelOutputEvent::FinalMessage {
                     text: format!("done:{echoed}"),
+                    parts: vec![],
+                    receipt: None,
                 })
                 .await;
         });
@@ -134,7 +136,7 @@ async fn dispatch_streams_output_events() {
     assert_eq!(events.len(), 2);
     assert!(matches!(events[0], ChannelOutputEvent::TextDelta { .. }));
     match &events[1] {
-        ChannelOutputEvent::FinalMessage { text } => assert_eq!(text, "done:m42"),
+        ChannelOutputEvent::FinalMessage { text, .. } => assert_eq!(text, "done:m42"),
         other => panic!("unexpected final event: {other:?}"),
     }
 }
