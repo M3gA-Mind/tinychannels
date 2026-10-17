@@ -20,7 +20,7 @@ pub(crate) struct TelegramIncomingMessageContext {
     pub(crate) mention_text: Option<String>,
 }
 
-struct TelegramDownloadedMedia {
+pub(crate) struct TelegramDownloadedMedia {
     bytes: Vec<u8>,
     file_name: Option<String>,
     content_type: Option<String>,
