@@ -13,7 +13,7 @@ use tinychannels::delivery::progressive::{
     ProgressiveSender, TYPING_REFRESH_INTERVAL,
 };
 use tinychannels_bus::module_progressive::{
-    ProgressiveCommand, ProgressiveEvent, ProgressiveResult, ProgressiveTransportRequest,
+    ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
     ProgressiveTransportResult,
 };
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
@@ -396,18 +396,18 @@ async fn run(
     }
 }
 
-fn apply(reply: &mut ProgressiveReply, events: Vec<ProgressiveEvent>) -> Result<()> {
+fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>) -> Result<()> {
     let text = events
         .iter()
         .filter_map(|event| match event {
-            ProgressiveEvent::TextDelta(value) => Some(value.len()),
+            ChannelOutputEvent::TextDelta { text } => Some(text.len()),
             _ => None,
         })
         .sum::<usize>();
     let thinking = events
         .iter()
         .filter_map(|event| match event {
-            ProgressiveEvent::ThinkingDelta(value) => Some(value.len()),
+            ChannelOutputEvent::ThinkingDelta { text, .. } => Some(text.len()),
             _ => None,
         })
         .sum::<usize>();
@@ -423,12 +423,30 @@ fn apply(reply: &mut ProgressiveReply, events: Vec<ProgressiveEvent>) -> Result<
     }
     for event in events {
         match event {
-            ProgressiveEvent::TextDelta(value) => reply.on_text_delta(&value),
-            ProgressiveEvent::ThinkingDelta(value) => reply.on_thinking_delta(&value),
-            ProgressiveEvent::ToolCall(name) => reply.on_tool_call(&name),
-            ProgressiveEvent::ToolResult { tool_name, success } => {
-                reply.on_tool_result(&tool_name, success)
+            ChannelOutputEvent::TextDelta { text } => reply.on_text_delta(&text),
+            ChannelOutputEvent::ThinkingDelta { text, .. } => reply.on_thinking_delta(&text),
+            ChannelOutputEvent::ToolCallStarted { tool_name, display_label, .. } => {
+                reply.on_tool_call(display_label.as_deref().unwrap_or(&tool_name))
             }
+            ChannelOutputEvent::ToolProgress { label, message } => {
+                reply.on_tool_call(message.as_deref().unwrap_or(&label))
+            }
+            ChannelOutputEvent::ToolCallProgress { message, .. } => reply.on_tool_call(&message),
+            ChannelOutputEvent::ToolCallCompleted { tool_name, display_label, success, .. } => {
+                reply.on_tool_result(display_label.as_deref().unwrap_or(&tool_name), success)
+            }
+            ChannelOutputEvent::FinalMessage { .. }
+            | ChannelOutputEvent::ToolCallArgsDelta { .. }
+            | ChannelOutputEvent::ApprovalRequest { .. }
+            | ChannelOutputEvent::Clarification { .. }
+            | ChannelOutputEvent::Media { .. }
+            | ChannelOutputEvent::VoiceNote { .. }
+            | ChannelOutputEvent::Subagent { .. }
+            | ChannelOutputEvent::Usage { .. }
+            | ChannelOutputEvent::Artifact { .. }
+            | ChannelOutputEvent::Cancellation { .. }
+            | ChannelOutputEvent::Lifecycle { .. }
+            | ChannelOutputEvent::Native { .. } => {}
         }
     }
     Ok(())

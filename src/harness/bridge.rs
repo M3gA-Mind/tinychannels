@@ -87,8 +87,8 @@ pub fn translate_output_event(
         ChannelOutputEvent::Cancellation { reason } => OutboundPayload::Text {
             text: reason.unwrap_or_else(|| "Cancelled.".to_string()),
         },
-        ChannelOutputEvent::Lifecycle { event } => OutboundPayload::NativeChannelData {
-            data: json!({ "lifecycle": event }),
+        ChannelOutputEvent::Lifecycle { stage, message } => OutboundPayload::NativeChannelData {
+            data: json!({ "lifecycle": { "stage": stage, "message": message } }),
         },
         ChannelOutputEvent::Native { data } => OutboundPayload::NativeChannelData { data },
         event => OutboundPayload::NativeChannelData {

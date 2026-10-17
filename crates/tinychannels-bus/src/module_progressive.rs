@@ -29,15 +29,10 @@ pub enum ChannelOutputEvent {
     Native { data: Value },
 }
 
-/// Ordered facts projected from one host-owned agent turn.
-#[derive(Clone, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "event", content = "value", rename_all = "snake_case")]
-pub enum ProgressiveEvent {
-    TextDelta(String),
-    ThinkingDelta(String),
-    ToolCall(String),
-    ToolResult { tool_name: String, success: bool },
-}
+/// Compatibility type name for progressive commands. It is the same
+/// canonical DTO used by host turn dispatch.
+#[deprecated(note = "use ChannelOutputEvent")]
+pub type ProgressiveEvent = ChannelOutputEvent;
 
 /// Compatibility name retained while module callers migrate to the shared
 /// output DTO. New producers should send `ChannelOutputEvent` values.
@@ -51,7 +46,7 @@ pub enum ProgressiveCommand {
     },
     Feed {
         handle: String,
-        events: Vec<ProgressiveEvent>,
+        events: Vec<ChannelOutputEvent>,
     },
     Finish {
         handle: String,
