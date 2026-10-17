@@ -159,6 +159,12 @@ impl ChannelAdapter for LocalChannelAdapter {
                     account_id: self.descriptor.account_id.clone(),
                 }
             });
+            if let Some(channel) = &mut receipt.channel
+                && channel.id == self.descriptor.id
+                && channel.account_id.is_none()
+            {
+                channel.account_id.clone_from(&self.descriptor.account_id);
+            }
             receipt.conversation.get_or_insert_with(|| {
                 intent.conversation_ref.clone().unwrap_or_else(|| {
                     tinychannels_bus::ConversationRef {
