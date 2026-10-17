@@ -212,21 +212,18 @@ impl HttpClientFactory for ConfiguredHttpClients {
     }
 }
 
-/// Build every provider that `config` enables.
+
+/// Build the configured Telegram channel as its concrete provider type.
 ///
-/// Order is stable and matches the declaration order below, so a caller that
-/// indexes the result gets the same provider across runs.
-///
-/// See the module docs for the three things the caller must do first.
+/// The module uses this to retain the same Telegram object as both the polling
+/// owner and the native v2 operation executor.
 #[must_use]
-pub fn build_channels(
+pub fn build_telegram_channel(
     config: &ChannelsConfig,
     host: &Arc<dyn ChannelHost>,
     http: &dyn HttpClientFactory,
-) -> Vec<Arc<dyn Channel>> {
-    let mut channels: Vec<Arc<dyn Channel>> = Vec::new();
-
-    if let Some(tg) = config.telegram.as_ref() {
+) -> Option<Arc<TelegramChannel>> {
+    let tg = config.telegram.as_ref()?;
         tracing::info!(
             channel = "telegram",
             allowed_users_count = tg.allowed_users.len(),
@@ -266,7 +263,29 @@ pub fn build_channels(
         if let Some(events) = host.events() {
             telegram = telegram.with_events(events);
         }
-        channels.push(Arc::new(telegram));
+        return Some(Arc::new(telegram));
+    }
+
+}
+
+/// Build every provider that `config` enables.
+///
+/// Order is stable and matches the declaration order below, so a caller that
+/// indexes the result gets the same provider across runs.
+///
+/// See the module docs for the three things the caller must do first.
+#[must_use]
+pub fn build_channels(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Vec<Arc<dyn Channel>> {
+    let mut channels: Vec<Arc<dyn Channel>> = Vec::new();
+
+    if config.telegram.is_some() {
+        if let Some(telegram) = build_telegram_channel(config, host, http) {
+            channels.push(telegram);
+        }
     }
 
     if let Some(dc) = config.discord.as_ref() {
