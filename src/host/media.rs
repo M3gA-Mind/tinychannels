@@ -28,6 +28,31 @@ pub struct StoredMedia {
     pub bytes: Vec<u8>,
 }
 
+/// Scope and metadata that accompany a media body through the shared store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaMetadata {
+    pub scope: MediaScope,
+    pub kind: tinychannels_bus::MediaKind,
+    pub content_type: String,
+    pub file_name: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub dedupe_key: Option<String>,
+    pub max_bytes: u64,
+}
+
+/// A bounded in-memory media fixture or native upload body to persist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaStoreRequest {
+    pub metadata: MediaMetadata,
+    pub bytes: Vec<u8>,
+}
+
+/// An untrusted streaming media body to persist under the configured limit.
+pub struct MediaStreamRequest {
+    pub metadata: MediaMetadata,
+    pub reader: BlobReader,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct MediaRecord {
     scope: MediaScope,
@@ -68,15 +93,18 @@ impl ScopedMediaStore {
     /// Persist bounded media and return its durable opaque reference.
     pub async fn store(
         &self,
-        scope: MediaScope,
-        kind: tinychannels_bus::MediaKind,
-        content_type: String,
-        file_name: Option<String>,
-        duration_ms: Option<u64>,
-        bytes: Vec<u8>,
-        dedupe_key: Option<String>,
-        max_bytes: u64,
+        request: MediaStoreRequest,
     ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        let MediaStoreRequest { metadata, bytes } = request;
+        let MediaMetadata {
+            scope,
+            kind,
+            content_type,
+            file_name,
+            duration_ms,
+            dedupe_key,
+            max_bytes,
+        } = metadata;
         validate_scope(&scope)?;
         if bytes.is_empty() || bytes.len() as u64 > max_bytes {
             anyhow::bail!("media exceeds the configured size limit");
@@ -121,6 +149,10 @@ impl ScopedMediaStore {
             if existing.state == MediaRecordState::Ready
                 && existing.scope == record.scope
                 && existing.digest == digest
+                && existing.media.kind == record.media.kind
+                && existing.content_type == record.content_type
+                && existing.media.duration_ms == record.media.duration_ms
+                && existing.file_name == record.file_name
             {
                 return Ok(existing.media);
             }
@@ -193,15 +225,18 @@ impl ScopedMediaStore {
     /// actual body/MIME, then persist it through the scoped blob port.
     pub async fn store_stream(
         &self,
-        scope: MediaScope,
-        kind: tinychannels_bus::MediaKind,
-        content_type: String,
-        file_name: Option<String>,
-        duration_ms: Option<u64>,
-        reader: BlobReader,
-        dedupe_key: Option<String>,
-        max_bytes: u64,
+        request: MediaStreamRequest,
     ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        let MediaStreamRequest { metadata, reader } = request;
+        let MediaMetadata {
+            scope,
+            kind,
+            content_type,
+            file_name,
+            duration_ms,
+            dedupe_key,
+            max_bytes,
+        } = metadata;
         validate_scope(&scope)?;
         let normalized = normalized_content_type(&content_type);
         let allowed_kind = match kind {
@@ -227,16 +262,18 @@ impl ScopedMediaStore {
         if bytes.is_empty() || bytes.len() as u64 > max_bytes {
             anyhow::bail!("media exceeds the configured size limit");
         }
-        self.store(
-            scope,
-            kind,
-            content_type,
-            file_name,
-            duration_ms,
+        self.store(MediaStoreRequest {
+            metadata: MediaMetadata {
+                scope,
+                kind,
+                content_type,
+                file_name,
+                duration_ms,
+                dedupe_key,
+                max_bytes,
+            },
             bytes,
-            dedupe_key,
-            max_bytes,
-        )
+        })
         .await
     }
 
