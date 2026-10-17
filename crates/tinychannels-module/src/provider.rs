@@ -294,98 +294,165 @@ pub(crate) fn configured_media_account_scope(
     config: &ChannelsConfig,
 ) -> Option<String> {
     let provider = tinychannels_bus::provider_id(instance);
-    let identity: Vec<&str> = match provider {
-        "telegram" => vec![config.telegram.as_ref()?.bot_token.as_str()],
-        "discord" => vec![config.discord.as_ref()?.bot_token.as_str()],
+    let identity: Vec<String> = match provider {
+        "telegram" => {
+            let c = config.telegram.as_ref()?;
+            if c.bot_token.trim().is_empty() {
+                return None;
+            }
+            vec![c.bot_token.clone()]
+        }
+        "discord" => {
+            let c = config.discord.as_ref()?;
+            if c.bot_token.trim().is_empty() {
+                return None;
+            }
+            vec![c.bot_token.clone()]
+        }
         "slack" => {
             let c = config.slack.as_ref()?;
-            vec![c.bot_token.as_str(), c.app_token.as_deref().unwrap_or("")]
+            let app_token = c.app_token.as_deref()?;
+            if c.bot_token.trim().is_empty() || app_token.trim().is_empty() {
+                return None;
+            }
+            vec![c.bot_token.clone(), app_token.to_owned()]
         }
         "mattermost" => {
             let c = config.mattermost.as_ref()?;
-            vec![c.url.as_str(), c.bot_token.as_str()]
+            if c.bot_token.trim().is_empty() {
+                return None;
+            }
+            vec![c.url.clone(), c.bot_token.clone()]
         }
         "webhook" => {
             let c = config.webhook.as_ref()?;
-            vec![c.secret.as_deref().unwrap_or("")]
+            let secret = c.secret.as_deref()?;
+            if secret.trim().is_empty() {
+                return None;
+            }
+            vec![c.port.to_string(), secret.to_owned()]
         }
         "matrix" => {
             let c = config.matrix.as_ref()?;
+            if c.access_token.trim().is_empty() {
+                return None;
+            }
             vec![
-                c.homeserver.as_str(),
-                c.user_id.as_deref().unwrap_or(""),
-                c.access_token.as_str(),
+                c.homeserver.clone(),
+                c.user_id.clone().unwrap_or_default(),
+                c.access_token.clone(),
             ]
         }
-        "signal" => {
-            let c = config.signal.as_ref()?;
-            vec![c.http_url.as_str(), c.account.as_str()]
-        }
+        // Signal exposes no configured authentication secret or attested
+        // account identifier in the current contract.
+        "signal" => return None,
         "email" => {
             let c = config.email.as_ref()?;
+            if c.username.trim().is_empty() || c.password.trim().is_empty() {
+                return None;
+            }
             vec![
-                c.imap_host.as_str(),
-                c.username.as_str(),
-                c.password.as_str(),
+                c.imap_host.clone(),
+                c.imap_port.to_string(),
+                c.username.clone(),
+                c.password.clone(),
             ]
         }
         "whatsapp" => {
             let c = config.whatsapp.as_ref()?;
+            let phone_number_id = c.phone_number_id.as_deref()?;
+            let access_token = c.access_token.as_deref()?;
+            if phone_number_id.trim().is_empty() || access_token.trim().is_empty() {
+                return None;
+            }
             vec![
-                c.phone_number_id.as_deref().unwrap_or(""),
-                c.access_token.as_deref().unwrap_or(""),
-                c.app_secret.as_deref().unwrap_or(""),
-                c.session_path.as_deref().unwrap_or(""),
+                phone_number_id.to_owned(),
+                access_token.to_owned(),
+                c.app_secret.clone().unwrap_or_default(),
             ]
         }
         "linq" => {
             let c = config.linq.as_ref()?;
-            vec![c.from_phone.as_str(), c.api_token.as_str()]
+            if c.api_token.trim().is_empty() {
+                return None;
+            }
+            vec![c.from_phone.clone(), c.api_token.clone()]
         }
         "irc" => {
             let c = config.irc.as_ref()?;
+            let principal = if c
+                .sasl_password
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
+            {
+                c.username.as_deref().unwrap_or(&c.nickname)
+            } else if c
+                .nickserv_password
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
+            {
+                &c.nickname
+            } else {
+                return None;
+            };
+            let credential = c
+                .sasl_password
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| c.nickserv_password.as_deref())?;
             vec![
-                c.server.as_str(),
-                c.nickname.as_str(),
-                c.username.as_deref().unwrap_or(""),
-                c.server_password.as_deref().unwrap_or(""),
-                c.nickserv_password.as_deref().unwrap_or(""),
-                c.sasl_password.as_deref().unwrap_or(""),
+                c.server.clone(),
+                c.port.to_string(),
+                principal.to_owned(),
+                credential.to_owned(),
             ]
         }
         "lark" => {
             let c = config.lark.as_ref()?;
+            if c.app_id.trim().is_empty() || c.app_secret.trim().is_empty() {
+                return None;
+            }
             vec![
-                c.app_id.as_str(),
-                c.app_secret.as_str(),
-                if c.use_feishu { "feishu" } else { "lark" },
+                c.app_id.clone(),
+                c.app_secret.clone(),
+                if c.use_feishu {
+                    "feishu".into()
+                } else {
+                    "lark".into()
+                },
             ]
         }
         "dingtalk" => {
             let c = config.dingtalk.as_ref()?;
-            vec![c.client_id.as_str(), c.client_secret.as_str()]
+            if c.client_id.trim().is_empty() || c.client_secret.trim().is_empty() {
+                return None;
+            }
+            vec![c.client_id.clone(), c.client_secret.clone()]
         }
         "qq" => {
             let c = config.qq.as_ref()?;
-            vec![c.app_id.as_str(), c.app_secret.as_str()]
+            if c.app_id.trim().is_empty() || c.app_secret.trim().is_empty() {
+                return None;
+            }
+            vec![c.app_id.clone(), c.app_secret.clone()]
         }
         "yuanbao" => {
             let c = config.yuanbao.as_ref()?;
+            if c.app_key.trim().is_empty() || c.app_secret.trim().is_empty() {
+                return None;
+            }
             vec![
-                c.api_domain.as_str(),
-                c.env.as_str(),
-                c.route_env.as_str(),
-                c.app_key.as_str(),
-                c.app_secret.as_str(),
+                c.api_domain.clone(),
+                c.env.clone(),
+                c.route_env.clone(),
+                c.app_key.clone(),
+                c.app_secret.clone(),
             ]
         }
         // The current iMessage configuration has no stable account identity.
         // Do not silently turn a provider name into cross-runtime authority.
         _ => return None,
     };
-    if identity.iter().all(|part| part.trim().is_empty()) {
-        return None;
-    }
     use sha2::{Digest, Sha256};
     let mut digest = Sha256::new();
     digest.update(b"tinychannels-media-account-v1\0");
