@@ -654,6 +654,7 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
                 ChannelOutputEvent::FinalMessage {
                     text: "terminal".into(),
                     parts: vec![],
+                    receipt: None,
                 },
                 ChannelOutputEvent::Cancellation {
                     reason: Some("cancelled".into()),
@@ -670,7 +671,7 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
             events: vec![ChannelOutputEvent::ThinkingDelta {
-                text: "x".repeat(MAX_CONTENT + 1),
+                text: "x".repeat(MAX_REQUEST + 1),
                 iteration: None,
             }],
         })
