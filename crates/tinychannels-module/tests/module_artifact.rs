@@ -1289,7 +1289,7 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
                 file_name: Some("other-account.png".into()),
                 duration_ms: None,
                 codec: None,
-                byte_count: png_for_wire_check.len() as u64,
+                byte_count: png_for_wire_check.len(),
             },
         )
         .await
@@ -1326,8 +1326,7 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
             "ReadMediaChunk",
             MediaReadChunk {
                 handle: other_read.handle.clone(),
-                offset: 0,
-                max_bytes: 1024,
+                sequence: 0,
             },
         )
         .await
