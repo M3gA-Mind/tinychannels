@@ -2176,7 +2176,10 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
     let (by_id, query_id, action_id, provider_message_id, actor) = callbacks[0];
     assert_eq!(query_id, "allowed-id-query");
     assert_eq!(action_id, "approval-v1:request-42:0");
-    assert_eq!(approval_action_id("request-42", 0).as_deref(), Some(action_id));
+    assert_eq!(
+        approval_action_id("request-42", 0).as_deref(),
+        Some(action_id.as_str())
+    );
     assert_eq!(provider_message_id.as_deref(), Some("81"));
     assert_eq!(actor.id, "42");
     assert_eq!(actor.name.as_deref(), Some("outsider"));
