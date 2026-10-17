@@ -967,24 +967,18 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
             .await
     });
     let command = commands.recv().await.expect("adapter dispatch");
-    let tinychannels_bus::module_interaction::ChannelInteractionResult::Sent(mut outcome) =
-        tinychannels_bus::module_interaction::ChannelInteractionResult::Sent(Box::new(
-            tinychannels_bus::ChannelSendOutcome {
-                receipt: tinychannels_bus::MessageReceipt {
-                    primary_platform_message_id: Some("msg-1".into()),
-                    platform_message_ids: vec!["msg-1".into()],
-                    ..Default::default()
-                },
-                error: Some(tinychannels_bus::ChannelSendError {
-                    message: "second chunk failed".into(),
-                    retryable: true,
-                    ..Default::default()
-                }),
-            },
-        ))
-    else {
-        unreachable!()
-    };
+    let outcome = Box::new(tinychannels_bus::ChannelSendOutcome {
+        receipt: tinychannels_bus::MessageReceipt {
+            primary_platform_message_id: Some("msg-1".into()),
+            platform_message_ids: vec!["msg-1".into()],
+            ..Default::default()
+        },
+        error: Some(tinychannels_bus::ChannelSendError {
+            message: "second chunk failed".into(),
+            retryable: true,
+            ..Default::default()
+        }),
+    });
     command.started.send(()).unwrap();
     command
         .reply

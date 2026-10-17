@@ -861,7 +861,7 @@ impl Running {
     }
 
     fn adapter_descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
-        let channel_id = tinychannels_bus::provider_id(&self.configured_instance).to_owned();
+        let channel_id = tinychannels_bus::provider_id(self.channel.name()).to_owned();
         tinychannels_bus::channel::ChannelDescriptor {
             id: channel_id,
             display_name: self.channel.name().to_owned(),
@@ -881,8 +881,8 @@ impl Running {
         &self,
         intent: &tinychannels_bus::ChannelOutboundIntent,
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
-        let expected_channel = tinychannels_bus::provider_id(&self.configured_instance);
-        if intent.channel_id != expected_channel
+        let expected_channel = tinychannels_bus::provider_id(self.channel.name());
+        if tinychannels_bus::provider_id(&intent.channel_id) != expected_channel
             || intent.channel_ref.as_ref().is_some_and(|reference| {
                 reference.id != expected_channel
                     || reference.account_id.as_deref() != Some(self.configured_instance.as_str())
@@ -1073,7 +1073,7 @@ impl tinychannels::channel::ChannelAdapter for Running {
     > {
         let healthy = self.channel.health_check().await;
         Ok(tinychannels::controllers::ChannelAccountSnapshot {
-            channel_id: tinychannels_bus::provider_id(&self.configured_instance).into(),
+            channel_id: tinychannels_bus::provider_id(self.channel.name()).into(),
             account_id: Some(self.configured_instance.clone()),
             states: vec![
                 tinychannels::controllers::ChannelAccountState::Configured,
