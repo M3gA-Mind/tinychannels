@@ -20,19 +20,17 @@
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use tinychannels_bus::DeliveryTerminalResult;
 use tinystoragedrivers_core::Key;
 use tinystoragedrivers_core::Result;
 use tinystoragedrivers_core::schema::{SourceRecord, Step, TargetRecord};
 
-use super::records::{StoredDelivery, StoredResult, to_stored_ms};
+use super::records::{ChatBinding, StoredDelivery, StoredResult, to_stored_ms};
 use super::schema::{
     DELIVERY_FAILED, DELIVERY_PENDING, DELIVERY_RESULTS, REMOTE_BINDINGS, REMOTE_BUSY, REMOTE_META,
     WHATSAPP_DEVICE, WHATSAPP_IDENTITY, WHATSAPP_LID_MAPPING, WHATSAPP_PREKEY, WHATSAPP_SENDER_KEY,
     WHATSAPP_SESSION, WHATSAPP_SIGNED_PREKEY, WHATSAPP_SYNC_KEY,
 };
-use crate::delivery::QueuedDelivery;
-use crate::remote::ChatBinding;
+use crate::module_delivery::{DeliveryQueueEntry as QueuedDelivery, DeliveryTerminalResult};
 
 const LOG_PREFIX: &str = "[channel-storage-migrate]";
 

@@ -5,7 +5,7 @@
 //! WhatsApp Web session backend write, plus the steps that bring the v1
 //! collections (`channels_delivery_*`, `channel_remote_*`, `whatsapp_*`)
 //! forward onto the v2 names. A host builds
-//! `Registry::compose([tinychannels::storage::storage_schema(), ..])`, prepares
+//! `Registry::compose([tinychannels_bus::storage::storage_schema(), ..])`, prepares
 //! the backend and migrates; a loadable module's storage grant is generated
 //! from the same schema (every item is [`ScopeClass::Module`]).
 //!

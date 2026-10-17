@@ -7,19 +7,30 @@
 //! These DTOs are the only place the two meet.
 
 use serde::{Deserialize, Serialize};
-use tinychannels_bus::{
-    ChannelOutboundIntent, DeliveryDurability, DeliveryTerminalResult, OutboundPayload,
+use crate::channel::{ChannelOutboundIntent, DeliveryDurability, OutboundPayload};
+use crate::module_delivery::{
+    DeliveryQueueEntry as QueuedDelivery, DeliveryRecoveryState, DeliveryTerminalResult,
 };
 
-use crate::delivery::{DeliveryRecoveryState, QueuedDelivery};
+/// A chat's binding to a host conversation thread. When it was last bound is
+/// the record's own `updated_ms` metadata, not a field here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChatBinding {
+    pub thread_id: String,
+    pub sender_key: String,
+    /// Title captured at `/new` time so `/status` can show it without listing
+    /// every thread.
+    #[serde(default)]
+    pub title: Option<String>,
+}
 
 /// A wire millisecond count as the stored `i64` (saturating, never negative).
-pub(crate) fn to_stored_ms(ms: u64) -> i64 {
+pub fn to_stored_ms(ms: u64) -> i64 {
     i64::try_from(ms).unwrap_or(i64::MAX)
 }
 
 /// A stored millisecond count as the wire `u64` (negative counts read as 0).
-pub(crate) fn from_stored_ms(ms: i64) -> u64 {
+pub fn from_stored_ms(ms: i64) -> u64 {
     u64::try_from(ms).unwrap_or(0)
 }
 
