@@ -4155,6 +4155,35 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
 
     let published = callback.published_voice_media.lock().await[0].clone();
     let published_id = published.opaque_id.as_deref().expect("published voice id");
+    let publication = callback
+        .published_voice_requests
+        .lock()
+        .await
+        .iter()
+        .find(|request| request.scope.turn_id == context.turn_id)
+        .cloned()
+        .expect("voice publication captures its originating scope and bytes");
+    let sent_id = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                ..
+            } if turn_id == &context.turn_id => parts.iter().find_map(|part| match part {
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media { media, .. },
+                } => media.opaque_id.clone(),
+                _ => None,
+            }),
+            _ => None,
+        })
+        .expect("the actual final voice send carries its canonical media id");
+    assert_eq!(sent_id, published_id);
     let scope = tinychannels_bus::HostVoiceScope {
         configured_instance: "telegram:bot-1".into(),
         channel: context.channel.clone(),
@@ -4170,9 +4199,17 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         Arc::clone(storage.blobs()),
     );
     let stored = media_store
-        .read(scope, published_id, 1024 * 1024)
+        .read(scope.clone(), published_id, 1024 * 1024)
         .await
         .expect("progressive policy voice reference resolves in scoped storage");
+    assert_eq!(publication.scope, scope);
+    assert_eq!(publication.codec.as_deref(), Some("ogg_opus"));
+    assert_eq!(
+        stored.bytes,
+        base64::engine::general_purpose::STANDARD
+            .decode(publication.audio_base64)
+            .unwrap()
+    );
     assert!(stored.bytes.starts_with(b"OggS"));
     assert_eq!(stored.content_type, "audio/ogg");
 
