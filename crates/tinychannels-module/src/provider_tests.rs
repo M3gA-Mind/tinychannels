@@ -401,11 +401,8 @@ use tinychannels::host::EventSink as _;
 use tinychannels_bus::{ChannelInboundEnvelope, ContentPart, ConversationKind, ConversationRef};
 use tinychannels_conformance::AdapterFixture as _;
 
-type TelegramMessageContextMap = Arc<
-    std::sync::Mutex<
-        std::collections::HashMap<String, (ConversationRef, Option<String>)>,
-    >,
->;
+type TelegramMessageContextMap =
+    Arc<std::sync::Mutex<std::collections::HashMap<String, (ConversationRef, Option<String>)>>>;
 
 struct RunningTelegramConformance {
     adapter: ConfiguredAdapterHandle,
@@ -2365,7 +2362,6 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
                             .and_then(|value| value.as_i64().map(|n| n.to_string())));
                         let context = ConversationRef { kind: ConversationKind::Group, id: chat, thread_id: thread.clone(), topic_id: thread, ..Default::default() };
                         message_contexts_for_mock.lock().unwrap().insert(id.clone(), (context, reply));
-                    }
                 }
                 result = serde_json::json!({});
                 result["message_id"] = serde_json::Value::Number(id.parse::<u64>().unwrap().into());
