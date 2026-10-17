@@ -1,17 +1,29 @@
 //! Module-owned provider interaction execution.
-use crate::provider::Running;
+use tinychannels::Channel;
+
+/// Capability facts bound to the exact adapter handle selected at startup.
+pub(crate) fn configured_adapter_capabilities(
+    provider: &crate::provider::Running,
+) -> tinychannels_bus::ChannelCapabilities {
+    let adapter = provider.adapter_handle();
+    let descriptor = adapter.descriptor();
+    let mut capabilities = adapter.declared_capabilities();
+    capabilities.account.configured = Some(true);
+    capabilities.account.enabled = Some(true);
+    capabilities.account.account_id = descriptor.account_id;
+    capabilities.account.proactive_target = adapter.proactive_target();
+    capabilities
+}
 use tinychannels_bus::{ChannelInteraction, ChannelInteractionInfo, ChannelInteractionResult};
 
 /// Canonical facts shared by Describe and every configured-instance consumer.
 pub(crate) fn configured_capabilities(
-    provider: &Running,
+    provider: &dyn Channel,
 ) -> tinychannels_bus::ChannelCapabilities {
-    let adapter = provider.adapter_handle();
-    let _descriptor = adapter.descriptor();
-    let mut capabilities = adapter.declared_capabilities();
+    let mut capabilities = provider.capabilities();
     capabilities.account.configured = Some(true);
     capabilities.account.enabled = Some(true);
-    capabilities.account.proactive_target = adapter.proactive_target();
+    capabilities.account.proactive_target = provider.proactive_target();
     capabilities
 }
 
