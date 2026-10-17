@@ -188,7 +188,21 @@ impl Channel for TelegramChannel {
         }
         actions.extend(["react".into(), "reactions".into()]);
         let mut parts = vec!["text".into()];
-        let media_capability = if media_enabled {
+        let media_capability = |types: &[&str]| {
+            if media_enabled {
+                tinychannels_bus::ContentCapability {
+                    inbound: true,
+                    outbound: true,
+                    accepted_types: types.iter().map(|kind| (*kind).to_owned()).collect(),
+                    emitted_types: types.iter().map(|kind| (*kind).to_owned()).collect(),
+                    max_size_bytes: Some(20 * 1024 * 1024),
+                    ..Default::default()
+                }
+            } else {
+                tinychannels_bus::ContentCapability::default()
+            }
+        };
+        if media_enabled {
             parts.extend([
                 "image".into(),
                 "video".into(),
@@ -196,14 +210,7 @@ impl Channel for TelegramChannel {
                 "file".into(),
                 "sticker".into(),
             ]);
-            tinychannels_bus::ContentCapability {
-                inbound: true,
-                outbound: true,
-                ..Default::default()
-            }
-        } else {
-            tinychannels_bus::ContentCapability::default()
-        };
+        }
         let (voice_in, voice_out) = if self.voice_media_store.is_some() {
             parts.push("voice_note".into());
             (
@@ -249,19 +256,25 @@ impl Channel for TelegramChannel {
                     outbound: true,
                     ..Default::default()
                 },
-                image: media_capability.clone(),
-                video: media_capability.clone(),
-                audio: media_capability.clone(),
-                file: media_capability,
-                sticker: if media_enabled {
-                    tinychannels_bus::ContentCapability {
-                        inbound: true,
-                        outbound: true,
-                        ..Default::default()
-                    }
-                } else {
-                    tinychannels_bus::ContentCapability::default()
-                },
+                image: media_capability(&["image/jpeg", "image/png", "image/gif", "image/webp"]),
+                video: media_capability(&["video/mp4", "video/quicktime", "video/webm"]),
+                audio: media_capability(&[
+                    "audio/ogg",
+                    "audio/mpeg",
+                    "audio/mp4",
+                    "audio/wav",
+                    "audio/webm",
+                ]),
+                file: media_capability(&[
+                    "application/pdf",
+                    "text/plain",
+                    "text/csv",
+                    "application/json",
+                    "application/zip",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ]),
+                sticker: media_capability(&["image/webp"]),
                 ..Default::default()
             },
             actions: tinychannels_bus::ActionCapabilities {
