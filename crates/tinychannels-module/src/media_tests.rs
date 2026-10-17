@@ -38,7 +38,6 @@ async fn media_reads_reserve_capacity_before_resolution_and_release_it_on_cancel
     let reads = MediaReads::default();
     let first = reads.reserve().unwrap();
     let second = reads.reserve().unwrap();
-    let held = reads.reserve().unwrap();
     assert!(reads.reserve().is_err());
     drop(first);
     let third = reads.reserve().unwrap();
@@ -82,6 +81,7 @@ async fn media_reads_return_bounded_ordered_retryable_chunks_and_release_bytes()
         .unwrap();
     assert_eq!(last.bytes, bytes[tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES..]);
     assert!(last.done);
+    let held = reads.reserve().unwrap();
     assert!(reads.reserve().is_err());
     reads
         .abort(tinychannels_bus::MediaReadFinish(info.handle))
