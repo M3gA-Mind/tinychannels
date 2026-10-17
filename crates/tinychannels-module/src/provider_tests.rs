@@ -410,6 +410,7 @@ struct RunningTelegramConformance {
     callbacks: IngressVoiceCallback,
     observed: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
     request_cursor: std::sync::Mutex<usize>,
+    response_cursor: std::sync::Mutex<usize>,
     response_ids: Arc<std::sync::Mutex<Vec<(String, String)>>>,
 }
 
@@ -426,16 +427,19 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
         let mut scope = self.scope.clone();
         if matches!(feature,
             tinychannels_conformance::ConformanceFeature::InboundReactions
-                | tinychannels_conformance::ConformanceFeature::VoiceIn
-                | tinychannels_conformance::ConformanceFeature::Typing
                 | tinychannels_conformance::ConformanceFeature::Reactions
                 | tinychannels_conformance::ConformanceFeature::Edit
                 | tinychannels_conformance::ConformanceFeature::Delete
         ) {
-            // These Bot API operations/events carry no message_thread_id.
+            // MessageReactionUpdated and message-targeted mutation methods do
+            // not carry a topic/thread field in their Bot API request/event.
             scope.conversation.thread_id = None;
             scope.conversation.topic_id = None;
             scope.thread_id = None;
+            scope.reply_to_id = None;
+        }
+        if feature == tinychannels_conformance::ConformanceFeature::VoiceIn {
+            // Telegram Message carries message_thread_id, but no reply target.
             scope.reply_to_id = None;
         }
         scope
@@ -597,6 +601,31 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     recipient: self.scope.conversation.id.clone(),
                 }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                 Ok(None)
+            }
+            Feature::VoiceIn => {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        if !self.callbacks.inbound.lock().await.is_empty() { break; }
+                        self.callbacks.ingress_changed.notified().await;
+                    }
+                }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let envelope = self.callbacks.inbound.lock().await.first().map(|(_, value)| value.clone())
+                    .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
+                let channel = serde_json::from_value(envelope.get("channel").cloned().unwrap_or_default())
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let conversation: ConversationRef = serde_json::from_value(envelope.get("conversation").cloned().unwrap_or_default())
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let parts = envelope.get("parts").and_then(serde_json::Value::as_array).cloned().unwrap_or_default();
+                let voice = parts.iter().find(|part| part.get("type").and_then(serde_json::Value::as_str) == Some("voice_note"))
+                    .and_then(|part| part.get("voiceNote"));
+                let mut payload_kinds = Vec::new();
+                if voice.and_then(|v| v.get("media")).is_some() { payload_kinds.push("audio".into()); }
+                if voice.and_then(|v| v.get("transcript")).and_then(|t| t.get("text")).and_then(serde_json::Value::as_str).is_some() { payload_kinds.push("transcript".into()); }
+                self.observed.lock().unwrap().push(tinychannels_conformance::WireObservation {
+                    feature, operation: "voice_in".into(), channel, conversation,
+                    reply_to_id: None, thread_id: Some("77".into()), payload_kinds, platform_message_ids: Vec::new(), request: envelope,
+                });
+                return Ok(None);
             }
             Feature::Reactions => {
                 self.running.interact(tinychannels_bus::ChannelInteraction::SendReaction {
