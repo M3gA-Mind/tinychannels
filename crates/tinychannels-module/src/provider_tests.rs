@@ -2063,7 +2063,7 @@ async fn configured_telegram_native_optional_ports_share_ordered_queue_and_rejec
 #[tokio::test]
 async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_scope() {
     use tinychannels_bus::ChannelEventKind;
-    use tinychannels_bus::channel::approval_action_id;
+    use tinychannels_bus::channel::parse_approval_action_id;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -2129,17 +2129,33 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
         .await;
 
     let instance = "telegram:configured-callback-account".to_owned();
-    let channel = Arc::new(
-        tinychannels::TelegramChannel::new(
-            "test-token".into(),
-            vec!["alice".into(), "42".into()],
-            false,
-        )
-        .with_api_base_for_test(server.uri()),
-    );
     let hooks = Arc::new(Hooks::default());
     let (host, callback, _server_connection, _storage) = ingress_fixture().await;
-    let _provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let config = tinychannels_bus::ChannelsConfig {
+        telegram: Some(tinychannels_bus::config::TelegramConfig {
+            bot_token: "test-token".into(),
+            chat_id: None,
+            allowed_users: vec!["alice".into(), "42".into()],
+            stream_mode: Default::default(),
+            draft_update_interval_ms: 1000,
+            silent_streaming: true,
+            mention_only: false,
+        }),
+        ..Default::default()
+    };
+    let built = tinychannels::build_telegram_channel(
+        &config,
+        &provider_host,
+        &tinychannels::DefaultHttpClients,
+    )
+    .expect("factory builds configured Telegram channel");
+    let channel = Arc::new(
+        Arc::try_unwrap(built)
+            .ok()
+            .expect("factory channel has no outside owners")
+            .with_api_base_for_test(server.uri()),
+    );
     let running = Running::start_telegram(channel, hooks, host, None, false);
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -2176,22 +2192,25 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
     let (by_id, query_id, action_id, provider_message_id, actor) = callbacks[0];
     assert_eq!(query_id, "allowed-id-query");
     assert_eq!(action_id, "approval-v1:request-42:0");
-    assert_eq!(
-        approval_action_id("request-42", 0).as_deref(),
-        Some(action_id.as_str())
-    );
+    assert_eq!(parse_approval_action_id(action_id), Some(("request-42", 0)));
     assert_eq!(provider_message_id.as_deref(), Some("81"));
     assert_eq!(actor.id, "42");
     assert_eq!(actor.name.as_deref(), Some("outsider"));
     assert_eq!(by_id.channel.account_id.as_deref(), Some(instance.as_str()));
+    assert_eq!(by_id.channel.id, "telegram");
     assert_eq!(by_id.conversation.as_ref().unwrap().id, "-100");
     assert_eq!(by_id.conversation.as_ref().unwrap().topic_id.as_deref(), Some("77"));
-    let (_, query_id, action_id, provider_message_id, actor) = callbacks[1];
+    let (by_username, query_id, action_id, provider_message_id, actor) = callbacks[1];
     assert_eq!(query_id, "allowed-username-query");
     assert_eq!(action_id, "approval-v1:request-42:1");
+    assert_eq!(parse_approval_action_id(action_id), Some(("request-42", 1)));
     assert_eq!(provider_message_id.as_deref(), Some("82"));
     assert_eq!(actor.id, "43");
     assert_eq!(actor.name.as_deref(), Some("alice"));
+    assert_eq!(by_username.channel.id, "telegram");
+    assert_eq!(by_username.channel.account_id.as_deref(), Some(instance.as_str()));
+    assert_eq!(by_username.conversation.as_ref().unwrap().id, "100");
+    assert_eq!(by_username.conversation.as_ref().unwrap().topic_id, None);
 
     let acknowledgments = server
         .received_requests()
