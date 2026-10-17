@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
 use tinystoragedrivers_core::{
-    Blob, BlobMeta, BlobReader, BlobStore, MemoryStorage, Precondition,
-    Result as StorageResult, Scope, StorageBackend, StorageError,
+    Blob, BlobMeta, BlobReader, BlobStore, MemoryStorage, Precondition, Result as StorageResult,
+    Scope, StorageBackend, StorageError,
 };
 
 fn media_scope() -> MediaScope {
@@ -472,8 +472,7 @@ async fn pending_cleanup_filters_scope_state_and_age_before_applying_its_limit()
         .unwrap();
     let mut foreign_request = media_request(valid_png(), None, Some("cleanup-foreign"));
     foreign_request.metadata.scope.turn_id = "different-turn".into();
-    let foreign_store = store();
-    let foreign = foreign_store.store(foreign_request).await.unwrap();
+    let foreign = main_store.store(foreign_request).await.unwrap();
 
     for (id, age, state) in [
         (target.opaque_id.as_deref().unwrap(), 1, "writing"),
