@@ -438,16 +438,6 @@ fn voice_note_projection_keeps_transcript_precedence_and_audio_order() {
         },
         codec: Some("opus".into()),
         duration_ms: Some(1200),
-        ..Default::default()
-    };
-    let voice = || tinychannels_bus::VoiceNote {
-        media: MediaReference {
-            kind: MediaKind::Audio,
-            url: Some("https://example.test/voice.ogg".into()),
-            ..Default::default()
-        },
-        codec: Some("opus".into()),
-        duration_ms: Some(1200),
         transcript: Some(tinychannels_bus::VoiceTranscript {
             text: "recognized words".into(),
             language: Some("en".into()),
