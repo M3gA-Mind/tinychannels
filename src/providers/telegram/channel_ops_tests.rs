@@ -238,8 +238,18 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
 #[tokio::test]
 async fn typed_voice_sends_long_transcript_as_receipted_followup_text() {
     let server = mock_api().await;
-    mount_post(&server, "sendVoice", ok_with(serde_json::json!({"message_id": 54}))).await;
-    mount_post(&server, "sendMessage", ok_with(serde_json::json!({"message_id": 55}))).await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({"message_id": 54})),
+    )
+    .await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({"message_id": 55})),
+    )
+    .await;
     let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
     let transcript = "transcript ".repeat(110);
     let message = tinychannels_bus::ChannelOutboundMessage {
@@ -280,13 +290,24 @@ async fn typed_voice_sends_long_transcript_as_receipted_followup_text() {
     let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
     assert_eq!(outcome.error, None);
     assert_eq!(outcome.receipt.platform_message_ids, ["54", "55"]);
-    assert_eq!(outcome.receipt.parts.iter().map(|part| part.kind).collect::<Vec<_>>(), [
-        tinychannels_bus::channel::MessageReceiptPartKind::Voice,
-        tinychannels_bus::channel::MessageReceiptPartKind::Text,
-    ]);
+    assert_eq!(
+        outcome
+            .receipt
+            .parts
+            .iter()
+            .map(|part| part.kind)
+            .collect::<Vec<_>>(),
+        [
+            tinychannels_bus::channel::MessageReceiptPartKind::Voice,
+            tinychannels_bus::channel::MessageReceiptPartKind::Text,
+        ]
+    );
     let voice = raw_bodies(&server, "sendVoice").await;
     assert_eq!(voice.len(), 1);
-    assert!(!voice[0].contains(&transcript), "overlong caption is omitted from multipart upload");
+    assert!(
+        !voice[0].contains(&transcript),
+        "overlong caption is omitted from multipart upload"
+    );
     let text = json_bodies(&server, "sendMessage").await;
     assert_eq!(text.len(), 1);
     assert!(text[0]["text"].as_str().unwrap().contains("transcript"));
@@ -297,15 +318,24 @@ async fn typed_voice_sends_long_transcript_as_receipted_followup_text() {
 #[tokio::test]
 async fn long_voice_transcript_failure_retains_partial_receipts_without_retry() {
     let server = mock_api().await;
-    mount_post(&server, "sendVoice", ok_with(serde_json::json!({"message_id": 56}))).await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({"message_id": 56})),
+    )
+    .await;
     Mock::given(method("POST"))
         .and(path(api_path("sendMessage")))
         .respond_with(ok_with(serde_json::json!({"message_id": 57})))
         .up_to_n_times(1)
         .mount(&server)
         .await;
-    mount_post(&server, "sendMessage", ResponseTemplate::new(400).set_body_string("rejected"))
-        .await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ResponseTemplate::new(400).set_body_string("rejected"),
+    )
+    .await;
     let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
     let transcript = "long transcript ".repeat(400);
     let message = tinychannels_bus::ChannelOutboundMessage {
@@ -344,13 +374,21 @@ async fn long_voice_transcript_failure_retains_partial_receipts_without_retry() 
     };
     let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["56", "57"]);
-    let error = outcome.error.expect("later transcript chunk failure stays visible");
+    let error = outcome
+        .error
+        .expect("later transcript chunk failure stays visible");
     assert!(error.sent_before_error);
     assert!(!error.retryable);
-    assert_eq!(json_bodies(&server, "sendMessage").await.len(), 2,
-        "the operation makes one pass and preserves the accepted text chunk");
-    assert_eq!(raw_bodies(&server, "sendVoice").await.len(), 1,
-        "ambiguous transcript failure must not repeat the voice upload");
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await.len(),
+        2,
+        "the operation makes one pass and preserves the accepted text chunk"
+    );
+    assert_eq!(
+        raw_bodies(&server, "sendVoice").await.len(),
+        1,
+        "ambiguous transcript failure must not repeat the voice upload"
+    );
 }
 
 #[tokio::test]

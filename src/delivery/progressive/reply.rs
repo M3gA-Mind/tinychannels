@@ -234,11 +234,7 @@ impl ProgressiveReply {
         let should_synthesize = parts.is_empty()
             && self
                 .sender
-                .should_synthesize_final(
-                    &self.channel,
-                    self.output_context.as_ref(),
-                    text,
-                )
+                .should_synthesize_final(&self.channel, self.output_context.as_ref(), text)
                 .await?;
         if parts.is_empty()
             && !should_synthesize
@@ -266,7 +262,6 @@ impl ProgressiveReply {
         }
         Ok(dispatch)
     }
-
 
     /// Current per-turn state (for logging and tests).
     pub fn state(&self) -> &StreamingState {

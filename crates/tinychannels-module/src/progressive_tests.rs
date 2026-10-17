@@ -2365,8 +2365,8 @@ async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked()
             replies.host.clone(),
         ),
     );
-    let ProgressiveResult::Opened { handle } = replies.execute(
-        ProgressiveCommand::OpenOutput {
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
             channel: tinychannels_bus::ChannelRef {
                 id: "discord".into(),
                 account_id: Some("discord:voice-lease".into()),
@@ -2378,8 +2378,10 @@ async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked()
             },
             turn_id: "blocked-voice-turn".into(),
             lifetime_ms: 1100,
-        },
-    ).await.unwrap() else {
+        })
+        .await
+        .unwrap()
+    else {
         panic!("expected opened scoped output")
     };
     // Keep the host synthesis callback pending so finalization must observe
@@ -2387,38 +2389,68 @@ async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked()
     let feed_replies = replies.clone();
     let replay_handle = handle.clone();
     let terminal_events = vec![ChannelOutputEvent::FinalMessage {
-                text: "spoken words".into(),
-                parts: vec![],
-                receipt: None,
-            }];
+        text: "spoken words".into(),
+        parts: vec![],
+        receipt: None,
+    }];
     let feed_events = terminal_events.clone();
     let feed = tokio::spawn(async move {
-        feed_replies.execute(ProgressiveCommand::FeedOutput {
-            handle,
-            events: feed_events,
-        }).await
+        feed_replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle,
+                events: feed_events,
+            })
+            .await
     });
     callback.entered.notified().await;
     tokio::time::advance(Duration::from_secs(2)).await;
-    for _ in 0..10 { tokio::task::yield_now().await; }
-    assert!(feed.is_finished(), "expired finalization must stop waiting on host synthesis");
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        feed.is_finished(),
+        "expired finalization must stop waiting on host synthesis"
+    );
     let result = feed.await.expect("feed task joins");
-    assert!(result.is_err(), "expired voice turn must not report successful delivery");
-    assert!(callback.requests.lock().await.iter().all(|request| !matches!(
-        request, ProgressiveTransportRequest::SendTyped { .. }
-    )), "a late synthesis result must not reach provider transport");
+    assert!(
+        result.is_err(),
+        "expired voice turn must not report successful delivery"
+    );
+    assert!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .all(|request| !matches!(request, ProgressiveTransportRequest::SendTyped { .. })),
+        "a late synthesis result must not reach provider transport"
+    );
     callback.released.notify_one();
     tokio::task::yield_now().await;
-    let replay = replies.execute(ProgressiveCommand::FeedOutput {
-        handle: replay_handle,
-        events: terminal_events,
-    }).await;
-    assert!(replay.is_err(), "identical terminal replay remains fenced after expiry");
-    assert_eq!(callback.synthesis_calls.load(Ordering::SeqCst), 1,
-        "terminal replay must not start another synthesis callback");
-    assert!(callback.requests.lock().await.iter().all(|request| !matches!(
-        request, ProgressiveTransportRequest::SendTyped { .. }
-    )), "released late synthesis must not reach provider transport");
+    let replay = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: replay_handle,
+            events: terminal_events,
+        })
+        .await;
+    assert!(
+        replay.is_err(),
+        "identical terminal replay remains fenced after expiry"
+    );
+    assert_eq!(
+        callback.synthesis_calls.load(Ordering::SeqCst),
+        1,
+        "terminal replay must not start another synthesis callback"
+    );
+    assert!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .all(|request| !matches!(request, ProgressiveTransportRequest::SendTyped { .. })),
+        "released late synthesis must not reach provider transport"
+    );
     replies.shutdown().await.unwrap();
 }
 
@@ -3648,21 +3680,26 @@ async fn ambiguous_voice_receipt_is_retained_and_identical_final_is_not_retried(
         "discord:ambiguous-voice",
         "ambiguous-voice-turn",
         tinychannels_bus::ChannelCapabilities::default(),
-    ).await;
-    callback.send_queue.lock().await.push_back(ProgressiveTransportResult::Outcome(
-        Box::new(tinychannels_bus::channel::ChannelSendOutcome {
-            receipt: tinychannels_bus::channel::MessageReceipt {
-                platform_message_ids: vec!["accepted-voice-message".into()],
-                ..Default::default()
+    )
+    .await;
+    callback
+        .send_queue
+        .lock()
+        .await
+        .push_back(ProgressiveTransportResult::Outcome(Box::new(
+            tinychannels_bus::channel::ChannelSendOutcome {
+                receipt: tinychannels_bus::channel::MessageReceipt {
+                    platform_message_ids: vec!["accepted-voice-message".into()],
+                    ..Default::default()
+                },
+                error: Some(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                    message: "voice request may have been accepted".into(),
+                    sent_before_error: true,
+                    ..Default::default()
+                }),
             },
-            error: Some(tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                message: "voice request may have been accepted".into(),
-                sent_before_error: true,
-                ..Default::default()
-            }),
-        }),
-    ));
+        )));
     let events = vec![ChannelOutputEvent::FinalMessage {
         text: "voice transcript".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Voice {
@@ -3679,29 +3716,46 @@ async fn ambiguous_voice_receipt_is_retained_and_identical_final_is_not_retried(
         }],
         receipt: None,
     }];
-    let first = replies.execute(ProgressiveCommand::FeedOutput {
-        handle: handle.clone(),
-        events: events.clone(),
-    }).await.unwrap();
-    assert!(matches!(first, ProgressiveResult::DeliveryBatch { outcomes, .. }
-        if outcomes.len() == 1
-            && outcomes[0].receipt.platform_message_ids == ["accepted-voice-message"]
-            && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
-    ), "unknown voice delivery must preserve accepted receipt and uncertainty");
-    let before = callback.requests.lock().await.iter()
+    let first = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: events.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(first, ProgressiveResult::DeliveryBatch { outcomes, .. }
+            if outcomes.len() == 1
+                && outcomes[0].receipt.platform_message_ids == ["accepted-voice-message"]
+                && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
+        ),
+        "unknown voice delivery must preserve accepted receipt and uncertainty"
+    );
+    let before = callback
+        .requests
+        .lock()
+        .await
+        .iter()
         .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
         .count();
     assert_eq!(before, 1);
-    let replay = replies.execute(ProgressiveCommand::FeedOutput {
-        handle,
-        events,
-    }).await.unwrap();
-    assert!(matches!(replay, ProgressiveResult::DeliveryBatch { outcomes, .. }
-        if outcomes.len() == 1
-            && outcomes[0].receipt.platform_message_ids == ["accepted-voice-message"]
-            && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
-    ), "terminal replay returns the retained ambiguous outcome");
-    let after = callback.requests.lock().await.iter()
+    let replay = replies
+        .execute(ProgressiveCommand::FeedOutput { handle, events })
+        .await
+        .unwrap();
+    assert!(
+        matches!(replay, ProgressiveResult::DeliveryBatch { outcomes, .. }
+            if outcomes.len() == 1
+                && outcomes[0].receipt.platform_message_ids == ["accepted-voice-message"]
+                && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
+        ),
+        "terminal replay returns the retained ambiguous outcome"
+    );
+    let after = callback
+        .requests
+        .lock()
+        .await
+        .iter()
         .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
         .count();
     assert_eq!(after, before, "unknown voice receipt must not be retried");
@@ -3884,18 +3938,25 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         });
         assert_eq!(has_media, expected_voice, "policy case {index}: {mode:?}");
         if expected_voice {
-            let encoded = serde_json::to_vec(&requests.iter().rev().find(|candidate| {
-                matches!(candidate, ProgressiveTransportRequest::SendTyped { parts, .. }
-                    if parts.iter().any(|part| matches!(part,
-                        tinychannels_bus::OutboundContentPart::Voice {
-                            voice: tinychannels_bus::OutboundVoice::Media {
-                                audio_base64: None,
-                                media,
-                                ..
-                            }
-                        } if media.opaque_id.as_deref() == Some("durable-host-voice")
-                    )))
-            }).unwrap()).unwrap();
+            let encoded = serde_json::to_vec(
+                &requests
+                    .iter()
+                    .rev()
+                    .find(|candidate| {
+                        matches!(candidate, ProgressiveTransportRequest::SendTyped { parts, .. }
+                        if parts.iter().any(|part| matches!(part,
+                            tinychannels_bus::OutboundContentPart::Voice {
+                                voice: tinychannels_bus::OutboundVoice::Media {
+                                    audio_base64: None,
+                                    media,
+                                    ..
+                                }
+                            } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                        )))
+                    })
+                    .unwrap(),
+            )
+            .unwrap();
             assert!(encoded.len() < tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
             assert!(!String::from_utf8_lossy(&encoded).contains("audio_base64"));
         }
@@ -3907,8 +3968,16 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     // canonical final event has no explicit typed parts. Each mode gets a
     // distinct turn so delivery idempotency keys cannot alias.
     for (turn_id, mode, inbound) in [
-        ("draft-mirror", tinychannels_bus::HostVoiceReplyMode::Mirror, true),
-        ("draft-always", tinychannels_bus::HostVoiceReplyMode::Always, false),
+        (
+            "draft-mirror",
+            tinychannels_bus::HostVoiceReplyMode::Mirror,
+            true,
+        ),
+        (
+            "draft-always",
+            tinychannels_bus::HostVoiceReplyMode::Always,
+            false,
+        ),
     ] {
         *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
             mode,
@@ -3944,10 +4013,12 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
                     .await
                     .iter()
                     .skip(before)
-                    .any(|request| matches!(request,
-                        ProgressiveTransportRequest::Send { turn_id: Some(actual_turn), .. }
-                            if actual_turn == turn_id
-                    ))
+                    .any(|request| {
+                        matches!(request,
+                            ProgressiveTransportRequest::Send { turn_id: Some(actual_turn), .. }
+                                if actual_turn == turn_id
+                        )
+                    })
                 {
                     break;
                 }
@@ -3967,30 +4038,47 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             })
             .await
             .expect("final message completes progressive turn");
-        assert!(matches!(final_result, ProgressiveResult::DeliveryOutcome { .. }));
+        assert!(matches!(
+            final_result,
+            ProgressiveResult::DeliveryOutcome { .. }
+        ));
         let requests = callback.requests.lock().await;
         let terminal = &requests[before..];
         let voice_sends = terminal
             .iter()
-            .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { parts, .. }
-                if parts.iter().any(|part| matches!(part,
-                    tinychannels_bus::OutboundContentPart::Voice {
-                        voice: tinychannels_bus::OutboundVoice::Media { media, .. }
-                    } if media.opaque_id.as_deref() == Some("durable-host-voice")
-                ))
-            ))
+            .filter(|request| {
+                matches!(request, ProgressiveTransportRequest::SendTyped { parts, .. }
+                    if parts.iter().any(|part| matches!(part,
+                        tinychannels_bus::OutboundContentPart::Voice {
+                            voice: tinychannels_bus::OutboundVoice::Media { media, .. }
+                        } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                    ))
+                )
+            })
             .count();
-        assert_eq!(voice_sends, 1, "{mode:?} final must send one native voice part");
-        assert!(terminal.iter().any(|request| matches!(request,
-            ProgressiveTransportRequest::Send { turn_id: Some(actual_turn), .. }
-                if actual_turn == turn_id
-        )), "the worker must first create/update the progressive text draft");
+        assert_eq!(
+            voice_sends, 1,
+            "{mode:?} final must send one native voice part"
+        );
+        assert!(
+            terminal.iter().any(|request| matches!(request,
+                ProgressiveTransportRequest::Send { turn_id: Some(actual_turn), .. }
+                    if actual_turn == turn_id
+            )),
+            "the worker must first create/update the progressive text draft"
+        );
         let draft_delete = terminal.iter().find_map(|request| match request {
-            ProgressiveTransportRequest::Delete { turn_id: Some(actual_turn), receipt, .. }
-                if actual_turn == turn_id => receipt.as_ref(),
+            ProgressiveTransportRequest::Delete {
+                turn_id: Some(actual_turn),
+                receipt,
+                ..
+            } if actual_turn == turn_id => receipt.as_ref(),
             _ => None,
         });
-        assert!(draft_delete.is_some(), "the existing progressive draft must be cleaned up after final voice delivery");
+        assert!(
+            draft_delete.is_some(),
+            "the existing progressive draft must be cleaned up after final voice delivery"
+        );
         assert_eq!(
             draft_delete.unwrap().platform_message_ids,
             ["fixture-message"],
@@ -4042,22 +4130,28 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         .await
         .expect("audio-file fallback is delivered");
     let requests = callback.requests.lock().await;
-    let audio_request = requests.iter().rev().find_map(|request| match request {
-        ProgressiveTransportRequest::SendTyped {
-            turn_id: Some(turn_id),
-            parts,
-            ..
-        } if turn_id == "audio-file-fallback" => Some(parts),
-        _ => None,
-    }).expect("audio-file typed send");
+    let audio_request = requests
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                ..
+            } if turn_id == "audio-file-fallback" => Some(parts),
+            _ => None,
+        })
+        .expect("audio-file typed send");
     assert!(audio_request.iter().any(|part| matches!(part,
         tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Audio { media, codec: Some(codec), .. }
         } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
     )));
-    assert!(!audio_request.iter().any(|part| matches!(part,
-        tinychannels_bus::OutboundContentPart::Voice { .. }
-    )));
+    assert!(
+        !audio_request
+            .iter()
+            .any(|part| matches!(part, tinychannels_bus::OutboundContentPart::Voice { .. }))
+    );
     drop(requests);
 
     let link_turn = ProgressiveOutputContext {
@@ -4100,31 +4194,52 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         .await
         .expect("authorized-link fallback is delivered");
     let requests = callback.requests.lock().await;
-    let link_request = requests.iter().rev().find_map(|request| match request {
-        ProgressiveTransportRequest::SendTyped {
-            turn_id: Some(turn_id),
-            parts,
-            text,
-            ..
-        } if turn_id == "authorized-link-fallback" => Some((parts, text)),
-        _ => None,
-    }).expect("text plus authorized link send");
-    assert!(!link_request.0.iter().any(|part| matches!(part,
+    let link_request = requests
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                text,
+                ..
+            } if turn_id == "authorized-link-fallback" => Some((parts, text)),
+            _ => None,
+        })
+        .expect("text plus authorized link send");
+    assert!(!link_request.0.iter().any(|part| matches!(
+        part,
         tinychannels_bus::OutboundContentPart::Voice { .. }
-            | tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Audio { .. } }
+            | tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Audio { .. }
+            }
     )));
-    assert!(link_request.1.contains("https://media.example/authorized/voice"));
-    let canonical_text = link_request.0.iter().filter_map(|part| match part {
-        tinychannels_bus::OutboundContentPart::Content {
-            part: tinychannels_bus::ContentPart::Text { text, .. },
-        } => Some(text.as_str()),
-        _ => None,
-    }).collect::<Vec<_>>();
-    assert_eq!(canonical_text.len(), 2, "fallback must preserve ordered text parts");
+    assert!(
+        link_request
+            .1
+            .contains("https://media.example/authorized/voice")
+    );
+    let canonical_text = link_request
+        .0
+        .iter()
+        .filter_map(|part| match part {
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. },
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        canonical_text.len(),
+        2,
+        "fallback must preserve ordered text parts"
+    );
     assert_eq!(canonical_text[0], "spoken ");
     assert!(canonical_text[1].contains("words"));
-    assert!(canonical_text[1].contains("https://media.example/authorized/voice"),
-        "authorized link must exist in provider-rendered content.parts");
+    assert!(
+        canonical_text[1].contains("https://media.example/authorized/voice"),
+        "authorized link must exist in provider-rendered content.parts"
+    );
     drop(requests);
 
     *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
@@ -4159,23 +4274,38 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         )
         .await
         .expect("oversized voice falls back to the text response");
-    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), stores_before);
+    assert_eq!(
+        callback.voice_store_calls.load(Ordering::SeqCst),
+        stores_before
+    );
     let requests = callback.requests.lock().await;
-    let too_long_request = requests.iter().rev().find_map(|request| match request {
-        ProgressiveTransportRequest::SendTyped { parts, text, .. } => Some((parts, text)),
-        _ => None,
-    }).unwrap();
-    assert!(!too_long_request.0.iter().any(|part| matches!(part,
-        tinychannels_bus::OutboundContentPart::Voice { .. }
-    )));
-    assert!(too_long_request
-        .1
-        .contains("Audio reply exceeded the channel size limit"));
-    assert!(too_long_request.0.iter().any(|part| matches!(part,
-        tinychannels_bus::OutboundContentPart::Content {
-            part: tinychannels_bus::ContentPart::Text { text, .. }
-        } if text.contains("Audio reply exceeded the channel size limit")
-    )), "size fallback note must exist in canonical provider-rendered content.parts");
+    let too_long_request = requests
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped { parts, text, .. } => Some((parts, text)),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        !too_long_request
+            .0
+            .iter()
+            .any(|part| matches!(part, tinychannels_bus::OutboundContentPart::Voice { .. }))
+    );
+    assert!(
+        too_long_request
+            .1
+            .contains("Audio reply exceeded the channel size limit")
+    );
+    assert!(
+        too_long_request.0.iter().any(|part| matches!(part,
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. }
+            } if text.contains("Audio reply exceeded the channel size limit")
+        )),
+        "size fallback note must exist in canonical provider-rendered content.parts"
+    );
     drop(requests);
 
     let duration_context = ProgressiveOutputContext {
@@ -4197,27 +4327,39 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         capabilities.clone(),
         duration_context,
     );
-    duration_limited.send_parts(
-        &[tinychannels_bus::OutboundContentPart::Content {
-            part: tinychannels_bus::ContentPart::Text {
-                text: "spoken words".into(),
-                markdown_dialect: None,
-            },
-        }],
-        "spoken words",
-    ).await.expect("too-long audio duration falls back to text");
+    duration_limited
+        .send_parts(
+            &[tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "spoken words".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            "spoken words",
+        )
+        .await
+        .expect("too-long audio duration falls back to text");
     let requests = callback.requests.lock().await;
-    let duration_request = requests.iter().rev().find_map(|request| match request {
-        ProgressiveTransportRequest::SendTyped {
-            turn_id: Some(turn_id), parts, ..
-        } if turn_id == "duration-limit-fallback" => Some(parts),
-        _ => None,
-    }).expect("duration-limit text send");
-    assert!(duration_request.iter().any(|part| matches!(part,
-        tinychannels_bus::OutboundContentPart::Content {
-            part: tinychannels_bus::ContentPart::Text { text, .. }
-        } if text.contains("Audio reply was too long to send")
-    )), "duration limit note must exist in canonical provider-rendered content.parts");
+    let duration_request = requests
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                ..
+            } if turn_id == "duration-limit-fallback" => Some(parts),
+            _ => None,
+        })
+        .expect("duration-limit text send");
+    assert!(
+        duration_request.iter().any(|part| matches!(part,
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. }
+            } if text.contains("Audio reply was too long to send")
+        )),
+        "duration limit note must exist in canonical provider-rendered content.parts"
+    );
     drop(requests);
 
     *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {

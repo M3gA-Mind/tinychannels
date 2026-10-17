@@ -567,17 +567,26 @@ impl Channel for TelegramChannel {
                 .as_deref()
                 .filter(|id| !id.trim().is_empty())
                 .ok_or_else(|| anyhow::anyhow!("voice media has no host-owned opaque reference"))?;
-            let channel = message.channel_ref.clone().unwrap_or_else(|| {
-                tinychannels_bus::ChannelRef {
-                    id: "telegram".into(),
-                    account_id: None,
-                }
-            });
-            let turn_id = message.turn_id.clone()
+            let channel =
+                message
+                    .channel_ref
+                    .clone()
+                    .unwrap_or_else(|| tinychannels_bus::ChannelRef {
+                        id: "telegram".into(),
+                        account_id: None,
+                    });
+            let turn_id = message
+                .turn_id
+                .clone()
                 .filter(|turn_id| !turn_id.trim().is_empty())
-                .ok_or_else(|| anyhow::anyhow!("Telegram voice upload requires originating turn identity"))?;
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Telegram voice upload requires originating turn identity")
+                })?;
             let scope = tinychannels_bus::HostVoiceScope {
-                configured_instance: channel.account_id.clone().unwrap_or_else(|| channel.id.clone()),
+                configured_instance: channel
+                    .account_id
+                    .clone()
+                    .unwrap_or_else(|| channel.id.clone()),
                 channel,
                 conversation: conversation.clone(),
                 turn_id,
@@ -652,54 +661,71 @@ impl Channel for TelegramChannel {
                     .as_deref()
                     .or(conversation.topic_id.as_deref())
                     .or(conversation.thread_id.as_deref());
-                match self.send_text_chunks_with_ids(
-                    &caption,
-                    &chat_id,
-                    thread,
-                    Self::parse_message_id(message.reply_to_id.as_deref()),
-                ).await {
+                match self
+                    .send_text_chunks_with_ids(
+                        &caption,
+                        &chat_id,
+                        thread,
+                        Self::parse_message_id(message.reply_to_id.as_deref()),
+                    )
+                    .await
+                {
                     Ok(text_ids) => {
                         for (index, text_id) in text_ids.into_iter().enumerate() {
                             receipt.platform_message_ids.push(text_id.clone());
-                            receipt.parts.push(tinychannels_bus::channel::MessageReceiptPart {
-                                platform_message_id: text_id.clone(),
-                                kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
-                                index: index + 1,
-                                thread_id: conversation.topic_id.clone()
-                                    .or(conversation.thread_id.clone()),
-                                reply_to_id: message.reply_to_id.clone(),
-                                edit_token: Some(text_id.clone()),
-                                delete_token: Some(text_id.clone()),
-                                raw: Some(tinychannels_bus::channel::MessageReceiptSourceResult {
-                                    channel: Some("telegram".into()),
-                                    message_id: Some(text_id),
-                                    chat_id: Some(chat_id.clone()),
-                                    ..Default::default()
-                                }),
-                            });
-                        }
-                    }
-                    Err(send_error) => {
-                        let partial = send_error.downcast_ref::<super::channel_send::PartialTextSendError>();
-                        if let Some(partial) = partial {
-                            for (index, text_id) in partial.message_ids.iter().enumerate() {
-                                receipt.platform_message_ids.push(text_id.clone());
-                                receipt.parts.push(tinychannels_bus::channel::MessageReceiptPart {
+                            receipt
+                                .parts
+                                .push(tinychannels_bus::channel::MessageReceiptPart {
                                     platform_message_id: text_id.clone(),
                                     kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
                                     index: index + 1,
-                                    thread_id: conversation.topic_id.clone()
+                                    thread_id: conversation
+                                        .topic_id
+                                        .clone()
                                         .or(conversation.thread_id.clone()),
                                     reply_to_id: message.reply_to_id.clone(),
                                     edit_token: Some(text_id.clone()),
                                     delete_token: Some(text_id.clone()),
-                                    raw: Some(tinychannels_bus::channel::MessageReceiptSourceResult {
-                                        channel: Some("telegram".into()),
-                                        message_id: Some(text_id.clone()),
-                                        chat_id: Some(chat_id.clone()),
-                                        ..Default::default()
-                                    }),
+                                    raw: Some(
+                                        tinychannels_bus::channel::MessageReceiptSourceResult {
+                                            channel: Some("telegram".into()),
+                                            message_id: Some(text_id),
+                                            chat_id: Some(chat_id.clone()),
+                                            ..Default::default()
+                                        },
+                                    ),
                                 });
+                        }
+                    }
+                    Err(send_error) => {
+                        let partial =
+                            send_error.downcast_ref::<super::channel_send::PartialTextSendError>();
+                        if let Some(partial) = partial {
+                            for (index, text_id) in partial.message_ids.iter().enumerate() {
+                                receipt.platform_message_ids.push(text_id.clone());
+                                receipt
+                                    .parts
+                                    .push(tinychannels_bus::channel::MessageReceiptPart {
+                                        platform_message_id: text_id.clone(),
+                                        kind:
+                                            tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                                        index: index + 1,
+                                        thread_id: conversation
+                                            .topic_id
+                                            .clone()
+                                            .or(conversation.thread_id.clone()),
+                                        reply_to_id: message.reply_to_id.clone(),
+                                        edit_token: Some(text_id.clone()),
+                                        delete_token: Some(text_id.clone()),
+                                        raw: Some(
+                                            tinychannels_bus::channel::MessageReceiptSourceResult {
+                                                channel: Some("telegram".into()),
+                                                message_id: Some(text_id.clone()),
+                                                chat_id: Some(chat_id.clone()),
+                                                ..Default::default()
+                                            },
+                                        ),
+                                    });
                             }
                             error = Some(partial.error.clone());
                             if let Some(error) = &mut error {
@@ -709,7 +735,9 @@ impl Channel for TelegramChannel {
                         } else {
                             error = Some(tinychannels_bus::channel::ChannelSendError {
                                 kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                                message: "Telegram sent voice audio but transcript delivery is uncertain".into(),
+                                message:
+                                    "Telegram sent voice audio but transcript delivery is uncertain"
+                                        .into(),
                                 sent_before_error: true,
                                 retryable: false,
                                 ..Default::default()

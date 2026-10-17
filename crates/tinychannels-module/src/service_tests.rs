@@ -523,7 +523,10 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
             .await
             .unwrap();
         let typed = received.recv().await.unwrap();
-        assert_eq!(typed.turn_id.as_deref(), Some(format!("source-turn-{index}").as_str()));
+        assert_eq!(
+            typed.turn_id.as_deref(),
+            Some(format!("source-turn-{index}").as_str())
+        );
         assert_eq!(typed.reply_to_id.as_deref(), Some("source-message"));
         assert_eq!(typed.thread_id.as_deref(), Some("thread"));
         assert_eq!(
@@ -677,7 +680,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         channel_id: "fixture".into(),
                         conversation_id: "room".into(),
                         turn_id: None,
-        durability: tinychannels_bus::DeliveryDurability::BestEffort,
+                        durability: tinychannels_bus::DeliveryDurability::BestEffort,
                         payload,
                         ..Default::default()
                     },
@@ -739,7 +742,7 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
                 conversation_ref: None,
                 idempotency_key: "delivery-required".to_owned(),
                 turn_id: None,
-        durability: tinychannels::DeliveryDurability::Required,
+                durability: tinychannels::DeliveryDurability::Required,
                 payload: tinychannels::OutboundPayload::Text {
                     text: "must remain durable".to_owned(),
                 },
@@ -1294,8 +1297,11 @@ async fn large_voice_bytes_use_compact_scoped_reference_in_best_effort_and_requi
             assert_eq!(result.message_id.as_deref(), Some("voice-message"));
         }
         let message = received.recv().await.expect("typed provider send");
-        assert_eq!(message.turn_id.as_deref(), Some(format!("{id}-origin-turn").as_str()),
-            "the real service dispatch retains the source turn separately from the idempotency key");
+        assert_eq!(
+            message.turn_id.as_deref(),
+            Some(format!("{id}-origin-turn").as_str()),
+            "the real service dispatch retains the source turn separately from the idempotency key"
+        );
         assert_eq!(message.idempotency_key, id);
         assert!(matches!(
             &message.parts[0],
@@ -3000,7 +3006,7 @@ async fn service_send_failures_preserve_named_error_and_durable_queue_busy_refus
                 "fixture".into(),
                 ChannelOutboundIntent {
                     turn_id: None,
-        durability: tinychannels::DeliveryDurability::BestEffort,
+                    durability: tinychannels::DeliveryDurability::BestEffort,
                     ..required_intent("best-effort", "hello")
                 },
             )

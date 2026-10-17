@@ -328,7 +328,7 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
             idempotency_key: key.into(),
             channel_id: "not-running".into(),
             turn_id: None,
-        durability: tinychannels_bus::DeliveryDurability::Required,
+            durability: tinychannels_bus::DeliveryDurability::Required,
             payload: OutboundPayload::Text {
                 text: "scoped delivery".into(),
             },

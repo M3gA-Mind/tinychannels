@@ -1,10 +1,10 @@
 use super::*;
 use base64::Engine as _;
 use sha2::Digest as _;
-use tinychannels::host::EventSink as _;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
+use tinychannels::host::EventSink as _;
 use tinychannels_bus::{ChannelInboundEnvelope, ContentPart, ConversationKind, ConversationRef};
 
 #[derive(Clone, Default)]
@@ -58,7 +58,10 @@ async fn ingress_fixture() -> (HostChannels, IngressVoiceCallback, tinybus::Conn
         )
         .await
         .unwrap();
-    server.request_name(tinychannels_bus::HOST_BUS_NAME).await.unwrap();
+    server
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
     let client = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
@@ -104,10 +107,14 @@ fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> Chann
 async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
     let (host, callback, _server) = ingress_fixture().await;
     let events = ModuleEvents(host.clone(), "telegram:bot-a".into());
-    assert!(events
-        .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(None)))
-        .await
-        .unwrap());
+    assert!(
+        events
+            .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(
+                None
+            )))
+            .await
+            .unwrap()
+    );
     host.flush().await.unwrap();
 
     let read = callback.read_requests.lock().await;
@@ -118,7 +125,10 @@ async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
     assert_eq!(stt.len(), 1);
     assert_eq!(stt[0].scope.configured_instance, "telegram:bot-a");
     assert_eq!(stt[0].scope.channel.id, "telegram");
-    assert_eq!(stt[0].scope.channel.account_id.as_deref(), Some("telegram:bot-a"));
+    assert_eq!(
+        stt[0].scope.channel.account_id.as_deref(),
+        Some("telegram:bot-a")
+    );
     assert_eq!(
         stt[0].scope.conversation,
         ConversationRef {
@@ -161,9 +171,9 @@ async fn completed_provider_transcript_skips_media_read_and_host_stt() {
         source: tinychannels_bus::VoiceTranscriptSource::Provider,
     };
     events
-        .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(Some(
-            provider_transcript,
-        ))))
+        .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(
+            Some(provider_transcript),
+        )))
         .await
         .unwrap();
     host.flush().await.unwrap();

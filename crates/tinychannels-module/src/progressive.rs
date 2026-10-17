@@ -216,16 +216,20 @@ impl ProgressiveSender for Sender {
         if text.trim().is_empty() || !self.capabilities.voice_out.synthesis {
             return Ok(false);
         }
-        let Some(context) = context else { return Ok(false) };
+        let Some(context) = context else {
+            return Ok(false);
+        };
         let scope = tinychannels_bus::HostVoiceScope {
             configured_instance: self.channel.clone(),
             channel: context.channel.clone(),
             conversation: context.conversation.clone(),
             turn_id: context.turn_id.clone(),
         };
-        let policy = self.host.voice_reply_policy(
-            tinychannels_bus::HostVoiceReplyPolicyRequest { scope },
-        ).await.ok();
+        let policy = self
+            .host
+            .voice_reply_policy(tinychannels_bus::HostVoiceReplyPolicyRequest { scope })
+            .await
+            .ok();
         Ok(policy.is_some_and(|policy| match policy.mode {
             tinychannels_bus::HostVoiceReplyMode::Mirror => policy.inbound_has_voice,
             tinychannels_bus::HostVoiceReplyMode::Always => true,
@@ -546,9 +550,8 @@ async fn send_typed_part(
                                     transcript: Some(requested_text.clone()),
                                 },
                             });
-                        } else if let Some(url) = prepared
-                            .accessible_url
-                            .filter(|url| !url.trim().is_empty())
+                        } else if let Some(url) =
+                            prepared.accessible_url.filter(|url| !url.trim().is_empty())
                         {
                             prepared_text.push_str("\n");
                             prepared_text.push_str(&url);
@@ -581,12 +584,14 @@ async fn send_typed_part(
                 }
                 if prepared_text != text {
                     let suffix = prepared_text.strip_prefix(text).unwrap_or(&prepared_text);
-                    if let Some(text_part) = prepared_parts.iter_mut().rev().find_map(|part| match part {
-                        tinychannels_bus::OutboundContentPart::Content {
-                            part: tinychannels_bus::ContentPart::Text { text, .. },
-                        } => Some(text),
-                        _ => None,
-                    }) {
+                    if let Some(text_part) =
+                        prepared_parts.iter_mut().rev().find_map(|part| match part {
+                            tinychannels_bus::OutboundContentPart::Content {
+                                part: tinychannels_bus::ContentPart::Text { text, .. },
+                            } => Some(text),
+                            _ => None,
+                        })
+                    {
                         text_part.push_str(suffix);
                     } else if !prepared_text.trim().is_empty() {
                         prepared_parts.push(tinychannels_bus::OutboundContentPart::Content {

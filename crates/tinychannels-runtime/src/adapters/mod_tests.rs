@@ -73,7 +73,7 @@ async fn local_adapter_delegates_outbound_delivery() {
             reply_to_id: None,
             thread_id: None,
             turn_id: None,
-        durability: DeliveryDurability::BestEffort,
+            durability: DeliveryDurability::BestEffort,
             payload: OutboundPayload::Text { text: "hi".into() },
         })
         .await
