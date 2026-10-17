@@ -3794,7 +3794,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         assert_eq!(voice_sends, 1, "{mode:?} final must send one native voice part");
         assert!(terminal.iter().any(|request| matches!(request,
             ProgressiveTransportRequest::OutputEvent { event, .. }
-                if matches!(event, tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta { .. })
+                if matches!(&**event, tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta { .. })
         )), "the worker must first create/update the progressive text draft");
         assert!(terminal.iter().any(|request| matches!(request,
             ProgressiveTransportRequest::Delete { .. }
