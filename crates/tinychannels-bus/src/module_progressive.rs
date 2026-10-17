@@ -151,7 +151,7 @@ pub enum ChannelOutputEvent {
 }
 
 /// Transport-safe projection of a classified tool failure.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolFailureSummary {
     pub class: String,
