@@ -6,7 +6,6 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::delivery::progressive::{
@@ -18,7 +17,7 @@ use tinychannels_bus::module_progressive::{
     ProgressiveTransportResult,
 };
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 use tokio::task::JoinHandle;
 
 const MAX_ACTIVE: usize = 16;
@@ -143,7 +142,8 @@ impl ProgressiveSender for Sender {
                 &context.conversation,
                 sequence,
                 "provider_send",
-            )).expect("scoped channel identity serializes");
+            ))
+            .expect("scoped channel identity serializes");
             hex::encode(Sha256::digest(scope))
         });
         match self
@@ -237,6 +237,7 @@ enum Command {
     Feed(
         Vec<ChannelOutputEvent>,
         bool,
+        Option<[u8; 32]>,
         oneshot::Sender<Result<ProgressiveResult>>,
     ),
     Finish(String, oneshot::Sender<()>),
@@ -252,7 +253,12 @@ struct Entry {
     commands: mpsc::Sender<Command>,
     worker: Mutex<Option<JoinHandle<()>>>,
     closing: Mutex<Option<Closing>>,
-    terminal_feed: AtomicBool,
+    terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
+}
+struct TerminalMemo {
+    fingerprint: [u8; 32],
+    result: Option<std::result::Result<ProgressiveResult, String>>,
+    notify: Arc<Notify>,
 }
 struct State {
     terminal: bool,
@@ -354,15 +360,45 @@ impl Replies {
                 ChannelOutputEvent::FinalMessage { .. } | ChannelOutputEvent::Cancellation { .. }
             )
         });
-        if entry.terminal_feed.load(Ordering::Acquire) {
-            return Err(Error::failed("progressive reply is terminal"));
-        }
-        if terminal
-            && entry
-                .terminal_feed
-                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                .is_err()
-        {
+        let fingerprint = if terminal {
+            Some(
+                Sha256::digest(
+                    serde_json::to_vec(&events)
+                        .map_err(|_| Error::failed("terminal event could not be encoded"))?,
+                )
+                .into(),
+            )
+        } else {
+            None
+        };
+        if let Some(fingerprint) = fingerprint {
+            loop {
+                let wait = {
+                    let mut memo = entry.terminal_feed.lock().await;
+                    match memo.as_mut() {
+                        Some(memo) if memo.fingerprint != fingerprint => {
+                            return Err(Error::failed("progressive terminal content differs"));
+                        }
+                        Some(memo) => {
+                            if let Some(result) = memo.result.clone() {
+                                memo.notify.notify_one();
+                                return result.map_err(Error::failed);
+                            }
+                            memo.notify.clone()
+                        }
+                        None => {
+                            *memo = Some(TerminalMemo {
+                                fingerprint,
+                                result: None,
+                                notify: Arc::new(Notify::new()),
+                            });
+                            break;
+                        }
+                    }
+                };
+                wait.notified().await;
+            }
+        } else if entry.terminal_feed.lock().await.is_some() {
             return Err(Error::failed("progressive reply is terminal"));
         }
         let closing = entry.closing.lock().await;
@@ -370,11 +406,17 @@ impl Replies {
             return Err(Error::failed("progressive reply is closed"));
         }
         let (reply, wait) = oneshot::channel();
-        entry
+        if entry
             .commands
-            .send(Command::Feed(events, forward, reply))
+            .send(Command::Feed(events, forward, fingerprint, reply))
             .await
-            .map_err(|_| Error::failed("progressive reply is closed"))?;
+            .is_err()
+        {
+            drop(closing);
+            let failure = Err(Error::failed("progressive reply is closed"));
+            record_terminal(&entry.terminal_feed, fingerprint, &failure).await;
+            return failure;
+        }
         drop(closing);
         Ok(wait
             .await
@@ -496,14 +538,22 @@ impl Replies {
         let handle = uuid::Uuid::new_v4().simple().to_string();
         let (commands, inbox) = mpsc::channel(16);
         let host = self.host.clone();
-        let worker = tokio::spawn(run(host, channel, capabilities, context, inbox));
+        let terminal_feed = Arc::new(Mutex::new(None));
+        let worker = tokio::spawn(run(
+            host,
+            channel,
+            capabilities,
+            context,
+            terminal_feed.clone(),
+            inbox,
+        ));
         state.entries.insert(
             handle.clone(),
             Arc::new(Entry {
                 commands,
                 worker: Mutex::new(Some(worker)),
                 closing: Mutex::new(None),
-                terminal_feed: AtomicBool::new(false),
+                terminal_feed,
             }),
         );
         Ok(ProgressiveResult::Opened { handle })
@@ -674,6 +724,7 @@ async fn run(
     channel: String,
     capabilities: tinychannels_bus::ChannelCapabilities,
     context: Option<ProgressiveOutputContext>,
+    terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
     mut inbox: mpsc::Receiver<Command>,
 ) {
     let mut reply = if let Some(context) = context {
@@ -709,7 +760,7 @@ async fn run(
     loop {
         tokio::select! {
             command = inbox.recv() => match command {
-                Some(Command::Feed(events, forward, response)) => {
+                Some(Command::Feed(events, forward, fingerprint, response)) => {
                     let cancellation = events
                         .iter()
                         .any(|event| matches!(event, ChannelOutputEvent::Cancellation { .. }));
@@ -723,12 +774,15 @@ async fn run(
                     let failed = result.is_err();
                     if failed {
                         reply.abort().await;
+                        record_terminal(&terminal_feed, fingerprint, &result).await;
                         let _ = response.send(result);
                         break;
                     }
                     if cancellation {
                         reply.abort().await;
-                        let _ = response.send(Ok(ProgressiveResult::Closed));
+                        let result = Ok(ProgressiveResult::Closed);
+                        record_terminal(&terminal_feed, fingerprint, &result).await;
+                        let _ = response.send(result);
                         break;
                     }
                     if let Some((text, event_parts, has_typed_parts)) = final_message {
@@ -755,6 +809,7 @@ async fn run(
                             reply.finalize(&text).await;
                             result = Ok(ProgressiveResult::Closed);
                         }
+                        record_terminal(&terminal_feed, fingerprint, &result).await;
                         let _ = response.send(result);
                         break;
                     }
@@ -777,6 +832,26 @@ async fn run(
             _ = fillers.tick() => reply.filler_tick().await,
             _ = &mut expiry => { reply.abort().await; break; }
         }
+    }
+}
+
+async fn record_terminal(
+    terminal_feed: &Mutex<Option<TerminalMemo>>,
+    fingerprint: Option<[u8; 32]>,
+    result: &Result<ProgressiveResult>,
+) {
+    let Some(fingerprint) = fingerprint else {
+        return;
+    };
+    let mut memo = terminal_feed.lock().await;
+    if let Some(memo) = memo.as_mut().filter(|memo| memo.fingerprint == fingerprint) {
+        memo.result = Some(
+            result
+                .as_ref()
+                .map(Clone::clone)
+                .map_err(ToString::to_string),
+        );
+        memo.notify.notify_one();
     }
 }
 

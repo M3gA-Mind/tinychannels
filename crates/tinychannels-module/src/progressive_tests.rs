@@ -218,6 +218,76 @@ async fn cancelling_the_close_caller_preserves_terminal_delivery_and_cleanup() {
 }
 
 #[tokio::test]
+async fn cancelled_terminal_feed_replays_retained_receipt_without_resending() {
+    let (replies, callback) = fixture(true).await;
+    let handle = open(&replies).await;
+    let terminal_events = vec![ChannelOutputEvent::FinalMessage {
+        text: "retained terminal".into(),
+        parts: vec![],
+        receipt: None,
+    }];
+    let retained = Arc::new(replies);
+    let calling = retained.clone();
+    let calling_handle = handle.clone();
+    let calling_events = terminal_events.clone();
+    let caller = tokio::spawn(async move {
+        calling
+            .execute(ProgressiveCommand::FeedOutput {
+                handle: calling_handle,
+                events: calling_events,
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), callback.entered.notified())
+        .await
+        .unwrap();
+    caller.abort();
+    let _ = caller.await;
+    callback.released.notify_one();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if callback.sends.lock().await.len() == 1 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    let replay = retained
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: terminal_events,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        replay,
+        ProgressiveResult::DeliveryOutcome {
+            outcome: {
+                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+                outcome.receipt.platform_message_ids = vec!["fixture-message".into()];
+                outcome
+            }
+        }
+    );
+    assert_eq!(callback.sends.lock().await.len(), 1);
+    let changed = retained
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "changed".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap_err();
+    assert!(changed.to_string().contains("differs"));
+    retained.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn handles_cannot_cross_private_runtime_reply_stores() {
     let (first, _) = fixture(false).await;
     let (second, _) = fixture(false).await;
