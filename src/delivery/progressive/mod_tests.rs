@@ -1623,9 +1623,11 @@ async fn impossible_text_limit_and_unsupported_first_segment_never_send_a_replac
 async fn disabled_draft_flush_makes_no_provider_calls() {
     use super::draft::flush_streaming_edit;
     let sender = FakeSender::default();
-    let mut state = StreamingState::default();
-    state.content = "text".into();
-    state.edit_disabled = true;
+    let mut state = StreamingState {
+        content: "text".into(),
+        edit_disabled: true,
+        ..Default::default()
+    };
     flush_streaming_edit(&sender, "empty", &mut state, false).await;
     assert!(sender.calls().is_empty());
 }
@@ -1633,6 +1635,10 @@ async fn disabled_draft_flush_makes_no_provider_calls() {
 #[tokio::test]
 async fn ids_only_draft_receipt_edits_in_place_without_replacing_delivered_message() {
     for receipt in [
+        MessageReceipt {
+            primary_platform_message_id: Some("known-id".into()),
+            ..Default::default()
+        },
         MessageReceipt {
             platform_message_ids: vec!["known-id".into()],
             ..Default::default()
@@ -1647,35 +1653,41 @@ async fn ids_only_draft_receipt_edits_in_place_without_replacing_delivered_messa
             ..Default::default()
         },
     ] {
-        let (sender, mut reply) = turn("telegram:ids-only-receipt");
-        FakeSender::script(&sender.sends, Outcome::Ok(json!({"receipt": receipt})));
-        reply.on_text_delta("draft");
-        reply.edit_tick().await;
-        reply.on_text_delta(" update");
-        reply.edit_tick().await;
-        let dispatch = reply
-            .finalize_output_event(&Event::FinalMessage {
-                text: "finished".into(),
-                parts: vec![],
-                receipt: None,
-            })
-            .await
-            .expect("a known provider ID is sufficient to edit a valid draft receipt");
-        assert_eq!(
-            dispatch.outcomes[0]
-                .receipt
-                .primary_platform_message_id
-                .as_deref(),
-            Some("known-id")
-        );
-        assert_eq!(
-            sender.calls(),
-            [
-                Call::Send("draft".into()),
-                Call::Edit("known-id".into(), "draft update".into()),
-                Call::Edit("known-id".into(), "finished".into()),
-            ]
-        );
+        for response in [
+            serde_json::to_value(&receipt).unwrap(),
+            json!({"receipt": receipt}),
+            json!({"data": {"receipt": receipt}}),
+        ] {
+            let (sender, mut reply) = turn("telegram:ids-only-receipt");
+            FakeSender::script(&sender.sends, Outcome::Ok(response));
+            reply.on_text_delta("draft");
+            reply.edit_tick().await;
+            reply.on_text_delta(" update");
+            reply.edit_tick().await;
+            let dispatch = reply
+                .finalize_output_event(&Event::FinalMessage {
+                    text: "finished".into(),
+                    parts: vec![],
+                    receipt: None,
+                })
+                .await
+                .expect("a known provider ID is sufficient to edit a valid draft receipt");
+            assert_eq!(
+                dispatch.outcomes[0]
+                    .receipt
+                    .primary_platform_message_id
+                    .as_deref(),
+                Some("known-id")
+            );
+            assert_eq!(
+                sender.calls(),
+                [
+                    Call::Send("draft".into()),
+                    Call::Edit("known-id".into(), "draft update".into()),
+                    Call::Edit("known-id".into(), "finished".into()),
+                ]
+            );
+        }
     }
 }
 
