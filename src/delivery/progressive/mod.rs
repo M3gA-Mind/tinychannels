@@ -86,7 +86,7 @@ pub enum ProgressiveSendError {
     /// Provider reports a partial or uncertain send with normalized receipt
     /// facts; callers must not retry or flatten this into an ordinary error.
     #[error("progressive send returned a partial or uncertain receipt")]
-    PartialOutcome(tinychannels_bus::ChannelSendOutcome),
+    PartialOutcome(tinychannels_bus::channel::ChannelSendOutcome),
     /// Anything else (5xx, transport, rate limit). Counts against the
     /// per-turn failure budget.
     #[error(transparent)]
