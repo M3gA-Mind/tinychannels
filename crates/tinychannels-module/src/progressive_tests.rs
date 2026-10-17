@@ -2,6 +2,7 @@ use super::*;
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tokio::sync::Notify;
+use tinychannels_bus::module_progressive::SubagentOutput;
 
 struct ConfiguredChannel(&'static str);
 struct ConfiguredChannelWithCapabilities {
@@ -393,7 +394,7 @@ async fn cancelled_terminal_feed_replays_retained_receipt_without_resending() {
             outcome: {
                 let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
                 outcome.receipt.platform_message_ids = vec!["fixture-message".into()];
-                outcome
+                Box::new(outcome)
             }
         }
     );
@@ -701,12 +702,11 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
         ProgressiveResult::Updated
     );
     let forwarded = callback.requests.lock().await.iter().any(|request| {
-        matches!(request, ProgressiveTransportRequest::OutputEvent {
-            event: ChannelOutputEvent::ToolCallCompleted { call_id, arguments, structured, .. },
-            ..
-        } if call_id == "call-1"
-            && arguments.as_ref().is_some_and(|value| value["q"] == "safe test")
-            && structured.as_ref().is_some_and(|value| value["count"] == 1))
+        matches!(request, ProgressiveTransportRequest::OutputEvent { event, .. }
+            if matches!(event.as_ref(), ChannelOutputEvent::ToolCallCompleted { call_id, arguments, structured, .. }
+                if call_id == "call-1"
+                    && arguments.as_ref().is_some_and(|value| value["q"] == "safe test")
+                    && structured.as_ref().is_some_and(|value| value["count"] == 1)))
     });
     assert!(
         forwarded,
@@ -1457,7 +1457,7 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
         .await
         .unwrap();
     let outcomes = match result {
-        ProgressiveResult::DeliveryOutcome { outcome } => vec![outcome],
+        ProgressiveResult::DeliveryOutcome { outcome } => vec![*outcome],
         ProgressiveResult::DeliveryOutcomes { outcomes } => outcomes,
         ProgressiveResult::DeliveryBatch { outcomes, .. } => outcomes,
         other => panic!("expected retained media outcome, got {other:?}"),
@@ -1965,8 +1965,8 @@ async fn native_approval_and_clarification_events_deliver_prompts() {
             .any(|text| text.contains("Which folder should I use?"))
     );
     assert!(requests.iter().any(|request| matches!(request,
-        ProgressiveTransportRequest::OutputEvent { event: ChannelOutputEvent::ApprovalRequest { id, .. }, .. }
-            if id == "approval-7"
+        ProgressiveTransportRequest::OutputEvent { event, .. }
+            if matches!(event.as_ref(), ChannelOutputEvent::ApprovalRequest { id, .. } if id == "approval-7")
     )));
     drop(requests);
     replies.shutdown().await.unwrap();
@@ -2136,7 +2136,7 @@ async fn callback_error_after_accepting_draft_is_not_retried_or_resent() {
         .await
         .unwrap();
     let outcomes = match result {
-        ProgressiveResult::DeliveryOutcome { outcome } => vec![outcome],
+        ProgressiveResult::DeliveryOutcome { outcome } => vec![*outcome],
         ProgressiveResult::DeliveryOutcomes { outcomes }
         | ProgressiveResult::DeliveryBatch { outcomes, .. } => outcomes,
         other => panic!("expected retained uncertain draft result, got {other:?}"),
