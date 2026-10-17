@@ -795,7 +795,7 @@ async fn run(
                                 }]
                             };
                             result = match reply.send_parts(&parts, &text).await {
-                                Ok(outcome) => Ok(ProgressiveResult::DeliveryOutcome { outcome }),
+                                Ok(_outcome) => Ok(ProgressiveResult::Closed),
                                 Err(ProgressiveSendError::UnsupportedContent) => {
                                     reply.abort().await;
                                     Ok(ProgressiveResult::DeliveryUnsupported { parts })
