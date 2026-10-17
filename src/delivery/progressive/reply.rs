@@ -231,15 +231,9 @@ impl ProgressiveReply {
                 outcome,
             )));
         }
-        let should_synthesize = parts.is_empty()
-            && self
-                .sender
-                .should_synthesize_final(
-                    &self.channel,
-                    self.output_context.as_ref(),
-                    text,
-                )
-                .await?;
+        // Narrow reconstruction of the old text-only fast path, which did
+        // not consult voice policy before editing an existing draft.
+        let should_synthesize = false;
         if parts.is_empty()
             && !should_synthesize
             && let Some(outcome) = self.finalize_existing_text(text).await?
