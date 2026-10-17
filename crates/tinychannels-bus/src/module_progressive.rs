@@ -131,14 +131,23 @@ pub struct ToolFailureSummary {
 }
 
 /// Token and charged-cost totals that belong to one child agent.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SubagentUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cached_input_tokens: u64,
     pub charged_amount_usd: f64,
-    pub cost_source: String,
+    pub cost_source: CostSource,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CostSource {
+    Charged,
+    Estimated,
+    #[default]
+    Unknown,
 }
 
 /// Content-free reason a turn or child run stopped early.
