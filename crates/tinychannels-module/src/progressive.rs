@@ -49,13 +49,7 @@ impl Sender {
             )) => match outcome.error {
                 None => serde_json::to_value(outcome.receipt)
                     .map_err(|error| ProgressiveSendError::Other(error.into())),
-                Some(error) => Err(ProgressiveSendError::Other(anyhow::anyhow!(
-                    "progressive send failed ({:?}; sent_before_error={}; known_message_ids={:?}): {}",
-                    error.kind,
-                    error.sent_before_error,
-                    outcome.receipt.platform_message_ids,
-                    error.message
-                ))),
+                Some(_) => Err(ProgressiveSendError::PartialOutcome(outcome)),
             },
             ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Success(
                 value,
