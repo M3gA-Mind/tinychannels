@@ -1313,17 +1313,23 @@ impl Running {
             account_id: Some(self.configured_instance.clone()),
         };
         let valid_receipt = |receipt: &tinychannels_bus::channel::MessageReceipt| {
+            let has_message_id = receipt
+                .primary_platform_message_id
+                .as_deref()
+                .is_some_and(|message_id| !message_id.trim().is_empty())
+                || receipt
+                    .parts
+                    .iter()
+                    .any(|part| !part.platform_message_id.trim().is_empty());
             receipt.channel.as_ref() == Some(&expected_channel)
                 && receipt.conversation.as_ref().is_some_and(|conversation| {
                     !conversation.id.trim().is_empty()
                         && receipt
                             .parts
                             .iter()
-                            .all(|part| part.platform_message_id.trim().len() > 0)
+                            .all(|part| !part.platform_message_id.trim().is_empty())
                 })
-                && !tinychannels_bus::channel::resolve_message_receipt_primary_id(receipt)
-                    .unwrap_or_default()
-                    .is_empty()
+                && has_message_id
         };
         match &interaction {
             tinychannels_bus::ChannelInteraction::SendReaction {
