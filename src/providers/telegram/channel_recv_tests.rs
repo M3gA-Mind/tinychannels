@@ -820,6 +820,67 @@ async fn telegram_media_only_update_persists_into_scoped_blobs() {
 }
 
 #[tokio::test]
+async fn telegram_document_download_infers_type_and_name_from_getfile_path() {
+    let server = mock_api().await;
+    let pdf = b"%PDF-1.7\n1 0 obj\nfixture".to_vec();
+    mount_post(
+        &server,
+        "getFile",
+        ok_with(serde_json::json!({
+            "file_path": "documents/spec.pdf",
+            "file_size": pdf.len()
+        })),
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!("/file/bot{TOKEN}/documents/spec.pdf")))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "application/octet-stream")
+                .set_body_bytes(pdf.clone()),
+        )
+        .mount(&server)
+        .await;
+
+    let repository = ScopedMediaRepository::new();
+    let channel =
+        channel_for(&server, &["alice"]).with_media_repository(Arc::new(repository.clone()));
+    let update = serde_json::json!({
+        "update_id": 12,
+        "message": {
+            "message_id": 62,
+            "chat": { "id": 888, "type": "supergroup" },
+            "from": { "id": 9, "username": "alice" },
+            "document": { "file_id": "document-file", "file_unique_id": "document-unique" }
+        }
+    });
+    let message = channel
+        .parse_update_message_or_voice(&update)
+        .await
+        .expect("document-only update is accepted");
+    let parts = channel
+        .media_parts_for_ingress(&update, &message)
+        .await
+        .unwrap();
+    let envelope = TelegramChannel::inbound_envelope_with_media(&update, &message, None, parts);
+    let [tinychannels_bus::ContentPart::File { media, file_name, .. }] = envelope.parts.as_slice()
+    else {
+        panic!("downloaded Telegram document should be retained as a typed file");
+    };
+    assert_eq!(file_name.as_deref(), Some("spec.pdf"));
+    assert_eq!(media.file_name.as_deref(), Some("spec.pdf"));
+    assert_eq!(media.content_type.as_deref(), Some("application/pdf"));
+
+    let scope = repository.scopes.lock().unwrap()[0].clone();
+    let stored = repository
+        .read_media(scope, media.opaque_id.clone().unwrap(), 1024)
+        .await
+        .unwrap();
+    assert_eq!(stored.bytes, pdf);
+    assert_eq!(stored.content_type, "application/pdf");
+}
+
+#[tokio::test]
 async fn text_update_bypasses_voice_parser() {
     let server = mock_api().await;
     let ch = channel_for(&server, &["*"]);
