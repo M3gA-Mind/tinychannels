@@ -965,6 +965,15 @@ impl tinychannels::channel::ChannelAdapter for Running {
         tinychannels::channel::ChannelSendError,
     > {
         self.validate_adapter_intent(&intent)?;
+        let capabilities = self.channel.capabilities();
+        if !adapter_payload_supported(&intent.payload, &capabilities) {
+            return Err(tinychannels::channel::ChannelSendError {
+                kind: tinychannels::channel::SendErrorKind::BadFormat,
+                message: "configured provider does not advertise this outbound content kind".into(),
+                retryable: false,
+                ..Default::default()
+            });
+        }
         let mut intent = intent;
         let expected_channel = tinychannels_bus::provider_id(&self.configured_instance).to_owned();
         intent
@@ -1019,6 +1028,44 @@ impl tinychannels::channel::ChannelAdapter for Running {
             health_state: Some(if healthy { "healthy" } else { "unhealthy" }.into()),
             ..Default::default()
         })
+    }
+}
+
+fn adapter_payload_supported(
+    payload: &tinychannels_bus::OutboundPayload,
+    capabilities: &tinychannels_bus::ChannelCapabilities,
+) -> bool {
+    use tinychannels_bus::{ContentPart, OutboundContentPart, OutboundPayload};
+    let supports_part = |part: &ContentPart| match part {
+        ContentPart::Text { .. } => capabilities.content.text.outbound,
+        ContentPart::Image { .. } => capabilities.content.image.outbound,
+        ContentPart::Video { .. } => capabilities.content.video.outbound,
+        ContentPart::Audio { .. } => capabilities.content.audio.outbound,
+        ContentPart::File { .. } => capabilities.content.file.outbound,
+        ContentPart::VoiceNote { .. } => capabilities.voice_out.supported,
+        ContentPart::Sticker { .. } => capabilities.content.sticker.outbound,
+        ContentPart::Location { .. } => capabilities.content.location.outbound,
+        ContentPart::Contact { .. } => capabilities.content.contact.outbound,
+        ContentPart::Buttons { .. } => capabilities.content.buttons.outbound,
+        ContentPart::Poll { .. } => capabilities.content.poll.outbound,
+        ContentPart::Presentation { .. } => capabilities.content.presentation.outbound,
+        ContentPart::Native { .. } => capabilities.content.native.outbound,
+    };
+    match payload {
+        OutboundPayload::Text { .. } => capabilities.content.text.outbound,
+        OutboundPayload::Media { text, media_urls } => {
+            text.as_ref().is_none_or(|_| capabilities.content.text.outbound)
+                && (media_urls.is_empty() || capabilities.content.image.outbound)
+        }
+        OutboundPayload::Voice { .. } => capabilities.voice_out.supported,
+        OutboundPayload::Files { .. } => capabilities.content.file.outbound,
+        OutboundPayload::Poll { .. } => capabilities.content.poll.outbound,
+        OutboundPayload::PresentationBlocks { .. } => capabilities.content.presentation.outbound,
+        OutboundPayload::NativeChannelData { .. } => capabilities.content.native.outbound,
+        OutboundPayload::Parts { parts } => parts.iter().all(|part| match part {
+            OutboundContentPart::Content { part } => supports_part(part),
+            OutboundContentPart::Voice { .. } => capabilities.voice_out.supported,
+        }),
     }
 }
 
