@@ -117,6 +117,15 @@ pub(super) async fn flush_thinking_message(
                     err,
                 );
             }
+            Err(err @ ProgressiveSendError::PartialOutcome(_)) => {
+                tracing::error!(
+                    "[channel-inbound][thinking] edit returned an uncertain outcome; retaining bubble id channel='{}' msg_id={} err={}",
+                    channel,
+                    msg_id,
+                    err
+                );
+                state.latch_thinking_edits_unsupported();
+            }
         }
         return;
     }

@@ -140,6 +140,14 @@ pub(super) async fn finalize_channel_reply(
                     );
                     replace_draft(sender, channel, &message_id, final_text).await;
                 }
+                Err(err @ ProgressiveSendError::PartialOutcome(_)) => {
+                    tracing::error!(
+                        "[channel-inbound] final edit returned a partial or uncertain receipt; skipping replacement to avoid duplicate delivery channel='{}' msg_id={} err={}",
+                        channel,
+                        message_id,
+                        err
+                    );
+                }
             }
         }
     } else {

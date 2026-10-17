@@ -77,6 +77,15 @@ pub(super) async fn flush_streaming_edit(
                     state.edit_disabled = true;
                 }
             }
+            Err(err @ ProgressiveSendError::PartialOutcome(_)) => {
+                tracing::error!(
+                    "[channel-inbound][stream] edit returned an uncertain outcome; retaining draft id and disabling edits channel='{}' msg_id={} err={}",
+                    channel,
+                    message_id,
+                    err
+                );
+                state.latch_draft_edits_unsupported();
+            }
         }
         return;
     }
