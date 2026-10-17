@@ -6,6 +6,23 @@ constructs these DTOs; it must not serialize or debug-print the source enum.
 The host remains responsible for capture and audience policy. Model-call input
 and output are observability payloads and are not channel output.
 
+`FeedOutput` sends each event, in order, through `OutputEvent` as an observation
+callback, then applies it to the module-owned progressive reply. Observation
+acknowledgement is not a provider-send receipt. Typed `Media`, `VoiceNote`, and
+terminal `FinalMessage` content use `SendTyped`; only its `ChannelSendOutcome`
+acknowledges delivery. An explicitly unsupported typed payload returns
+`DeliveryUnsupported` with the original ordered parts. Other failures remain
+failures, and the engine does not retry an ambiguous send. A terminal feed is
+unique and last in its batch, closes the handle, and rejects later feeds. Its
+result includes every receipt and any partial-send error.
+
+Scoped opens carry the host-selected turn ID, configured `ChannelRef` including
+account identity, and complete `ConversationRef`. The module checks the
+configured account key and provider before opening; send, edit, delete, typing,
+and observation requests retain that scope. Bridge idempotency keys include
+the event sequence and full channel/conversation scope. Replaying one event
+must reuse its sequence; each new event must advance it.
+
 The TinyAgents `AgentProgress` source variants map as follows:
 
 | Source event | Channel output projection |
