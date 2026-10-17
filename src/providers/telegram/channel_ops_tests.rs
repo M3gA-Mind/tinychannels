@@ -44,7 +44,7 @@ fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
         .with_voice_media_store(Arc::new(VoiceReadFixture))
         .capabilities();
     assert!(off.content.text.inbound && off.content.text.outbound);
-    assert_eq!(off.content.parts, ["text"]);
+    assert_eq!(off.content.parts, ["text", "voice_note"]);
     assert!(off.actions.supported.contains(&"send".into()));
     assert!(!off.progressive_edits);
     assert!(!off.streaming_reply_pipeline);
