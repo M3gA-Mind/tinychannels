@@ -198,16 +198,11 @@ pub struct WebSubagentProgressDetail {
 }
 
 /// Web request metadata; attribution fields do not imply routing authority.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ChatRequestMetadata {
-        #[serde(skip_serializing_if = "Option::is_none")]
     pub speak_reply: Option<bool>,
-        #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<u64>,
-        #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
     pub hold_text_stream: bool,
 }
