@@ -3774,7 +3774,11 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
                     .lock()
                     .await
                     .iter()
-                    .any(|request| matches!(request, ProgressiveTransportRequest::Send { .. }))
+                    .skip(before)
+                    .any(|request| matches!(request,
+                        ProgressiveTransportRequest::Send { turn_id: Some(actual_turn), .. }
+                            if actual_turn == turn_id
+                    ))
                 {
                     break;
                 }
