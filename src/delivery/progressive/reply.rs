@@ -330,7 +330,7 @@ impl ProgressiveReply {
     }
 }
 
-fn split_text_by_limit(
+pub(super) fn split_text_by_limit(
     text: &str,
     limit: u64,
     unit: tinychannels_bus::LengthUnit,
@@ -365,6 +365,73 @@ fn split_text_by_limit(
         segments.push(current);
     }
     Ok(segments)
+}
+
+pub(super) fn segment_text_parts(
+    parts: &[tinychannels_bus::OutboundContentPart],
+    projection: &str,
+    limit: u64,
+    unit: tinychannels_bus::LengthUnit,
+) -> Result<Vec<(Vec<tinychannels_bus::OutboundContentPart>, String)>, super::ProgressiveSendError> {
+    let text_parts = parts
+        .iter()
+        .map(|part| match part {
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, markdown_dialect },
+            } => Some((text.as_str(), markdown_dialect.clone())),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>();
+    let Some(text_parts) = text_parts else {
+        return Ok(vec![(parts.to_vec(), projection.to_owned())]);
+    };
+    if parts.is_empty() {
+        return split_text_by_limit(projection, limit, unit).map(|chunks| {
+            chunks
+                .into_iter()
+                .map(|chunk| {
+                    let part = tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Text {
+                            text: chunk.clone(),
+                            markdown_dialect: None,
+                        },
+                    };
+                    (vec![part], chunk)
+                })
+                .collect()
+        });
+    }
+    let combined_size = text_parts
+        .iter()
+        .map(|(text, _)| measure_text(text, unit))
+        .sum::<u64>();
+    if combined_size <= limit {
+        return Ok(vec![(parts.to_vec(), projection.to_owned())]);
+    }
+    let mut segments = Vec::new();
+    for (text, dialect) in text_parts {
+        for chunk in split_text_by_limit(text, limit, unit)? {
+            let part = tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: chunk.clone(),
+                    markdown_dialect: dialect.clone(),
+                },
+            };
+            segments.push((vec![part], chunk));
+        }
+    }
+    if segments.is_empty() {
+        segments.push((parts.to_vec(), projection.to_owned()));
+    }
+    Ok(segments)
+}
+
+fn measure_text(text: &str, unit: tinychannels_bus::LengthUnit) -> u64 {
+    match unit {
+        tinychannels_bus::LengthUnit::Characters => text.chars().count() as u64,
+        tinychannels_bus::LengthUnit::Utf8Bytes => text.len() as u64,
+        tinychannels_bus::LengthUnit::Utf16Units => text.encode_utf16().count() as u64,
+    }
 }
 
 fn merge_receipt(
