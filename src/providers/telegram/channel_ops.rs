@@ -2143,12 +2143,10 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
         &self,
         _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> Result<(), crate::channel::ChannelSendError> {
-        Err(crate::channel::ChannelSendError {
-            kind: crate::channel::SendErrorKind::Forbidden,
-            message: "Telegram polling is owned by the configured provider runtime".into(),
-            retryable: false,
-            ..Default::default()
-        })
+        // The configured module's Running task owns the single long-poll loop
+        // and publishes the same Telegram-normalized ingress into TinyBus.
+        let _ = _sink;
+        Ok(())
     }
 
     async fn stop(&self) -> Result<(), crate::channel::ChannelSendError> {
@@ -2173,10 +2171,13 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
     async fn status(
         &self,
     ) -> Result<tinychannels_runtime::controllers::ChannelAccountSnapshot, crate::channel::ChannelSendError> {
-        <Self as Channel>::status(self).await.map_err(|error| crate::channel::ChannelSendError {
-            kind: crate::channel::SendErrorKind::Transient,
-            message: error.to_string(),
-            retryable: true,
+        Ok(tinychannels_bus::controllers::ChannelAccountSnapshot {
+            channel_id: "telegram".into(),
+            states: vec![
+                tinychannels_bus::controllers::ChannelAccountState::Configured,
+                tinychannels_bus::controllers::ChannelAccountState::Enabled,
+            ],
+            health_state: Some("unknown".into()),
             ..Default::default()
         })
     }
