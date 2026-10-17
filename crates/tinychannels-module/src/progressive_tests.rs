@@ -829,7 +829,12 @@ async fn unsupported_rich_final_returns_the_unflattened_parts() {
         })
         .await
         .unwrap();
-    assert_eq!(result, ProgressiveResult::DeliveryUnsupported { parts });
+    assert_eq!(
+        result,
+        ProgressiveResult::DeliveryUnsupported {
+            parts: parts.clone()
+        }
+    );
     assert_eq!(callback.sends.lock().await.len(), 1);
     let requests = callback.requests.lock().await;
     let ProgressiveTransportRequest::SendTyped {
