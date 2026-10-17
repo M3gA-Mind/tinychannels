@@ -91,11 +91,11 @@ macro_rules! channel_method_registry {
             #[doc = "Run module-owned remote commands and persisted turn state."] EXECUTE_REMOTE => "ExecuteRemote",
             #[doc = "Prepare module-owned channel facts and runtime command responses."] PREPARE_CHANNEL_CONTROL => "PrepareChannelControl",
             #[doc = "Activate an identity runtime with bounded `ProcessInbound` turn callbacks."] START_RUNTIME_WITH_DISPATCH => "StartRuntimeWithDispatch",
-            #[doc = "Parse model/provider commands and render help without changing host state."] PREPARE_RUNTIME_COMMAND => "PrepareRuntimeCommand"
-            ,#[doc = "Begin bounded media ingestion for an active configured provider."] BEGIN_MEDIA_UPLOAD => "BeginMediaUpload"
-            ,#[doc = "Append one idempotent confidential media chunk."] APPEND_MEDIA_UPLOAD_CHUNK => "AppendMediaUploadChunk"
-            ,#[doc = "Persist a complete upload as a scoped opaque media reference."] FINISH_MEDIA_UPLOAD => "FinishMediaUpload"
-            ,#[doc = "Abort a buffered media upload; retries are idempotent."] ABORT_MEDIA_UPLOAD => "AbortMediaUpload"
+            #[doc = "Parse model/provider commands and render help without changing host state."] PREPARE_RUNTIME_COMMAND => "PrepareRuntimeCommand",
+            #[doc = "Begin bounded media ingestion for an active configured provider."] BEGIN_MEDIA_UPLOAD => "BeginMediaUpload",
+            #[doc = "Append one idempotent confidential media chunk."] APPEND_MEDIA_UPLOAD_CHUNK => "AppendMediaUploadChunk",
+            #[doc = "Persist a complete upload as a scoped opaque media reference."] FINISH_MEDIA_UPLOAD => "FinishMediaUpload",
+            #[doc = "Abort a buffered media upload; retries are idempotent."] ABORT_MEDIA_UPLOAD => "AbortMediaUpload",
         ]);
     };
 }
