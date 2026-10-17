@@ -931,30 +931,29 @@ async fn run(
                                 }
                             }
                             if result.is_ok() && !draft_finalized {
-                            let parts = if has_typed_parts {
-                                event_parts
-                            } else {
-                                vec![tinychannels_bus::OutboundContentPart::Content {
-                                    part: tinychannels_bus::ContentPart::Text { text: text.clone(), markdown_dialect: None },
-                                }]
-                            };
-                            result = match reply.send_parts(&parts, &text).await {
-                                Ok(outcome) => {
-                                    prior_outcomes.push(outcome);
-                                    Ok(delivery_result(prior_outcomes, prior_unsupported))
+                                let parts = if has_typed_parts {
+                                    event_parts
+                                } else {
+                                    vec![tinychannels_bus::OutboundContentPart::Content {
+                                        part: tinychannels_bus::ContentPart::Text {
+                                            text: text.clone(),
+                                            markdown_dialect: None,
+                                        },
+                                    }]
+                                };
+                                match reply.send_parts(&parts, &text).await {
+                                    Ok(outcome) => prior_outcomes.push(outcome),
+                                    Err(ProgressiveSendError::UnsupportedContent) => {
+                                        reply.abort().await;
+                                        prior_unsupported.extend(parts);
+                                    }
+                                    Err(error) => {
+                                        reply.abort().await;
+                                        result = Err(Error::failed(error.to_string()));
+                                    }
                                 }
-                                Err(ProgressiveSendError::UnsupportedContent) => {
-                                    reply.abort().await;
-                                    prior_unsupported.extend(parts);
-                                    Ok(delivery_result(prior_outcomes, prior_unsupported))
-                                }
-                                Err(error) => {
-                                    reply.abort().await;
-                                    Err(Error::failed(error.to_string()))
-                                }
-                            };
                             }
-                            if result.is_ok() && draft_finalized {
+                            if result.is_ok() {
                                 result = Ok(delivery_result(prior_outcomes, prior_unsupported));
                             }
                         } else {
