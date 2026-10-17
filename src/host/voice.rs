@@ -1,6 +1,6 @@
 //! Shared inbound voice enrichment and scoped reply-mode decisions.
 
-use super::{Transcriber, TranscriptionRequest};
+use super::{SpeechRequest, SpeechSynthesizer, Transcriber, TranscriptionRequest, VoiceCodec, VoiceCodecRequest, VoiceMediaRequest, VoiceMediaStore};
 use std::sync::Arc;
 use tinychannels_bus::{
     HostVoiceScope, VoiceNote, VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
@@ -86,6 +86,80 @@ pub fn should_synthesize_reply(
         VoiceReplyMode::Never => false,
         VoiceReplyMode::SpeakReply => explicitly_requested,
     }
+}
+
+/// Run the shared text-to-speech, TinyVoice codec, and host persistence path
+/// for one explicitly selected voice reply. Providers only resolve the final
+/// opaque media reference and perform their native upload.
+pub async fn prepare_voice_reply(
+    scope: HostVoiceScope,
+    text: String,
+    voice: Option<String>,
+    synthesizer: &dyn SpeechSynthesizer,
+    codec: &dyn VoiceCodec,
+    store: &dyn VoiceMediaStore,
+) -> anyhow::Result<VoiceNote> {
+    if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
+        anyhow::bail!("voice synthesis requires conversation and turn identity");
+    }
+    let synthesized = synthesizer
+        .synthesize_scoped(
+            scope.clone(),
+            SpeechRequest {
+                text,
+                voice,
+                format: None,
+                thread_id: scope.conversation.thread_id.clone(),
+            },
+        )
+        .await?;
+    let from = match synthesized.mime_type.as_str() {
+        "audio/wav" | "audio/wave" => "wav_pcm16",
+        "audio/ogg" => "ogg_opus",
+        "audio/mp4" => "m4a_aac",
+        "audio/mpeg" => "mp3",
+        _ => anyhow::bail!("synthesizer returned an unsupported audio format"),
+    };
+    let encoded = codec
+        .transcode(VoiceCodecRequest {
+            audio_base64: synthesized.audio_base64,
+            from: from.into(),
+            target: "ogg_opus".into(),
+        })
+        .await?;
+    let stored = store
+        .store_voice(VoiceMediaRequest {
+            audio_base64: encoded.audio_base64,
+            mime_type: "audio/ogg".into(),
+            codec: Some("ogg_opus".into()),
+            duration_ms: None,
+            file_name: Some("voice.ogg".into()),
+            direction: tinychannels_bus::HostVoiceMediaDirection::Outbound,
+            scope,
+        })
+        .await?;
+    let mut media = stored.media;
+    if !media
+        .opaque_id
+        .as_deref()
+        .is_some_and(|id| !id.trim().is_empty())
+    {
+        anyhow::bail!("host voice storage returned no durable opaque reference");
+    }
+    media.url = None;
+    media.path = None;
+    media.local_cache_path = None;
+    media.kind = tinychannels_bus::MediaKind::Audio;
+    media.content_type = Some("audio/ogg".into());
+    media.codec = Some("ogg_opus".into());
+    Ok(VoiceNote {
+        media,
+        codec: Some("ogg_opus".into()),
+        duration_ms: None,
+        waveform: None,
+        push_to_talk: false,
+        transcript: None,
+    })
 }
 
 fn unavailable_transcript() -> VoiceTranscript {

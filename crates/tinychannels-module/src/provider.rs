@@ -193,7 +193,7 @@ impl Hooks {
     }
 }
 
-struct ModuleVoiceCodec(HostChannels);
+pub(crate) struct ModuleVoiceCodec(pub(crate) HostChannels);
 
 #[async_trait::async_trait]
 impl tinychannels::host::VoiceCodec for ModuleVoiceCodec {
@@ -305,7 +305,7 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
     }
 }
 
-struct ModuleSynthesizer(HostChannels, String);
+pub(crate) struct ModuleSynthesizer(pub(crate) HostChannels, pub(crate) String);
 
 #[async_trait::async_trait]
 impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
@@ -343,7 +343,7 @@ impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
     }
 }
 
-struct ModuleVoiceMediaStore(HostChannels, String);
+pub(crate) struct ModuleVoiceMediaStore(pub(crate) HostChannels, pub(crate) String);
 
 #[async_trait::async_trait]
 impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {

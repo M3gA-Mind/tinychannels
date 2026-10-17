@@ -50,7 +50,8 @@ pub use services::{
     VoiceCodec, VoiceCodecRequest, VoiceCodecResult, VoiceMediaRequest, VoiceMediaStore,
 };
 pub use voice::{
-    VoiceEnrichmentStatus, VoiceReplyMode, enrich_voice_note, should_synthesize_reply,
+    VoiceEnrichmentStatus, VoiceReplyMode, enrich_voice_note, prepare_voice_reply,
+    should_synthesize_reply,
 };
 
 use crate::config::ChannelsConfig;
