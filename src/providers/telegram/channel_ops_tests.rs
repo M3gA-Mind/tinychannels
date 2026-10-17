@@ -335,9 +335,9 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
             ),
             "stored-audio-1" => (
                 tinychannels_bus::MediaKind::Audio,
-                "audio/wav",
-                "audio.wav",
-                BASE64.decode("UklGRgAAAABXQVZF").unwrap(),
+                "audio/mpeg",
+                "audio.mp3",
+                valid_mp3_frame(),
             ),
             _ => panic!("unexpected typed media id: {opaque_id}"),
         };
@@ -1138,7 +1138,14 @@ async fn typed_audio_upload_preserves_caption_title_and_duration() {
     assert!(body.contains("name=\"caption\"\r\n\r\nspoken words"));
     assert!(body.contains("name=\"title\"\r\n\r\nOriginal title"));
     assert!(body.contains("name=\"duration\"\r\n\r\n2"));
-    assert!(body.contains("Content-Type: audio/wav"));
+    assert!(body.contains("Content-Type: audio/mpeg"));
+}
+
+fn valid_mp3_frame() -> Vec<u8> {
+    // MPEG-1 Layer III, 128 kbps, 44.1 kHz frame (417 bytes).
+    let mut bytes = vec![0_u8; 417];
+    bytes[..4].copy_from_slice(&[0xff, 0xfb, 0x90, 0x64]);
+    bytes
 }
 
 #[tokio::test]
