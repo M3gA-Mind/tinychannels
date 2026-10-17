@@ -80,9 +80,10 @@ async fn local_adapter_delegates_outbound_delivery() {
         .expect("send");
 
     assert_eq!(
-        receipt.primary_platform_message_id.as_deref(),
+        receipt.receipt.primary_platform_message_id.as_deref(),
         Some("local-1")
     );
+    assert!(receipt.error.is_none());
     assert_eq!(
         sink.ids.lock().expect("ids lock").as_slice(),
         ["turn-1:text"]
