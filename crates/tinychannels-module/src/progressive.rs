@@ -369,14 +369,14 @@ async fn send_typed_part(
                 voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
             }));
             if should_speak {
-                let policy = policy.expect("checked above");
+                let _policy = policy.expect("checked above");
                 let instance = sender.channel.clone();
                 let synthesizer = crate::provider::ModuleSynthesizer(sender.host.clone(), instance.clone());
                 let codec = crate::provider::ModuleVoiceCodec(sender.host.clone());
                 let store = crate::provider::ModuleVoiceMediaStore(sender.host.clone(), instance);
                 match tinychannels::host::prepare_voice_reply(
                     scope,
-                    spoken_text,
+                    spoken_text.clone(),
                     voice,
                     &synthesizer,
                     &codec,
