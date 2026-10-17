@@ -1706,6 +1706,102 @@ async fn typed_callback_error_after_acceptance_is_unknown_and_stops_batch() {
 }
 
 #[tokio::test]
+async fn thinking_multipart_receipt_drives_per_part_token_cleanup() {
+    let (replies, callback) = fixture(false).await;
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Success(
+        serde_json::json!({
+            "receipt": {
+                "primaryPlatformMessageId": "thinking-1",
+                "platformMessageIds": ["thinking-1", "thinking-2"],
+                "parts": [
+                    {"platformMessageId": "thinking-1", "editToken": "edit-1", "deleteToken": "delete-1"},
+                    {"platformMessageId": "thinking-2", "editToken": "edit-2", "deleteToken": "delete-2"}
+                ]
+            }
+        }),
+    ));
+    let context = ProgressiveOutputContext {
+        turn_id: "thinking-receipt-turn".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "discord".into(),
+            account_id: Some("discord:thinking-receipt".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "room".into(),
+            ..Default::default()
+        },
+    };
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.progressive_edits = true;
+    let mut reply = ProgressiveReply::new(
+        Arc::new(Sender {
+            host: replies.host.clone(),
+            context: Some(context),
+            send_sequence: std::sync::atomic::AtomicU64::new(0),
+        }),
+        "discord:thinking-receipt",
+        capabilities,
+    );
+    reply.on_thinking_delta("reasoning");
+    reply.edit_tick().await;
+    assert_eq!(reply.state().thinking_message_ids, ["thinking-1", "thinking-2"]);
+    reply.abort().await;
+    let requests = callback.requests.lock().await;
+    let deletes: Vec<_> = requests
+        .iter()
+        .filter_map(|request| match request {
+            ProgressiveTransportRequest::Delete { receipt, message_id, .. } => {
+                Some((message_id.as_str(), receipt.as_ref()?))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(deletes.len(), 2);
+    assert_eq!(deletes[0].0, "thinking-1");
+    assert_eq!(deletes[0].1.parts[0].delete_token.as_deref(), Some("delete-1"));
+    assert_eq!(deletes[1].0, "thinking-2");
+    assert_eq!(deletes[1].1.parts[0].delete_token.as_deref(), Some("delete-2"));
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn filler_callback_error_after_acceptance_is_not_retried() {
+    let (replies, callback) = fixture(false).await;
+    *callback.rpc_error_after_send.lock().await = true;
+    let mut reply = ProgressiveReply::new(
+        Arc::new(Sender {
+            host: replies.host.clone(),
+            context: Some(ProgressiveOutputContext {
+                turn_id: "filler-unknown-turn".into(),
+                channel: tinychannels_bus::ChannelRef {
+                    id: "discord".into(),
+                    account_id: Some("discord:filler-unknown".into()),
+                },
+                conversation: tinychannels_bus::ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Dm,
+                    id: "room".into(),
+                    ..Default::default()
+                },
+            }),
+            send_sequence: std::sync::atomic::AtomicU64::new(0),
+        }),
+        "discord:filler-unknown",
+        tinychannels_bus::ChannelCapabilities::default(),
+    );
+    reply.filler_tick().await;
+    reply.filler_tick().await;
+    reply.filler_tick().await;
+    assert!(reply.state().filler_delivery_uncertain);
+    assert!(reply.state().filler_disabled);
+    let sends = callback.requests.lock().await.iter().filter(|request| {
+        matches!(request, ProgressiveTransportRequest::Send { .. })
+    }).count();
+    assert_eq!(sends, 1, "accepted-then-error filler must not be retried");
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn native_approval_and_clarification_events_deliver_prompts() {
     let (base, callback) = fixture(false).await;
     let configured = Arc::new(Mutex::new(HashMap::new()));
