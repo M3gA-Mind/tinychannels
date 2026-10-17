@@ -621,11 +621,57 @@ pub(crate) struct Running {
     worker: Mutex<Option<JoinHandle<()>>>,
     finished: Arc<AtomicBool>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AdapterMode {
+    LegacyBacked,
+}
+
+pub(crate) struct ConfiguredAdapterHandle {
+    pub(crate) configured_instance: String,
+    pub(crate) mode: AdapterMode,
+    adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
+}
+
+impl ConfiguredAdapterHandle {
+    pub(crate) fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
+        self.adapter.descriptor()
+    }
+
+    pub(crate) fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.adapter.declared_capabilities()
+    }
+
+    pub(crate) async fn send(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.adapter.send(intent).await
+    }
+}
+
+pub(crate) struct ConfiguredAdapterFactory;
+
+impl ConfiguredAdapterFactory {
+    pub(crate) fn legacy(running: Arc<Running>) -> ConfiguredAdapterHandle {
+        let configured_instance = running.configured_instance.clone();
+        let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = running;
+        ConfiguredAdapterHandle {
+            configured_instance,
+            mode: AdapterMode::LegacyBacked,
+            adapter,
+        }
+    }
+}
+
 impl Running {
     pub(crate) fn adapter_handle(
         self: &Arc<Self>,
-    ) -> Arc<dyn tinychannels::channel::ChannelAdapter> {
-        self.clone()
+    ) -> ConfiguredAdapterHandle {
+        ConfiguredAdapterFactory::legacy(self.clone())
     }
 
     pub(crate) fn start(
