@@ -1196,7 +1196,7 @@ async fn bridge_approval_presentation_renders_scoped_inline_choice_actions() {
             choices: vec!["Allow once".into(), "Deny".into()],
         },
         &Default::default(),
-        &tinychannels_bus::ChannelPresentationCapabilities {
+        &crate::channel::ChannelPresentationCapabilities {
             max_actions: Some(2),
             max_actions_per_row: Some(1),
             ..Default::default()

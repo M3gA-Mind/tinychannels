@@ -1869,7 +1869,10 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
         Running::start(
             Arc::new(ConfiguredChannelWithCapabilities {
                 name: "discord",
-                capabilities: tinychannels_bus::ChannelCapabilities::default(),
+                capabilities: tinychannels_bus::ChannelCapabilities {
+                    chat_approvals: true,
+                    ..Default::default()
+                },
             }),
             Arc::new(crate::provider::Hooks::default()),
             base.host.clone(),
