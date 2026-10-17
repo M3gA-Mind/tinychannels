@@ -325,8 +325,9 @@ fn voice_ingress_keeps_audio_part_beside_provider_transcript() {
         TelegramChannel::inbound_envelope_from_update(&update, &legacy, Some(voice_note));
 
     assert_eq!(envelope.text, "recognized words");
-    assert_eq!(envelope.parts.len(), 1);
-    let tinychannels_bus::ContentPart::VoiceNote { voice_note } = &envelope.parts[0] else {
+    assert_eq!(envelope.parts.len(), 2);
+    assert!(matches!(envelope.parts[0], tinychannels_bus::ContentPart::Text { .. }));
+    let tinychannels_bus::ContentPart::VoiceNote { voice_note } = &envelope.parts[1] else {
         panic!("voice ingress must retain a typed audio part")
     };
     assert_eq!(voice_note.media.content_type.as_deref(), Some("audio/ogg"));
