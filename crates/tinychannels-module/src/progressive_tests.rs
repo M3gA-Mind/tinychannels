@@ -4603,6 +4603,69 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
 
     assert_eq!(codec_ops.load(Ordering::SeqCst), 3);
     assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 3);
+
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Never,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    let mut explicit_context = context.clone();
+    explicit_context.turn_id = "explicit-synthesis-denied".into();
+    let explicit_sender = Sender {
+        host: host.clone(),
+        context: Some(explicit_context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    };
+    let explicit_parts = [
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("ordered-image".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Synthesize {
+                text: "spoken words must remain visible".into(),
+                voice: None,
+            },
+        },
+    ];
+    explicit_sender
+        .send_parts(
+            "telegram:bot-1",
+            &explicit_parts,
+            "",
+            Some(&explicit_context),
+            0,
+        )
+        .await
+        .expect("denied explicit synthesis still sends the ordered parts");
+    {
+        let requests = callback.requests.lock().await;
+        let parts = requests.iter().find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(actual_turn),
+                parts,
+                ..
+            } if actual_turn == "explicit-synthesis-denied" => Some(parts),
+            _ => None,
+        });
+        assert!(parts.is_some_and(|parts| parts.iter().any(|part| matches!(
+            part,
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. }
+            } if text == "spoken words must remain visible"
+        ))));
+    }
+    assert_eq!(codec_ops.load(Ordering::SeqCst), 3);
+    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 3);
 }
 
 fn progressive_test_wav() -> Vec<u8> {
