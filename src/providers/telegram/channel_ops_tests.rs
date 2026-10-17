@@ -1221,7 +1221,7 @@ async fn bridge_approval_presentation_renders_scoped_inline_choice_actions() {
     assert_eq!(outcome.receipt.platform_message_ids, ["991"]);
     let bodies = json_bodies(&server, "sendMessage").await;
     assert_eq!(bodies.len(), 1);
-    assert_eq!(bodies[0]["text"], "Run the command\\?");
+    assert_eq!(bodies[0]["text"], "Run the command?");
     let keyboard = &bodies[0]["reply_markup"]["inline_keyboard"];
     assert_eq!(keyboard[0][0]["text"], "Allow once");
     assert_eq!(keyboard[0][1]["text"], "Deny");
