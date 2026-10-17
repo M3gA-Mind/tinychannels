@@ -95,7 +95,9 @@ impl TelegramChannel {
                 | tinychannels_bus::ContentPart::Sticker { media, .. } => vec![media.clone()],
                 tinychannels_bus::ContentPart::Video {
                     media, thumbnail, ..
-                } => std::iter::once(media.clone()).chain(thumbnail.clone()).collect(),
+                } => std::iter::once(media.clone())
+                    .chain(thumbnail.clone())
+                    .collect(),
                 tinychannels_bus::ContentPart::VoiceNote { voice_note } => {
                     vec![voice_note.media.clone()]
                 }
