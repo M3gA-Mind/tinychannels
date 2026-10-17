@@ -133,6 +133,124 @@ fn fixture(feature: ConformanceFeature) -> Fixture {
     }
 }
 
+fn declare_feature(fixture: &mut Fixture, feature: ConformanceFeature) {
+    let capabilities = &mut fixture.adapter.0;
+    match feature {
+        ConformanceFeature::Text => capabilities.content.text.outbound = true,
+        ConformanceFeature::Image => capabilities.content.image.outbound = true,
+        ConformanceFeature::Video => capabilities.content.video.outbound = true,
+        ConformanceFeature::Audio => capabilities.content.audio.outbound = true,
+        ConformanceFeature::File => capabilities.content.file.outbound = true,
+        ConformanceFeature::Sticker => capabilities.content.sticker.outbound = true,
+        ConformanceFeature::Location => capabilities.content.location.outbound = true,
+        ConformanceFeature::Contact => capabilities.content.contact.outbound = true,
+        ConformanceFeature::Buttons => capabilities.content.buttons.outbound = true,
+        ConformanceFeature::Poll => capabilities.content.poll.outbound = true,
+        ConformanceFeature::Presentation => capabilities.content.presentation.outbound = true,
+        ConformanceFeature::NativeData => capabilities.content.native.outbound = true,
+        ConformanceFeature::VoiceIn => {
+            capabilities.voice_in.supported = true;
+            fixture.observations[0].payload_kinds = vec!["audio".into(), "transcript".into()];
+        }
+        ConformanceFeature::VoiceOut => capabilities.voice_out.supported = true,
+        ConformanceFeature::VoiceSynthesis => capabilities.voice_out.synthesis = true,
+        ConformanceFeature::ReplyAddressing => {
+            capabilities.addressing.reply_to_id = true;
+            fixture.scope.reply_to_id = Some("reply-5".into());
+            fixture.observations[0].reply_to_id = Some("reply-5".into());
+        }
+        ConformanceFeature::ThreadAddressing => {
+            capabilities.addressing.thread_id = true;
+            fixture.scope.thread_id = Some("thread-7".into());
+            fixture.observations[0].thread_id = Some("thread-7".into());
+        }
+        ConformanceFeature::Typing => capabilities.actions.supported.push("typing".into()),
+        ConformanceFeature::Reactions => capabilities.reactions = true,
+        ConformanceFeature::InboundReactions => {
+            capabilities.events.supported.push("reaction".into());
+        }
+        ConformanceFeature::Edit => capabilities.actions.supported.push("edit".into()),
+        ConformanceFeature::Delete => capabilities.actions.supported.push("delete".into()),
+        ConformanceFeature::ReadReceipts => {
+            capabilities.events.supported.push("read_receipt".into());
+        }
+        ConformanceFeature::StreamingDraft => {
+            capabilities.progressive_edits = true;
+            capabilities.actions.supported.push("draft-update".into());
+            fixture.observations.clear();
+            for operation in feature.required_operations() {
+                let mut observation = WireObservation {
+                    feature,
+                    operation: (*operation).into(),
+                    channel: fixture.scope.channel.clone(),
+                    conversation: fixture.scope.conversation.clone(),
+                    reply_to_id: fixture.scope.reply_to_id.clone(),
+                    thread_id: fixture.scope.thread_id.clone(),
+                    payload_kinds: vec!["text".into()],
+                    platform_message_ids: vec!["321".into()],
+                    request: serde_json::json!({"operation": operation}),
+                };
+                observation.feature = feature;
+                fixture.observations.push(observation);
+            }
+            fixture.result = Ok(Some(ChannelSendOutcome {
+                receipt: MessageReceipt {
+                    channel: Some(fixture.scope.channel.clone()),
+                    conversation: Some(fixture.scope.conversation.clone()),
+                    primary_platform_message_id: Some("321".into()),
+                    platform_message_ids: vec!["321".into()],
+                    parts: vec![MessageReceiptPart {
+                        platform_message_id: "321".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                },
+                error: None,
+            }));
+        }
+    }
+    if fixture.observations.is_empty() {
+        fixture.observations.push(WireObservation {
+            feature,
+            operation: feature.required_operations()[0].into(),
+            channel: fixture.scope.channel.clone(),
+            conversation: fixture.scope.conversation.clone(),
+            reply_to_id: fixture.scope.reply_to_id.clone(),
+            thread_id: fixture.scope.thread_id.clone(),
+            payload_kinds: feature
+                .payload_kind()
+                .map(|kind| vec![kind.into()])
+                .unwrap_or_default(),
+            platform_message_ids: vec!["321".into()],
+            request: serde_json::json!({"chat_id": "100", "text": "fixture"}),
+        });
+    } else {
+        for observation in &mut fixture.observations {
+            observation.feature = feature;
+            observation.channel = fixture.scope.channel.clone();
+            observation.conversation = fixture.scope.conversation.clone();
+            observation.reply_to_id = fixture.scope.reply_to_id.clone();
+            observation.thread_id = fixture.scope.thread_id.clone();
+        }
+    }
+}
+
+#[tokio::test]
+async fn shared_matrix_exercises_every_declared_feature_contract() {
+    for feature in ConformanceFeature::ALL {
+        let mut fixture = fixture(feature);
+        declare_feature(&mut fixture, feature);
+        if matches!(feature, ConformanceFeature::Typing | ConformanceFeature::Reactions | ConformanceFeature::InboundReactions | ConformanceFeature::Delete | ConformanceFeature::ReadReceipts | ConformanceFeature::VoiceIn) {
+            fixture.result = Ok(None);
+            for observation in &mut fixture.observations {
+                observation.platform_message_ids.clear();
+            }
+        }
+        let result = check_feature(&fixture, feature).await;
+        assert!(result.is_ok(), "{feature:?} should pass its declared case: {result:?}");
+    }
+}
+
 #[tokio::test]
 async fn check_feature_rejects_auth_failure_as_unsupported() {
     let mut fixture = fixture(ConformanceFeature::Image);
