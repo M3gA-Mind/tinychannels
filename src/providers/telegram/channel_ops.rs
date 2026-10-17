@@ -379,26 +379,17 @@ impl TelegramChannel {
         if structured.is_empty() {
             return Ok(None);
         }
-        if structured.len() != 1
-            || message.parts.iter().any(|part| {
+        let buttons_only_with_text = structured.len() == 1
+            && matches!(structured[0], ContentPart::Buttons { .. })
+            && message.parts.iter().all(|part| {
                 matches!(
                     part,
-                    OutboundContentPart::Voice { .. }
-                        | OutboundContentPart::Content {
-                            part: ContentPart::Image { .. }
-                                | ContentPart::Video { .. }
-                                | ContentPart::Audio { .. }
-                                | ContentPart::File { .. }
-                                | ContentPart::Sticker { .. }
-                                | ContentPart::Contact { .. }
-                                | ContentPart::Location { .. }
-                                | ContentPart::Poll { .. }
-                                | ContentPart::Presentation { .. }
-                                | ContentPart::Native { .. }
-                        }
+                    OutboundContentPart::Content {
+                        part: ContentPart::Text { .. } | ContentPart::Buttons { .. }
+                    }
                 )
-            })
-        {
+            });
+        if structured.len() != 1 || (!buttons_only_with_text && message.parts.len() != 1) {
             anyhow::bail!("Telegram structured message has an unsupported content combination");
         }
         let conversation =
