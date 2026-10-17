@@ -2875,8 +2875,8 @@ async fn channel_start_variants_refuse_missing_configuration_and_excessive_backo
 async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
     use base64::Engine as _;
     use tinychannels_bus::{
-        ChannelRef, ConversationKind, ConversationRef, HostVoiceScope, MediaKind, MediaUploadBegin,
-        MediaUploadChunk, MediaUploadFinish,
+        ChannelRef, ConversationKind, ConversationRef, HostVoiceScope, MediaKind, MediaReadBegin,
+        MediaReadChunk, MediaReadFinish, MediaUploadBegin, MediaUploadChunk, MediaUploadFinish,
     };
 
     let (service, _callbacks, _server) =
@@ -2925,7 +2925,7 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
             .await
             .is_err()
     );
-    let handle = service.begin_media_upload(begin).await.unwrap();
+    let handle = service.begin_media_upload(begin.clone()).await.unwrap();
     assert_eq!(
         service
             .append_media_upload_chunk(MediaUploadChunk {
@@ -2947,6 +2947,64 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
     );
     assert!(service.abort_media_upload(finish.clone()).await.is_err());
 
+    let mut read_scope = begin.scope.clone();
+    read_scope.configured_instance = "fixture".into();
+    read_scope.channel.id = "fixture".into();
+    read_scope.channel.account_id = Some("fixture:media-v1:test".into());
+    let read = service
+        .begin_media_read(MediaReadBegin {
+            instance: "fixture".into(),
+            scope: read_scope.clone(),
+            media: result.clone(),
+            max_bytes: bytes_len(&result),
+        })
+        .await
+        .unwrap();
+    assert_eq!(read.byte_count, bytes_len(&result) as usize);
+    assert_eq!(read.media.opaque_id, result.opaque_id);
+    let first = service
+        .read_media_chunk(MediaReadChunk {
+            handle: read.handle.clone(),
+            sequence: 0,
+        })
+        .await
+        .unwrap();
+    assert!(first.done);
+    assert_eq!(first.bytes.len(), read.byte_count);
+    assert_eq!(
+        service
+            .read_media_chunk(MediaReadChunk {
+                handle: read.handle.clone(),
+                sequence: 0,
+            })
+            .await
+            .unwrap(),
+        first
+    );
+    let aborted_handle = read.handle.clone();
+    service
+        .abort_media_read(MediaReadFinish(read.handle))
+        .await
+        .unwrap();
+    assert!(service.media_reads.binding(&aborted_handle).await.is_err());
+    assert!(service
+        .read_media_chunk(MediaReadChunk {
+            handle: aborted_handle,
+            sequence: 0,
+        })
+        .await
+        .is_err());
+
+    let replaced_read = service
+        .begin_media_read(MediaReadBegin {
+            instance: "fixture".into(),
+            scope: read_scope,
+            media: result.clone(),
+            max_bytes: bytes_len(&result),
+        })
+        .await
+        .unwrap();
+
     service.provider_activations.lock().await.insert(
         "fixture".into(),
         super::ProviderActivation {
@@ -2954,6 +3012,17 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
             media_account_scope: Some("fixture:media-v1:test".into()),
         },
     );
+    assert!(service
+        .read_media_chunk(MediaReadChunk {
+            handle: replaced_read.handle.clone(),
+            sequence: 0,
+        })
+        .await
+        .is_err());
+    assert!(service
+        .abort_media_read(MediaReadFinish(replaced_read.handle))
+        .await
+        .is_err());
     assert!(service.finish_media_upload(finish).await.is_err());
     service.terminal.store(true, Ordering::SeqCst);
     assert!(
@@ -2969,6 +3038,10 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
             .is_err()
     );
     service.shutdown().await.unwrap();
+}
+
+fn bytes_len(reference: &tinychannels_bus::MediaReference) -> u64 {
+    reference.size_bytes.expect("stored media includes byte count")
 }
 
 fn request_media_fixture() -> tinychannels_bus::MediaUploadBegin {
