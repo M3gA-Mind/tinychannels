@@ -226,7 +226,9 @@ impl ProgressiveReply {
                     sent_before_error: true,
                     ..Default::default()
                 });
-            return Err(super::ProgressiveSendError::PartialOutcome(outcome));
+            return Err(super::ProgressiveSendError::PartialOutcome(Box::new(
+                outcome,
+            )));
         }
         if parts.is_empty() {
             if let Some(outcome) = self.finalize_existing_text(text).await? {
@@ -448,7 +450,7 @@ impl ProgressiveReply {
             }
             Err(error) => {
                 let mut outcome = match error {
-                    super::ProgressiveSendError::PartialOutcome(outcome) => outcome,
+                    super::ProgressiveSendError::PartialOutcome(outcome) => *outcome,
                     super::ProgressiveSendError::Unavailable => {
                         let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
                         outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
@@ -511,7 +513,9 @@ impl ProgressiveReply {
                         ..Default::default()
                     });
                 self.abort().await;
-                Err(super::ProgressiveSendError::PartialOutcome(outcome))
+                Err(super::ProgressiveSendError::PartialOutcome(Box::new(
+                    outcome,
+                )))
             }
         }
     }
@@ -548,7 +552,7 @@ impl ProgressiveReply {
                 .await
             {
                 Ok(next) => next,
-                Err(super::ProgressiveSendError::PartialOutcome(next)) => next,
+                Err(super::ProgressiveSendError::PartialOutcome(next)) => *next,
                 Err(error) if index > 0 => {
                     outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
                         kind: tinychannels_bus::channel::SendErrorKind::Unknown,
