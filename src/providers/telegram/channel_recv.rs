@@ -174,7 +174,7 @@ impl TelegramChannel {
                     scope,
                     kind,
                     content_type: hint.to_owned(),
-                    file_name: file_name.or(downloaded.file_name),
+                    file_name: file_name.clone().or(downloaded.file_name),
                     duration_ms,
                     codec: None,
                     voice_direction: None,
