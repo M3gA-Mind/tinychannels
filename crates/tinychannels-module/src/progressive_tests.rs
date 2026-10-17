@@ -4545,11 +4545,41 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     // policy on each final turn. A denied policy sends the canonical text and
     // performs no synthesis/store operation.
     for (turn_id, mode, inbound_has_voice, explicitly_requested, should_voice) in [
-        ("mirror-off", tinychannels_bus::HostVoiceReplyMode::Mirror, false, false, false),
-        ("mirror-on", tinychannels_bus::HostVoiceReplyMode::Mirror, true, false, true),
-        ("never", tinychannels_bus::HostVoiceReplyMode::Never, true, true, false),
-        ("speak-no", tinychannels_bus::HostVoiceReplyMode::SpeakReply, false, false, false),
-        ("speak-yes", tinychannels_bus::HostVoiceReplyMode::SpeakReply, false, true, true),
+        (
+            "mirror-off",
+            tinychannels_bus::HostVoiceReplyMode::Mirror,
+            false,
+            false,
+            false,
+        ),
+        (
+            "mirror-on",
+            tinychannels_bus::HostVoiceReplyMode::Mirror,
+            true,
+            false,
+            true,
+        ),
+        (
+            "never",
+            tinychannels_bus::HostVoiceReplyMode::Never,
+            true,
+            true,
+            false,
+        ),
+        (
+            "speak-no",
+            tinychannels_bus::HostVoiceReplyMode::SpeakReply,
+            false,
+            false,
+            false,
+        ),
+        (
+            "speak-yes",
+            tinychannels_bus::HostVoiceReplyMode::SpeakReply,
+            false,
+            true,
+            true,
+        ),
     ] {
         *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
             mode,
@@ -4592,12 +4622,16 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
             } if actual_turn == turn_id => Some(parts),
             _ => None,
         });
-        let has_voice = parts.is_some_and(|parts| parts.iter().any(|part| matches!(
-            part,
-            tinychannels_bus::OutboundContentPart::Voice {
-                voice: tinychannels_bus::OutboundVoice::Media { .. }
-            }
-        )));
+        let has_voice = parts.is_some_and(|parts| {
+            parts.iter().any(|part| {
+                matches!(
+                    part,
+                    tinychannels_bus::OutboundContentPart::Voice {
+                        voice: tinychannels_bus::OutboundVoice::Media { .. }
+                    }
+                )
+            })
+        });
         assert_eq!(has_voice, should_voice, "turn {turn_id}");
     }
 
