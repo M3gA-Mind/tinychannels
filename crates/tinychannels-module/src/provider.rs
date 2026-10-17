@@ -404,7 +404,7 @@ pub(crate) fn configured_media_account_scope(
                 .sasl_password
                 .as_deref()
                 .filter(|s| !s.trim().is_empty())
-                .or_else(|| c.nickserv_password.as_deref())?;
+                .or(c.nickserv_password.as_deref())?;
             vec![
                 c.server.clone(),
                 c.port.to_string(),
