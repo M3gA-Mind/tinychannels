@@ -50,7 +50,7 @@ pub use services::{
     VoiceCodec, VoiceCodecRequest, VoiceCodecResult, VoiceMediaRequest, VoiceMediaStore,
 };
 pub use voice::{
-    PreparedVoiceReply, VoiceEnrichmentStatus, VoiceReplyMode, enrich_voice_note,
+    PreparedVoiceReply, VoiceEnrichmentStatus, VoiceReplyMode, VoiceReplyConstraints, enrich_voice_note,
     prepare_voice_reply, should_synthesize_reply,
 };
 
