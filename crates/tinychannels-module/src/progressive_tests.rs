@@ -369,17 +369,14 @@ async fn open_scoped_provider(
     capabilities: tinychannels_bus::ChannelCapabilities,
 ) -> String {
     let hooks = Arc::new(crate::provider::Hooks::default());
-    *hooks
-        .configured_instance
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = Some(account.to_owned());
-    *hooks
-        .media_account_scope
-        .lock()
-        .unwrap_or_else(|error| error.into_inner()) = Some(format!(
-        "{}:media-v1:fixture",
-        tinychannels_bus::provider_id(provider)
-    ));
+    let _provider_host = hooks.host(
+        replies.host.clone(),
+        account.to_owned(),
+        Some(format!(
+            "{}:media-v1:fixture",
+            tinychannels_bus::provider_id(provider)
+        )),
+    );
     replies.running.lock().await.insert(
         account.to_owned(),
         Running::start(
