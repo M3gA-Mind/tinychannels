@@ -280,6 +280,58 @@ fn inbound_envelope_keeps_chat_channel_and_legacy_identity_fallbacks() {
     assert_eq!(unknown.sender.id, "legacy-sender");
 }
 
+#[test]
+fn voice_ingress_keeps_audio_part_beside_provider_transcript() {
+    let legacy = ChannelMessage {
+        id: "telegram_100_9".into(),
+        sender: "alice".into(),
+        reply_target: "100".into(),
+        content: "recognized words".into(),
+        channel: "telegram".into(),
+        ..Default::default()
+    };
+    let update = serde_json::json!({
+        "message": {
+            "message_id": 9,
+            "chat": {"id": 100, "type": "private"},
+            "from": {"id": 8},
+            "voice": {
+                "file_id": "opaque-provider-file-id",
+                "file_unique_id": "opaque-unique-id",
+                "file_size": 16,
+                "mime_type": "audio/ogg",
+                "duration": 3
+            }
+        }
+    });
+
+    let envelope = TelegramChannel::inbound_envelope_from_update(&update, &legacy);
+
+    assert_eq!(envelope.text, "recognized words");
+    assert_eq!(envelope.parts.len(), 1);
+    let tinychannels_bus::ContentPart::VoiceNote { voice_note } = &envelope.parts[0] else {
+        panic!("voice ingress must retain a typed audio part")
+    };
+    assert_eq!(voice_note.media.content_type.as_deref(), Some("audio/ogg"));
+    assert_eq!(voice_note.duration_ms, Some(3_000));
+    assert_eq!(
+        voice_note.transcript.as_ref().map(|transcript| transcript.text.as_str()),
+        Some("recognized words")
+    );
+    assert_eq!(
+        voice_note
+            .transcript
+            .as_ref()
+            .map(|transcript| transcript.source),
+        Some(tinychannels_bus::VoiceTranscriptSource::HostStt)
+    );
+    assert_ne!(
+        voice_note.media.url.as_deref(),
+        Some("opaque-provider-file-id"),
+        "provider-private file IDs are not durable media URLs"
+    );
+}
+
 #[tokio::test]
 async fn typed_send_keeps_delivered_chunk_ids_when_later_chunk_fails() {
     let server = mock_api().await;
