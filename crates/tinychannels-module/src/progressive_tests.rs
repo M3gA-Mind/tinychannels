@@ -4536,7 +4536,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
                     ..
                 }
             } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
-        ))));
+        ))), "captured outbound parts: {send:?}");
     }
     assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
     assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 1);

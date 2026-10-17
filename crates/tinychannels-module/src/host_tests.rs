@@ -724,7 +724,7 @@ async fn scoped_voice_callbacks_round_trip_scope_and_enforce_media_limits() {
         .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
             scope: scope.clone(),
             opaque_id: "voice-1".into(),
-            max_bytes: 4,
+            max_bytes: 12,
         })
         .await
         .unwrap();
