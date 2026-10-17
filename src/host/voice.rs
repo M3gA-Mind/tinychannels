@@ -98,6 +98,13 @@ pub struct PreparedVoiceReply {
     pub accessible_url: Option<String>,
 }
 
+/// Provider constraints applied before audio is durably stored.
+pub struct VoiceReplyConstraints<'a> {
+    pub accepted_codecs: &'a [String],
+    pub max_size_bytes: Option<u64>,
+    pub max_duration_ms: Option<u64>,
+}
+
 /// Run the shared text-to-speech, TinyVoice codec, and host persistence path
 /// for one explicitly selected voice reply. Providers only resolve the final
 /// opaque media reference and perform their native upload.
@@ -108,9 +115,7 @@ pub async fn prepare_voice_reply(
     synthesizer: &dyn SpeechSynthesizer,
     codec: &dyn VoiceCodec,
     store: &dyn VoiceMediaStore,
-    accepted_codecs: &[String],
-    max_size_bytes: Option<u64>,
-    max_duration_ms: Option<u64>,
+    constraints: VoiceReplyConstraints<'_>,
 ) -> anyhow::Result<PreparedVoiceReply> {
     if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
         anyhow::bail!("voice synthesis requires conversation and turn identity");
@@ -135,7 +140,12 @@ pub async fn prepare_voice_reply(
     };
     let target = ["ogg_opus", "m4a_aac", "mp3", "wav_pcm16"]
         .into_iter()
-        .find(|codec| accepted_codecs.iter().any(|accepted| accepted == codec))
+        .find(|codec| {
+            constraints
+                .accepted_codecs
+                .iter()
+                .any(|accepted| accepted == codec)
+        })
         .ok_or_else(|| anyhow::anyhow!("provider advertises no supported voice codec"))?;
     let encoded = codec
         .transcode(VoiceCodecRequest {
@@ -149,11 +159,15 @@ pub async fn prepare_voice_reply(
         &encoded.audio_base64,
     )?
     .len() as u64;
-    if max_size_bytes.is_some_and(|limit| size_bytes > limit) {
+    if constraints.max_size_bytes.is_some_and(|limit| size_bytes > limit) {
         anyhow::bail!("synthesized voice exceeds provider size limit");
     }
     let duration_ms = encoded.duration_ms.or(synthesized.duration_ms);
-    if max_duration_ms.is_some_and(|limit| duration_ms.is_some_and(|duration| duration > limit)) {
+    if constraints
+        .max_duration_ms
+        .zip(duration_ms)
+        .is_some_and(|(limit, duration)| duration > limit)
+    {
         anyhow::bail!("synthesized voice exceeds provider duration limit");
     }
     let (mime_type, file_name) = match target {
@@ -175,10 +189,10 @@ pub async fn prepare_voice_reply(
         })
         .await?;
     let mut media = stored.media;
-    if !media
+    if media
         .opaque_id
         .as_deref()
-        .is_some_and(|id| !id.trim().is_empty())
+        .is_none_or(|id| id.trim().is_empty())
     {
         anyhow::bail!("host voice storage returned no durable opaque reference");
     }
