@@ -2116,9 +2116,6 @@ async fn send_typed_media_with_receipt(
     Ok(tinychannels_bus::channel::ChannelSendOutcome { receipt, error })
 }
 
-#[cfg(test)]
-#[path = "channel_ops_tests.rs"]
-mod tests;
 
 #[async_trait]
 impl crate::channel::ChannelAdapter for TelegramChannel {
@@ -2403,3 +2400,7 @@ impl crate::channel::ChannelStreamingDraft for TelegramChannel {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "channel_ops_tests.rs"]
+mod tests;
