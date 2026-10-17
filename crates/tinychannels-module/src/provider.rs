@@ -196,6 +196,10 @@ impl Hooks {
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
                 configured_instance,
+                self.media_account_scope
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
             )))
             .storage(Arc::new(ModuleStorage(callbacks.clone())))
             .allowlist(Arc::new(ModuleAllowlist(callbacks)))
@@ -701,7 +705,11 @@ async fn read_scoped_voice_media(
     })
 }
 
-pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String);
+pub(crate) struct ModuleEvents(
+    pub(crate) HostChannels,
+    pub(crate) String,
+    Option<String>,
+);
 
 #[async_trait::async_trait]
 impl tinychannels::host::EventSink for ModuleEvents {
@@ -775,6 +783,8 @@ impl tinychannels::host::EventSink for ModuleEvents {
                         conversation: envelope.conversation.clone(),
                         turn_id: envelope.message_id.clone(),
                     };
+                    let mut scope = scope;
+                    bind_configured_media_scope(&mut scope, &self.1, self.2.as_deref())?;
                     let request = if let Some(opaque_id) = voice_note.media.opaque_id.clone() {
                         match read_scoped_voice_media(
                             &self.0,
@@ -799,7 +809,11 @@ impl tinychannels::host::EventSink for ModuleEvents {
                         voice_note,
                         scope,
                         request,
-                        Some(Arc::new(ModuleTranscriber(self.0.clone(), self.1.clone()))),
+                        Some(Arc::new(ModuleTranscriber(
+                            self.0.clone(),
+                            self.1.clone(),
+                            self.2.clone(),
+                        ))),
                     )
                     .await;
                 }
