@@ -211,6 +211,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         host: host.clone(),
         email: crate::email::EmailSender::new(),
         media_uploads: Arc::new(crate::media::MediaUploads::default()),
+        media_reads: Arc::new(crate::media::MediaReads::default()),
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
@@ -288,7 +289,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
     let (sent, mut received) = tokio::sync::mpsc::channel(8);
     let channel = Arc::new(CaptureTypedChannel(sent));
     let hooks = Arc::new(Hooks::default());
-    let _provider_host = hooks.host(host.clone(), "account-a".into());
+    let _provider_host = hooks.host(host.clone(), "account-a".into(), None);
     let mut running = HashMap::new();
     running.insert(
         "fixture".to_owned(),
@@ -302,6 +303,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         host: host.clone(),
         email: crate::email::EmailSender::new(),
         media_uploads: Arc::new(crate::media::MediaUploads::default()),
+        media_reads: Arc::new(crate::media::MediaReads::default()),
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
@@ -772,6 +774,7 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
         host: host.clone(),
         email: crate::email::EmailSender::new(),
         media_uploads: Arc::new(crate::media::MediaUploads::default()),
+        media_reads: Arc::new(crate::media::MediaReads::default()),
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
@@ -1155,6 +1158,7 @@ async fn channels_with_store(
         host,
         email: crate::email::EmailSender::new(),
         media_uploads: Arc::new(crate::media::MediaUploads::default()),
+        media_reads: Arc::new(crate::media::MediaReads::default()),
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays,
@@ -2871,17 +2875,19 @@ async fn channel_start_variants_refuse_missing_configuration_and_excessive_backo
 async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
     use base64::Engine as _;
     use tinychannels_bus::{
-        ChannelRef, ConversationKind, ConversationRef, HostVoiceScope, MediaKind, MediaUploadBegin,
-        MediaUploadChunk, MediaUploadFinish,
+        ChannelRef, ConversationKind, ConversationRef, HostVoiceScope, MediaKind, MediaReadBegin,
+        MediaReadChunk, MediaReadFinish, MediaUploadBegin, MediaUploadChunk, MediaUploadFinish,
     };
 
     let (service, _callbacks, _server) =
         channels_with_store(Arc::new(CaptureChannel(tokio::sync::mpsc::channel(1).0))).await;
-    service
-        .provider_activations
-        .lock()
-        .await
-        .insert("fixture".into(), "activation-a".into());
+    service.provider_activations.lock().await.insert(
+        "fixture".into(),
+        super::ProviderActivation {
+            generation: "activation-a".into(),
+            media_account_scope: Some("fixture:media-v1:test".into()),
+        },
+    );
     let bytes = base64::engine::general_purpose::STANDARD
         .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII=")
         .unwrap();
@@ -2919,13 +2925,13 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
             .await
             .is_err()
     );
-    let handle = service.begin_media_upload(begin).await.unwrap();
+    let handle = service.begin_media_upload(begin.clone()).await.unwrap();
     assert_eq!(
         service
             .append_media_upload_chunk(MediaUploadChunk {
                 handle: handle.clone(),
                 sequence: 0,
-                bytes,
+                bytes: bytes.clone(),
             })
             .await
             .unwrap(),
@@ -2941,12 +2947,147 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
     );
     assert!(service.abort_media_upload(finish.clone()).await.is_err());
 
+    let mut read_scope = begin.scope.clone();
+    read_scope.configured_instance = "fixture".into();
+    read_scope.channel.id = "fixture".into();
+    read_scope.channel.account_id = Some("fixture:media-v1:test".into());
+    let read_request = MediaReadBegin {
+        instance: "fixture".into(),
+        scope: read_scope.clone(),
+        media: result.clone(),
+        max_bytes: bytes_len(&result),
+    };
+    assert!(
+        service
+            .begin_media_read(MediaReadBegin {
+                instance: "missing".into(),
+                ..read_request.clone()
+            })
+            .await
+            .expect_err("inactive provider cannot resolve media")
+            .to_string()
+            .contains("not running")
+    );
+    service.provider_activations.lock().await.insert(
+        "fixture-no-identity".into(),
+        super::ProviderActivation {
+            generation: "activation-no-identity".into(),
+            media_account_scope: None,
+        },
+    );
+    let running_fixture = service.running.lock().await["fixture"].clone();
     service
-        .provider_activations
+        .running
         .lock()
         .await
-        .insert("fixture".into(), "activation-b".into());
+        .insert("fixture-no-identity".into(), running_fixture);
+    assert!(
+        service
+            .begin_media_read(MediaReadBegin {
+                instance: "fixture-no-identity".into(),
+                ..read_request.clone()
+            })
+            .await
+            .expect_err("provider without stable identity fails closed")
+            .to_string()
+            .contains("no stable media identity")
+    );
+    assert!(
+        service
+            .begin_media_read(MediaReadBegin {
+                max_bytes: 0,
+                ..read_request.clone()
+            })
+            .await
+            .expect_err("zero-byte bound is invalid")
+            .to_string()
+            .contains("request is invalid")
+    );
+    let read = service
+        .begin_media_read(read_request.clone())
+        .await
+        .unwrap();
+    assert_eq!(read.byte_count, bytes_len(&result) as usize);
+    assert_eq!(read.media.opaque_id, result.opaque_id);
+    assert_eq!(read.content_type, "image/png");
+    assert_eq!(read.file_name.as_deref(), Some("image.png"));
+    let first = service
+        .read_media_chunk(MediaReadChunk {
+            handle: read.handle.clone(),
+            sequence: 0,
+        })
+        .await
+        .unwrap();
+    assert!(first.done);
+    assert_eq!(first.bytes, bytes);
+    assert_eq!(
+        service
+            .read_media_chunk(MediaReadChunk {
+                handle: read.handle.clone(),
+                sequence: 0,
+            })
+            .await
+            .unwrap(),
+        first
+    );
+    let aborted_handle = read.handle.clone();
+    service
+        .abort_media_read(MediaReadFinish(read.handle))
+        .await
+        .unwrap();
+    assert!(service.media_reads.binding(&aborted_handle).await.is_err());
+    assert!(
+        service
+            .read_media_chunk(MediaReadChunk {
+                handle: aborted_handle,
+                sequence: 0,
+            })
+            .await
+            .is_err()
+    );
+
+    let replaced_read = service
+        .begin_media_read(MediaReadBegin {
+            instance: "fixture".into(),
+            scope: read_scope.clone(),
+            media: result.clone(),
+            max_bytes: bytes_len(&result),
+        })
+        .await
+        .unwrap();
+
+    service.provider_activations.lock().await.insert(
+        "fixture".into(),
+        super::ProviderActivation {
+            generation: "activation-b".into(),
+            media_account_scope: Some("fixture:media-v1:test".into()),
+        },
+    );
+    assert!(
+        service
+            .read_media_chunk(MediaReadChunk {
+                handle: replaced_read.handle.clone(),
+                sequence: 0,
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .abort_media_read(MediaReadFinish(replaced_read.handle.clone()))
+            .await
+            .is_err()
+    );
     assert!(service.finish_media_upload(finish).await.is_err());
+    let terminal_read = service
+        .begin_media_read(MediaReadBegin {
+            instance: "fixture".into(),
+            scope: read_scope,
+            media: result,
+            max_bytes: 1024,
+        })
+        .await
+        .unwrap();
     service.terminal.store(true, Ordering::SeqCst);
     assert!(
         service
@@ -2960,7 +3101,40 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
             .await
             .is_err()
     );
+    assert!(
+        service
+            .begin_media_read(read_request)
+            .await
+            .expect_err("terminal module refuses begin")
+            .to_string()
+            .contains("shutting down")
+    );
+    assert!(
+        service
+            .read_media_chunk(MediaReadChunk {
+                handle: terminal_read.handle.clone(),
+                sequence: 0,
+            })
+            .await
+            .expect_err("terminal module refuses chunks")
+            .to_string()
+            .contains("shutting down")
+    );
+    assert!(
+        service
+            .abort_media_read(MediaReadFinish(terminal_read.handle))
+            .await
+            .expect_err("terminal module refuses abort")
+            .to_string()
+            .contains("shutting down")
+    );
     service.shutdown().await.unwrap();
+}
+
+fn bytes_len(reference: &tinychannels_bus::MediaReference) -> u64 {
+    reference
+        .size_bytes
+        .expect("stored media includes byte count")
 }
 
 fn request_media_fixture() -> tinychannels_bus::MediaUploadBegin {

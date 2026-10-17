@@ -30,10 +30,16 @@ const LEGACY_TURN_LIFETIME: Duration = Duration::from_secs(180);
 
 struct Sender {
     host: HostChannels,
+    media_account_scope: Option<String>,
     context: Option<ProgressiveOutputContext>,
     capabilities: tinychannels_bus::ChannelCapabilities,
     channel: String,
     send_sequence: std::sync::atomic::AtomicU64,
+}
+
+struct ProgressiveTarget {
+    channel: String,
+    media_account_scope: Option<String>,
 }
 
 impl Sender {
@@ -494,9 +500,13 @@ async fn send_typed_part(
             if should_speak {
                 let instance = sender.channel.clone();
                 let synthesizer =
-                    crate::provider::ModuleSynthesizer(sender.host.clone(), instance.clone());
+                    crate::provider::ModuleSynthesizer(sender.host.clone(), sender.channel.clone());
                 let codec = crate::provider::ModuleVoiceCodec(sender.host.clone());
-                let store = crate::provider::ModuleVoiceMediaStore(sender.host.clone(), instance);
+                let store = crate::provider::ModuleVoiceMediaStore(
+                    sender.host.clone(),
+                    instance,
+                    sender.media_account_scope.clone(),
+                );
                 let native_voice = sender.capabilities.voice_out.supported
                     && !sender.capabilities.voice_out.accepted_codecs.is_empty();
                 let audio_codecs = sender
@@ -1000,7 +1010,7 @@ impl Replies {
         }
         let provider_id = tinychannels_bus::provider_id(&channel);
         let running = self.running.lock().await;
-        let capabilities = if let Some(context) = context.as_ref() {
+        let (capabilities, media_account_scope) = if let Some(context) = context.as_ref() {
             let configured_instance = context
                 .channel
                 .account_id
@@ -1011,16 +1021,23 @@ impl Replies {
                     "scoped channel identity does not match its configured account",
                 ));
             }
-            running
+            let provider = running
                 .get(configured_instance)
-                .ok_or_else(|| Error::failed("scoped channel instance is not configured"))?
-                .channel
-                .capabilities()
+                .ok_or_else(|| Error::failed("scoped channel instance is not configured"))?;
+            (
+                provider.channel.capabilities(),
+                provider.media_account_scope.clone(),
+            )
         } else {
-            running
-                .get(provider_id)
-                .map(|provider| provider.channel.capabilities())
-                .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
+            running.get(provider_id).map_or_else(
+                || (tinychannels_bus::ChannelCapabilities::unknown(), None),
+                |provider| {
+                    (
+                        provider.channel.capabilities(),
+                        provider.media_account_scope.clone(),
+                    )
+                },
+            )
         };
         drop(running);
         let mut state = self.state.lock().await;
@@ -1065,7 +1082,10 @@ impl Replies {
         let terminal_feed = Arc::new(Mutex::new(None));
         let worker = tokio::spawn(run(
             host,
-            channel,
+            ProgressiveTarget {
+                channel,
+                media_account_scope,
+            },
             capabilities,
             context,
             lifetime,
@@ -1246,17 +1266,22 @@ async fn abort_entry(entry: Arc<Entry>) -> Result<()> {
 
 async fn run(
     host: HostChannels,
-    channel: String,
+    target: ProgressiveTarget,
     capabilities: tinychannels_bus::ChannelCapabilities,
     context: Option<ProgressiveOutputContext>,
     lifetime: Duration,
     terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
     mut inbox: mpsc::Receiver<Command>,
 ) {
+    let ProgressiveTarget {
+        channel,
+        media_account_scope,
+    } = target;
     let mut reply = if let Some(context) = context {
         ProgressiveReply::new_scoped(
             Arc::new(Sender {
                 host,
+                media_account_scope: media_account_scope.clone(),
                 context: Some(context.clone()),
                 capabilities: capabilities.clone(),
                 channel: channel.clone(),
@@ -1270,6 +1295,7 @@ async fn run(
         ProgressiveReply::new(
             Arc::new(Sender {
                 host,
+                media_account_scope,
                 context: None,
                 capabilities: capabilities.clone(),
                 channel: channel.clone(),

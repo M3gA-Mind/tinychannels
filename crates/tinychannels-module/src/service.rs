@@ -105,15 +105,22 @@ pub(crate) struct Channels {
     pub(crate) host: HostChannels,
     email: EmailSender,
     media_uploads: Arc<MediaUploads>,
+    media_reads: Arc<crate::media::MediaReads>,
     progressive: Arc<crate::progressive::Replies>,
     /// Shared with each listener task so it can retire its own entry.
     pub(crate) running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
-    provider_activations: Mutex<HashMap<String, String>>,
+    provider_activations: Mutex<HashMap<String, ProviderActivation>>,
     relays: Arc<Relays>,
     pub(crate) terminal: AtomicBool,
     runtimes: Option<Arc<crate::runtime::Runtimes>>,
     shutdown_task: Mutex<Option<JoinHandle<BusResult<()>>>>,
     delivery_admission: Arc<Mutex<()>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProviderActivation {
+    generation: String,
+    media_account_scope: Option<String>,
 }
 
 struct ModuleDeliveryHandler {
@@ -133,6 +140,7 @@ impl Channels {
             host,
             email: EmailSender::new(),
             media_uploads: Arc::new(MediaUploads::default()),
+            media_reads: Arc::new(crate::media::MediaReads::default()),
             running,
             provider_activations: Mutex::new(HashMap::new()),
             terminal: AtomicBool::new(false),
@@ -142,11 +150,11 @@ impl Channels {
         }
     }
 
-    async fn media_activation(&self, instance: &str) -> BusResult<String> {
-        if self
-            .running
-            .lock()
-            .await
+    async fn media_activation(&self, instance: &str) -> BusResult<ProviderActivation> {
+        // Keep the running provider and its immutable account binding paired
+        // with the same generation while lifecycle transitions hold this lock.
+        let running = self.running.lock().await;
+        if running
             .get(instance)
             .is_none_or(|provider| provider.is_finished())
         {
@@ -186,7 +194,9 @@ impl Channels {
         }
 
         let hooks = Arc::new(Hooks::default());
-        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone(), name.clone());
+        let media_account_scope = crate::provider::configured_media_account_scope(&name, &config);
+        let owner_host: Arc<dyn ChannelHost> =
+            hooks.host(self.host.clone(), name.clone(), media_account_scope.clone());
         let built = build_channels(&config, &owner_host, http);
         let channel = built
             .into_iter()
@@ -218,10 +228,13 @@ impl Channels {
             None => Running::start(channel, hooks, self.host.clone()),
         };
         running.insert(name.clone(), provider);
-        self.provider_activations
-            .lock()
-            .await
-            .insert(name.clone(), uuid::Uuid::new_v4().simple().to_string());
+        self.provider_activations.lock().await.insert(
+            name.clone(),
+            ProviderActivation {
+                generation: uuid::Uuid::new_v4().simple().to_string(),
+                media_account_scope,
+            },
+        );
         drop(running);
         finish_start_admission(
             &self.host,
@@ -775,6 +788,8 @@ impl Channels {
                 .is_some_and(|current| Arc::ptr_eq(current, &entry))
             {
                 running.remove(&name);
+                self.provider_activations.lock().await.remove(&name);
+                self.media_reads.invalidate_instance(&name).await;
             }
             result?;
         }
@@ -1049,7 +1064,14 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let activation = self.media_activation(&request.instance).await?;
-        self.media_uploads.begin(request, activation).await
+        if activation.media_account_scope.is_none() {
+            return Err(BusError::failed(
+                "configured account has no stable media identity",
+            ));
+        }
+        self.media_uploads
+            .begin(request, activation.generation)
+            .await
     }
 
     /// Append one ordered, retry-safe media chunk over confidential TinyBus.
@@ -1062,7 +1084,7 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let (instance, activation) = self.media_uploads.binding_handle(&chunk.handle).await?;
-        if self.media_activation(&instance).await? != activation {
+        if self.media_activation(&instance).await?.generation != activation {
             return Err(BusError::failed(
                 "media upload belongs to another provider activation",
             ));
@@ -1080,7 +1102,8 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let (instance, activation) = self.media_uploads.binding(&request).await?;
-        if self.media_activation(&instance).await? != activation {
+        let current = self.media_activation(&instance).await?;
+        if current.generation != activation {
             return Err(BusError::failed(
                 "media upload belongs to another provider activation",
             ));
@@ -1088,6 +1111,7 @@ impl Channels {
         let repository = Arc::new(crate::provider::ModuleMediaRepository(
             self.host.clone(),
             instance,
+            current.media_account_scope,
         ));
         self.media_uploads
             .clone()
@@ -1105,12 +1129,109 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let (instance, activation) = self.media_uploads.binding(&request).await?;
-        if self.media_activation(&instance).await? != activation {
+        if self.media_activation(&instance).await?.generation != activation {
             return Err(BusError::failed(
                 "media upload belongs to another provider activation",
             ));
         }
         self.media_uploads.abort(request).await
+    }
+
+    /// Resolve one scoped media reference into a short-lived confidential read.
+    #[tinybus(confidential)]
+    async fn begin_media_read(
+        &self,
+        request: tinychannels_bus::MediaReadBegin,
+    ) -> BusResult<tinychannels_bus::MediaReadInfo> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let activation = self.media_activation(&request.instance).await?;
+        if activation.media_account_scope.is_none() {
+            return Err(BusError::failed(
+                "configured account has no stable media identity",
+            ));
+        }
+        if request.scope.conversation.id.trim().is_empty()
+            || request.scope.turn_id.trim().is_empty()
+            || request.media.opaque_id.as_deref().is_none_or(str::is_empty)
+            || request.max_bytes == 0
+            || request.max_bytes > tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES as u64
+        {
+            return Err(BusError::failed("media resolution request is invalid"));
+        }
+        let encoded = serde_json::to_vec(&request)
+            .map_err(|_| BusError::failed("media resolution request is invalid"))?;
+        if encoded.len() > tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES {
+            return Err(BusError::failed(
+                "media resolution request exceeds its limit",
+            ));
+        }
+        let instance = request.instance.clone();
+        let repository = crate::provider::ModuleMediaRepository(
+            self.host.clone(),
+            instance.clone(),
+            activation.media_account_scope.clone(),
+        );
+        let media_id = request
+            .media
+            .opaque_id
+            .clone()
+            .ok_or_else(|| BusError::failed("media resolution request is invalid"))?;
+        let scope = request.scope.clone();
+        let max_bytes = request.max_bytes;
+        self.media_reads
+            .resolve(
+                request,
+                activation.generation.clone(),
+                || async move {
+                <crate::provider::ModuleMediaRepository as tinychannels::host::MediaRepository>::read_media(
+                    &repository,
+                    scope,
+                    media_id,
+                    max_bytes,
+                )
+                .await
+                .map_err(|_| BusError::failed("media could not be resolved"))
+                },
+                || async {
+                    !self.terminal.load(Ordering::SeqCst)
+                        && matches!(
+                            self.media_activation(&instance).await,
+                            Ok(current) if current == activation
+                        )
+                },
+            )
+            .await
+    }
+
+    /// Return one bounded chunk over confidential TinyBus method-reply framing.
+    #[tinybus(confidential)]
+    async fn read_media_chunk(
+        &self,
+        request: tinychannels_bus::MediaReadChunk,
+    ) -> BusResult<tinychannels_bus::MediaReadChunkResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_reads.binding(&request.handle).await?;
+        if self.media_activation(&instance).await?.generation != activation {
+            return Err(BusError::failed("media read belongs to another activation"));
+        }
+        self.media_reads.chunk(request).await
+    }
+
+    /// Release a resolved media read and its temporary byte buffer.
+    #[tinybus(confidential)]
+    async fn abort_media_read(&self, request: tinychannels_bus::MediaReadFinish) -> BusResult<()> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_reads.binding(&request.0).await?;
+        if self.media_activation(&instance).await?.generation != activation {
+            return Err(BusError::failed("media read belongs to another activation"));
+        }
+        self.media_reads.abort(request).await
     }
 
     /// Append an ordered, retry-safe confidential attachment chunk.

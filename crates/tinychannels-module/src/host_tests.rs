@@ -466,8 +466,11 @@ async fn callback_consumer_preserves_inbound_then_status_order() {
 #[tokio::test]
 async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
     let (host, callback, _server) = connected_host().await;
-    let provider_host =
-        Arc::new(crate::provider::Hooks::default()).host(host.clone(), "telegram".into());
+    let provider_host = Arc::new(crate::provider::Hooks::default()).host(
+        host.clone(),
+        "telegram".into(),
+        Some("telegram:media-v1:fixture".into()),
+    );
     let transcription = provider_host
         .transcriber()
         .unwrap()
@@ -585,6 +588,14 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         assert_eq!(observed.configured_instance, "telegram");
         assert_eq!(observed.channel.id, "telegram");
         assert_eq!(observed.channel.account_id.as_deref(), Some("telegram"));
+        assert!(
+            !observed
+                .channel
+                .account_id
+                .as_deref()
+                .unwrap()
+                .contains("media-v1")
+        );
     }
     for observed in &scopes[1..] {
         assert_eq!(observed.conversation.id, "conversation-1");
@@ -631,8 +642,11 @@ async fn denied_voice_publication_removes_unclaimed_shared_media() {
     callback
         .voice_publication_failures
         .store(1, Ordering::SeqCst);
-    let provider_host =
-        Arc::new(crate::provider::Hooks::default()).host(host.clone(), "telegram".into());
+    let provider_host = Arc::new(crate::provider::Hooks::default()).host(
+        host.clone(),
+        "telegram".into(),
+        Some("telegram:media-v1:fixture".into()),
+    );
     let store = provider_host.voice_media_store().unwrap();
     let scope = tinychannels_bus::HostVoiceScope {
         conversation: tinychannels_bus::ConversationRef {
@@ -1061,11 +1075,11 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
             expires_at: None,
         },
     };
-    crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
+    crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into(), None)
         .publish_channel_event(source.clone())
         .await
         .unwrap();
-    crate::provider::ModuleEvents(host.clone(), "telegram:account-b".into())
+    crate::provider::ModuleEvents(host.clone(), "telegram:account-b".into(), None)
         .publish_channel_event(source)
         .await
         .unwrap();
@@ -1105,7 +1119,7 @@ async fn module_unified_ingress_acknowledges_message_before_following_event() {
     use tinychannels::host::EventSink;
 
     let (host, callback, _server) = connected_host().await;
-    let events = crate::provider::ModuleEvents(host.clone(), "telegram:bot-a".into());
+    let events = crate::provider::ModuleEvents(host.clone(), "telegram:bot-a".into(), None);
     let handled = events
         .publish_inbound(tinychannels_bus::ChannelMessage {
             id: "telegram_100_5".into(),

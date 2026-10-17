@@ -1,5 +1,7 @@
 //! Bounded, runtime-local host-to-module media uploads.
 use futures_util::FutureExt;
+use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, time::Duration};
 use tinybus::{Error, Result};
@@ -8,6 +10,7 @@ use tinychannels_bus::{
 };
 use tokio::sync::Mutex;
 use tokio::sync::Notify;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio::time::Instant;
 
 #[async_trait::async_trait]
@@ -21,6 +24,265 @@ pub(crate) trait MediaPersistence: Send + Sync {
 const UPLOAD_LIFETIME: Duration = Duration::from_secs(60);
 const TERMINAL_LIFETIME: Duration = Duration::from_secs(5 * 60);
 const TERMINAL_CAPACITY: usize = 128;
+const READ_LIFETIME: Duration = Duration::from_secs(60);
+const READ_IO_TIMEOUT: Duration = Duration::from_secs(30);
+
+struct Read {
+    instance: String,
+    activation: String,
+    expires: Instant,
+    bytes: Vec<u8>,
+    next_sequence: usize,
+    last_chunk: Option<tinychannels_bus::MediaReadChunkResult>,
+    _permit: OwnedSemaphorePermit,
+}
+
+#[derive(Default)]
+struct ReadState {
+    reads: HashMap<String, Read>,
+}
+
+/// Runtime-local bounded byte buffers created only after scoped-store validation.
+pub(crate) struct MediaReads {
+    state: Arc<Mutex<ReadState>>,
+    capacity: Arc<Semaphore>,
+    expiry_janitor_running: Arc<AtomicBool>,
+}
+
+impl Default for MediaReads {
+    fn default() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ReadState::default())),
+            capacity: Arc::new(Semaphore::new(
+                tinychannels_bus::module_media::MEDIA_READ_CAPACITY,
+            )),
+            expiry_janitor_running: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+pub(crate) struct MediaReadReservation(OwnedSemaphorePermit);
+
+impl MediaReads {
+    pub(crate) async fn reserve(&self) -> Result<MediaReadReservation> {
+        let mut state = self.state.lock().await;
+        Self::prune(&mut state);
+        drop(state);
+        self.capacity
+            .clone()
+            .try_acquire_owned()
+            .map(MediaReadReservation)
+            .map_err(|_| Error::failed("media read capacity is full"))
+    }
+
+    pub(crate) async fn resolve<F, Fut, V, Vut>(
+        &self,
+        request: tinychannels_bus::MediaReadBegin,
+        activation: String,
+        load: F,
+        still_active: V,
+    ) -> Result<tinychannels_bus::MediaReadInfo>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<tinychannels::host::StoredMedia>>,
+        V: FnOnce() -> Vut,
+        Vut: Future<Output = bool>,
+    {
+        self.resolve_with_deadline(request, activation, READ_IO_TIMEOUT, load, still_active)
+            .await
+    }
+
+    async fn resolve_with_deadline<F, Fut, V, Vut>(
+        &self,
+        request: tinychannels_bus::MediaReadBegin,
+        activation: String,
+        deadline: Duration,
+        load: F,
+        still_active: V,
+    ) -> Result<tinychannels_bus::MediaReadInfo>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<tinychannels::host::StoredMedia>>,
+        V: FnOnce() -> Vut,
+        Vut: Future<Output = bool>,
+    {
+        let reservation = self.reserve().await?;
+        let media = tokio::time::timeout(deadline, load())
+            .await
+            .map_err(|_| Error::failed("media resolution timed out"))??;
+        if !still_active().await {
+            return Err(Error::failed(
+                "media provider activation changed during resolution",
+            ));
+        }
+        self.complete(request, activation, media, reservation).await
+    }
+
+    pub(crate) async fn complete(
+        &self,
+        request: tinychannels_bus::MediaReadBegin,
+        activation: String,
+        media: tinychannels::host::StoredMedia,
+        reservation: MediaReadReservation,
+    ) -> Result<tinychannels_bus::MediaReadInfo> {
+        let max = tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES;
+        let bytes = media.bytes.len();
+        let chunk_size = tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES;
+        if request.instance.trim().is_empty()
+            || bytes == 0
+            || bytes > max
+            || bytes as u64 > request.max_bytes
+            || media.media.size_bytes != Some(bytes as u64)
+        {
+            return Err(Error::failed("resolved media exceeds its size limit"));
+        }
+        let mut state = self.state.lock().await;
+        Self::prune(&mut state);
+        let handle = loop {
+            let candidate = uuid::Uuid::new_v4().simple().to_string();
+            if !state.reads.contains_key(&candidate) {
+                break candidate;
+            }
+        };
+        let chunk_count = bytes.div_ceil(chunk_size);
+        let mut resolved_reference = media.media;
+        resolved_reference.path = None;
+        resolved_reference.url = None;
+        resolved_reference.local_cache_path = None;
+        let info = tinychannels_bus::MediaReadInfo {
+            handle: tinychannels_bus::MediaReadHandle(handle.clone()),
+            media: resolved_reference,
+            content_type: media.content_type,
+            file_name: media.file_name,
+            byte_count: bytes,
+            chunk_count: chunk_count as u32,
+        };
+        let info_bytes = serde_json::to_vec(&info)
+            .map_err(|_| Error::failed("resolved media metadata is invalid"))?;
+        if info_bytes.len() > tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES {
+            return Err(Error::failed("resolved media metadata exceeds its limit"));
+        }
+        let expires = Instant::now() + READ_LIFETIME;
+        state.reads.insert(
+            handle,
+            Read {
+                instance: request.instance,
+                activation,
+                expires,
+                bytes: media.bytes,
+                next_sequence: 0,
+                last_chunk: None,
+                _permit: reservation.0,
+            },
+        );
+        drop(state);
+        self.start_expiry_janitor();
+        Ok(info)
+    }
+
+    pub(crate) async fn binding(
+        &self,
+        handle: &tinychannels_bus::MediaReadHandle,
+    ) -> Result<(String, String)> {
+        let mut state = self.state.lock().await;
+        Self::prune(&mut state);
+        state
+            .reads
+            .get(&handle.0)
+            .map(|read| (read.instance.clone(), read.activation.clone()))
+            .ok_or_else(|| Error::failed("media read is unknown or expired"))
+    }
+
+    pub(crate) async fn chunk(
+        &self,
+        request: tinychannels_bus::MediaReadChunk,
+    ) -> Result<tinychannels_bus::MediaReadChunkResult> {
+        let mut state = self.state.lock().await;
+        Self::prune(&mut state);
+        let read = state
+            .reads
+            .get_mut(&request.handle.0)
+            .ok_or_else(|| Error::failed("media read is unknown or expired"))?;
+        let sequence = request.sequence as usize;
+        if let Some(last) = &read.last_chunk
+            && sequence + 1 == read.next_sequence
+            && sequence == last.sequence as usize
+        {
+            return Ok(last.clone());
+        }
+        if sequence != read.next_sequence {
+            return Err(Error::failed("media chunks must be read in order"));
+        }
+        let size = tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES;
+        let start = sequence
+            .checked_mul(size)
+            .ok_or_else(|| Error::failed("media chunk sequence exceeds its limit"))?;
+        if start >= read.bytes.len() {
+            return Err(Error::failed("media chunk sequence exceeds its limit"));
+        }
+        let end = (start + size).min(read.bytes.len());
+        let result = tinychannels_bus::MediaReadChunkResult {
+            sequence: request.sequence,
+            bytes: read.bytes[start..end].to_vec(),
+            done: end == read.bytes.len(),
+        };
+        read.next_sequence += 1;
+        read.last_chunk = Some(result.clone());
+        Ok(result)
+    }
+
+    pub(crate) async fn abort(&self, request: tinychannels_bus::MediaReadFinish) -> Result<()> {
+        self.state
+            .lock()
+            .await
+            .reads
+            .remove(&request.0.0)
+            .map(|_| ())
+            .ok_or_else(|| Error::failed("media read is unknown or expired"))
+    }
+
+    pub(crate) async fn invalidate_instance(&self, instance: &str) {
+        self.state
+            .lock()
+            .await
+            .reads
+            .retain(|_, read| read.instance != instance);
+    }
+
+    fn start_expiry_janitor(&self) {
+        if self.expiry_janitor_running.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let state = Arc::downgrade(&self.state);
+        let running = Arc::clone(&self.expiry_janitor_running);
+        tokio::spawn(async move {
+            loop {
+                let next_expiry = {
+                    let Some(state) = state.upgrade() else {
+                        running.store(false, Ordering::SeqCst);
+                        return;
+                    };
+                    let mut guard = state.lock().await;
+                    Self::prune(&mut guard);
+                    let next_expiry = guard.reads.values().map(|read| read.expires).min();
+                    if next_expiry.is_none() {
+                        running.store(false, Ordering::SeqCst);
+                    }
+                    next_expiry
+                };
+                let Some(next_expiry) = next_expiry else {
+                    return;
+                };
+                tokio::time::sleep_until(next_expiry).await;
+            }
+        });
+    }
+
+    fn prune(state: &mut ReadState) {
+        let now = Instant::now();
+        state.reads.retain(|_, read| read.expires > now);
+    }
+}
 
 struct Upload {
     request: MediaUploadBegin,

@@ -1,4 +1,373 @@
 use super::*;
+
+fn stored(bytes: Vec<u8>) -> tinychannels::host::StoredMedia {
+    tinychannels::host::StoredMedia {
+        media: tinychannels_bus::MediaReference {
+            opaque_id: Some("opaque".into()),
+            content_type: Some("application/octet-stream".into()),
+            size_bytes: Some(bytes.len() as u64),
+            ..Default::default()
+        },
+        content_type: "application/octet-stream".into(),
+        file_name: Some("data.bin".into()),
+        bytes,
+    }
+}
+
+fn read_request_fixture() -> tinychannels_bus::MediaReadBegin {
+    tinychannels_bus::MediaReadBegin {
+        instance: "telegram:primary".into(),
+        scope: tinychannels_bus::HostVoiceScope {
+            conversation: tinychannels_bus::ConversationRef {
+                id: "conversation".into(),
+                ..Default::default()
+            },
+            turn_id: "turn".into(),
+            ..Default::default()
+        },
+        media: tinychannels_bus::MediaReference {
+            opaque_id: Some("opaque".into()),
+            ..Default::default()
+        },
+        max_bytes: 1024,
+    }
+}
+
+#[tokio::test]
+async fn media_reads_reserve_capacity_before_resolution_and_release_it_on_cancel() {
+    let reads = MediaReads::default();
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop(first);
+    let third = reads.reserve().await.unwrap();
+    drop((second, third));
+    assert!(reads.reserve().await.is_ok());
+}
+
+#[tokio::test]
+async fn media_reads_return_bounded_ordered_retryable_chunks_and_release_bytes() {
+    let reads = MediaReads::default();
+    let mut begin = read_request_fixture();
+    let bytes = vec![0x5a; tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES + 7];
+    begin.max_bytes = bytes.len() as u64;
+    let info = reads
+        .complete(
+            begin,
+            "activation".into(),
+            stored(bytes.clone()),
+            reads.reserve().await.unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(info.byte_count, bytes.len());
+    assert_eq!(info.chunk_count, 2);
+    let first_request = tinychannels_bus::MediaReadChunk {
+        handle: info.handle.clone(),
+        sequence: 0,
+    };
+    let first = reads.chunk(first_request.clone()).await.unwrap();
+    assert_eq!(
+        first.bytes.len(),
+        tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES
+    );
+    assert!(!first.done);
+    assert_eq!(reads.chunk(first_request).await.unwrap(), first);
+    assert!(
+        reads
+            .chunk(tinychannels_bus::MediaReadChunk {
+                handle: info.handle.clone(),
+                sequence: 2,
+            })
+            .await
+            .is_err()
+    );
+    let last = reads
+        .chunk(tinychannels_bus::MediaReadChunk {
+            handle: info.handle.clone(),
+            sequence: 1,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        last.bytes,
+        bytes[tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES..]
+    );
+    assert!(last.done);
+    assert_eq!(
+        reads
+            .chunk(tinychannels_bus::MediaReadChunk {
+                handle: info.handle.clone(),
+                sequence: 1,
+            })
+            .await
+            .unwrap(),
+        last,
+        "a lost final reply must remain retryable until explicit close"
+    );
+    let held = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    reads
+        .abort(tinychannels_bus::MediaReadFinish(info.handle))
+        .await
+        .unwrap();
+    assert!(reads.reserve().await.is_ok());
+    drop(held);
+}
+
+#[tokio::test]
+async fn media_reads_reject_claimed_size_mismatch_without_retaining_the_slot() {
+    let reads = MediaReads::default();
+    let mut wrong = stored(vec![1, 2, 3]);
+    wrong.media.size_bytes = Some(4);
+    assert!(
+        reads
+            .complete(
+                read_request_fixture(),
+                "activation".into(),
+                wrong,
+                reads.reserve().await.unwrap()
+            )
+            .await
+            .is_err()
+    );
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn expired_read_leases_release_capacity_without_being_touched() {
+    let reads = MediaReads::default();
+    for handle in ["expired-a", "expired-b"] {
+        let permit = reads.capacity.clone().try_acquire_owned().unwrap();
+        reads.state.lock().await.reads.insert(
+            handle.into(),
+            Read {
+                instance: "telegram".into(),
+                activation: "old".into(),
+                expires: Instant::now() - Duration::from_secs(1),
+                bytes: vec![1],
+                next_sequence: 0,
+                last_chunk: None,
+                _permit: permit,
+            },
+        );
+    }
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn oversized_resolved_metadata_drops_the_reserved_capacity() {
+    let reads = MediaReads::default();
+    let mut media = stored(vec![1, 2, 3]);
+    media.file_name =
+        Some("x".repeat(tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES + 1));
+    assert!(
+        reads
+            .complete(
+                read_request_fixture(),
+                "activation".into(),
+                media,
+                reads.reserve().await.unwrap()
+            )
+            .await
+            .is_err()
+    );
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn canceled_and_timed_out_scoped_reads_release_their_pending_slots() {
+    use std::{
+        future::pending,
+        sync::Arc,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::sync::Semaphore;
+
+    let reads = Arc::new(MediaReads::default());
+    let entered = Arc::new(Semaphore::new(0));
+    let mut pending_reads = Vec::new();
+    for _ in 0..tinychannels_bus::module_media::MEDIA_READ_CAPACITY {
+        let task_reads = Arc::clone(&reads);
+        let task_entered = Arc::clone(&entered);
+        pending_reads.push(tokio::spawn(async move {
+            task_reads
+                .resolve_with_deadline(
+                    read_request_fixture(),
+                    "activation".into(),
+                    Duration::from_secs(600),
+                    || async move {
+                        task_entered.add_permits(1);
+                        pending::<tinybus::Result<tinychannels::host::StoredMedia>>().await
+                    },
+                    || async { true },
+                )
+                .await
+        }));
+    }
+    entered
+        .acquire_many(tinychannels_bus::module_media::MEDIA_READ_CAPACITY as u32)
+        .await
+        .unwrap()
+        .forget();
+    let loads = Arc::new(AtomicUsize::new(0));
+    let third_loads = Arc::clone(&loads);
+    let third = reads
+        .resolve(
+            read_request_fixture(),
+            "activation".into(),
+            || async move {
+                third_loads.fetch_add(1, Ordering::SeqCst);
+                Ok(stored(vec![1]))
+            },
+            || async { true },
+        )
+        .await;
+    assert!(third.is_err());
+    assert_eq!(
+        loads.load(Ordering::SeqCst),
+        0,
+        "capacity must be reserved before storage I/O"
+    );
+    for pending_read in pending_reads {
+        pending_read.abort();
+        let _ = pending_read.await;
+    }
+
+    let entered = Arc::new(Semaphore::new(0));
+    let task_reads = Arc::clone(&reads);
+    let task_entered = Arc::clone(&entered);
+    let timed_out = task_reads
+        .resolve_with_deadline(
+            read_request_fixture(),
+            "activation".into(),
+            Duration::from_millis(1),
+            || async move {
+                task_entered.add_permits(1);
+                pending::<tinybus::Result<tinychannels::host::StoredMedia>>().await
+            },
+            || async { true },
+        )
+        .await;
+    assert!(timed_out.is_err());
+
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn failed_and_panicking_scoped_reads_release_the_pending_reservation() {
+    use futures_util::FutureExt;
+    use std::panic::AssertUnwindSafe;
+
+    let reads = MediaReads::default();
+    let failed = reads
+        .resolve(
+            read_request_fixture(),
+            "activation".into(),
+            || async { Err(tinybus::Error::failed("fixture storage failure")) },
+            || async { true },
+        )
+        .await;
+    assert!(failed.is_err());
+    let panicked = AssertUnwindSafe(reads.resolve(
+        read_request_fixture(),
+        "activation".into(),
+        || async { panic!("fixture storage panic") },
+        || async { true },
+    ))
+    .catch_unwind()
+    .await;
+    assert!(panicked.is_err());
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn activation_replacement_discards_the_pending_read_before_retaining_bytes() {
+    use std::future::ready;
+
+    let reads = MediaReads::default();
+    let result = reads
+        .resolve(
+            read_request_fixture(),
+            "old-activation".into(),
+            || async { Ok(stored(vec![1, 2, 3])) },
+            || ready(false),
+        )
+        .await;
+    assert!(result.is_err());
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn rapid_read_close_cycles_keep_expiry_cleanup_bounded() {
+    let runtime = tokio::runtime::Handle::current();
+    let baseline_tasks = runtime.metrics().num_alive_tasks();
+    let reads = MediaReads::default();
+    for _ in 0..64 {
+        let info = reads
+            .complete(
+                read_request_fixture(),
+                "activation".into(),
+                stored(vec![7]),
+                reads.reserve().await.unwrap(),
+            )
+            .await
+            .unwrap();
+        reads
+            .abort(tinychannels_bus::MediaReadFinish(info.handle))
+            .await
+            .unwrap();
+    }
+    tokio::task::yield_now().await;
+    assert!(
+        runtime.metrics().num_alive_tasks() <= baseline_tasks + 1,
+        "closing reads must not leave one detached expiry task per handle"
+    );
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
+    drop((first, second));
+}
+
+#[tokio::test]
+async fn expiry_janitor_does_not_keep_read_state_alive_after_resolver_drop() {
+    let reads = MediaReads::default();
+    let info = reads
+        .complete(
+            read_request_fixture(),
+            "activation".into(),
+            stored(vec![7; 1024]),
+            reads.reserve().await.unwrap(),
+        )
+        .await
+        .unwrap();
+    let state = Arc::downgrade(&reads.state);
+    // Let the single janitor enter its expiry wait while the resolver remains
+    // the only strong owner of the bytes and their capacity permit.
+    tokio::task::yield_now().await;
+    assert!(state.upgrade().is_some());
+    drop(reads);
+    assert!(state.upgrade().is_none());
+    drop(info);
+}
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;
 

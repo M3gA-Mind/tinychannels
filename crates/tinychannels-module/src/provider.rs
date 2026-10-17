@@ -7,7 +7,9 @@ use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::host::{LifecycleRegistry, ShutdownHook};
 use tinychannels::{Channel, ChannelHostBuilder, SendMessage};
-use tinychannels_bus::{ChannelSupervisionPolicy, HostEventPublication, HostTranscriptionRequest};
+use tinychannels_bus::{
+    ChannelSupervisionPolicy, ChannelsConfig, HostEventPublication, HostTranscriptionRequest,
+};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
@@ -143,6 +145,7 @@ impl std::fmt::Display for RunningSendError {
 pub(crate) struct Hooks {
     hooks: StdMutex<Vec<ShutdownHook>>,
     configured_instance: StdMutex<Option<String>>,
+    media_account_scope: StdMutex<Option<String>>,
 }
 impl LifecycleRegistry for Hooks {
     fn register_shutdown(&self, _name: &str, hook: ShutdownHook) {
@@ -157,11 +160,16 @@ impl Hooks {
         self: &Arc<Self>,
         callbacks: HostChannels,
         configured_instance: String,
+        media_account_scope: Option<String>,
     ) -> Arc<dyn tinychannels::host::ChannelHost> {
         *self
             .configured_instance
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = Some(configured_instance.clone());
+        *self
+            .media_account_scope
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = media_account_scope.clone();
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(
@@ -175,15 +183,21 @@ impl Hooks {
             .voice_media_store(Arc::new(ModuleVoiceMediaStore(
                 callbacks.clone(),
                 configured_instance.clone(),
+                media_account_scope.clone(),
             )))
             .media_repository(Arc::new(ModuleMediaRepository(
                 callbacks.clone(),
                 configured_instance.clone(),
+                media_account_scope,
             )))
             .voice_codec(Arc::new(ModuleVoiceCodec(callbacks.clone())))
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
                 configured_instance,
+                self.media_account_scope
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
             )))
             .storage(Arc::new(ModuleStorage(callbacks.clone())))
             .allowlist(Arc::new(ModuleAllowlist(callbacks)))
@@ -268,10 +282,230 @@ impl tinychannels::host::StorageProvider for ModuleStorage {
     }
 }
 
+/// Return a stable, opaque media authority for the selected provider's
+/// configured identity material. Mutable policy fields are deliberately
+/// excluded so changing allowed users or presentation settings does not
+/// orphan durable media. A credential rotation creates a new authority unless
+/// the provider later exposes an authenticated stable account identifier.
+pub(crate) fn configured_media_account_scope(
+    instance: &str,
+    config: &ChannelsConfig,
+) -> Option<String> {
+    let provider = tinychannels_bus::provider_id(instance);
+    let identity: Vec<String> = match provider {
+        "telegram" => {
+            let c = config.telegram.as_ref()?;
+            if c.bot_token.trim().is_empty() {
+                return None;
+            }
+            vec![c.bot_token.clone()]
+        }
+        "discord" => {
+            let c = config.discord.as_ref()?;
+            if c.bot_token.trim().is_empty() {
+                return None;
+            }
+            vec![c.bot_token.clone()]
+        }
+        "slack" => {
+            let c = config.slack.as_ref()?;
+            if c.bot_token.trim().is_empty() {
+                return None;
+            }
+            // Socket Mode's app token is an optional transport credential; the
+            // bot token identifies the account that owns media.
+            vec![c.bot_token.clone()]
+        }
+        "mattermost" => {
+            let c = config.mattermost.as_ref()?;
+            if c.url.trim().is_empty() || c.bot_token.trim().is_empty() {
+                return None;
+            }
+            vec![c.url.clone(), c.bot_token.clone()]
+        }
+        "webhook" => {
+            let c = config.webhook.as_ref()?;
+            let secret = c.secret.as_deref()?;
+            if secret.trim().is_empty() {
+                return None;
+            }
+            vec![c.port.to_string(), secret.to_owned()]
+        }
+        "matrix" => {
+            let c = config.matrix.as_ref()?;
+            if c.homeserver.trim().is_empty() || c.access_token.trim().is_empty() {
+                return None;
+            }
+            vec![
+                c.homeserver.clone(),
+                c.user_id.clone().unwrap_or_default(),
+                c.access_token.clone(),
+            ]
+        }
+        // Signal exposes no configured authentication secret or attested
+        // account identifier in the current contract.
+        "signal" => return None,
+        "email" => {
+            let c = config.email.as_ref()?;
+            if c.imap_host.trim().is_empty()
+                || c.username.trim().is_empty()
+                || c.password.trim().is_empty()
+            {
+                return None;
+            }
+            vec![
+                c.imap_host.clone(),
+                c.imap_port.to_string(),
+                c.username.clone(),
+                c.password.clone(),
+            ]
+        }
+        "whatsapp" => {
+            let c = config.whatsapp.as_ref()?;
+            let phone_number_id = c.phone_number_id.as_deref()?;
+            let access_token = c.access_token.as_deref()?;
+            if phone_number_id.trim().is_empty() || access_token.trim().is_empty() {
+                return None;
+            }
+            vec![
+                phone_number_id.to_owned(),
+                access_token.to_owned(),
+                c.app_secret.clone().unwrap_or_default(),
+            ]
+        }
+        "linq" => {
+            let c = config.linq.as_ref()?;
+            if c.api_token.trim().is_empty() {
+                return None;
+            }
+            vec![c.from_phone.clone(), c.api_token.clone()]
+        }
+        "irc" => {
+            let c = config.irc.as_ref()?;
+            if c.server.trim().is_empty() {
+                return None;
+            }
+            let principal = if c
+                .sasl_password
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
+            {
+                c.username.as_deref().unwrap_or(&c.nickname)
+            } else if c
+                .nickserv_password
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty())
+            {
+                &c.nickname
+            } else {
+                return None;
+            };
+            let credential = c
+                .sasl_password
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .or(c.nickserv_password.as_deref())?;
+            vec![
+                c.server.clone(),
+                c.port.to_string(),
+                principal.to_owned(),
+                credential.to_owned(),
+            ]
+        }
+        "lark" => {
+            let c = config.lark.as_ref()?;
+            if c.app_id.trim().is_empty() || c.app_secret.trim().is_empty() {
+                return None;
+            }
+            vec![
+                c.app_id.clone(),
+                c.app_secret.clone(),
+                if c.use_feishu {
+                    "feishu".into()
+                } else {
+                    "lark".into()
+                },
+            ]
+        }
+        "dingtalk" => {
+            let c = config.dingtalk.as_ref()?;
+            if c.client_id.trim().is_empty() || c.client_secret.trim().is_empty() {
+                return None;
+            }
+            vec![c.client_id.clone(), c.client_secret.clone()]
+        }
+        "qq" => {
+            let c = config.qq.as_ref()?;
+            if c.app_id.trim().is_empty() || c.app_secret.trim().is_empty() {
+                return None;
+            }
+            vec![c.app_id.clone(), c.app_secret.clone()]
+        }
+        "yuanbao" => {
+            let c = config.yuanbao.as_ref()?;
+            if c.app_key.trim().is_empty() || c.app_secret.trim().is_empty() {
+                return None;
+            }
+            vec![
+                c.api_domain.clone(),
+                c.env.clone(),
+                c.route_env.clone(),
+                c.app_key.clone(),
+                c.app_secret.clone(),
+            ]
+        }
+        // The current iMessage configuration has no stable account identity.
+        // Do not silently turn a provider name into cross-runtime authority.
+        _ => return None,
+    };
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"tinychannels-media-account-v1\0");
+    digest.update((provider.len() as u64).to_le_bytes());
+    digest.update(provider.as_bytes());
+    for part in identity {
+        digest.update((part.len() as u64).to_le_bytes());
+        digest.update(part.as_bytes());
+    }
+    Some(format!(
+        "{provider}:media-v1:{}",
+        hex::encode(digest.finalize())
+    ))
+}
+
 #[derive(Clone)]
-pub(crate) struct ModuleMediaRepository(pub(crate) HostChannels, pub(crate) String);
+pub(crate) struct ModuleMediaRepository(
+    pub(crate) HostChannels,
+    pub(crate) String,
+    pub(crate) Option<String>,
+);
+
+fn bind_configured_media_scope(
+    scope: &mut tinychannels_bus::HostVoiceScope,
+    instance: &str,
+    media_account_scope: Option<&str>,
+) -> anyhow::Result<()> {
+    let account_scope = media_account_scope
+        .ok_or_else(|| anyhow::anyhow!("configured account has no stable media identity"))?;
+    bind_configured_voice_callback_scope(scope, instance);
+    scope.channel.account_id = Some(account_scope.to_owned());
+    Ok(())
+}
+
+fn bind_configured_voice_callback_scope(
+    scope: &mut tinychannels_bus::HostVoiceScope,
+    instance: &str,
+) {
+    scope.configured_instance = instance.to_owned();
+    scope.channel.id = tinychannels_bus::provider_id(instance).to_owned();
+    scope.channel.account_id = Some(instance.to_owned());
+}
 
 impl ModuleMediaRepository {
+    fn bind_scope(&self, scope: &mut tinychannels::host::MediaScope) -> anyhow::Result<()> {
+        bind_configured_media_scope(scope, &self.1, self.2.as_deref())
+    }
+
     async fn scoped_store(&self) -> anyhow::Result<tinychannels::host::ScopedMediaStore> {
         let storage = self.0.storage().await.map_err(|error| {
             anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind())
@@ -305,9 +539,7 @@ impl tinychannels::host::MediaRepository for ModuleMediaRepository {
         if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
             anyhow::bail!("media storage requires a conversation and turn identity");
         }
-        scope.configured_instance.clone_from(&self.1);
-        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        scope.channel.account_id = Some(self.1.clone());
+        self.bind_scope(scope)?;
         self.scoped_store().await?.store(request).await
     }
 
@@ -320,9 +552,7 @@ impl tinychannels::host::MediaRepository for ModuleMediaRepository {
         if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
             anyhow::bail!("media resolution requires a conversation and turn identity");
         }
-        scope.configured_instance.clone_from(&self.1);
-        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        scope.channel.account_id = Some(self.1.clone());
+        self.bind_scope(&mut scope)?;
         self.scoped_store()
             .await?
             .read(scope, &opaque_id, max_bytes)
@@ -373,13 +603,12 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
 
     async fn transcribe_scoped(
         &self,
-        mut scope: tinychannels_bus::HostVoiceScope,
+        scope: tinychannels_bus::HostVoiceScope,
         request: tinychannels::host::TranscriptionRequest,
     ) -> anyhow::Result<tinychannels::host::TranscriptionResult> {
         validate_voice_scope(&scope)?;
-        scope.configured_instance.clone_from(&self.1);
-        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        scope.channel.account_id = Some(self.1.clone());
+        let mut scope = scope;
+        bind_configured_voice_callback_scope(&mut scope, &self.1);
         let result = self
             .0
             .transcribe_voice(tinychannels_bus::HostVoiceTranscriptionRequest {
@@ -412,13 +641,12 @@ impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
 
     async fn synthesize_scoped(
         &self,
-        mut scope: tinychannels_bus::HostVoiceScope,
+        scope: tinychannels_bus::HostVoiceScope,
         request: tinychannels::host::SpeechRequest,
     ) -> anyhow::Result<tinychannels::host::SpeechResult> {
         validate_voice_scope(&scope)?;
-        scope.configured_instance.clone_from(&self.1);
-        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        scope.channel.account_id = Some(self.1.clone());
+        let mut scope = scope;
+        bind_configured_voice_callback_scope(&mut scope, &self.1);
         let result = self
             .0
             .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
@@ -438,19 +666,23 @@ impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
     }
 }
 
-pub(crate) struct ModuleVoiceMediaStore(pub(crate) HostChannels, pub(crate) String);
+pub(crate) struct ModuleVoiceMediaStore(
+    pub(crate) HostChannels,
+    pub(crate) String,
+    pub(crate) Option<String>,
+);
 
 #[async_trait::async_trait]
 impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
     async fn store_voice(
         &self,
-        mut request: tinychannels::host::VoiceMediaRequest,
+        request: tinychannels::host::VoiceMediaRequest,
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         validate_voice_scope(&request.scope)?;
-        request.scope.configured_instance.clone_from(&self.1);
-        request.scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        request.scope.channel.account_id = Some(self.1.clone());
-        let projection_scope = request.scope.clone();
+        let mut projection_scope = request.scope;
+        bind_configured_voice_callback_scope(&mut projection_scope, &self.1);
+        let mut storage_scope = projection_scope.clone();
+        bind_configured_media_scope(&mut storage_scope, &self.1, self.2.as_deref())?;
         use base64::Engine;
         let audio = base64::engine::general_purpose::STANDARD
             .decode(request.audio_base64.as_bytes())
@@ -468,7 +700,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         let media = media_store
             .store(tinychannels::host::MediaStoreRequest {
                 metadata: tinychannels::host::MediaMetadata {
-                    scope: request.scope,
+                    scope: storage_scope.clone(),
                     kind: tinychannels_bus::MediaKind::Audio,
                     content_type: request.mime_type,
                     file_name: request.file_name,
@@ -501,7 +733,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
                 // `delete` leaves its durable cleanup tombstone if the blob backend is transiently down.
                 let _ = media_store
                     .delete(
-                        projection_scope,
+                        storage_scope,
                         media.opaque_id.as_deref().unwrap_or_default(),
                     )
                     .await;
@@ -530,9 +762,13 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         if opaque_id.trim().is_empty() {
             anyhow::bail!("voice media reference is empty");
         }
-        scope.configured_instance.clone_from(&self.1);
-        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        scope.channel.account_id = Some(self.1.clone());
+        bind_configured_voice_callback_scope(&mut scope, &self.1);
+        if opaque_id.starts_with("tinychannels_media_v1_") {
+            let mut storage_scope = scope;
+            bind_configured_media_scope(&mut storage_scope, &self.1, self.2.as_deref())?;
+            return read_scoped_voice_media(&self.0, storage_scope, opaque_id, 8 * 1024 * 1024)
+                .await;
+        }
         read_scoped_voice_media(&self.0, scope, opaque_id, 8 * 1024 * 1024).await
     }
 }
@@ -576,7 +812,11 @@ async fn read_scoped_voice_media(
     })
 }
 
-pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String);
+pub(crate) struct ModuleEvents(
+    pub(crate) HostChannels,
+    pub(crate) String,
+    pub(crate) Option<String>,
+);
 
 #[async_trait::async_trait]
 impl tinychannels::host::EventSink for ModuleEvents {
@@ -651,9 +891,17 @@ impl tinychannels::host::EventSink for ModuleEvents {
                         turn_id: envelope.message_id.clone(),
                     };
                     let request = if let Some(opaque_id) = voice_note.media.opaque_id.clone() {
+                        let mut storage_scope = scope.clone();
+                        if opaque_id.starts_with("tinychannels_media_v1_") {
+                            bind_configured_media_scope(
+                                &mut storage_scope,
+                                &self.1,
+                                self.2.as_deref(),
+                            )?;
+                        }
                         match read_scoped_voice_media(
                             &self.0,
-                            scope.clone(),
+                            storage_scope,
                             opaque_id,
                             8 * 1024 * 1024,
                         )
@@ -743,6 +991,7 @@ async fn listen_with_supervision(
 /// A resource is retained until its owning task acknowledges cleanup.
 pub(crate) struct Running {
     pub(crate) channel: Arc<dyn Channel>,
+    pub(crate) media_account_scope: Option<String>,
     configured_instance: String,
     send: mpsc::Sender<SendCommand>,
     cancel: watch::Sender<bool>,
@@ -856,6 +1105,11 @@ impl Running {
             .unwrap_or_else(|e| e.into_inner())
             .clone()
             .unwrap_or_else(|| listen_channel.name().to_owned());
+        let media_account_scope = hooks
+            .media_account_scope
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let worker_cancel = cancel.clone();
         let worker_instance = configured_instance.clone();
         let worker = tokio::spawn(async move {
@@ -964,6 +1218,7 @@ impl Running {
         });
         Arc::new(Self {
             channel,
+            media_account_scope,
             configured_instance,
             send,
             cancel,

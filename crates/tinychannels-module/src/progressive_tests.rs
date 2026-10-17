@@ -368,6 +368,15 @@ async fn open_scoped_provider(
     turn_id: &str,
     capabilities: tinychannels_bus::ChannelCapabilities,
 ) -> String {
+    let hooks = Arc::new(crate::provider::Hooks::default());
+    let _provider_host = hooks.host(
+        replies.host.clone(),
+        account.to_owned(),
+        Some(format!(
+            "{}:media-v1:fixture",
+            tinychannels_bus::provider_id(provider)
+        )),
+    );
     replies.running.lock().await.insert(
         account.to_owned(),
         Running::start(
@@ -375,7 +384,7 @@ async fn open_scoped_provider(
                 name: provider,
                 capabilities,
             }),
-            Arc::new(crate::provider::Hooks::default()),
+            hooks,
             replies.host.clone(),
         ),
     );
@@ -633,6 +642,7 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     let (replies, _) = fixture(false).await;
     let mut reply = ProgressiveReply::new(
         Arc::new(Sender {
+            media_account_scope: None,
             host: replies.host.clone(),
             context: None,
             capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
@@ -1243,6 +1253,7 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
     let (replies, _) = fixture(false).await;
     let mut reply = ProgressiveReply::new(
         Arc::new(Sender {
+            media_account_scope: None,
             host: replies.host.clone(),
             context: None,
             capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
@@ -1288,6 +1299,7 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
 async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
     let (replies, callback) = fixture(false).await;
     let sender = Sender {
+        media_account_scope: None,
         host: replies.host.clone(),
         context: None,
         capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
@@ -1314,6 +1326,7 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
 async fn transport_failures_preserve_recovery_classification() {
     let (replies, callback) = fixture(false).await;
     let sender = Sender {
+        media_account_scope: None,
         host: replies.host.clone(),
         context: None,
         capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
@@ -2268,6 +2281,7 @@ async fn filler_callback_error_after_acceptance_is_not_retried() {
     };
     let mut reply = ProgressiveReply::new(
         Arc::new(Sender {
+            media_account_scope: None,
             host: replies.host.clone(),
             context: Some(ProgressiveOutputContext {
                 turn_id: "filler-unknown-turn".into(),
@@ -3961,6 +3975,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             explicitly_requested: explicit,
         });
         let sender = Arc::new(Sender {
+            media_account_scope: Some("telegram:media-v1:fixture".into()),
             host: host.clone(),
             context: Some(context.clone()),
             capabilities: capabilities.clone(),
@@ -4204,8 +4219,10 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         Arc::clone(storage.documents()),
         Arc::clone(storage.blobs()),
     );
+    let mut storage_scope = scope.clone();
+    storage_scope.channel.account_id = Some("telegram:media-v1:fixture".into());
     let stored = media_store
-        .read(scope.clone(), published_id, 1024 * 1024)
+        .read(storage_scope, published_id, 1024 * 1024)
         .await
         .expect("progressive policy voice reference resolves in scoped storage");
     assert_eq!(publication.scope, scope);
@@ -4236,6 +4253,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     audio_caps.content.audio.max_size_bytes = Some(8 * 1024 * 1024);
     audio_caps.content.audio.max_duration_ms = Some(10_000);
     let audio_sender = Arc::new(Sender {
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(audio_turn.clone()),
         capabilities: audio_caps.clone(),
@@ -4292,6 +4310,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     let mut link_caps = tinychannels_bus::ChannelCapabilities::default();
     link_caps.voice_out.synthesis = true;
     let link_sender = Arc::new(Sender {
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(link_turn.clone()),
         capabilities: link_caps.clone(),
@@ -4380,6 +4399,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     });
     capabilities.voice_out.max_size_bytes = Some(1);
     let sender = Arc::new(Sender {
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
@@ -4446,6 +4466,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
     capabilities.voice_out.max_duration_ms = Some(1_000);
     let sender = Arc::new(Sender {
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(duration_context.clone()),
         capabilities: capabilities.clone(),
@@ -4499,6 +4520,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         explicitly_requested: false,
     });
     let sender = Arc::new(Sender {
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
@@ -4585,6 +4607,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
     capabilities.voice_out.max_duration_ms = Some(10_000);
     let sender = Arc::new(Sender {
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
@@ -4663,7 +4686,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         configured_instance: "telegram:bot-1".into(),
         channel: tinychannels_bus::ChannelRef {
             id: "telegram".into(),
-            account_id: Some("telegram:bot-1".into()),
+            account_id: Some("telegram:media-v1:fixture".into()),
         },
         conversation: context.conversation.clone(),
         turn_id: "stub-codec-turn".into(),
@@ -4727,6 +4750,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         let mut case_context = context.clone();
         case_context.turn_id = turn_id.into();
         let case_sender = Arc::new(Sender {
+            media_account_scope: Some("telegram:media-v1:fixture".into()),
             host: host.clone(),
             context: Some(case_context.clone()),
             capabilities: capabilities.clone(),
@@ -4784,6 +4808,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     let mut explicit_context = context.clone();
     explicit_context.turn_id = "explicit-synthesis-denied".into();
     let explicit_sender = Sender {
+        media_account_scope: None,
         host: host.clone(),
         context: Some(explicit_context.clone()),
         capabilities: capabilities.clone(),
@@ -4847,6 +4872,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     let mut explicit_allowed_context = context.clone();
     explicit_allowed_context.turn_id = "explicit-synthesis-mid-turn".into();
     let explicit_allowed_sender = Sender {
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(explicit_allowed_context.clone()),
         capabilities: capabilities.clone(),
@@ -5040,6 +5066,7 @@ async fn send_final_voice_case(
         },
     };
     let sender = Arc::new(Sender {
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
