@@ -3557,3 +3557,94 @@ async fn listen_backs_off_when_webhook_delete_fails_and_on_transport_error() {
     );
     assert!(dead.bot_username.lock().is_none());
 }
+
+#[tokio::test]
+async fn native_edit_rejects_rich_parts_and_mismatched_receipt_scope_before_io() {
+    let server = mock_api().await;
+    mount_post(&server, "editMessageText", ok_with(serde_json::json!({"message_id": 7}))).await;
+    let channel = channel_for(&server, &["*"]);
+    let channel_ref = tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None };
+    let conversation = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Group,
+        id: "100".into(), thread_id: Some("4".into()), topic_id: Some("4".into()), ..Default::default()
+    };
+    let receipt = tinychannels_bus::channel::MessageReceipt {
+        channel: Some(channel_ref.clone()), conversation: Some(conversation.clone()),
+        primary_platform_message_id: Some("7".into()), platform_message_ids: vec!["7".into()],
+        ..Default::default()
+    };
+    let rich_intent = tinychannels_bus::ChannelOutboundIntent {
+        channel_id: "telegram".into(), conversation_id: "100".into(),
+        channel_ref: Some(channel_ref.clone()), conversation_ref: Some(conversation.clone()),
+        payload: tinychannels_bus::OutboundPayload::Parts { parts: vec![
+            tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Text { text: "keep this text".into(), markdown_dialect: None } },
+            tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Buttons { rows: vec![vec![tinychannels_bus::ButtonAction { id: "action".into(), label: "Continue".into(), style: None, disabled: false }]] } },
+        ] }, ..Default::default()
+    };
+
+    let rich = crate::channel::ChannelEdit::edit(&channel, &receipt, rich_intent.clone()).await;
+    assert!(rich.is_err(), "native edit must reject buttons instead of silently dropping them");
+    let rich_error = rich.unwrap_err();
+    assert_eq!(rich_error.kind, tinychannels_bus::channel::SendErrorKind::Forbidden);
+    assert!(!rich_error.sent_before_error);
+
+    let mut mismatched = rich_intent;
+    mismatched.payload = tinychannels_bus::OutboundPayload::Text { text: "edited".into() };
+    mismatched.conversation_id = "200".into();
+    mismatched.conversation_ref = Some(tinychannels_bus::ConversationRef { id: "200".into(), ..conversation });
+    let mismatch = crate::channel::ChannelEdit::edit(&channel, &receipt, mismatched).await;
+    assert!(mismatch.is_err(), "a receipt cannot authorize editing a different conversation");
+    assert_eq!(mismatch.unwrap_err().kind, tinychannels_bus::channel::SendErrorKind::Forbidden);
+    assert!(json_bodies(&server, "editMessageText").await.is_empty(), "preflight rejection must perform no HTTP request");
+}
+
+#[tokio::test]
+async fn native_reaction_edit_and_delete_failures_preserve_attempt_uncertainty() {
+    let server = mock_api().await;
+    for endpoint in ["setMessageReaction", "editMessageText", "deleteMessage"] {
+        Mock::given(method("POST"))
+            .and(path(api_path(endpoint)))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": false, "description": "rejected"})))
+            .mount(&server)
+            .await;
+    }
+    let channel = channel_for(&server, &["*"]);
+    let channel_ref = tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None };
+    let conversation = tinychannels_bus::ConversationRef { kind: tinychannels_bus::ConversationKind::Group, id: "100".into(), ..Default::default() };
+    let receipt = tinychannels_bus::channel::MessageReceipt {
+        channel: Some(channel_ref.clone()), conversation: Some(conversation.clone()),
+        primary_platform_message_id: Some("7".into()), platform_message_ids: vec!["7".into()],
+        ..Default::default()
+    };
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        channel_id: "telegram".into(), conversation_id: "100".into(),
+        channel_ref: Some(channel_ref.clone()), conversation_ref: Some(conversation.clone()),
+        payload: tinychannels_bus::OutboundPayload::Text { text: "edit".into() }, ..Default::default()
+    };
+
+    let reaction = crate::channel::ChannelReaction::send_reaction(
+        &channel, &channel_ref, &conversation, "7",
+        &tinychannels_bus::channel::ChannelReaction { value: "👍".into(), custom_emoji_id: None }, false,
+    ).await.unwrap_err();
+    let edit = crate::channel::ChannelEdit::edit(&channel, &receipt, intent).await.unwrap_err();
+    let delete = crate::channel::ChannelDelete::delete(&channel, &receipt).await.unwrap_err();
+    for error in [reaction, edit, delete] {
+        assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Unknown);
+        assert!(error.sent_before_error, "the request reached Telegram before the uncertain result");
+        assert!(!error.message.contains("test-token"));
+    }
+    for endpoint in ["setMessageReaction", "editMessageText", "deleteMessage"] {
+        assert_eq!(json_bodies(&server, endpoint).await.len(), 1, "expected the native request to reach {endpoint}");
+    }
+}
+
+#[tokio::test]
+async fn native_typing_does_not_report_success_when_telegram_rejects_action() {
+    let server = mock_api().await;
+    mount_post(&server, "sendChatAction", ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": false}))).await;
+    let channel = channel_for(&server, &["*"]);
+    let error = crate::channel::ChannelTyping::start_typing(&channel, "100:4").await.unwrap_err();
+    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Forbidden);
+    assert!(!error.sent_before_error);
+    assert_eq!(json_bodies(&server, "sendChatAction").await.len(), 2, "thread rejection is retried once at chat scope");
+}
