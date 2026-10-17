@@ -1332,19 +1332,18 @@ pub(crate) mod exports {
     macro_rules! declare_channel_exports {
         ([$($method:literal),* $(,)?]) => {
             tinybus_module::module_export_optional_static! {
-        setup = super::setup,
-        worker_threads = 4,
-        provides = ["ai.tinyhumans.tinychannels.Channels"],
-        methods = [$($method),*],
-        /* registry-generated membership */
-        signals = [],
-        // The host callback object is resolved per call, not required at load:
-        // an outbound-only host that serves nothing is supported.
-        requires = [],
-        optional = ["ai.tinyhumans.tinychannels.ChannelsHost"],
-        lazy = false,
-    
-        }
+                setup = super::setup,
+                worker_threads = 4,
+                provides = ["ai.tinyhumans.tinychannels.Channels"],
+                methods = [$($method),*],
+                signals = [],
+                // The host callback object is resolved per call, not required at load:
+                // an outbound-only host that serves nothing is supported.
+                requires = [],
+                optional = ["ai.tinyhumans.tinychannels.ChannelsHost"],
+                lazy = false,
+            }
+        };
     }
     tinychannels_bus::channel_method_registry!(declare_channel_exports);
 }

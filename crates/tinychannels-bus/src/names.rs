@@ -150,7 +150,7 @@ macro_rules! channel_method_registry {
 macro_rules! define_method_table {
     ([$($method:literal),* $(,)?]) => {
         /// All module method names in the declaration order used by the interface.
-        pub const METHODS: [&str; <[&str]>::len(&[$($method),*])] = [$($method),*];
+        pub const METHODS: [&str; 37] = [$($method),*];
     };
 }
 crate::channel_method_registry!(define_method_table);
