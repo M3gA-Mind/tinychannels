@@ -126,6 +126,9 @@ pub(super) async fn flush_thinking_message(
                 );
                 state.latch_thinking_edits_unsupported();
             }
+            Err(ProgressiveSendError::UnsupportedContent) => {
+                state.latch_thinking_edits_unsupported();
+            }
         }
         return;
     }

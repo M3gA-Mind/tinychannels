@@ -86,6 +86,9 @@ pub(super) async fn flush_streaming_edit(
                 );
                 state.latch_draft_edits_unsupported();
             }
+            Err(ProgressiveSendError::UnsupportedContent) => {
+                state.latch_draft_edits_unsupported();
+            }
         }
         return;
     }

@@ -148,6 +148,13 @@ pub(super) async fn finalize_channel_reply(
                         err
                     );
                 }
+                Err(ProgressiveSendError::UnsupportedContent) => {
+                    tracing::error!(
+                        "[channel-inbound] final edit unsupported by transport; retaining draft channel='{}' msg_id={}",
+                        channel,
+                        message_id
+                    );
+                }
             }
         }
     } else {
