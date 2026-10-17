@@ -1498,6 +1498,69 @@ async fn cancellation_retains_prior_media_receipt() {
 }
 
 #[tokio::test]
+async fn typed_callback_error_after_acceptance_is_unknown_and_stops_batch() {
+    let (base, callback) = fixture(false).await;
+    *callback.rpc_error_after_send.lock().await = true;
+    let configured = Arc::new(Mutex::new(HashMap::new()));
+    configured.lock().await.insert(
+        "discord:typed-unknown".to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities: tinychannels_bus::ChannelCapabilities::default(),
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            base.host.clone(),
+        ),
+    );
+    let replies = Replies::new(base.host.clone(), configured);
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:typed-unknown".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "typed-unknown-turn".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected opened output")
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![
+                ChannelOutputEvent::Media {
+                    text: None,
+                    parts: vec![],
+                },
+                ChannelOutputEvent::FinalMessage {
+                    text: "must not send after unknown callback result".into(),
+                    parts: vec![],
+                    receipt: None,
+                },
+            ],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result,
+        ProgressiveResult::DeliveryBatch { outcomes, failure: Some(_), .. }
+            if outcomes.len() == 1 && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
+    ));
+    let sends = callback.requests.lock().await.iter().filter(|request| {
+        matches!(request, ProgressiveTransportRequest::SendTyped { .. })
+    }).count();
+    assert_eq!(sends, 1);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn native_approval_and_clarification_events_deliver_prompts() {
     let (base, callback) = fixture(false).await;
     let configured = Arc::new(Mutex::new(HashMap::new()));
