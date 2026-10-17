@@ -39,31 +39,48 @@ fn vcard_escape(value: &str) -> String {
         .replace('\r', "")
 }
 
-fn presentation_text(value: &serde_json::Value) -> String {
-    fn collect(value: &serde_json::Value, out: &mut Vec<String>) {
+fn safe_vcard_type(label: Option<&str>, fallback: &str) -> &str {
+    match label.map(str::trim).map(str::to_ascii_uppercase).as_deref() {
+        Some("CELL" | "HOME" | "WORK" | "FAX" | "PAGER" | "VOICE") => {
+            label.map(str::trim).unwrap_or(fallback)
+        }
+        Some("INTERNET" | "X400") => label.map(str::trim).unwrap_or(fallback),
+        _ => fallback,
+    }
+}
+
+fn presentation_text(value: &serde_json::Value) -> anyhow::Result<String> {
+    fn collect(value: &serde_json::Value, out: &mut Vec<String>) -> anyhow::Result<()> {
         match value {
             serde_json::Value::String(text) if !text.trim().is_empty() => out.push(text.clone()),
-            serde_json::Value::Array(items) => items.iter().for_each(|item| collect(item, out)),
+            serde_json::Value::Array(items) => {
+                for item in items { collect(item, out)?; }
+            }
             serde_json::Value::Object(object) => {
-                for key in ["text", "title", "heading", "caption", "description"] {
-                    if let Some(value) = object.get(key) {
-                        collect(value, out);
-                    }
+                const ALLOWED: &[&str] = &["type", "text", "title", "heading", "caption", "description"];
+                if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
+                    anyhow::bail!("Telegram presentation block contains unsupported fields");
                 }
-                if object.keys().all(|key| {
-                    !["text", "title", "heading", "caption", "description"].contains(&key.as_str())
-                }) {
-                    for value in object.values() {
-                        collect(value, out);
+                if let Some(kind) = object.get("type").and_then(serde_json::Value::as_str)
+                    && !matches!(kind, "text" | "paragraph" | "heading" | "title" | "caption" | "quote" | "bullet" | "list_item")
+                {
+                    anyhow::bail!("Telegram presentation block type is unsupported");
+                }
+                for key in ["title", "heading", "text", "caption", "description"] {
+                    if let Some(serde_json::Value::String(text)) = object.get(key)
+                        && !text.trim().is_empty()
+                    {
+                        out.push(text.clone());
                     }
                 }
             }
-            _ => {}
+            _ => anyhow::bail!("Telegram presentation only accepts text or supported text blocks"),
         }
+        Ok(())
     }
     let mut parts = Vec::new();
-    collect(value, &mut parts);
-    parts.join("\n")
+    collect(value, &mut parts)?;
+    Ok(parts.join("\n"))
 }
 
 fn response_status_ok(value: &serde_json::Value) -> bool {
