@@ -2566,6 +2566,76 @@ async fn legacy_reaction_marker_is_plain_text_not_a_telegram_operation() {
     assert_eq!(sent_texts(&server).await, ["\\[REACTION:🔥\\] hello"]);
 }
 
+#[tokio::test]
+async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
+    let server = mock_api().await;
+    mount_post(&server, "answerCallbackQuery", ok()).await;
+    mount_get_updates_once(
+        &server,
+        1,
+        updates(serde_json::json!([
+            {
+                "update_id": 40,
+                "callback_query": {
+                    "id": "spoofed-first-name", "data": "action-a",
+                    "from": {"id": 31, "first_name": "alice"},
+                    "message": {"message_id": 80, "chat": {"id": 100, "type": "private"}}
+                }
+            },
+            {
+                "update_id": 41,
+                "callback_query": {
+                    "id": "allowed-id", "data": "opaque-action",
+                    "from": {"id": 42, "username": "outsider"},
+                    "message": {"message_id": 81, "chat": {"id": 100, "type": "private"}}
+                }
+            },
+            {
+                "update_id": 42,
+                "message": {
+                    "message_id": 82, "chat": {"id": 100, "type": "private"},
+                    "from": {"id": 42, "username": "outsider"}, "text": "stop listener"
+                }
+            }
+        ])),
+    )
+    .await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let events = Arc::new(RecordingEvents::default());
+    let channel = Arc::new(fast_backoff(
+        channel_for(&server, &["alice", "42"]).with_events(events.clone()),
+    ));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let listener = tokio::spawn({
+        let channel = channel.clone();
+        async move { channel.listen(tx).await }
+    });
+    tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("allowed message terminates listener")
+        .expect("message delivered");
+    drop(rx);
+    tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("listener exits after receiver closes")
+        .unwrap()
+        .unwrap();
+
+    let callbacks = events
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, kind, _)| kind == "button_callback")
+        .map(|(_, _, payload)| payload.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(callbacks.len(), 1);
+    assert_eq!(callbacks[0]["event"]["query_id"], "allowed-id");
+    assert_eq!(callbacks[0]["event"]["actor"]["id"], "42");
+    let acknowledgments = json_bodies(&server, "answerCallbackQuery").await;
+    assert_eq!(acknowledgments.len(), 2);
+}
+
 #[test]
 fn callback_event_keeps_authenticated_actor_message_and_topic_identity() {
     let update = serde_json::json!({

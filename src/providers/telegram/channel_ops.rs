@@ -75,6 +75,20 @@ impl TelegramChannel {
         })
     }
 
+    fn callback_is_allowed(&self, update: &serde_json::Value) -> bool {
+        let Some(user) = update.get("callback_query").and_then(|query| query.get("from")) else {
+            return false;
+        };
+        let id = user
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
+        // Authorization only uses Telegram's numeric user ID and username. The
+        // first name is a display label and must never grant access.
+        let username = user.get("username").and_then(serde_json::Value::as_str);
+        self.is_any_user_allowed(id.iter().map(String::as_str).chain(username))
+    }
+
     async fn acknowledge_callback(&self, query_id: &str) {
         let Ok(response) = self
             .http_client()
