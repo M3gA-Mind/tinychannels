@@ -131,6 +131,7 @@ struct Callback {
     synthesis_calls: Arc<AtomicUsize>,
     voice_store_calls: Arc<AtomicUsize>,
     published_voice_media: Arc<Mutex<Vec<tinychannels_bus::MediaReference>>>,
+    published_voice_requests: Arc<Mutex<Vec<tinychannels_bus::HostStoreVoiceMediaRequest>>>,
 }
 
 #[derive(Clone, Default)]
@@ -217,6 +218,10 @@ impl Callback {
         request: tinychannels_bus::HostStoreVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         self.voice_store_calls.fetch_add(1, Ordering::SeqCst);
+        self.published_voice_requests
+            .lock()
+            .await
+            .push(request.clone());
         let media = request
             .media_reference
             .unwrap_or_else(|| tinychannels_bus::MediaReference {
