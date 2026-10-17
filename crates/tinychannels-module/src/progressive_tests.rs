@@ -2004,6 +2004,88 @@ async fn scoped_output_survives_more_than_two_hundred_seconds_until_host_lease()
     replies.shutdown().await.unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn scoped_output_expiry_cleans_an_existing_draft_without_sending_a_reply() {
+    let (replies, callback) = fixture(false).await;
+    let account = "discord:short-lease";
+    replies.running.lock().await.insert(
+        account.into(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities: tinychannels_bus::ChannelCapabilities {
+                    progressive_edits: true,
+                    ..Default::default()
+                },
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            replies.host.clone(),
+        ),
+    );
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some(account.into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "lease-room".into(),
+                ..Default::default()
+            },
+            turn_id: "short-lease-turn".into(),
+            lifetime_ms: 1100,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected scoped output handle")
+    };
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "visible draft".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    assert!(callback.requests.lock().await.iter().any(|request| matches!(request,
+        ProgressiveTransportRequest::Send { message, .. } if message["text"] == "visible draft"
+    )));
+
+    tokio::time::advance(Duration::from_millis(150)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    let late = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "too late".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap_err();
+    assert!(late.to_string().contains("closed"));
+    let requests = callback.requests.lock().await;
+    assert!(requests.iter().any(|request| matches!(request,
+        ProgressiveTransportRequest::Delete { message_id, .. } if message_id == "fixture-message"
+    )));
+    assert_eq!(
+        callback.sends.lock().await.len(),
+        1,
+        "lease cleanup only deletes the draft and does not send a replacement"
+    );
+    replies.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn native_approval_and_clarification_events_deliver_prompts() {
     let (base, callback) = fixture(false).await;

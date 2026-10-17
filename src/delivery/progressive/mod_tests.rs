@@ -1848,3 +1848,169 @@ async fn segmented_projection_retains_later_receipt_address_tokens_and_raw_provi
         );
     }
 }
+
+#[tokio::test]
+async fn partial_thinking_without_ids_fences_only_thinking_and_does_not_invent_cleanup_authority() {
+    let (sender, mut reply) = turn("telegram:thinking-no-ids");
+    FakeSender::script(
+        &sender.sends,
+        Outcome::Err(|| {
+            ProgressiveSendError::PartialOutcome(Box::new(ChannelSendOutcome {
+                receipt: MessageReceipt {
+                    idempotency_key: Some("accepted-but-unidentified".into()),
+                    ..Default::default()
+                },
+                error: Some(tinychannels_bus::channel::ChannelSendError {
+                    sent_before_error: true,
+                    ..Default::default()
+                }),
+            }))
+        }),
+    );
+    reply.on_thinking_delta("reasoning");
+    reply.edit_tick().await;
+    reply.on_thinking_delta(" more");
+    reply.edit_tick().await;
+    assert!(reply.state.thinking_sent);
+    assert!(reply.state.thinking_delivery_uncertain);
+    assert!(reply.state.thinking_edit_disabled);
+    assert!(reply.state.thinking_message_id.is_none());
+    assert!(reply.state.thinking_message_ids.is_empty());
+    assert!(reply.state.thinking_message_receipt.is_none());
+    assert!(!reply.state.delivery_uncertain);
+    reply.on_text_delta("visible");
+    reply.edit_tick().await;
+    reply.abort().await;
+    assert_eq!(
+        sender.calls(),
+        [
+            Call::Send("💭 Thinking:\n_reasoning_".into()),
+            Call::Send("visible".into()),
+            Call::Delete("m2".into()),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn unsupported_draft_edits_keep_owned_message_for_cleanup_without_retrying() {
+    let (sender, mut reply) = turn("telegram:draft-unsupported-content");
+    reply.on_text_delta("draft");
+    reply.edit_tick().await;
+    FakeSender::script(
+        &sender.edits,
+        Outcome::Err(|| ProgressiveSendError::UnsupportedContent),
+    );
+    reply.on_text_delta(" update");
+    reply.edit_tick().await;
+    reply.on_text_delta(" again");
+    reply.edit_tick().await;
+    assert!(reply.state.edit_disabled);
+    assert_eq!(reply.state.message_id.as_deref(), Some("m1"));
+    reply.abort().await;
+    assert_eq!(
+        sender.calls(),
+        [
+            Call::Send("draft".into()),
+            Call::Edit("m1".into(), "draft update".into()),
+            Call::Delete("m1".into()),
+        ]
+    );
+}
+
+#[derive(Clone, Default)]
+struct DeliveryDiagnostics(Arc<Mutex<Vec<String>>>);
+
+impl tracing::Subscriber for DeliveryDiagnostics {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Fields(String);
+        impl tracing::field::Visit for Fields {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                use std::fmt::Write;
+                write!(&mut self.0, "{}={value:?};", field.name()).unwrap();
+            }
+        }
+        let mut fields = Fields(String::new());
+        event.record(&mut fields);
+        self.0.lock().unwrap().push(fields.0);
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+#[tokio::test]
+async fn uncertain_send_diagnostics_report_only_shape_counts_without_message_or_receipt_secrets() {
+    let diagnostics = DeliveryDiagnostics::default();
+    let _guard = tracing::subscriber::set_default(diagnostics.clone());
+    let (sender, mut reply) = turn("telegram:redacted-diagnostics");
+    let receipt = MessageReceipt {
+        idempotency_key: Some("private-idempotency-key".into()),
+        edit_token: Some("private-edit-token".into()),
+        delete_token: Some("private-delete-token".into()),
+        raw: Some(vec![
+            tinychannels_bus::channel::MessageReceiptSourceResult {
+                meta: Some(json!({"private": "private-provider-payload"})),
+                ..Default::default()
+            },
+        ]),
+        ..Default::default()
+    };
+    FakeSender::script(
+        &sender.sends,
+        Outcome::Ok(serde_json::to_value(&receipt).unwrap()),
+    );
+    reply.on_text_delta("private-user-message");
+    reply.edit_tick().await;
+    assert!(reply.state.delivery_uncertain && reply.state.edit_disabled);
+    assert_eq!(reply.state.message_receipt, Some(receipt.clone()));
+    assert!(reply.state.message_id.is_none());
+    reply.on_text_delta(" more");
+    reply.edit_tick().await;
+    assert_eq!(sender.calls().len(), 1);
+    let (sender, mut reply) = turn("telegram:redacted-ephemeral");
+    FakeSender::script(
+        &sender.sends,
+        Outcome::Ok(serde_json::to_value(&receipt).unwrap()),
+    );
+    reply.on_thinking_delta("private-model-reasoning");
+    reply.edit_tick().await;
+    FakeSender::script(
+        &sender.sends,
+        Outcome::Ok(serde_json::to_value(receipt).unwrap()),
+    );
+    reply.filler_tick().await;
+    assert!(reply.state.thinking_delivery_uncertain && reply.state.filler_delivery_uncertain);
+    let (sender, mut reply) = turn("telegram:redacted-edit");
+    reply.on_text_delta("private-edit-message");
+    reply.edit_tick().await;
+    reply.on_text_delta(" update");
+    reply.edit_tick().await;
+    assert_eq!(sender.calls().len(), 2);
+
+    let messages = diagnostics.0.lock().unwrap().join("\n");
+    assert!(messages.contains("initial draft response lacked an id"));
+    assert!(messages.contains("receipt_parts=0"));
+    assert!(messages.contains("response_fields="));
+    assert!(messages.contains("edit ok"));
+    for secret in [
+        "private-idempotency-key",
+        "private-edit-token",
+        "private-delete-token",
+        "private-provider-payload",
+        "private-user-message",
+        "private-model-reasoning",
+        "private-edit-message",
+    ] {
+        assert!(
+            !messages.contains(secret),
+            "delivery diagnostic exposed {secret}"
+        );
+    }
+}
