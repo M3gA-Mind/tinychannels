@@ -46,6 +46,7 @@ tracing = "0.1"
 log = "0.4"
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }
+base64 = "0.23"
 
 [dev-dependencies]
 tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["test-support"] }
@@ -54,7 +55,6 @@ tokio = { version = "1", features = ["test-util"] }
 serde_json = "1"
 futures-util = "0.3"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
-base64 = "0.23"
 
 [features]
 default = []
