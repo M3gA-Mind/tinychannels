@@ -31,6 +31,8 @@ const LEGACY_TURN_LIFETIME: Duration = Duration::from_secs(180);
 struct Sender {
     host: HostChannels,
     context: Option<ProgressiveOutputContext>,
+    capabilities: tinychannels_bus::ChannelCapabilities,
+    channel: String,
     send_sequence: std::sync::atomic::AtomicU64,
 }
 
@@ -336,6 +338,78 @@ async fn send_typed_part(
     sequence: u64,
     segment_index: u32,
 ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
+    let mut prepared_parts = parts.to_vec();
+    let mut prepared_text = text.to_owned();
+    if let Some(context) = context {
+        let synth = prepared_parts.iter().find_map(|part| match part {
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Synthesize { text, voice },
+            } => Some((text.clone(), voice.clone())),
+            _ => None,
+        });
+        if let Some((spoken_text, voice)) = synth {
+            let scope = tinychannels_bus::HostVoiceScope {
+                configured_instance: sender.channel.clone(),
+                channel: context.channel.clone(),
+                conversation: context.conversation.clone(),
+                turn_id: context.turn_id.clone(),
+            };
+            let policy = sender.host.voice_reply_policy(
+                tinychannels_bus::HostVoiceReplyPolicyRequest { scope: scope.clone() },
+            ).await.ok();
+            let should_speak = policy.as_ref().is_some_and(|policy| {
+                match policy.mode {
+                    tinychannels_bus::HostVoiceReplyMode::Mirror => policy.inbound_has_voice,
+                    tinychannels_bus::HostVoiceReplyMode::Always => true,
+                    tinychannels_bus::HostVoiceReplyMode::Never => false,
+                    tinychannels_bus::HostVoiceReplyMode::SpeakReply => policy.explicitly_requested,
+                }
+            });
+            prepared_parts.retain(|part| !matches!(part, tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
+            }));
+            if should_speak {
+                let policy = policy.expect("checked above");
+                let instance = sender.channel.clone();
+                let synthesizer = crate::provider::ModuleSynthesizer(sender.host.clone(), instance.clone());
+                let codec = crate::provider::ModuleVoiceCodec(sender.host.clone());
+                let store = crate::provider::ModuleVoiceMediaStore(sender.host.clone(), instance);
+                match tinychannels::host::prepare_voice_reply(
+                    scope,
+                    spoken_text,
+                    voice,
+                    &synthesizer,
+                    &codec,
+                    &store,
+                    &sender.capabilities.voice_out.accepted_codecs,
+                    sender.capabilities.voice_out.max_size_bytes,
+                    sender.capabilities.voice_out.max_duration_ms,
+                ).await {
+                    Ok(prepared) => {
+                        let note = prepared.note;
+                        prepared_parts.push(tinychannels_bus::OutboundContentPart::Voice {
+                            voice: tinychannels_bus::OutboundVoice::Media {
+                                media: note.media,
+                                audio_base64: None,
+                                codec: note.codec,
+                                duration_ms: note.duration_ms,
+                            },
+                        });
+                        if let Some(url) = prepared.accessible_url.filter(|url| !url.trim().is_empty()) {
+                            prepared_text.push_str("\n");
+                            prepared_text.push_str(&url);
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(channel = %sender.channel, "shared voice preparation unavailable: {error}");
+                        if prepared_text.trim().is_empty() { prepared_text = spoken_text; }
+                    }
+                }
+            } else if prepared_text.trim().is_empty() {
+                prepared_text = spoken_text;
+            }
+        }
+    }
     let idempotency_key = context.map(|context| {
         let scope = serde_json::to_vec(&(
             &context.turn_id,
@@ -359,8 +433,8 @@ async fn send_typed_part(
                 sequence: context.map(|_| sequence),
                 segment_index: context.map(|_| segment_index),
                 idempotency_key,
-                parts: parts.to_vec(),
-                text: text.into(),
+                parts: prepared_parts,
+                text: prepared_text,
             },
         )))
         .await
@@ -954,6 +1028,8 @@ async fn run(
             Arc::new(Sender {
                 host,
                 context: Some(context.clone()),
+                capabilities: capabilities.clone(),
+                channel: channel.clone(),
                 send_sequence: std::sync::atomic::AtomicU64::new(0),
             }),
             channel,
@@ -965,6 +1041,8 @@ async fn run(
             Arc::new(Sender {
                 host,
                 context: None,
+                capabilities: capabilities.clone(),
+                channel: channel.clone(),
                 send_sequence: std::sync::atomic::AtomicU64::new(0),
             }),
             channel,

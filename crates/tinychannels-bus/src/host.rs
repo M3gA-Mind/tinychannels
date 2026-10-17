@@ -149,10 +149,6 @@ pub struct HostVoiceReplyPolicy {
     pub mode: HostVoiceReplyMode,
     pub inbound_has_voice: bool,
     pub explicitly_requested: bool,
-    pub accepted_codecs: Vec<String>,
-    pub max_size_bytes: Option<u64>,
-    pub max_duration_ms: Option<u64>,
-    pub normalized_waveform: bool,
 }
 
 /// Host reply-policy callback name.
