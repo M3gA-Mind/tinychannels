@@ -191,6 +191,9 @@ pub struct ChannelOutboundMessage {
     pub conversation_ref: Option<ConversationRef>,
     pub reply_to_id: Option<String>,
     pub thread_id: Option<String>,
+    /// Originating scoped host turn; distinct from the per-send idempotency key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
     pub idempotency_key: String,
     pub parts: Vec<OutboundContentPart>,
 }

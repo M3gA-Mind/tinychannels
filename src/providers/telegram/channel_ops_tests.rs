@@ -129,7 +129,8 @@ async fn telegram_resolves_and_uploads_voice_larger_than_inline_intent_limit() {
         }),
         reply_to_id: Some("42".into()),
         thread_id: None,
-        idempotency_key: "large-voice-turn".into(),
+        turn_id: Some("large-voice-origin-turn".into()),
+        idempotency_key: "send-idempotency-hash".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Voice {
             voice: tinychannels_bus::OutboundVoice::Media {
                 media: tinychannels_bus::MediaReference {
@@ -182,6 +183,7 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
         }),
         reply_to_id: Some("42".into()),
         thread_id: None,
+        turn_id: None,
         idempotency_key: "turn-7".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Voice {
             voice: tinychannels_bus::OutboundVoice::Media {
@@ -237,6 +239,7 @@ async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() 
         }),
         reply_to_id: Some("42".into()),
         thread_id: None,
+        turn_id: None,
         idempotency_key: "turn-7".into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Voice {
             voice: tinychannels_bus::OutboundVoice::Media {
@@ -371,6 +374,7 @@ fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessag
         }),
         reply_to_id: Some("5".into()),
         thread_id: None,
+        turn_id: None,
         idempotency_key: id.into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Text {
