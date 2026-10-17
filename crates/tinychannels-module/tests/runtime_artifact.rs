@@ -39,7 +39,8 @@ enum PreviousControlResult {
 #[derive(Clone, Default)]
 struct Callback {
     sends: Arc<std::sync::atomic::AtomicUsize>,
-    output_events: Arc<std::sync::Mutex<Vec<tinychannels_bus::module_progressive::ChannelOutputEvent>>>,
+    output_events:
+        Arc<std::sync::Mutex<Vec<tinychannels_bus::module_progressive::ChannelOutputEvent>>>,
 }
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
@@ -217,23 +218,26 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             methods::EXECUTE_PROGRESSIVE,
             ProgressiveCommand::FeedOutput {
                 handle: handle.clone(),
-                events: vec![ChannelOutputEvent::TextDelta {
-                    text: "artifact draft".into(),
-                    iteration: Some(1),
-                }, ChannelOutputEvent::ToolCallCompleted {
-                    call_id: "artifact-call".into(),
-                    tool_name: "lookup".into(),
-                    success: true,
-                    output_chars: 5,
-                    output: "found".into(),
-                    arguments: Some(serde_json::json!({"query": "artifact"})),
-                    elapsed_ms: 4,
-                    iteration: 1,
-                    failure: None,
-                    display_label: Some("Lookup".into()),
-                    display_detail: None,
-                    structured: Some(serde_json::json!({"kind": "lookup", "count": 1})),
-                }],
+                events: vec![
+                    ChannelOutputEvent::TextDelta {
+                        text: "artifact draft".into(),
+                        iteration: Some(1),
+                    },
+                    ChannelOutputEvent::ToolCallCompleted {
+                        call_id: "artifact-call".into(),
+                        tool_name: "lookup".into(),
+                        success: true,
+                        output_chars: 5,
+                        output: "found".into(),
+                        arguments: Some(serde_json::json!({"query": "artifact"})),
+                        elapsed_ms: 4,
+                        iteration: 1,
+                        failure: None,
+                        display_label: Some("Lookup".into()),
+                        display_detail: None,
+                        structured: Some(serde_json::json!({"kind": "lookup", "count": 1})),
+                    },
+                ],
             },
         )
         .await
@@ -254,9 +258,11 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     }
     assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 1);
     let output_events = callback.output_events.lock().unwrap();
-    assert!(matches!(output_events.get(1), Some(ChannelOutputEvent::ToolCallCompleted {
+    assert!(
+        matches!(output_events.get(1), Some(ChannelOutputEvent::ToolCallCompleted {
         call_id, arguments: Some(arguments), structured: Some(structured), ..
-    }) if call_id == "artifact-call" && arguments["query"] == "artifact" && structured["count"] == 1));
+    }) if call_id == "artifact-call" && arguments["query"] == "artifact" && structured["count"] == 1)
+    );
     use tinychannels_bus::module_remote::{RemoteOperation, RemoteOperationResult, RemoteRoute};
     let remote_workspace = tempfile::tempdir().unwrap();
     use tinychannels_bus::module_control::{ChannelControlRequest, ChannelControlResult};
