@@ -5,6 +5,7 @@ use tinychannels_bus::{
     MediaUploadBegin, MediaUploadChunk, MediaUploadFinish, MediaUploadHandle, MediaUploadResult,
 };
 use tokio::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
@@ -22,11 +23,11 @@ const TERMINAL_CAPACITY: usize = 128;
 
 struct Upload {
     request: MediaUploadBegin,
-    activation: usize,
+    activation: String,
     expires: Instant,
     chunks: Vec<Option<Vec<u8>>>,
     next_sequence: usize,
-    finalizing: bool,
+    finalizing: std::sync::Arc<AtomicBool>,
     changed: std::sync::Arc<Notify>,
 }
 
@@ -38,7 +39,7 @@ enum Terminal {
 struct TerminalEntry {
     value: Terminal,
     instance: String,
-    activation: usize,
+    activation: String,
     expires: Instant,
 }
 
@@ -55,11 +56,26 @@ pub(crate) struct MediaUploads {
     state: Mutex<State>,
 }
 
+struct FinalizeGuard {
+    flag: std::sync::Arc<AtomicBool>,
+    changed: std::sync::Arc<Notify>,
+    complete: bool,
+}
+
+impl Drop for FinalizeGuard {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.flag.store(false, Ordering::SeqCst);
+            self.changed.notify_waiters();
+        }
+    }
+}
+
 impl MediaUploads {
     pub(crate) async fn binding_handle(
         &self,
         handle: &MediaUploadHandle,
-    ) -> Result<(String, usize)> {
+    ) -> Result<(String, String)> {
         let mut state = self.state.lock().await;
         Self::prune(&mut state);
         state
@@ -69,7 +85,7 @@ impl MediaUploads {
             .ok_or_else(|| Error::failed("media upload is unknown or expired"))
     }
 
-    pub(crate) async fn binding(&self, request: &MediaUploadFinish) -> Result<(String, usize)> {
+    pub(crate) async fn binding(&self, request: &MediaUploadFinish) -> Result<(String, String)> {
         let mut state = self.state.lock().await;
         Self::prune(&mut state);
         state
@@ -88,7 +104,7 @@ impl MediaUploads {
     pub(crate) async fn begin(
         &self,
         request: MediaUploadBegin,
-        activation: usize,
+        activation: String,
     ) -> Result<MediaUploadHandle> {
         let max = tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES;
         if request.instance.trim().is_empty()
@@ -112,7 +128,7 @@ impl MediaUploads {
         }
         let mut state = self.state.lock().await;
         state.uploads.retain(|_, upload| {
-            upload.finalizing
+            upload.finalizing.load(Ordering::SeqCst)
                 || upload.request.instance != request.instance
                 || upload.activation == activation
         });
@@ -186,7 +202,7 @@ impl MediaUploads {
     pub(crate) async fn finish<P: MediaPersistence>(
         &self,
         request: MediaUploadFinish,
-        activation: usize,
+        activation: String,
         repository: &P,
     ) -> Result<MediaUploadResult> {
         let mut state = self.state.lock().await;
@@ -206,7 +222,7 @@ impl MediaUploads {
         if upload.activation != activation {
             return Err(Error::failed("media upload belongs to another provider activation"));
         }
-        if upload.finalizing {
+        if upload.finalizing.load(Ordering::SeqCst) {
             let changed = upload.changed.clone();
             let notified = changed.notified();
             tokio::pin!(notified);
@@ -222,7 +238,14 @@ impl MediaUploads {
         if upload.next_sequence != upload.chunks.len() {
             return Err(Error::failed("media upload is incomplete"));
         }
-        upload.finalizing = true;
+        upload.finalizing.store(true, Ordering::SeqCst);
+        let changed = upload.changed.clone();
+        let flag = upload.finalizing.clone();
+        let mut finalize_guard = FinalizeGuard {
+            flag,
+            changed: changed.clone(),
+            complete: false,
+        };
         let instance = upload.request.instance.clone();
         let activation = upload.activation;
         let request_metadata = upload.request.clone();
@@ -230,8 +253,7 @@ impl MediaUploads {
         let bytes: Vec<u8> = chunks.into_iter().flatten().collect();
         if bytes.len() != request_metadata.byte_count {
             if let Some(upload) = state.uploads.get_mut(&request.0.0) {
-                upload.finalizing = false;
-                upload.changed.notify_waiters();
+                upload.finalizing.store(false, Ordering::SeqCst);
             }
             return Err(Error::failed("media upload byte count does not match"));
         }
@@ -257,15 +279,15 @@ impl MediaUploads {
         let Some(upload) = state.uploads.remove(&request.0.0) else {
             return Err(Error::failed("media upload is no longer active"));
         };
-        let changed = upload.changed.clone();
         let media = match media {
             Ok(media) => media,
             Err(error) => {
                 let mut upload = upload;
-                upload.finalizing = false;
+                upload.finalizing.store(false, Ordering::SeqCst);
                 upload.expires = Instant::now() + UPLOAD_LIFETIME;
-                upload.changed.notify_waiters();
                 state.uploads.insert(request.0.0, upload);
+                finalize_guard.complete = true;
+                changed.notify_waiters();
                 return Err(error);
             }
         };
@@ -279,6 +301,7 @@ impl MediaUploads {
             },
         );
         Self::trim_terminal(&mut state);
+        finalize_guard.complete = true;
         changed.notify_waiters();
         Ok(media)
     }
@@ -295,7 +318,7 @@ impl MediaUploads {
         let Some(upload) = state.uploads.get(&request.0.0) else {
             return Err(Error::failed("media upload is unknown or expired"));
         };
-        if upload.finalizing {
+        if upload.finalizing.load(Ordering::SeqCst) {
             return Err(Error::failed("media upload is already finalizing"));
         }
         let upload = state.uploads.remove(&request.0.0).expect("checked above");
@@ -316,7 +339,9 @@ impl MediaUploads {
         let now = Instant::now();
         state
             .uploads
-            .retain(|_, upload| upload.finalizing || upload.expires > now);
+            .retain(|_, upload| {
+                upload.finalizing.load(Ordering::SeqCst) || upload.expires > now
+            });
         state.terminal.retain(|_, entry| entry.expires > now);
     }
 
