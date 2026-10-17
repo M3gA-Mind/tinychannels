@@ -7,6 +7,10 @@ use serde_json::Value;
 /// progressive delivery. Fields are transport DTOs; the host owns policy for
 /// selecting which payloads may be shown to a recipient.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "canonical wire events retain complete typed payloads without boxing"
+)]
 #[serde(
     tag = "type",
     rename_all = "snake_case",
@@ -205,7 +209,7 @@ pub enum ProgressiveEvent {
 
 /// Compatibility name retained while module callers migrate to the shared
 /// output DTO. New producers should send `ChannelOutputEvent` values.
-
+///
 /// A handle belongs to the private runtime that opened it.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", rename_all = "snake_case")]
@@ -240,6 +244,10 @@ pub enum ProgressiveCommand {
 
 /// Completion of one bounded command.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "wire results preserve complete provider receipts without boxing"
+)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum ProgressiveResult {
     Opened {
@@ -277,6 +285,10 @@ pub enum ProgressiveOutputFailure {
 
 /// The host supplies its managed REST transport and captured credential.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "transport requests preserve ordered canonical payloads as wire DTOs"
+)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum ProgressiveTransportRequest {
     /// Ordered, host-authorized projection of one canonical turn event.
@@ -359,6 +371,10 @@ pub enum ProgressiveTransportRequest {
 
 /// Typed transport facts preserve the module's existing recovery rules.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "transport results preserve typed provider receipt facts as wire DTOs"
+)]
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ProgressiveTransportResult {
     /// Observation callback accepted the event; this does not acknowledge a
