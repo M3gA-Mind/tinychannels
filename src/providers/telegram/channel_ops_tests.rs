@@ -37,6 +37,7 @@ struct TelegramWireFixture {
     adapter: tinychannels_runtime::adapters::LocalChannelAdapter,
     server: MockServer,
     observations: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
+    request_cursor: std::sync::Mutex<usize>,
     scope: tinychannels_conformance::ExpectedScope,
 }
 
@@ -94,7 +95,11 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             ..Default::default()
         };
         let result = self.adapter.send(intent).await;
-        let requests = self.server.received_requests().await.unwrap_or_default();
+        let mut requests = self.server.received_requests().await.unwrap_or_default();
+        let mut cursor = self.request_cursor.lock().unwrap();
+        let request_end = requests.len();
+        requests = requests.drain(*cursor..).collect();
+        *cursor = request_end;
         for request in requests
             .into_iter()
             .filter(|request| request.url.path().ends_with("/sendMessage"))
@@ -838,6 +843,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         adapter,
         server,
         observations: std::sync::Mutex::new(Vec::new()),
+        request_cursor: std::sync::Mutex::new(0),
         scope,
     };
     check_feature(&fixture, ConformanceFeature::Text)
