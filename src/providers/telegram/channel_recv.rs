@@ -162,9 +162,19 @@ impl TelegramChannel {
             },
             turn_id: message.id.clone(),
         };
+        let downloaded_file_name = downloaded.file_name;
+        let typed_mime_hint = mime_hint
+            .as_deref()
+            .filter(|mime| !mime.eq_ignore_ascii_case("application/octet-stream"));
         let hint = file_name
             .as_deref()
             .and_then(super::attachments::infer_attachment_mime)
+            .or(typed_mime_hint)
+            .or_else(|| {
+                downloaded_file_name
+                    .as_deref()
+                    .and_then(super::attachments::infer_attachment_mime)
+            })
             .or(mime_hint.as_deref())
             .or(downloaded.content_type.as_deref())
             .unwrap_or("");
@@ -181,7 +191,7 @@ impl TelegramChannel {
                     scope,
                     kind,
                     content_type: hint.to_owned(),
-                    file_name: file_name.clone().or(downloaded.file_name),
+                    file_name: file_name.clone().or(downloaded_file_name),
                     duration_ms,
                     codec: None,
                     voice_direction: None,
