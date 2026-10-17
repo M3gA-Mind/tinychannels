@@ -1,8 +1,6 @@
 //! Adapter traits for direct providers, relay connectors, and host bridges.
 
-use crate::channel::{
-    ChannelDescriptor, ChannelOutboundIntent, ChannelSendError, MessageReceipt,
-};
+use crate::channel::{ChannelDescriptor, ChannelOutboundIntent, ChannelSendError, MessageReceipt};
 use crate::controllers::ChannelAccountSnapshot;
 use async_trait::async_trait;
 use serde_json::Value;

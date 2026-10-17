@@ -53,7 +53,13 @@ impl ConformanceFeature {
     ];
 
     fn declared(self, capabilities: &ChannelCapabilities) -> bool {
-        let action = |name: &str| capabilities.actions.supported.iter().any(|value| value == name);
+        let action = |name: &str| {
+            capabilities
+                .actions
+                .supported
+                .iter()
+                .any(|value| value == name)
+        };
         match self {
             Self::Text => capabilities.content.text.outbound,
             Self::Image => capabilities.content.image.outbound,
@@ -68,7 +74,11 @@ impl ConformanceFeature {
             Self::Reactions => capabilities.reactions,
             Self::Edit => action("edit"),
             Self::Delete => action("delete") || action("unsend"),
-            Self::ReadReceipts => capabilities.events.supported.iter().any(|event| event == "read_receipt"),
+            Self::ReadReceipts => capabilities
+                .events
+                .supported
+                .iter()
+                .any(|event| event == "read_receipt"),
             Self::StreamingDraft => capabilities.progressive_edits && action("draft-update"),
         }
     }
@@ -123,13 +133,16 @@ pub async fn check_feature(
     if !declared {
         let explicitly_unsupported = match &result {
             Err(error) => error.kind == SendErrorKind::BadFormat && !error.retryable,
-            Ok(Some(outcome)) => outcome.error.as_ref().is_some_and(|error| {
-                error.kind == SendErrorKind::BadFormat && !error.retryable
-            }),
+            Ok(Some(outcome)) => outcome
+                .error
+                .as_ref()
+                .is_some_and(|error| error.kind == SendErrorKind::BadFormat && !error.retryable),
             Ok(None) => false,
         };
         if !explicitly_unsupported {
-            return Err(format!("undeclared {feature:?} did not return an explicit unsupported result"));
+            return Err(format!(
+                "undeclared {feature:?} did not return an explicit unsupported result"
+            ));
         }
         if !observations.is_empty() {
             return Err(format!("undeclared {feature:?} reached the mock platform"));
@@ -137,8 +150,12 @@ pub async fn check_feature(
         return Ok(());
     }
 
-    let outcome = result.map_err(|error| format!("declared {feature:?} failed: {}", error.message))?;
-    if outcome.as_ref().is_some_and(|result| result.error.is_some()) {
+    let outcome =
+        result.map_err(|error| format!("declared {feature:?} failed: {}", error.message))?;
+    if outcome
+        .as_ref()
+        .is_some_and(|result| result.error.is_some())
+    {
         return Err(format!("declared {feature:?} returned a provider error"));
     }
     let expected = fixture.expected_scope(feature);
@@ -148,7 +165,9 @@ pub async fn check_feature(
             && observation.conversation == expected.conversation
     });
     let Some(observation) = matching else {
-        return Err(format!("declared {feature:?} produced no matching wire observation"));
+        return Err(format!(
+            "declared {feature:?} produced no matching wire observation"
+        ));
     };
     let Some(outcome) = outcome else {
         return Err(format!("declared {feature:?} returned no receipt"));
@@ -159,16 +178,25 @@ pub async fn check_feature(
         || receipt.platform_message_ids.is_empty()
         || receipt.parts.is_empty()
     {
-        return Err(format!("declared {feature:?} returned an incomplete or mis-scoped receipt"));
+        return Err(format!(
+            "declared {feature:?} returned an incomplete or mis-scoped receipt"
+        ));
     }
     let expected_payload = feature.payload_kind();
     if let Some(expected_payload) = expected_payload
-        && !observation.payload_kinds.iter().any(|kind| kind == expected_payload)
+        && !observation
+            .payload_kinds
+            .iter()
+            .any(|kind| kind == expected_payload)
     {
-        return Err(format!("{feature:?} wire payload omitted {expected_payload}"));
+        return Err(format!(
+            "{feature:?} wire payload omitted {expected_payload}"
+        ));
     }
     if observation.platform_message_ids != receipt.platform_message_ids {
-        return Err(format!("{feature:?} receipt IDs differ from the mock response"));
+        return Err(format!(
+            "{feature:?} receipt IDs differ from the mock response"
+        ));
     }
     Ok(())
 }
@@ -188,7 +216,9 @@ impl ConformanceFeature {
 }
 
 /// Run the entire shared feature matrix against a provider fixture.
-pub async fn check_all_features(fixture: &dyn AdapterFixture) -> Vec<(ConformanceFeature, Result<(), String>)> {
+pub async fn check_all_features(
+    fixture: &dyn AdapterFixture,
+) -> Vec<(ConformanceFeature, Result<(), String>)> {
     let mut results = Vec::with_capacity(ConformanceFeature::ALL.len());
     for feature in ConformanceFeature::ALL {
         results.push((feature, check_feature(fixture, feature).await));

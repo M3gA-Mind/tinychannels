@@ -4,10 +4,10 @@ use crate::channel::{
     ChannelAdapter, ChannelDescriptor, ChannelInboundSink, ChannelOutboundIntent, ChannelSendError,
     ChannelStaticCapabilities, MessageReceipt,
 };
-use tinychannels_bus::{OutboundPayload, SendErrorKind};
 use crate::controllers::{ChannelAccountSnapshot, ChannelAccountState};
 use async_trait::async_trait;
 use std::sync::Arc;
+use tinychannels_bus::{OutboundPayload, SendErrorKind};
 
 /// Host callback used by `LocalChannelAdapter` to perform delivery.
 #[async_trait]
@@ -76,13 +76,25 @@ impl ChannelAdapter for LocalChannelAdapter {
             OutboundPayload::Voice { .. } => self.capabilities.voice_out.supported,
             OutboundPayload::Files { .. } => self.capabilities.content.file.outbound,
             OutboundPayload::Parts { parts } => parts.iter().all(|part| match part {
-                tinychannels_bus::OutboundContentPart::Voice { .. } => self.capabilities.voice_out.supported,
+                tinychannels_bus::OutboundContentPart::Voice { .. } => {
+                    self.capabilities.voice_out.supported
+                }
                 tinychannels_bus::OutboundContentPart::Content { part } => match part {
-                    tinychannels_bus::ContentPart::Text { .. } => self.capabilities.content.text.outbound,
-                    tinychannels_bus::ContentPart::Image { .. } => self.capabilities.content.image.outbound,
-                    tinychannels_bus::ContentPart::Video { .. } => self.capabilities.content.video.outbound,
-                    tinychannels_bus::ContentPart::Audio { .. } => self.capabilities.content.audio.outbound,
-                    tinychannels_bus::ContentPart::File { .. } => self.capabilities.content.file.outbound,
+                    tinychannels_bus::ContentPart::Text { .. } => {
+                        self.capabilities.content.text.outbound
+                    }
+                    tinychannels_bus::ContentPart::Image { .. } => {
+                        self.capabilities.content.image.outbound
+                    }
+                    tinychannels_bus::ContentPart::Video { .. } => {
+                        self.capabilities.content.video.outbound
+                    }
+                    tinychannels_bus::ContentPart::Audio { .. } => {
+                        self.capabilities.content.audio.outbound
+                    }
+                    tinychannels_bus::ContentPart::File { .. } => {
+                        self.capabilities.content.file.outbound
+                    }
                     _ => false,
                 },
             }),

@@ -6,6 +6,127 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+struct TelegramConformanceSink(Arc<TelegramChannel>);
+
+#[async_trait::async_trait]
+impl tinychannels_runtime::adapters::LocalOutboundSink for TelegramConformanceSink {
+    async fn send(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<tinychannels_bus::MessageReceipt, tinychannels_bus::ChannelSendError> {
+        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+        let outcome = self
+            .0
+            .send_typed_with_receipt(&message)
+            .await
+            .map_err(|error| tinychannels_bus::ChannelSendError {
+                kind: tinychannels_bus::SendErrorKind::Unknown,
+                message: error.to_string(),
+                ..Default::default()
+            })?;
+        if let Some(error) = outcome.error {
+            return Err(error);
+        }
+        Ok(outcome.receipt)
+    }
+}
+
+struct TelegramWireFixture {
+    adapter: tinychannels_runtime::adapters::LocalChannelAdapter,
+    server: MockServer,
+    observations: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
+    scope: tinychannels_conformance::ExpectedScope,
+}
+
+#[async_trait::async_trait]
+impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
+    fn adapter(&self) -> &dyn tinychannels_runtime::channel::ChannelAdapter {
+        &self.adapter
+    }
+
+    fn expected_scope(
+        &self,
+        _feature: tinychannels_conformance::ConformanceFeature,
+    ) -> tinychannels_conformance::ExpectedScope {
+        self.scope.clone()
+    }
+
+    fn clear_observations(&self) {
+        self.observations.lock().unwrap().clear();
+    }
+
+    fn observations(&self) -> Vec<tinychannels_conformance::WireObservation> {
+        self.observations.lock().unwrap().clone()
+    }
+
+    async fn exercise(
+        &self,
+        feature: tinychannels_conformance::ConformanceFeature,
+    ) -> Result<Option<tinychannels_bus::ChannelSendOutcome>, tinychannels_bus::ChannelSendError>
+    {
+        use tinychannels_conformance::ConformanceFeature as Feature;
+        let payload = match feature {
+            Feature::Text => tinychannels_bus::OutboundPayload::Text {
+                text: "hello-kit".into(),
+            },
+            Feature::Image => tinychannels_bus::OutboundPayload::Media {
+                text: None,
+                media_urls: vec!["https://example.invalid/image.png".into()],
+            },
+            _ => {
+                return Err(tinychannels_bus::ChannelSendError {
+                    kind: tinychannels_bus::SendErrorKind::BadFormat,
+                    message: "fixture does not implement this operation".into(),
+                    ..Default::default()
+                });
+            }
+        };
+        let intent = tinychannels_bus::ChannelOutboundIntent {
+            idempotency_key: "kit-op".into(),
+            channel_id: "telegram".into(),
+            conversation_id: "100".into(),
+            channel_ref: Some(self.scope.channel.clone()),
+            conversation_ref: Some(self.scope.conversation.clone()),
+            payload,
+            ..Default::default()
+        };
+        let result = self.adapter.send(intent).await;
+        let requests = self.server.received_requests().await.unwrap_or_default();
+        for request in requests
+            .into_iter()
+            .filter(|request| request.url.path().ends_with("/sendMessage"))
+        {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
+            let chat = body
+                .get("chat_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default();
+            let conversation = tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: chat.to_owned(),
+                ..Default::default()
+            };
+            let payload_kinds = if body.get("text").is_some() {
+                vec!["text".into()]
+            } else {
+                vec![]
+            };
+            self.observations
+                .lock()
+                .unwrap()
+                .push(tinychannels_conformance::WireObservation {
+                    feature,
+                    channel: self.scope.channel.clone(),
+                    conversation,
+                    payload_kinds,
+                    platform_message_ids: vec!["321".into()],
+                    request: body,
+                });
+        }
+        result.map(Some)
+    }
+}
+
 struct VoiceReadFixture;
 struct LargeVoiceReadFixture {
     expected_scope: tinychannels_bus::HostVoiceScope,
@@ -662,6 +783,59 @@ async fn typed_send_receipt_uses_actual_telegram_ids_and_full_address() {
         Some("topic")
     );
     assert_eq!(outcome.receipt.parts[0].reply_to_id.as_deref(), Some("5"));
+}
+
+#[tokio::test]
+async fn configured_telegram_adapter_passes_mock_wire_conformance() {
+    use tinychannels_conformance::{ConformanceFeature, ExpectedScope, check_feature};
+
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 321 })),
+    )
+    .await;
+    let channel = Arc::new(channel_for(&server, &["*"]));
+    let scope = ExpectedScope {
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:test-account".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            ..Default::default()
+        },
+    };
+    let adapter = tinychannels_runtime::adapters::LocalChannelAdapter::new(
+        tinychannels_bus::ChannelDescriptor {
+            id: scope.channel.id.clone(),
+            display_name: "Telegram test account".into(),
+            account_id: scope.channel.account_id.clone(),
+            ..Default::default()
+        },
+        channel.capabilities(),
+        Arc::new(TelegramConformanceSink(channel)),
+    );
+    let fixture = TelegramWireFixture {
+        adapter,
+        server,
+        observations: std::sync::Mutex::new(Vec::new()),
+        scope,
+    };
+    check_feature(&fixture, ConformanceFeature::Text)
+        .await
+        .unwrap();
+    let observation = fixture.observations().pop().unwrap();
+    assert_eq!(observation.request["chat_id"], "100");
+    assert_eq!(observation.request["text"], "hello-kit");
+    assert_eq!(observation.platform_message_ids, ["321"]);
+
+    check_feature(&fixture, ConformanceFeature::Image)
+        .await
+        .unwrap();
+    assert!(fixture.observations().is_empty());
 }
 
 #[tokio::test]

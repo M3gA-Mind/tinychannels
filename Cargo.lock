@@ -2769,6 +2769,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tinychannels-bus",
+ "tinychannels-conformance",
  "tinychannels-runtime",
  "tinystoragedrivers-core",
  "tokio",

@@ -1,7 +1,7 @@
 use crate::adapters::{LocalChannelAdapter, LocalOutboundSink};
 use crate::channel::{
-    ChannelAdapter, ChannelDescriptor, ChannelInboundSink,
-    ChannelOutboundIntent, ChannelSendError, DeliveryDurability, MessageReceipt, OutboundPayload,
+    ChannelAdapter, ChannelDescriptor, ChannelInboundSink, ChannelOutboundIntent, ChannelSendError,
+    DeliveryDurability, MessageReceipt, OutboundPayload,
 };
 use async_trait::async_trait;
 use std::sync::{Arc, Mutex};
@@ -34,7 +34,10 @@ struct NoopInboundSink;
 
 #[async_trait]
 impl ChannelInboundSink for NoopInboundSink {
-    async fn push(&self, _ingress: tinychannels_bus::ChannelIngress) -> Result<(), ChannelSendError> {
+    async fn push(
+        &self,
+        _ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), ChannelSendError> {
         Ok(())
     }
 }
