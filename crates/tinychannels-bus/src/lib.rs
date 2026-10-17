@@ -42,6 +42,7 @@ pub mod storage;
 )]
 pub mod traits;
 pub mod version;
+pub mod web;
 pub use capabilities::{
     AccountCapabilities, ActionCapabilities, AddressingCapabilities,
     ButtonPresentationCapabilities, ChannelCapabilities, ContentCapabilities, ContentCapability,
@@ -86,6 +87,12 @@ pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH,
 )]
 pub use traits::{Channel, ChannelIngress, ChannelMessage, ChannelSendExt, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};
+pub use web::{
+    ChatRequestMetadata, QueueMode, WebChannelEvent, WebEventContext, WebEventPayload,
+    WebGuardrailPayload, WebGuardrailReason, WebQueueItemPayload, WebSubagentProgressDetail,
+    WebSubagentUsagePayload, WebTurnTimingPayload, WebTurnUsagePayload, legacy_event_alias,
+    web_event_schema_json,
+};
 
 #[cfg(test)]
 #[path = "wire_tests.rs"]
