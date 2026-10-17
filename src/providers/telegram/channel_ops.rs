@@ -54,15 +54,28 @@ fn presentation_text(value: &serde_json::Value) -> anyhow::Result<String> {
         match value {
             serde_json::Value::String(text) if !text.trim().is_empty() => out.push(text.clone()),
             serde_json::Value::Array(items) => {
-                for item in items { collect(item, out)?; }
+                for item in items {
+                    collect(item, out)?;
+                }
             }
             serde_json::Value::Object(object) => {
-                const ALLOWED: &[&str] = &["type", "text", "title", "heading", "caption", "description"];
+                const ALLOWED: &[&str] =
+                    &["type", "text", "title", "heading", "caption", "description"];
                 if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
                     anyhow::bail!("Telegram presentation block contains unsupported fields");
                 }
                 if let Some(kind) = object.get("type").and_then(serde_json::Value::as_str)
-                    && !matches!(kind, "text" | "paragraph" | "heading" | "title" | "caption" | "quote" | "bullet" | "list_item")
+                    && !matches!(
+                        kind,
+                        "text"
+                            | "paragraph"
+                            | "heading"
+                            | "title"
+                            | "caption"
+                            | "quote"
+                            | "bullet"
+                            | "list_item"
+                    )
                 {
                     anyhow::bail!("Telegram presentation block type is unsupported");
                 }
@@ -449,9 +462,15 @@ impl TelegramChannel {
                     anyhow::bail!("Telegram place requires both a title and address");
                 }
                 if label.is_some() && (accuracy_meters.is_some() || live_until_unix_ms.is_some()) {
-                    anyhow::bail!("Telegram venue cannot also be a live or accuracy-scoped location");
+                    anyhow::bail!(
+                        "Telegram venue cannot also be a live or accuracy-scoped location"
+                    );
                 }
-                method = if label.is_some() { "sendVenue" } else { "sendLocation" };
+                method = if label.is_some() {
+                    "sendVenue"
+                } else {
+                    "sendLocation"
+                };
                 body["latitude"] = serde_json::json!(latitude);
                 body["longitude"] = serde_json::json!(longitude);
                 if let (Some(title), Some(address)) = (label, address) {

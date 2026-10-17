@@ -1012,7 +1012,13 @@ fn typed_parts(
 async fn native_location_contact_buttons_poll_and_presentation_use_bot_api_methods() {
     use tinychannels_bus::channel::{ButtonAction, ContactMethod, ContentPart};
     let server = mock_api().await;
-    for method_name in ["sendLocation", "sendContact", "sendMessage", "sendPoll"] {
+    for method_name in [
+        "sendLocation",
+        "sendVenue",
+        "sendContact",
+        "sendMessage",
+        "sendPoll",
+    ] {
         mount_post(
             &server,
             method_name,
@@ -1028,7 +1034,7 @@ async fn native_location_contact_buttons_poll_and_presentation_use_bot_api_metho
             part: ContentPart::Location {
                 latitude: 29.3,
                 longitude: 47.9,
-                label: Some("Office".into()),
+                label: None,
                 address: None,
                 accuracy_meters: Some(15.0),
                 live_until_unix_ms: None,
@@ -1047,6 +1053,26 @@ async fn native_location_contact_buttons_poll_and_presentation_use_bot_api_metho
     assert_eq!(body["longitude"], 47.9);
     assert_eq!(body["message_thread_id"], "77");
     assert_eq!(body["reply_parameters"]["message_id"], 12);
+
+    let venue = typed_parts(
+        "venue",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Location {
+                latitude: 29.3,
+                longitude: 47.9,
+                label: Some("Office".into()),
+                address: Some("Main Street".into()),
+                accuracy_meters: None,
+                live_until_unix_ms: None,
+            },
+        }],
+    );
+    crate::channel::ChannelTypedSend::send_typed(&channel, &venue)
+        .await
+        .unwrap();
+    let body = json_bodies(&server, "sendVenue").await.remove(0);
+    assert_eq!(body["title"], "Office");
+    assert_eq!(body["address"], "Main Street");
 
     let contact = typed_parts(
         "contact",
@@ -1145,7 +1171,7 @@ async fn native_location_contact_buttons_poll_and_presentation_use_bot_api_metho
         .await
         .unwrap();
     let body = json_bodies(&server, "sendMessage").await.remove(0);
-    assert_eq!(body["text"], "Status\nUpdate");
+    assert_eq!(body["text"], "Update\nStatus");
     assert_eq!(body["parse_mode"], "MarkdownV2");
 }
 
