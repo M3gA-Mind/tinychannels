@@ -298,7 +298,7 @@ pub(crate) fn configured_media_account_scope(
         }
         "webhook" => {
             let c = config.webhook.as_ref()?;
-            vec![c.port.to_string().leak(), c.secret.as_deref().unwrap_or("")]
+            vec![c.secret.as_deref().unwrap_or("")]
         }
         "matrix" => {
             let c = config.matrix.as_ref()?;
@@ -378,7 +378,24 @@ pub(crate) struct ModuleMediaRepository(
     Option<String>,
 );
 
+fn bind_configured_media_scope(
+    scope: &mut tinychannels_bus::HostVoiceScope,
+    instance: &str,
+    media_account_scope: Option<&str>,
+) -> anyhow::Result<()> {
+    let account_scope = media_account_scope
+        .ok_or_else(|| anyhow::anyhow!("configured account has no stable media identity"))?;
+    scope.configured_instance = instance.to_owned();
+    scope.channel.id = tinychannels_bus::provider_id(instance).to_owned();
+    scope.channel.account_id = Some(account_scope.to_owned());
+    Ok(())
+}
+
 impl ModuleMediaRepository {
+    fn bind_scope(&self, scope: &mut tinychannels::host::MediaScope) -> anyhow::Result<()> {
+        bind_configured_media_scope(scope, &self.1, self.2.as_deref())
+    }
+
     async fn scoped_store(&self) -> anyhow::Result<tinychannels::host::ScopedMediaStore> {
         let storage = self.0.storage().await.map_err(|error| {
             anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind())
@@ -412,9 +429,7 @@ impl tinychannels::host::MediaRepository for ModuleMediaRepository {
         if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
             anyhow::bail!("media storage requires a conversation and turn identity");
         }
-        scope.configured_instance.clone_from(&self.1);
-        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        scope.channel.account_id = Some(self.1.clone());
+        self.bind_scope(scope)?;
         self.scoped_store().await?.store(request).await
     }
 
@@ -427,9 +442,7 @@ impl tinychannels::host::MediaRepository for ModuleMediaRepository {
         if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
             anyhow::bail!("media resolution requires a conversation and turn identity");
         }
-        scope.configured_instance.clone_from(&self.1);
-        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        scope.channel.account_id = Some(self.1.clone());
+        self.bind_scope(&mut scope)?;
         self.scoped_store()
             .await?
             .read(scope, &opaque_id, max_bytes)
@@ -449,7 +462,7 @@ impl tinychannels::host::AllowlistStore for ModuleAllowlist {
     }
 }
 
-struct ModuleTranscriber(HostChannels, String);
+struct ModuleTranscriber(HostChannels, String, Option<String>);
 
 #[async_trait::async_trait]
 impl tinychannels::host::Transcriber for ModuleTranscriber {
@@ -484,9 +497,7 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
         request: tinychannels::host::TranscriptionRequest,
     ) -> anyhow::Result<tinychannels::host::TranscriptionResult> {
         validate_voice_scope(&scope)?;
-        scope.configured_instance.clone_from(&self.1);
-        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        scope.channel.account_id = Some(self.1.clone());
+        bind_configured_media_scope(&mut scope, &self.1, self.2.as_deref())?;
         let result = self
             .0
             .transcribe_voice(tinychannels_bus::HostVoiceTranscriptionRequest {
@@ -506,7 +517,11 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
     }
 }
 
-pub(crate) struct ModuleSynthesizer(pub(crate) HostChannels, pub(crate) String);
+pub(crate) struct ModuleSynthesizer(
+    pub(crate) HostChannels,
+    pub(crate) String,
+    pub(crate) Option<String>,
+);
 
 #[async_trait::async_trait]
 impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
@@ -523,9 +538,7 @@ impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
         request: tinychannels::host::SpeechRequest,
     ) -> anyhow::Result<tinychannels::host::SpeechResult> {
         validate_voice_scope(&scope)?;
-        scope.configured_instance.clone_from(&self.1);
-        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        scope.channel.account_id = Some(self.1.clone());
+        bind_configured_media_scope(&mut scope, &self.1, self.2.as_deref())?;
         let result = self
             .0
             .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
@@ -545,7 +558,11 @@ impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
     }
 }
 
-pub(crate) struct ModuleVoiceMediaStore(pub(crate) HostChannels, pub(crate) String);
+pub(crate) struct ModuleVoiceMediaStore(
+    pub(crate) HostChannels,
+    pub(crate) String,
+    pub(crate) Option<String>,
+);
 
 #[async_trait::async_trait]
 impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
@@ -554,9 +571,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         mut request: tinychannels::host::VoiceMediaRequest,
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         validate_voice_scope(&request.scope)?;
-        request.scope.configured_instance.clone_from(&self.1);
-        request.scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        request.scope.channel.account_id = Some(self.1.clone());
+        bind_configured_media_scope(&mut request.scope, &self.1, self.2.as_deref())?;
         let projection_scope = request.scope.clone();
         use base64::Engine;
         let audio = base64::engine::general_purpose::STANDARD
@@ -637,9 +652,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         if opaque_id.trim().is_empty() {
             anyhow::bail!("voice media reference is empty");
         }
-        scope.configured_instance.clone_from(&self.1);
-        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
-        scope.channel.account_id = Some(self.1.clone());
+        bind_configured_media_scope(&mut scope, &self.1, self.2.as_deref())?;
         read_scoped_voice_media(&self.0, scope, opaque_id, 8 * 1024 * 1024).await
     }
 }
