@@ -30,6 +30,13 @@ pub use state::{
     StreamingState, TypingState, extract_message_id, extract_message_ids, latest_thinking_snippet,
 };
 
+/// Provider deliveries produced while consuming one canonical output batch.
+#[derive(Debug, Default)]
+pub struct ProgressiveOutputDispatch {
+    pub outcomes: Vec<tinychannels_bus::channel::ChannelSendOutcome>,
+    pub unsupported: Vec<tinychannels_bus::OutboundContentPart>,
+}
+
 /// Minimum interval between progressive edits of the outbound message. Stays
 /// comfortably below Telegram's ~1 edit/sec per-chat cap; Slack has a similar
 /// soft limit.

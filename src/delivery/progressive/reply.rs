@@ -92,6 +92,89 @@ impl ProgressiveReply {
             .await
     }
 
+    /// Apply one canonical progress event to this shared delivery engine.
+    /// Output observation is a separate call so its acknowledgement can never
+    /// be mistaken for a provider-send receipt.
+    pub async fn apply_output_event(
+        &mut self,
+        event: &tinychannels_bus::module_progressive::ChannelOutputEvent,
+        deliver_typed_content: bool,
+    ) -> Result<super::ProgressiveOutputDispatch, super::ProgressiveSendError> {
+        use tinychannels_bus::module_progressive::ChannelOutputEvent as Event;
+        let mut dispatch = super::ProgressiveOutputDispatch::default();
+        match event {
+            Event::TextDelta { text, .. } => self.on_text_delta(text),
+            Event::ThinkingDelta { text, .. } => self.on_thinking_delta(text),
+            Event::ToolProgress { label, message } => {
+                self.on_tool_result(message.as_deref().unwrap_or(label), true)
+            }
+            Event::ToolCallStarted {
+                tool_name,
+                display_label,
+                ..
+            } => self.on_tool_call(display_label.as_deref().unwrap_or(tool_name)),
+            Event::ToolCallProgress { call_id, message } => {
+                self.on_tool_result(&format!("{call_id}: {message}"), true)
+            }
+            Event::ToolCallCompleted {
+                tool_name,
+                success,
+                display_label,
+                ..
+            } => self.on_tool_result(display_label.as_deref().unwrap_or(tool_name), *success),
+            Event::Media { text, parts } if deliver_typed_content => {
+                let mut outbound = Vec::new();
+                if let Some(text) = text {
+                    outbound.push(tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Text {
+                            text: text.clone(),
+                            markdown_dialect: None,
+                        },
+                    });
+                }
+                outbound.extend(parts.iter().cloned().map(|part| {
+                    tinychannels_bus::OutboundContentPart::Content { part }
+                }));
+                match self.send_content_parts(&outbound, "").await {
+                    Ok(outcome) => dispatch.outcomes.push(outcome),
+                    Err(super::ProgressiveSendError::UnsupportedContent) => {
+                        dispatch.unsupported.extend(outbound)
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            Event::VoiceNote { text, voice } if deliver_typed_content => {
+                let mut outbound = Vec::new();
+                if let Some(text) = text.clone().or_else(|| {
+                    voice.transcript.as_ref().map(|transcript| transcript.text.clone())
+                }) {
+                    outbound.push(tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Text {
+                            text,
+                            markdown_dialect: None,
+                        },
+                    });
+                }
+                outbound.push(tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media {
+                        media: voice.media.clone(),
+                        codec: voice.codec.clone(),
+                        duration_ms: voice.duration_ms,
+                    },
+                });
+                match self.send_content_parts(&outbound, "").await {
+                    Ok(outcome) => dispatch.outcomes.push(outcome),
+                    Err(super::ProgressiveSendError::UnsupportedContent) => {
+                        dispatch.unsupported.extend(outbound)
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
+            _ => {}
+        }
+        Ok(dispatch)
+    }
+
     /// Current per-turn state (for logging and tests).
     pub fn state(&self) -> &StreamingState {
         &self.state
