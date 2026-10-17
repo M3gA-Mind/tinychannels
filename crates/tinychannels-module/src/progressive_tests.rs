@@ -1103,6 +1103,18 @@ async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts
 #[tokio::test(start_paused = true)]
 async fn terminal_text_edits_existing_draft_without_duplicate_send() {
     let (base, callback) = fixture(false).await;
+    *callback.send_result.lock().await =
+        Some(ProgressiveTransportResult::Success(serde_json::json!({
+            "receipt": {
+                "primaryPlatformMessageId": "fixture-message",
+                "platformMessageIds": ["fixture-message"],
+                "parts": [{
+                    "platformMessageId": "fixture-message",
+                    "editToken": "opaque-edit-token",
+                    "deleteToken": "opaque-delete-token"
+                }]
+            }
+        })));
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
     capabilities.progressive_edits = true;
     let mut configured = HashMap::new();
@@ -1172,9 +1184,90 @@ async fn terminal_text_edits_existing_draft_without_duplicate_send() {
         "the terminal result must edit the visible draft"
     );
     assert!(matches!(callback.requests.lock().await.last().unwrap(),
-        ProgressiveTransportRequest::Edit { text, message_id, .. }
+        ProgressiveTransportRequest::Edit { text, message_id, receipt: Some(receipt), .. }
             if text == "complete" && message_id == "fixture-message"
+                && receipt.parts[0].edit_token.as_deref() == Some("opaque-edit-token")
     ));
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
+    let (base, callback) = fixture(false).await;
+    let configured = Arc::new(Mutex::new(HashMap::new()));
+    configured.lock().await.insert(
+        "discord:partial-batch".to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities: tinychannels_bus::ChannelCapabilities::default(),
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            base.host.clone(),
+        ),
+    );
+    let replies = Replies::new(base.host.clone(), configured);
+    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(
+        tinychannels_bus::channel::ChannelSendOutcome {
+            receipt: tinychannels_bus::channel::MessageReceipt {
+                platform_message_ids: vec!["media-part-1".into()],
+                ..Default::default()
+            },
+            error: Some(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                message: "media tail uncertain".into(),
+                sent_before_error: true,
+                ..Default::default()
+            }),
+        },
+    )]
+    .into();
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:partial-batch".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "partial-batch-turn".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected opened output")
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![
+                ChannelOutputEvent::Media {
+                    text: Some("caption".into()),
+                    parts: vec![],
+                },
+                ChannelOutputEvent::FinalMessage {
+                    text: "must not be sent after uncertainty".into(),
+                    parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Text {
+                            text: "must not be sent after uncertainty".into(),
+                            markdown_dialect: None,
+                        },
+                    }],
+                    receipt: None,
+                },
+            ],
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
+        if outcome.receipt.platform_message_ids == ["media-part-1"]
+            && outcome.error.as_ref().is_some_and(|error| error.sent_before_error))
+    );
+    assert_eq!(callback.sends.lock().await.len(), 1);
     replies.shutdown().await.unwrap();
 }
 
