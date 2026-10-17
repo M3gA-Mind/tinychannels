@@ -695,7 +695,7 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
             {"event": "text_delta", "value": "legacy chunk"},
             {"event": "thinking_delta", "value": "legacy thought"},
             {"event": "tool_call", "value": "search"},
-            {"event": "tool_result", "tool_name": "search", "success": true}
+            {"event": "tool_result", "value": {"tool_name": "search", "success": true}}
         ]
     }))
     .unwrap();
