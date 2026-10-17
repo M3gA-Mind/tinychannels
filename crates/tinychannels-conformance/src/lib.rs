@@ -8,8 +8,8 @@
 
 use async_trait::async_trait;
 use tinychannels_bus::{
-    ChannelCapabilities, ChannelOutboundIntent, ChannelRef, ChannelSendError,
-    channel::{ChannelSendOutcome, ConversationRef, SendErrorKind},
+    ChannelCapabilities, ChannelOutboundIntent, ChannelRef,
+    channel::{ChannelSendError, ChannelSendOutcome, ConversationRef, SendErrorKind},
 };
 use tinychannels_runtime::channel::ChannelAdapter;
 
