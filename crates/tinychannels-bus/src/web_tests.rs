@@ -7,6 +7,7 @@ const LEGACY_CANCEL: &str = include_str!("fixtures/web/chat_error_cancelled.json
 const CANCEL: &str = include_str!("fixtures/web/chat_cancelled.json");
 const TEXT_DELTA: &str = include_str!("fixtures/web/text_delta.json");
 const PROACTIVE: &str = include_str!("fixtures/web/proactive_message.json");
+const SUBAGENT_TOOL_RESULT: &str = include_str!("fixtures/web/subagent_tool_result.json");
 
 fn assert_historical_fixture_round_trips(fixture: &str) {
     let historical: serde_json::Value = serde_json::from_str(fixture).unwrap();
@@ -24,6 +25,7 @@ fn deployed_web_event_goldens_keep_their_serialized_shapes() {
         CANCEL,
         TEXT_DELTA,
         PROACTIVE,
+        SUBAGENT_TOOL_RESULT,
     ] {
         assert_historical_fixture_round_trips(fixture);
     }

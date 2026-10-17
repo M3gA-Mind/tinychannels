@@ -366,6 +366,8 @@ pub enum WebChannelEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_display_detail: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        structured: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         failure: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         subagent: Option<WebSubagentProgressDetail>,
