@@ -123,6 +123,42 @@ fn channel_events_round_trip_with_discriminator_source_and_full_address() {
 }
 
 #[test]
+fn button_callback_event_round_trips_actor_and_action_identity() {
+    let event = ChannelEvent {
+        version: 2,
+        event_id: "telegram:update:9:callback".into(),
+        source_event_id: Some("9".into()),
+        source_timestamp: Some(1234),
+        channel: ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("bot-a".into()),
+        },
+        conversation: Some(ConversationRef {
+            kind: ConversationKind::Group,
+            id: "-100".into(),
+            topic_id: Some("42".into()),
+            ..Default::default()
+        }),
+        event: ChannelEventKind::ButtonCallback {
+            query_id: "query-1".into(),
+            action_id: "approve:opaque".into(),
+            provider_message_id: Some("message-7".into()),
+            actor: SenderRef {
+                id: "user-3".into(),
+                name: Some("operator".into()),
+                ..Default::default()
+            },
+        },
+    };
+    let wire = serde_json::to_value(&event).unwrap();
+    assert_eq!(wire["type"], "button_callback");
+    assert_eq!(wire["actor"]["id"], "user-3");
+    assert_eq!(wire["actionId"], "approve:opaque");
+    assert_eq!(wire["conversation"]["topicId"], "42");
+    assert_eq!(serde_json::from_value::<ChannelEvent>(wire).unwrap(), event);
+}
+
+#[test]
 fn http_proxy_policy_round_trips_without_changing_its_wire_fields() {
     let policy = HttpProxyPolicy {
         http_proxy: Some("http://proxy.invalid:8080".into()),
