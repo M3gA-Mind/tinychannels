@@ -14,6 +14,7 @@ fn intent(id: &str, text: &str) -> ChannelOutboundIntent {
         conversation_id: "room".into(),
         channel_ref: None,
         conversation_ref: None,
+        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         payload: crate::OutboundPayload::Text { text: text.into() },
         ..Default::default()

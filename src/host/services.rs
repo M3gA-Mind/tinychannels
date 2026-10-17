@@ -7,6 +7,57 @@
 
 use async_trait::async_trait;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceCodecRequest {
+    pub audio_base64: String,
+    pub from: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VoiceCodecResult {
+    pub audio_base64: String,
+    pub duration_ms: Option<u64>,
+    pub waveform: Option<Vec<f32>>,
+}
+
+#[async_trait]
+pub trait VoiceCodec: Send + Sync {
+    async fn transcode(&self, request: VoiceCodecRequest) -> anyhow::Result<VoiceCodecResult>;
+}
+
+/// Persist audio with a host-authorized reference before a provider forwards
+/// it to a normalized channel envelope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoiceMediaRequest {
+    pub audio_base64: String,
+    pub mime_type: String,
+    pub codec: Option<String>,
+    pub duration_ms: Option<u64>,
+    pub file_name: Option<String>,
+    pub direction: tinychannels_bus::HostVoiceMediaDirection,
+    pub scope: tinychannels_bus::HostVoiceScope,
+}
+
+/// Host-owned durable media persistence. Implementations return only media
+/// references they authorize for the scoped conversation.
+#[async_trait]
+pub trait VoiceMediaStore: Send + Sync {
+    async fn store_voice(
+        &self,
+        request: VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult>;
+
+    /// Resolve a host-authorized opaque reference for one outbound upload.
+    async fn read_voice(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        _opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        anyhow::bail!("host voice media resolution is unavailable")
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Voice: speech-to-text
 // ---------------------------------------------------------------------------
@@ -41,6 +92,17 @@ pub trait Transcriber: Send + Sync {
         &self,
         request: TranscriptionRequest,
     ) -> anyhow::Result<TranscriptionResult>;
+
+    /// Context-aware transcription used by the shared voice pipeline. Legacy
+    /// hosts inherit the unscoped adapter; module hosts bind the context to
+    /// the configured account before crossing TinyBus.
+    async fn transcribe_scoped(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        request: TranscriptionRequest,
+    ) -> anyhow::Result<TranscriptionResult> {
+        self.transcribe(request).await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -64,6 +126,7 @@ pub struct SpeechRequest {
 pub struct SpeechResult {
     pub audio_base64: String,
     pub mime_type: String,
+    pub duration_ms: Option<u64>,
     /// Provider-specific viseme timeline (mascot lip-sync); opaque JSON.
     pub visemes: Option<serde_json::Value>,
 }
@@ -72,6 +135,15 @@ pub struct SpeechResult {
 #[async_trait]
 pub trait SpeechSynthesizer: Send + Sync {
     async fn synthesize(&self, request: SpeechRequest) -> anyhow::Result<SpeechResult>;
+
+    /// Context-aware synthesis used by channel reply policy.
+    async fn synthesize_scoped(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        request: SpeechRequest,
+    ) -> anyhow::Result<SpeechResult> {
+        self.synthesize(request).await
+    }
 }
 
 // ---------------------------------------------------------------------------

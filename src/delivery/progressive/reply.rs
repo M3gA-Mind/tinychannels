@@ -180,6 +180,7 @@ impl ProgressiveReply {
                 outbound.push(tinychannels_bus::OutboundContentPart::Voice {
                     voice: tinychannels_bus::OutboundVoice::Media {
                         media: voice.media.clone(),
+                        audio_base64: None,
                         codec: voice.codec.clone(),
                         duration_ms: voice.duration_ms,
                     },
@@ -230,7 +231,13 @@ impl ProgressiveReply {
                 outcome,
             )));
         }
+        let should_synthesize = parts.is_empty()
+            && self
+                .sender
+                .should_synthesize_final(&self.channel, self.output_context.as_ref(), text)
+                .await?;
         if parts.is_empty()
+            && !should_synthesize
             && let Some(outcome) = self.finalize_existing_text(text).await?
         {
             dispatch.push_outcome(outcome);
@@ -529,7 +536,7 @@ impl ProgressiveReply {
         for (index, (segment_parts, segment_text)) in segments.iter().enumerate() {
             let next = match self
                 .sender
-                .send_parts_with_segment(
+                .send_final_parts_with_segment(
                     &self.channel,
                     segment_parts,
                     segment_text,

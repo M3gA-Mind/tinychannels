@@ -673,7 +673,7 @@ fn inbound_voice_context_mention_only_group_requires_caption_mention() {
 }
 
 #[test]
-fn inbound_voice_content_preserves_caption_outside_mention_only_groups() {
+fn inbound_voice_context_accepts_caption_outside_mention_only_groups() {
     let ch = TelegramChannel::new("token".into(), vec!["*".into()], false);
     let update = serde_json::json!({
         "message": {
@@ -696,18 +696,12 @@ fn inbound_voice_content_preserves_caption_outside_mention_only_groups() {
     let ctx = ch
         .parse_incoming_message_context(&update["message"], Some("summarize this"))
         .expect("authorized voice message context should parse");
-    let content = TelegramChannel::voice_message_content(
-        "transcribed voice",
-        Some("summarize this"),
-        &ctx,
-        false,
-    );
-
-    assert_eq!(content, "summarize this\n\ntranscribed voice");
+    assert_eq!(ctx.mention_text, None);
+    assert_eq!(ctx.chat_id, "12345");
 }
 
 #[test]
-fn inbound_voice_content_uses_normalized_caption_in_mention_only_groups() {
+fn inbound_voice_context_normalizes_caption_in_mention_only_groups() {
     let ch = TelegramChannel::new("token".into(), vec!["*".into()], true);
     *ch.bot_username.lock() = Some("mybot".to_string());
     let update = serde_json::json!({
@@ -731,14 +725,8 @@ fn inbound_voice_content_uses_normalized_caption_in_mention_only_groups() {
     let ctx = ch
         .parse_incoming_message_context(&update["message"], Some("@mybot summarize this"))
         .expect("caption mention should allow voice in mention-only group");
-    let content = TelegramChannel::voice_message_content(
-        "transcribed voice",
-        Some("@mybot summarize this"),
-        &ctx,
-        true,
-    );
-
-    assert_eq!(content, "summarize this\n\ntranscribed voice");
+    assert_eq!(ctx.mention_text.as_deref(), Some("summarize this"));
+    assert_eq!(ctx.chat_id, "-100200300");
 }
 
 #[test]

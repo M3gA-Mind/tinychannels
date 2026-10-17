@@ -1,4 +1,286 @@
 use super::*;
+use base64::Engine as _;
+use sha2::Digest as _;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tinybus::broker::Broker;
+use tinybus::transport::memory::MemoryBus;
+use tinychannels::host::EventSink as _;
+use tinychannels_bus::{ChannelInboundEnvelope, ContentPart, ConversationKind, ConversationRef};
+
+#[derive(Clone, Default)]
+struct IngressVoiceCallback {
+    read_requests: Arc<Mutex<Vec<tinychannels_bus::HostReadVoiceMediaRequest>>>,
+    stt_requests: Arc<Mutex<Vec<tinychannels_bus::HostVoiceTranscriptionRequest>>>,
+    inbound: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    stt_calls: Arc<AtomicUsize>,
+}
+
+#[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
+impl IngressVoiceCallback {
+    async fn read_voice_media(
+        &self,
+        request: tinychannels_bus::HostReadVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        self.read_requests.lock().await.push(request);
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+            mime_type: "audio/ogg".into(),
+            file_name: Some("voice.oga".into()),
+        })
+    }
+
+    async fn transcribe_voice(
+        &self,
+        request: tinychannels_bus::HostVoiceTranscriptionRequest,
+    ) -> Result<tinychannels_bus::HostTranscriptionResult> {
+        self.stt_calls.fetch_add(1, Ordering::SeqCst);
+        self.stt_requests.lock().await.push(request);
+        Err(tinybus::Error::failed("fixture STT unavailable"))
+    }
+
+    async fn deliver_inbound(&self, channel: String, message: serde_json::Value) -> Result<()> {
+        self.inbound.lock().await.push((channel, message));
+        Ok(())
+    }
+}
+
+async fn ingress_fixture() -> (HostChannels, IngressVoiceCallback, tinybus::Connection) {
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let server = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let callback = IngressVoiceCallback::default();
+    server
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            callback.clone(),
+        )
+        .await
+        .unwrap();
+    server
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    let client = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    (HostChannels::new(client), callback, server)
+}
+
+fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> ChannelInboundEnvelope {
+    ChannelInboundEnvelope {
+        channel: tinychannels_bus::ChannelRef {
+            id: "forged-provider".into(),
+            account_id: Some("forged-account".into()),
+        },
+        message_id: "message-voice-13".into(),
+        conversation: ConversationRef {
+            kind: ConversationKind::Thread,
+            id: "chat-43".into(),
+            scope_id: Some("community-7".into()),
+            parent_id: Some("chat-parent".into()),
+            thread_id: Some("thread-8".into()),
+            topic_id: Some("topic-9".into()),
+        },
+        parts: vec![ContentPart::VoiceNote {
+            voice_note: tinychannels_bus::VoiceNote {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("opaque-voice".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    content_type: Some("audio/ogg".into()),
+                    ..Default::default()
+                },
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1400),
+                waveform: Some(vec![0.1, 0.6, 1.0]),
+                transcript,
+                ..Default::default()
+            },
+        }],
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
+    let (host, callback, _server) = ingress_fixture().await;
+    let events = ModuleEvents(host.clone(), "telegram:bot-a".into());
+    assert!(
+        events
+            .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(
+                None
+            )))
+            .await
+            .unwrap()
+    );
+    host.flush().await.unwrap();
+
+    let read = callback.read_requests.lock().await;
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].max_bytes, 8 * 1024 * 1024);
+    assert_eq!(read[0].opaque_id, "opaque-voice");
+    let stt = callback.stt_requests.lock().await;
+    assert_eq!(stt.len(), 1);
+    assert_eq!(stt[0].scope.configured_instance, "telegram:bot-a");
+    assert_eq!(stt[0].scope.channel.id, "telegram");
+    assert_eq!(
+        stt[0].scope.channel.account_id.as_deref(),
+        Some("telegram:bot-a")
+    );
+    assert_eq!(
+        stt[0].scope.conversation,
+        ConversationRef {
+            kind: ConversationKind::Thread,
+            id: "chat-43".into(),
+            scope_id: Some("community-7".into()),
+            parent_id: Some("chat-parent".into()),
+            thread_id: Some("thread-8".into()),
+            topic_id: Some("topic-9".into()),
+        }
+    );
+    assert_eq!(stt[0].scope.turn_id, "message-voice-13");
+    drop(stt);
+    drop(read);
+
+    let inbound = callback.inbound.lock().await;
+    assert_eq!(inbound.len(), 1);
+    assert_eq!(inbound[0].0, "telegram:bot-a");
+    let note = &inbound[0].1["parts"][0]["voiceNote"];
+    assert_eq!(note["media"]["opaqueId"], "opaque-voice");
+    assert_eq!(note["codec"], "ogg_opus");
+    assert_eq!(note["durationMs"], 1400);
+    let waveform = note["waveform"].as_array().unwrap();
+    assert_eq!(waveform.len(), 3);
+    for (actual, expected) in waveform.iter().zip([0.1_f64, 0.6, 1.0]) {
+        assert!((actual.as_f64().unwrap() - expected).abs() < 0.000_001);
+    }
+    assert_eq!(note["transcript"]["state"], "unavailable");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn completed_provider_transcript_skips_media_read_and_host_stt() {
+    let (host, callback, _server) = ingress_fixture().await;
+    let events = ModuleEvents(host.clone(), "telegram:bot-a".into());
+    let provider_transcript = tinychannels_bus::VoiceTranscript {
+        text: "provider words".into(),
+        language: Some("en".into()),
+        state: tinychannels_bus::VoiceTranscriptState::Complete,
+        source: tinychannels_bus::VoiceTranscriptSource::Provider,
+    };
+    events
+        .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(
+            Some(provider_transcript),
+        )))
+        .await
+        .unwrap();
+    host.flush().await.unwrap();
+    assert!(callback.read_requests.lock().await.is_empty());
+    assert_eq!(callback.stt_calls.load(Ordering::SeqCst), 0);
+    let inbound = callback.inbound.lock().await;
+    assert_eq!(
+        inbound[0].1["parts"][0]["voiceNote"]["transcript"]["text"],
+        "provider words"
+    );
+    assert_eq!(
+        inbound[0].1["parts"][0]["voiceNote"]["media"]["opaqueId"],
+        "opaque-voice"
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires the separately built TinyVoice module; run with TINYVOICE_MODULE_ARTIFACT"]
+async fn codec_adapter_calls_loaded_tinyvoice_module() {
+    use tinybus::broker::Broker;
+    use tinybus::module::ModuleHost;
+    use tinychannels::host::VoiceCodec as _;
+    use tinyvoice_bus::codec::AudioCodec;
+
+    let path = std::env::var("TINYVOICE_MODULE_ARTIFACT").expect("module artifact env");
+    let bytes = std::fs::read(&path).expect("read TinyVoice artifact");
+    let expected_sha = std::env::var("TINYVOICE_MODULE_SHA256").expect("expected artifact SHA env");
+    assert_eq!(hex::encode(sha2::Sha256::digest(&bytes)), expected_sha);
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    let broker = Broker::new();
+    let _broker_task = broker.spawn(bus.clone());
+    let host = ModuleHost::new(broker);
+    let info = host
+        .load_file(&path)
+        .expect("load compiled TinyVoice module");
+    assert_eq!(info.name, "tinyvoice-module");
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let client = ModuleVoiceCodec(HostChannels::new(connection.clone()));
+    let wav = sine_wave_wav();
+    let wav_b64 = base64::engine::general_purpose::STANDARD.encode(&wav);
+    let probe_proxy = connection
+        .proxy(
+            tinyvoice_bus::BUS_NAME,
+            tinyvoice_bus::OBJECT_PATH,
+            tinyvoice_bus::BUS_NAME,
+        )
+        .unwrap();
+    let info: tinyvoice_bus::codec::CodecInfo = probe_proxy
+        .call(
+            tinyvoice_bus::names::methods::CODEC_PROBE,
+            (tinyvoice_bus::codec::CodecInput {
+                audio_base64: wav_b64.clone(),
+            },),
+        )
+        .await
+        .unwrap();
+    assert_eq!(info.codec, AudioCodec::WavPcm16);
+    assert!(info.duration_ms > 0);
+    let opus = client
+        .transcode(tinychannels::host::VoiceCodecRequest {
+            audio_base64: wav_b64,
+            from: "wav_pcm16".into(),
+            target: "ogg_opus".into(),
+        })
+        .await
+        .expect("compiled TinyVoice WAV→Opus transcode");
+    let round_trip = client
+        .transcode(tinychannels::host::VoiceCodecRequest {
+            audio_base64: opus.audio_base64,
+            from: "ogg_opus".into(),
+            target: "wav_pcm16".into(),
+        })
+        .await
+        .expect("compiled TinyVoice Opus→WAV transcode");
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(round_trip.audio_base64)
+        .unwrap();
+    assert!(decoded.starts_with(b"RIFF"));
+    assert!(decoded.iter().any(|byte| *byte != 0));
+}
+
+fn sine_wave_wav() -> Vec<u8> {
+    let sample_rate = 16_000u32;
+    let sample_count = sample_rate as usize;
+    let data_len = sample_count * 2;
+    let mut wav = Vec::with_capacity(44 + data_len);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36u32 + data_len as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data_len as u32).to_le_bytes());
+    for index in 0..sample_count {
+        let phase = (index as f32 * 440.0 * std::f32::consts::TAU) / sample_rate as f32;
+        let sample = (phase.sin() * 12_000.0) as i16;
+        wav.extend_from_slice(&sample.to_le_bytes());
+    }
+    wav
+}
 
 struct SlowChannel {
     started: StdMutex<Option<oneshot::Sender<()>>>,
@@ -560,7 +842,7 @@ async fn host_adapters_propagate_callback_failures() {
             .await
             .is_err()
     );
-    let transcriber = ModuleTranscriber(host.clone());
+    let transcriber = ModuleTranscriber(host.clone(), "fixture".into());
     assert_eq!(transcriber.name(), "module-host");
     assert!(
         transcriber

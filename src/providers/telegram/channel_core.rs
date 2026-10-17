@@ -54,6 +54,8 @@ impl TelegramChannel {
             pairing,
             client: reqwest::Client::new(),
             transcriber: None,
+            voice_media_store: None,
+            voice_synthesis: false,
             allowlist: None,
             events: None,
             stream_mode: StreamMode::Off,
@@ -107,6 +109,19 @@ impl TelegramChannel {
     /// voice notes are received but not transcribed.
     pub fn with_transcriber(mut self, transcriber: Arc<dyn crate::host::Transcriber>) -> Self {
         self.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Inject host-owned persistence for normalized voice media.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
+        self.voice_media_store = Some(store);
+        self
+    }
+
+    /// Enable shared final-turn synthesis when the module host provides TTS,
+    /// TinyVoice codec operations, and durable scoped media storage.
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.voice_synthesis = enabled;
         self
     }
 

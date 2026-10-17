@@ -3683,6 +3683,13 @@
           ],
           "default": null
         },
+        "opaqueId": {
+          "description": "Stable host-owned identifier for media stored outside the channel\nprovider. It is safe to persist and does not imply a shared filesystem.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "path": {
           "type": [
             "string",
@@ -3771,6 +3778,13 @@
         {
           "type": "object",
           "properties": {
+            "audioBase64": {
+              "description": "Optional bounded inline payload for one native upload. The durable\nreference remains the canonical media identity.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
             "codec": {
               "type": [
                 "string",

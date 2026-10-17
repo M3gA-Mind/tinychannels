@@ -22,6 +22,8 @@ crate-type = ["rlib", "cdylib"]
 tinychannels = { path = "../..", features = ["email", "lark", "whatsapp-web", "relay-websocket"] }
 # The transport-free vocabulary shared with the host.
 tinychannels-bus = { path = "../tinychannels-bus" }
+# Codec vocabulary only; audio work runs in TinyVoice's compiled TinyBus module.
+tinyvoice-bus = { git = "https://github.com/tinyhumansai/tinyvoice", rev = "7a8e3ac5b31a11e9c061541b336c666ee10fa190" }
 # TinyBus provides the typed service interface and dynamic module host ABI.
 tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["macros", "modules"] }
 # The module-side SDK owns its runtime and exports the stable C entrypoints.
@@ -44,6 +46,7 @@ tracing = "0.1"
 log = "0.4"
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }
+base64 = "0.23"
 
 [dev-dependencies]
 tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["test-support"] }
@@ -52,7 +55,6 @@ tokio = { version = "1", features = ["test-util"] }
 serde_json = "1"
 futures-util = "0.3"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
-base64 = "0.23"
 
 [features]
 default = []

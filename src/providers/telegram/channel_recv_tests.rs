@@ -56,6 +56,35 @@ async fn mount_voice_download(server: &MockServer, bytes: Vec<u8>) {
         .await;
 }
 
+#[derive(Clone, Default)]
+struct RecordingVoiceStore(Arc<std::sync::Mutex<Vec<tinychannels_bus::HostVoiceScope>>>);
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for RecordingVoiceStore {
+    async fn store_voice(
+        &self,
+        request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        self.0.lock().unwrap().push(request.scope);
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("host-voice-reference".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            },
+            accessible_url: None,
+        })
+    }
+
+    async fn read_voice(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        _opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        unreachable!("inbound voice fixture only stores media")
+    }
+}
+
 // ── typing ───────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -510,9 +539,8 @@ async fn pending_pairing_prompt_in_group_omits_start_hint() {
 // ── voice ────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn voice_update_is_transcribed_with_caption_prefix() {
+async fn voice_update_parser_preserves_caption_without_claiming_transcription() {
     let server = mock_api().await;
-    mount_voice_download(&server, vec![1, 2, 3]).await;
     let stt = FixedTranscriber::ok("  spoken words  ");
     let ch = channel_for(&server, &["alice"]).with_transcriber(stt.clone());
 
@@ -521,14 +549,44 @@ async fn voice_update_is_transcribed_with_caption_prefix() {
         .await
         .expect("voice message parsed");
 
-    assert_eq!(msg.content, "note\n\nspoken words");
+    assert_eq!(msg.content, "note");
     assert_eq!(msg.sender, "alice");
     assert_eq!(msg.thread_ts.as_deref(), Some("60"));
     let requests = stt.requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 1);
-    assert_eq!(requests[0].audio_base64, "AQID");
-    assert_eq!(requests[0].mime_type.as_deref(), Some("audio/ogg"));
-    assert_eq!(requests[0].file_name.as_deref(), Some("v.oga"));
+    assert!(
+        requests.is_empty(),
+        "STT enrichment belongs to shared ingress"
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn stored_voice_scope_matches_normalized_ingress_turn_and_conversation() {
+    let server = mock_api().await;
+    mount_voice_download(&server, vec![1, 2, 3]).await;
+    let store = RecordingVoiceStore::default();
+    let channel = channel_for(&server, &["alice"]).with_voice_media_store(Arc::new(store.clone()));
+    let update = voice_update("supergroup", Some("caption"), Some(3));
+    let message = channel
+        .parse_update_message_or_voice(&update)
+        .await
+        .expect("voice message is accepted independently of STT");
+    let voice_note = channel
+        .voice_note_for_ingress(&update, &message)
+        .await
+        .unwrap()
+        .expect("durable voice reference");
+    let envelope =
+        TelegramChannel::inbound_envelope_from_update(&update, &message, Some(voice_note));
+
+    let scopes = store.0.lock().unwrap();
+    assert_eq!(scopes.len(), 1);
+    let scope = &scopes[0];
+    assert_eq!(scope.channel.id, envelope.channel.id);
+    assert_eq!(scope.channel.account_id, envelope.channel.account_id);
+    assert_eq!(scope.conversation, envelope.conversation);
+    assert_eq!(scope.turn_id, envelope.message_id);
+    assert_eq!(scope.turn_id, "telegram_888_60");
 }
 
 #[tokio::test]
@@ -555,83 +613,7 @@ async fn update_without_text_or_voice_yields_nothing() {
         "message": { "message_id": 1, "chat": { "id": 1 }, "sticker": {} }
     });
     assert!(ch.parse_update_message_or_voice(&update).await.is_none());
-    assert!(
-        ch.parse_update_voice_message(&serde_json::json!({}))
-            .await
-            .is_none()
-    );
-}
-
-#[tokio::test]
-async fn voice_without_transcriber_reports_failure_to_chat() {
-    let server = mock_api().await;
-    mount_voice_download(&server, vec![9]).await;
-    mount_post(&server, "sendMessage", ok()).await;
-    let ch = channel_for(&server, &["alice"]);
-
-    let msg = ch
-        .parse_update_voice_message(&voice_update("private", None, None))
-        .await;
-
-    assert!(msg.is_none());
-    let sent = json_bodies(&server, "sendMessage").await;
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0]["chat_id"], "888");
-    assert_eq!(sent[0]["reply_to_message_id"], 60);
-    assert!(
-        sent[0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("Voice transcription failed")
-    );
-}
-
-#[tokio::test]
-async fn voice_transcriber_error_reports_failure_to_chat() {
-    let server = mock_api().await;
-    mount_voice_download(&server, vec![9]).await;
-    mount_post(&server, "sendMessage", ok()).await;
-    let ch =
-        channel_for(&server, &["alice"]).with_transcriber(FixedTranscriber::failing("stt down"));
-
-    assert!(
-        ch.parse_update_voice_message(&voice_update("private", None, None))
-            .await
-            .is_none()
-    );
-    assert_eq!(sent_texts(&server).await.len(), 1);
-}
-
-#[tokio::test]
-async fn oversized_declared_voice_is_rejected_before_download() {
-    let server = mock_api().await;
-    mount_post(&server, "sendMessage", ok()).await;
-    let ch = channel_for(&server, &["alice"]).with_transcriber(FixedTranscriber::ok("x"));
-
-    let err = ch
-        .transcribe_telegram_voice(&TelegramVoiceAttachment {
-            file_id: "f".into(),
-            file_unique_id: None,
-            file_size: Some(TELEGRAM_MAX_VOICE_FILE_BYTES + 1),
-            mime_type: None,
-        })
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("voice file too large"), "{err}");
-    assert!(json_bodies(&server, "getFile").await.is_empty());
-}
-
-#[tokio::test]
-async fn voice_from_non_allowlisted_sender_is_not_downloaded() {
-    let server = mock_api().await;
-    let ch = channel_for(&server, &["bob"]).with_transcriber(FixedTranscriber::ok("x"));
-    assert!(
-        ch.parse_update_voice_message(&voice_update("private", None, None))
-            .await
-            .is_none()
-    );
-    assert!(server.received_requests().await.unwrap().is_empty());
+    assert!(TelegramChannel::parse_update_voice_attachment(&update).is_none());
 }
 
 #[tokio::test]
@@ -807,26 +789,5 @@ fn normalize_incoming_content_without_mention_collapses_whitespace() {
     assert_eq!(
         TelegramChannel::normalize_incoming_content("   ", "bot"),
         None
-    );
-}
-
-#[test]
-fn voice_content_without_caption_is_bare_transcript() {
-    let ctx = TelegramIncomingMessageContext {
-        sender_identity: "a".into(),
-        sender_name: None,
-        reply_target: "1".into(),
-        chat_id: "1".into(),
-        message_id: 1,
-        mention_text: None,
-    };
-    assert_eq!(
-        TelegramChannel::voice_message_content("words", Some("  "), &ctx, false),
-        "words"
-    );
-    assert_eq!(
-        TelegramChannel::voice_message_content("words", Some("cap"), &ctx, true),
-        "words",
-        "mention-only groups use the normalized mention text, not the raw caption"
     );
 }

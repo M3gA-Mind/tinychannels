@@ -1,4 +1,6 @@
 use super::*;
+use base64::Engine as _;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinychannels_bus::module_progressive::SubagentOutput;
@@ -122,12 +124,99 @@ struct Callback {
     rpc_error_after_send: Arc<Mutex<bool>>,
     unexpected_typed_response: Arc<Mutex<bool>>,
     block: bool,
+    block_synthesis: Arc<AtomicBool>,
     entered: Arc<Notify>,
     released: Arc<Notify>,
+    voice_policy: Arc<Mutex<Option<tinychannels_bus::HostVoiceReplyPolicy>>>,
+    synthesis_calls: Arc<AtomicUsize>,
+    voice_store_calls: Arc<AtomicUsize>,
+}
+
+#[derive(Clone, Default)]
+struct StubTinyVoiceCodec(Arc<AtomicUsize>);
+
+#[tinybus::interface(name = "ai.tinyhumans.tinyvoice.Voice")]
+impl StubTinyVoiceCodec {
+    async fn codec_transcode(
+        &self,
+        request: tinyvoice_bus::codec::CodecTranscodeRequest,
+    ) -> tinybus::Result<tinyvoice_bus::codec::CodecOutput> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(tinyvoice_bus::codec::CodecOutput {
+            audio_base64: request.audio_base64,
+        })
+    }
+
+    async fn codec_probe(
+        &self,
+        _request: tinyvoice_bus::codec::CodecInput,
+    ) -> tinybus::Result<tinyvoice_bus::codec::CodecInfo> {
+        Ok(tinyvoice_bus::codec::CodecInfo {
+            codec: tinyvoice_bus::codec::AudioCodec::WavPcm16,
+            duration_ms: 1_500,
+            sample_rate: 48_000,
+            channels: 1,
+        })
+    }
+
+    async fn codec_waveform(
+        &self,
+        request: tinyvoice_bus::codec::WaveformRequest,
+    ) -> tinybus::Result<tinyvoice_bus::codec::WaveformResult> {
+        Ok(tinyvoice_bus::codec::WaveformResult {
+            peaks: (0..request.buckets.min(2))
+                .map(|index| if index == 0 { 0 } else { 255 })
+                .collect(),
+        })
+    }
 }
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
 impl Callback {
+    async fn get_voice_reply_policy(
+        &self,
+        _request: tinychannels_bus::HostVoiceReplyPolicyRequest,
+    ) -> Result<tinychannels_bus::HostVoiceReplyPolicy> {
+        Ok(self.voice_policy.lock().await.clone().unwrap_or(
+            tinychannels_bus::HostVoiceReplyPolicy {
+                mode: tinychannels_bus::HostVoiceReplyMode::Mirror,
+                inbound_has_voice: false,
+                explicitly_requested: false,
+            },
+        ))
+    }
+
+    async fn synthesize_speech(
+        &self,
+        _request: tinychannels_bus::HostSpeechSynthesisRequest,
+    ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
+        self.synthesis_calls.fetch_add(1, Ordering::SeqCst);
+        if self.block_synthesis.load(Ordering::SeqCst) {
+            self.entered.notify_one();
+            self.released.notified().await;
+        }
+        Ok(tinychannels_bus::HostSpeechSynthesisResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(progressive_test_wav()),
+            mime_type: "audio/wav".into(),
+            duration_ms: Some(8_000),
+        })
+    }
+
+    async fn store_voice_media(
+        &self,
+        _request: tinychannels_bus::HostStoreVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        self.voice_store_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("durable-host-voice".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            },
+            accessible_url: Some("https://media.example/authorized/voice".into()),
+        })
+    }
+
     async fn dispatch_controller_backend(
         &self,
         request: ChannelBackendRequest,
@@ -244,11 +333,21 @@ async fn open_scoped(
     turn_id: &str,
     capabilities: tinychannels_bus::ChannelCapabilities,
 ) -> String {
+    open_scoped_provider(replies, "discord", account, turn_id, capabilities).await
+}
+
+async fn open_scoped_provider(
+    replies: &Replies,
+    provider: &'static str,
+    account: &str,
+    turn_id: &str,
+    capabilities: tinychannels_bus::ChannelCapabilities,
+) -> String {
     replies.running.lock().await.insert(
         account.to_owned(),
         Running::start(
             Arc::new(ConfiguredChannelWithCapabilities {
-                name: "discord",
+                name: provider,
                 capabilities,
             }),
             Arc::new(crate::provider::Hooks::default()),
@@ -258,7 +357,7 @@ async fn open_scoped(
     let ProgressiveResult::Opened { handle } = replies
         .execute(ProgressiveCommand::OpenOutput {
             channel: tinychannels_bus::ChannelRef {
-                id: "discord".into(),
+                id: provider.into(),
                 account_id: Some(account.to_owned()),
             },
             conversation: tinychannels_bus::ConversationRef {
@@ -511,6 +610,8 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
         Arc::new(Sender {
             host: replies.host.clone(),
             context: None,
+            capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+            channel: "discord:fixture".into(),
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:fixture",
@@ -1119,6 +1220,8 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
         Arc::new(Sender {
             host: replies.host.clone(),
             context: None,
+            capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+            channel: "discord:fixture".into(),
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:fixture",
@@ -1162,6 +1265,8 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
     let sender = Sender {
         host: replies.host.clone(),
         context: None,
+        capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+        channel: "discord:fixture".into(),
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     sender
@@ -1186,6 +1291,8 @@ async fn transport_failures_preserve_recovery_classification() {
     let sender = Sender {
         host: replies.host.clone(),
         context: None,
+        capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+        channel: "discord:fixture".into(),
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     for result in [
@@ -2149,6 +2256,8 @@ async fn filler_callback_error_after_acceptance_is_not_retried() {
                     ..Default::default()
                 },
             }),
+            capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+            channel: "discord:filler-unknown".into(),
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:filler-unknown",
@@ -2267,6 +2376,120 @@ async fn scoped_output_survives_more_than_two_hundred_seconds_until_host_lease()
             if outcome.receipt.platform_message_ids == ["fixture-message"]
     ));
     assert_eq!(callback.sends.lock().await.len(), 1);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked() {
+    let (replies, callback) = fixture(false).await;
+    let replies = Arc::new(replies);
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    callback.block_synthesis.store(true, Ordering::SeqCst);
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.voice_out.supported = true;
+    capabilities.voice_out.synthesis = true;
+    capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
+    replies.running.lock().await.insert(
+        "discord:voice-lease".into(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities,
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            replies.host.clone(),
+        ),
+    );
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:voice-lease".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "voice-lease-room".into(),
+                ..Default::default()
+            },
+            turn_id: "blocked-voice-turn".into(),
+            lifetime_ms: 1100,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected opened scoped output")
+    };
+    // Keep the host synthesis callback pending so finalization must observe
+    // the short output lease itself.
+    let feed_replies = replies.clone();
+    let replay_handle = handle.clone();
+    let terminal_events = vec![ChannelOutputEvent::FinalMessage {
+        text: "spoken words".into(),
+        parts: vec![],
+        receipt: None,
+    }];
+    let feed_events = terminal_events.clone();
+    let feed = tokio::spawn(async move {
+        feed_replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle,
+                events: feed_events,
+            })
+            .await
+    });
+    callback.entered.notified().await;
+    tokio::time::advance(Duration::from_secs(2)).await;
+    for _ in 0..10 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        feed.is_finished(),
+        "expired finalization must stop waiting on host synthesis"
+    );
+    let result = feed.await.expect("feed task joins");
+    assert!(
+        result.is_err(),
+        "expired voice turn must not report successful delivery"
+    );
+    assert!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .all(|request| !matches!(request, ProgressiveTransportRequest::SendTyped { .. })),
+        "a late synthesis result must not reach provider transport"
+    );
+    callback.released.notify_one();
+    tokio::task::yield_now().await;
+    let replay = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: replay_handle,
+            events: terminal_events,
+        })
+        .await;
+    assert!(
+        replay.is_err(),
+        "identical terminal replay remains fenced after expiry"
+    );
+    assert_eq!(
+        callback.synthesis_calls.load(Ordering::SeqCst),
+        1,
+        "terminal replay must not start another synthesis callback"
+    );
+    assert!(
+        callback
+            .requests
+            .lock()
+            .await
+            .iter()
+            .all(|request| !matches!(request, ProgressiveTransportRequest::SendTyped { .. })),
+        "released late synthesis must not reach provider transport"
+    );
     replies.shutdown().await.unwrap();
 }
 
@@ -3175,6 +3398,7 @@ async fn unsupported_rich_final_returns_the_unflattened_parts() {
             },
             codec: None,
             duration_ms: Some(1200),
+            audio_base64: None,
         },
     }];
     let result = replies
@@ -3487,6 +3711,97 @@ async fn typed_callback_acknowledgement_and_unavailability_keep_distinct_failure
 }
 
 #[tokio::test]
+async fn ambiguous_voice_receipt_is_retained_and_identical_final_is_not_retried() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open_scoped_provider(
+        &replies,
+        "discord",
+        "discord:ambiguous-voice",
+        "ambiguous-voice-turn",
+        tinychannels_bus::ChannelCapabilities::default(),
+    )
+    .await;
+    callback
+        .send_queue
+        .lock()
+        .await
+        .push_back(ProgressiveTransportResult::Outcome(Box::new(
+            tinychannels_bus::channel::ChannelSendOutcome {
+                receipt: tinychannels_bus::channel::MessageReceipt {
+                    platform_message_ids: vec!["accepted-voice-message".into()],
+                    ..Default::default()
+                },
+                error: Some(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                    message: "voice request may have been accepted".into(),
+                    sent_before_error: true,
+                    ..Default::default()
+                }),
+            },
+        )));
+    let events = vec![ChannelOutputEvent::FinalMessage {
+        text: "voice transcript".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("durable-host-voice".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1200),
+                audio_base64: None,
+            },
+        }],
+        receipt: None,
+    }];
+    let first = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: events.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(first, ProgressiveResult::DeliveryBatch { outcomes, .. }
+            if outcomes.len() == 1
+                && outcomes[0].receipt.platform_message_ids == ["accepted-voice-message"]
+                && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
+        ),
+        "unknown voice delivery must preserve accepted receipt and uncertainty"
+    );
+    let before = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+        .count();
+    assert_eq!(before, 1);
+    let replay = replies
+        .execute(ProgressiveCommand::FeedOutput { handle, events })
+        .await
+        .unwrap();
+    assert!(
+        matches!(replay, ProgressiveResult::DeliveryBatch { outcomes, .. }
+            if outcomes.len() == 1
+                && outcomes[0].receipt.platform_message_ids == ["accepted-voice-message"]
+                && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
+        ),
+        "terminal replay returns the retained ambiguous outcome"
+    );
+    let after = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+        .count();
+    assert_eq!(after, before, "unknown voice receipt must not be retried");
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn typed_provider_callback_with_wrong_result_family_is_unknown_not_success() {
     let (replies, callback) = fixture(false).await;
     *callback.unexpected_typed_response.lock().await = true;
@@ -3520,4 +3835,1120 @@ async fn typed_provider_callback_with_wrong_result_family_is_unknown_not_success
     );
     assert!(error.sent_before_error);
     replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+#[ignore = "requires the separately built TinyVoice module; run with TINYVOICE_MODULE_ARTIFACT"]
+async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
+    use tinybus::module::ModuleHost;
+
+    let path = std::env::var("TINYVOICE_MODULE_ARTIFACT").expect("TinyVoice artifact path");
+    let bytes = std::fs::read(&path).expect("read TinyVoice module");
+    let expected = std::env::var("TINYVOICE_MODULE_SHA256").expect("artifact SHA");
+    assert_eq!(hex::encode(sha2::Sha256::digest(&bytes)), expected);
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let _broker_task = broker.spawn(bus.clone());
+    let module_host = ModuleHost::new(broker);
+    assert_eq!(
+        module_host.load_file(&path).unwrap().name,
+        "tinyvoice-module"
+    );
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    connection
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    let callback = Callback::default();
+    connection
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            callback.clone(),
+        )
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection);
+    let context = ProgressiveOutputContext {
+        turn_id: "turn-voice-1".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:bot-1".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "chat-1".into(),
+            topic_id: Some("topic-2".into()),
+            ..Default::default()
+        },
+    };
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.voice_out.supported = true;
+    capabilities.voice_out.synthesis = true;
+    capabilities.progressive_edits = true;
+    capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
+    capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
+    capabilities.voice_out.max_duration_ms = Some(10_000);
+    let cases = [
+        (
+            tinychannels_bus::HostVoiceReplyMode::Mirror,
+            true,
+            false,
+            true,
+        ),
+        (
+            tinychannels_bus::HostVoiceReplyMode::Mirror,
+            false,
+            false,
+            false,
+        ),
+        (
+            tinychannels_bus::HostVoiceReplyMode::Always,
+            false,
+            false,
+            true,
+        ),
+        (
+            tinychannels_bus::HostVoiceReplyMode::Never,
+            true,
+            true,
+            false,
+        ),
+        (
+            tinychannels_bus::HostVoiceReplyMode::SpeakReply,
+            false,
+            true,
+            true,
+        ),
+        (
+            tinychannels_bus::HostVoiceReplyMode::SpeakReply,
+            true,
+            false,
+            false,
+        ),
+    ];
+    for (index, (mode, inbound, explicit, expected_voice)) in cases.into_iter().enumerate() {
+        *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+            mode,
+            inbound_has_voice: inbound,
+            explicitly_requested: explicit,
+        });
+        let sender = Arc::new(Sender {
+            host: host.clone(),
+            context: Some(context.clone()),
+            capabilities: capabilities.clone(),
+            channel: "telegram:bot-1".into(),
+            send_sequence: std::sync::atomic::AtomicU64::new(0),
+        });
+        let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+            sender,
+            "telegram:bot-1",
+            capabilities.clone(),
+            context.clone(),
+        );
+        reply
+            .send_parts(
+                &[tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: "spoken words".into(),
+                        markdown_dialect: None,
+                    },
+                }],
+                "spoken words",
+            )
+            .await
+            .expect("progressive final sends successfully");
+        let requests = callback.requests.lock().await;
+        let request = requests
+            .iter()
+            .rev()
+            .find_map(|request| match request {
+                ProgressiveTransportRequest::SendTyped { parts, text, .. } => Some((parts, text)),
+                _ => None,
+            })
+            .expect("final typed provider call");
+        let has_media = request.0.iter().any(|part| {
+            matches!(part,
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media { media, .. }
+                } if media.opaque_id.as_deref() == Some("durable-host-voice")
+            )
+        });
+        assert_eq!(has_media, expected_voice, "policy case {index}: {mode:?}");
+        if expected_voice {
+            let encoded = serde_json::to_vec(
+                &requests
+                    .iter()
+                    .rev()
+                    .find(|candidate| {
+                        matches!(candidate, ProgressiveTransportRequest::SendTyped { parts, .. }
+                        if parts.iter().any(|part| matches!(part,
+                            tinychannels_bus::OutboundContentPart::Voice {
+                                voice: tinychannels_bus::OutboundVoice::Media {
+                                    audio_base64: None,
+                                    media,
+                                    ..
+                                }
+                            } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                        )))
+                    })
+                    .unwrap(),
+            )
+            .unwrap();
+            assert!(encoded.len() < tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
+            assert!(!String::from_utf8_lossy(&encoded).contains("audio_base64"));
+        }
+        drop(requests);
+    }
+
+    // Exercise the real progressive worker sequence that previously bypassed
+    // final voice policy: a text delta creates/updates a draft, then the
+    // canonical final event has no explicit typed parts. Each mode gets a
+    // distinct turn so delivery idempotency keys cannot alias.
+    for (turn_id, mode, inbound) in [
+        (
+            "draft-mirror",
+            tinychannels_bus::HostVoiceReplyMode::Mirror,
+            true,
+        ),
+        (
+            "draft-always",
+            tinychannels_bus::HostVoiceReplyMode::Always,
+            false,
+        ),
+    ] {
+        *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+            mode,
+            inbound_has_voice: inbound,
+            explicitly_requested: false,
+        });
+        let replies = Replies::new(host.clone(), Arc::new(Mutex::new(HashMap::new())));
+        let handle = open_scoped_provider(
+            &replies,
+            "telegram",
+            "telegram:bot-1",
+            turn_id,
+            capabilities.clone(),
+        )
+        .await;
+        let before = callback.requests.lock().await.len();
+        let draft = replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle: handle.clone(),
+                events: vec![ChannelOutputEvent::TextDelta {
+                    text: "spoken ".into(),
+                    iteration: None,
+                }],
+            })
+            .await
+            .expect("text delta reaches progressive worker");
+        assert!(matches!(draft, ProgressiveResult::Updated));
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if callback
+                    .requests
+                    .lock()
+                    .await
+                    .iter()
+                    .skip(before)
+                    .any(|request| {
+                        matches!(request,
+                            ProgressiveTransportRequest::Send { turn_id: Some(actual_turn), .. }
+                                if actual_turn == turn_id
+                        )
+                    })
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("text delta must create a provider draft before finalization");
+        let final_result = replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle,
+                events: vec![ChannelOutputEvent::FinalMessage {
+                    text: "spoken words".into(),
+                    parts: vec![],
+                    receipt: None,
+                }],
+            })
+            .await
+            .expect("final message completes progressive turn");
+        assert!(matches!(
+            final_result,
+            ProgressiveResult::DeliveryOutcome { .. }
+        ));
+        let requests = callback.requests.lock().await;
+        let terminal = &requests[before..];
+        let voice_sends = terminal
+            .iter()
+            .filter(|request| {
+                matches!(request, ProgressiveTransportRequest::SendTyped { parts, .. }
+                    if parts.iter().any(|part| matches!(part,
+                        tinychannels_bus::OutboundContentPart::Voice {
+                            voice: tinychannels_bus::OutboundVoice::Media { media, .. }
+                        } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                    ))
+                )
+            })
+            .count();
+        assert_eq!(
+            voice_sends, 1,
+            "{mode:?} final must send one native voice part"
+        );
+        assert!(
+            terminal.iter().any(|request| matches!(request,
+                ProgressiveTransportRequest::Send { turn_id: Some(actual_turn), .. }
+                    if actual_turn == turn_id
+            )),
+            "the worker must first create/update the progressive text draft"
+        );
+        let draft_delete = terminal.iter().find_map(|request| match request {
+            ProgressiveTransportRequest::Delete {
+                turn_id: Some(actual_turn),
+                receipt,
+                ..
+            } if actual_turn == turn_id => receipt.as_ref(),
+            _ => None,
+        });
+        assert!(
+            draft_delete.is_some(),
+            "the existing progressive draft must be cleaned up after final voice delivery"
+        );
+        assert_eq!(
+            draft_delete.unwrap().platform_message_ids,
+            ["fixture-message"],
+            "cleanup must use the draft's provider receipt"
+        );
+        drop(requests);
+        replies.shutdown().await.expect("close scoped worker");
+    }
+
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    let audio_turn = ProgressiveOutputContext {
+        turn_id: "audio-file-fallback".into(),
+        ..context.clone()
+    };
+    let mut audio_caps = tinychannels_bus::ChannelCapabilities::default();
+    audio_caps.voice_out.synthesis = true;
+    audio_caps.content.parts = vec!["text".into(), "audio".into()];
+    audio_caps.content.audio.outbound = true;
+    audio_caps.content.audio.accepted_types = vec!["audio/ogg".into()];
+    audio_caps.content.audio.max_size_bytes = Some(8 * 1024 * 1024);
+    audio_caps.content.audio.max_duration_ms = Some(10_000);
+    let audio_sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(audio_turn.clone()),
+        capabilities: audio_caps.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut audio_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        audio_sender,
+        "telegram:bot-1",
+        audio_caps,
+        audio_turn,
+    );
+    audio_reply
+        .send_parts(
+            &[tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "spoken words".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            "spoken words",
+        )
+        .await
+        .expect("audio-file fallback is delivered");
+    let requests = callback.requests.lock().await;
+    let audio_request = requests
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                ..
+            } if turn_id == "audio-file-fallback" => Some(parts),
+            _ => None,
+        })
+        .expect("audio-file typed send");
+    assert!(audio_request.iter().any(|part| matches!(part,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Audio { media, codec: Some(codec), .. }
+        } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
+    )));
+    assert!(
+        !audio_request
+            .iter()
+            .any(|part| matches!(part, tinychannels_bus::OutboundContentPart::Voice { .. }))
+    );
+    drop(requests);
+
+    let link_turn = ProgressiveOutputContext {
+        turn_id: "authorized-link-fallback".into(),
+        ..context.clone()
+    };
+    let mut link_caps = tinychannels_bus::ChannelCapabilities::default();
+    link_caps.voice_out.synthesis = true;
+    let link_sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(link_turn.clone()),
+        capabilities: link_caps.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut link_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        link_sender,
+        "telegram:bot-1",
+        link_caps,
+        link_turn,
+    );
+    link_reply
+        .send_parts(
+            &[
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: "spoken ".into(),
+                        markdown_dialect: None,
+                    },
+                },
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: "words".into(),
+                        markdown_dialect: None,
+                    },
+                },
+            ],
+            "spoken words",
+        )
+        .await
+        .expect("authorized-link fallback is delivered");
+    let requests = callback.requests.lock().await;
+    let link_request = requests
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                text,
+                ..
+            } if turn_id == "authorized-link-fallback" => Some((parts, text)),
+            _ => None,
+        })
+        .expect("text plus authorized link send");
+    assert!(!link_request.0.iter().any(|part| matches!(
+        part,
+        tinychannels_bus::OutboundContentPart::Voice { .. }
+            | tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Audio { .. }
+            }
+    )));
+    assert!(
+        link_request
+            .1
+            .contains("https://media.example/authorized/voice")
+    );
+    let canonical_text = link_request
+        .0
+        .iter()
+        .filter_map(|part| match part {
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. },
+            } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        canonical_text.len(),
+        2,
+        "fallback must preserve ordered text parts"
+    );
+    assert_eq!(canonical_text[0], "spoken ");
+    assert!(canonical_text[1].contains("words"));
+    assert!(
+        canonical_text[1].contains("https://media.example/authorized/voice"),
+        "authorized link must exist in provider-rendered content.parts"
+    );
+    drop(requests);
+
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    capabilities.voice_out.max_size_bytes = Some(1);
+    let sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut too_long = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        sender,
+        "telegram:bot-1",
+        capabilities.clone(),
+        context.clone(),
+    );
+    let stores_before = callback.voice_store_calls.load(Ordering::SeqCst);
+    too_long
+        .send_parts(
+            &[tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "spoken words".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            "spoken words",
+        )
+        .await
+        .expect("oversized voice falls back to the text response");
+    assert_eq!(
+        callback.voice_store_calls.load(Ordering::SeqCst),
+        stores_before
+    );
+    let requests = callback.requests.lock().await;
+    let too_long_request = requests
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped { parts, text, .. } => Some((parts, text)),
+            _ => None,
+        })
+        .unwrap();
+    assert!(
+        !too_long_request
+            .0
+            .iter()
+            .any(|part| matches!(part, tinychannels_bus::OutboundContentPart::Voice { .. }))
+    );
+    assert!(
+        too_long_request
+            .1
+            .contains("Audio reply exceeded the channel size limit")
+    );
+    assert!(
+        too_long_request.0.iter().any(|part| matches!(part,
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. }
+            } if text.contains("Audio reply exceeded the channel size limit")
+        )),
+        "size fallback note must exist in canonical provider-rendered content.parts"
+    );
+    drop(requests);
+
+    let duration_context = ProgressiveOutputContext {
+        turn_id: "duration-limit-fallback".into(),
+        ..context.clone()
+    };
+    capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
+    capabilities.voice_out.max_duration_ms = Some(1_000);
+    let sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(duration_context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut duration_limited = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        sender,
+        "telegram:bot-1",
+        capabilities.clone(),
+        duration_context,
+    );
+    duration_limited
+        .send_parts(
+            &[tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "spoken words".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            "spoken words",
+        )
+        .await
+        .expect("too-long audio duration falls back to text");
+    let requests = callback.requests.lock().await;
+    let duration_request = requests
+        .iter()
+        .rev()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                ..
+            } if turn_id == "duration-limit-fallback" => Some(parts),
+            _ => None,
+        })
+        .expect("duration-limit text send");
+    assert!(
+        duration_request.iter().any(|part| matches!(part,
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. }
+            } if text.contains("Audio reply was too long to send")
+        )),
+        "duration limit note must exist in canonical provider-rendered content.parts"
+    );
+    drop(requests);
+
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    let sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let prompt = [tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Text {
+            text: "approval prompt".into(),
+            markdown_dialect: None,
+        },
+    }];
+    let before = callback.synthesis_calls.load(Ordering::SeqCst);
+    sender
+        .send_parts_with_segment(
+            "telegram:bot-1",
+            &prompt,
+            "approval prompt",
+            Some(&context),
+            100,
+            0,
+        )
+        .await
+        .expect("mid-turn approval delivery");
+    assert_eq!(callback.synthesis_calls.load(Ordering::SeqCst), before);
+}
+
+#[tokio::test]
+async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let _broker_task = broker.spawn(bus.clone());
+    let server = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let callback = Callback::default();
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    let codec_ops = Arc::new(AtomicUsize::new(0));
+    server
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            callback.clone(),
+        )
+        .await
+        .unwrap();
+    server
+        .serve_at(
+            tinyvoice_bus::OBJECT_PATH.try_into().unwrap(),
+            StubTinyVoiceCodec(codec_ops.clone()),
+        )
+        .await
+        .unwrap();
+    server
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    server.request_name(tinyvoice_bus::BUS_NAME).await.unwrap();
+    let client = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(client);
+    let context = ProgressiveOutputContext {
+        turn_id: "stub-codec-turn".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:bot-1".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "chat-1".into(),
+            topic_id: Some("topic-2".into()),
+            ..Default::default()
+        },
+    };
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.voice_out.supported = true;
+    capabilities.voice_out.synthesis = true;
+    capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
+    capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
+    capabilities.voice_out.max_duration_ms = Some(10_000);
+    let sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        sender,
+        "telegram:bot-1",
+        capabilities.clone(),
+        context.clone(),
+    );
+    reply
+        .send_parts(
+            &[tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "spoken response".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            "spoken response",
+        )
+        .await
+        .expect("stub codec bus supports the production final voice path");
+
+    {
+        let requests = callback.requests.lock().await;
+        let send = requests.iter().find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                ..
+            } if turn_id == "stub-codec-turn" => Some(parts),
+            _ => None,
+        });
+        assert!(send.is_some_and(|parts| parts.iter().any(|part| matches!(
+            part,
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media,
+                    codec: Some(codec),
+                    ..
+                }
+            } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
+        ))));
+    }
+    assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
+    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 1);
+
+    // Mirror, Never, and SpeakReply are evaluated against the host's scoped
+    // policy on each final turn. A denied policy sends the canonical text and
+    // performs no synthesis/store operation.
+    for (turn_id, mode, inbound_has_voice, explicitly_requested, should_voice) in [
+        (
+            "mirror-off",
+            tinychannels_bus::HostVoiceReplyMode::Mirror,
+            false,
+            false,
+            false,
+        ),
+        (
+            "mirror-on",
+            tinychannels_bus::HostVoiceReplyMode::Mirror,
+            true,
+            false,
+            true,
+        ),
+        (
+            "never",
+            tinychannels_bus::HostVoiceReplyMode::Never,
+            true,
+            true,
+            false,
+        ),
+        (
+            "speak-no",
+            tinychannels_bus::HostVoiceReplyMode::SpeakReply,
+            false,
+            false,
+            false,
+        ),
+        (
+            "speak-yes",
+            tinychannels_bus::HostVoiceReplyMode::SpeakReply,
+            false,
+            true,
+            true,
+        ),
+    ] {
+        *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+            mode,
+            inbound_has_voice,
+            explicitly_requested,
+        });
+        let mut case_context = context.clone();
+        case_context.turn_id = turn_id.into();
+        let case_sender = Arc::new(Sender {
+            host: host.clone(),
+            context: Some(case_context.clone()),
+            capabilities: capabilities.clone(),
+            channel: "telegram:bot-1".into(),
+            send_sequence: std::sync::atomic::AtomicU64::new(0),
+        });
+        let mut case_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+            case_sender,
+            "telegram:bot-1",
+            capabilities.clone(),
+            case_context,
+        );
+        case_reply
+            .send_parts(
+                &[tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: "policy response".into(),
+                        markdown_dialect: None,
+                    },
+                }],
+                "policy response",
+            )
+            .await
+            .expect("policy decision delivers a final response");
+        let requests = callback.requests.lock().await;
+        let parts = requests.iter().find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(actual_turn),
+                parts,
+                ..
+            } if actual_turn == turn_id => Some(parts),
+            _ => None,
+        });
+        let has_voice = parts.is_some_and(|parts| {
+            parts.iter().any(|part| {
+                matches!(
+                    part,
+                    tinychannels_bus::OutboundContentPart::Voice {
+                        voice: tinychannels_bus::OutboundVoice::Media { .. }
+                    }
+                )
+            })
+        });
+        assert_eq!(has_voice, should_voice, "turn {turn_id}");
+    }
+
+    assert_eq!(codec_ops.load(Ordering::SeqCst), 3);
+    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 3);
+
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Never,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    let mut explicit_context = context.clone();
+    explicit_context.turn_id = "explicit-synthesis-denied".into();
+    let explicit_sender = Sender {
+        host: host.clone(),
+        context: Some(explicit_context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    };
+    let explicit_parts = [
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("ordered-image".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Synthesize {
+                text: "spoken words must remain visible".into(),
+                voice: None,
+            },
+        },
+    ];
+    explicit_sender
+        .send_parts(
+            "telegram:bot-1",
+            &explicit_parts,
+            "",
+            Some(&explicit_context),
+            0,
+        )
+        .await
+        .expect("denied explicit synthesis still sends the ordered parts");
+    {
+        let requests = callback.requests.lock().await;
+        let parts = requests.iter().find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(actual_turn),
+                parts,
+                ..
+            } if actual_turn == "explicit-synthesis-denied" => Some(parts),
+            _ => None,
+        });
+        assert!(parts.is_some_and(|parts| parts.iter().any(|part| matches!(
+            part,
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. }
+            } if text == "spoken words must remain visible"
+        ))));
+    }
+    assert_eq!(codec_ops.load(Ordering::SeqCst), 3);
+    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 3);
+
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    let mut explicit_allowed_context = context.clone();
+    explicit_allowed_context.turn_id = "explicit-synthesis-mid-turn".into();
+    let explicit_allowed_sender = Sender {
+        host: host.clone(),
+        context: Some(explicit_allowed_context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    };
+    explicit_allowed_sender
+        .send_parts(
+            "telegram:bot-1",
+            &[
+                voice_test_text_part("explicit transcript"),
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Synthesize {
+                        text: "explicit transcript".into(),
+                        voice: None,
+                    },
+                },
+            ],
+            "explicit transcript",
+            Some(&explicit_allowed_context),
+            0,
+        )
+        .await
+        .expect("an explicitly requested typed voice can be sent mid-turn");
+    {
+        let requests = callback.requests.lock().await;
+        let parts = requests.iter().find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(actual_turn),
+                parts,
+                ..
+            } if actual_turn == "explicit-synthesis-mid-turn" => Some(parts),
+            _ => None,
+        });
+        assert!(parts.is_some_and(|parts| matches!(
+            parts.as_slice(),
+            [
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { text, .. }
+                },
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media { .. }
+                }
+            ] if text == "explicit transcript"
+        )));
+    }
+    assert_eq!(codec_ops.load(Ordering::SeqCst), 4);
+    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 4);
+
+    let mut audio_capabilities = capabilities.clone();
+    audio_capabilities.voice_out.supported = false;
+    audio_capabilities.voice_out.accepted_codecs.clear();
+    audio_capabilities.content.audio.outbound = true;
+    audio_capabilities.content.audio.accepted_types = vec!["audio/wav".into()];
+    audio_capabilities.content.parts.push("audio".into());
+    let audio_parts = send_final_voice_case(
+        &host,
+        &callback,
+        audio_capabilities,
+        "audio-file-fallback",
+        tinychannels_bus::HostVoiceReplyMode::Always,
+        vec![voice_test_text_part("audio fallback transcript")],
+        "audio fallback transcript",
+    )
+    .await;
+    assert!(audio_parts.iter().any(|part| matches!(
+        part,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Audio {
+                media,
+                codec: Some(codec),
+                transcript: Some(transcript),
+                ..
+            }
+        } if media.opaque_id.as_deref() == Some("durable-host-voice")
+            && codec == "wav_pcm16"
+            && transcript == "audio fallback transcript"
+    )));
+
+    let mut link_capabilities = capabilities.clone();
+    link_capabilities.voice_out.supported = false;
+    link_capabilities.voice_out.accepted_codecs.clear();
+    let link_parts = send_final_voice_case(
+        &host,
+        &callback,
+        link_capabilities,
+        "authorized-link-fallback",
+        tinychannels_bus::HostVoiceReplyMode::Always,
+        vec![
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("ordered-image".into()),
+                        kind: tinychannels_bus::MediaKind::Image,
+                        ..Default::default()
+                    },
+                    caption: None,
+                    alt_text: None,
+                },
+            },
+            voice_test_text_part("link fallback transcript"),
+        ],
+        "link fallback transcript",
+    )
+    .await;
+    assert!(matches!(link_parts.as_slice(), [
+        tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Image { .. } },
+        tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Text { text, .. } },
+    ] if text.contains("link fallback transcript")
+        && text.contains("https://media.example/authorized/voice")));
+
+    let mut size_limited = capabilities.clone();
+    size_limited.voice_out.max_size_bytes = Some(1);
+    let size_fallback = send_final_voice_case(
+        &host,
+        &callback,
+        size_limited,
+        "size-limit-fallback",
+        tinychannels_bus::HostVoiceReplyMode::Always,
+        Vec::new(),
+        "bounded text",
+    )
+    .await;
+    assert!(size_fallback.iter().any(|part| matches!(
+        part,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text { text, .. }
+        } if text.contains("Audio reply exceeded the channel size limit")
+            && text.contains("bounded text")
+    )));
+
+    let mut duration_limited = capabilities.clone();
+    duration_limited.voice_out.max_duration_ms = Some(1_000);
+    let duration_fallback = send_final_voice_case(
+        &host,
+        &callback,
+        duration_limited,
+        "duration-limit-fallback",
+        tinychannels_bus::HostVoiceReplyMode::Always,
+        vec![voice_test_text_part("long voice note")],
+        "long voice note",
+    )
+    .await;
+    assert!(duration_fallback.iter().any(|part| matches!(
+        part,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text { text, .. }
+        } if text.contains("Audio reply was too long to send")
+            && text.contains("long voice note")
+    )));
+}
+
+fn voice_test_text_part(text: &str) -> tinychannels_bus::OutboundContentPart {
+    tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Text {
+            text: text.into(),
+            markdown_dialect: None,
+        },
+    }
+}
+
+async fn send_final_voice_case(
+    host: &HostChannels,
+    callback: &Callback,
+    capabilities: tinychannels_bus::ChannelCapabilities,
+    turn_id: &str,
+    mode: tinychannels_bus::HostVoiceReplyMode,
+    parts: Vec<tinychannels_bus::OutboundContentPart>,
+    text: &str,
+) -> Vec<tinychannels_bus::OutboundContentPart> {
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode,
+        inbound_has_voice: true,
+        explicitly_requested: true,
+    });
+    let context = ProgressiveOutputContext {
+        turn_id: turn_id.into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:bot-1".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "chat-1".into(),
+            topic_id: Some("topic-2".into()),
+            ..Default::default()
+        },
+    };
+    let sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        sender,
+        "telegram:bot-1",
+        capabilities,
+        context,
+    );
+    reply
+        .send_parts(&parts, text)
+        .await
+        .expect("configured voice fallback delivers text or typed media");
+    let requests = callback.requests.lock().await;
+    requests
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(actual_turn),
+                parts,
+                ..
+            } if actual_turn == turn_id => Some(parts.clone()),
+            _ => None,
+        })
+        .expect("final turn dispatches one typed response")
+}
+
+fn progressive_test_wav() -> Vec<u8> {
+    let rate = 16_000u32;
+    let count = rate as usize * 8;
+    let data_len = count * 2;
+    let mut wav = Vec::with_capacity(44 + data_len);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36u32 + data_len as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&rate.to_le_bytes());
+    wav.extend_from_slice(&(rate * 2).to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data_len as u32).to_le_bytes());
+    for index in 0..count {
+        let sample =
+            ((index as f32 * 440.0 * std::f32::consts::TAU / rate as f32).sin() * 12_000.0) as i16;
+        wav.extend_from_slice(&sample.to_le_bytes());
+    }
+    wav
 }

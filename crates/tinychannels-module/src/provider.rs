@@ -164,7 +164,19 @@ impl Hooks {
             .unwrap_or_else(|e| e.into_inner()) = Some(configured_instance.clone());
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
-            .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
+            .transcriber(Arc::new(ModuleTranscriber(
+                callbacks.clone(),
+                configured_instance.clone(),
+            )))
+            .synthesizer(Arc::new(ModuleSynthesizer(
+                callbacks.clone(),
+                configured_instance.clone(),
+            )))
+            .voice_media_store(Arc::new(ModuleVoiceMediaStore(
+                callbacks.clone(),
+                configured_instance.clone(),
+            )))
+            .voice_codec(Arc::new(ModuleVoiceCodec(callbacks.clone())))
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
                 configured_instance,
@@ -178,6 +190,61 @@ impl Hooks {
         for hook in hooks {
             hook().await;
         }
+    }
+}
+
+pub(crate) struct ModuleVoiceCodec(pub(crate) HostChannels);
+
+#[async_trait::async_trait]
+impl tinychannels::host::VoiceCodec for ModuleVoiceCodec {
+    async fn transcode(
+        &self,
+        request: tinychannels::host::VoiceCodecRequest,
+    ) -> anyhow::Result<tinychannels::host::VoiceCodecResult> {
+        use tinyvoice_bus::codec::{AudioCodec, CodecTranscodeRequest};
+        let parse = |format: &str| match format {
+            "wav_pcm16" | "audio/wav" => Ok(AudioCodec::WavPcm16),
+            "ogg_opus" | "audio/ogg" => Ok(AudioCodec::OggOpus),
+            "m4a_aac" | "audio/mp4" => Ok(AudioCodec::M4aAac),
+            "mp3" | "audio/mpeg" => Ok(AudioCodec::Mp3),
+            _ => anyhow::bail!("unsupported TinyVoice codec format"),
+        };
+        let result = self
+            .0
+            .transcode_voice(CodecTranscodeRequest {
+                audio_base64: request.audio_base64,
+                from: parse(&request.from)?,
+                target: parse(&request.target)?,
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let info = self
+            .0
+            .probe_voice(tinyvoice_bus::codec::CodecInput {
+                audio_base64: result.audio_base64.clone(),
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let waveform = self
+            .0
+            .waveform_voice(tinyvoice_bus::codec::WaveformRequest {
+                audio_base64: result.audio_base64.clone(),
+                buckets: 64,
+            })
+            .await
+            .ok()
+            .map(|result| {
+                result
+                    .peaks
+                    .into_iter()
+                    .map(|peak| f32::from(peak) / 255.0)
+                    .collect()
+            });
+        Ok(tinychannels::host::VoiceCodecResult {
+            audio_base64: result.audio_base64,
+            duration_ms: Some(info.duration_ms),
+            waveform,
+        })
     }
 }
 
@@ -205,7 +272,7 @@ impl tinychannels::host::AllowlistStore for ModuleAllowlist {
     }
 }
 
-struct ModuleTranscriber(HostChannels);
+struct ModuleTranscriber(HostChannels, String);
 
 #[async_trait::async_trait]
 impl tinychannels::host::Transcriber for ModuleTranscriber {
@@ -233,6 +300,151 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
             duration_secs: result.duration_secs,
         })
     }
+
+    async fn transcribe_scoped(
+        &self,
+        mut scope: tinychannels_bus::HostVoiceScope,
+        request: tinychannels::host::TranscriptionRequest,
+    ) -> anyhow::Result<tinychannels::host::TranscriptionResult> {
+        validate_voice_scope(&scope)?;
+        scope.configured_instance.clone_from(&self.1);
+        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        scope.channel.account_id = Some(self.1.clone());
+        let result = self
+            .0
+            .transcribe_voice(tinychannels_bus::HostVoiceTranscriptionRequest {
+                scope,
+                audio_base64: request.audio_base64,
+                mime_type: request.mime_type,
+                file_name: request.file_name,
+                language: request.language,
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(tinychannels::host::TranscriptionResult {
+            text: result.text,
+            language: result.language,
+            duration_secs: result.duration_secs,
+        })
+    }
+}
+
+pub(crate) struct ModuleSynthesizer(pub(crate) HostChannels, pub(crate) String);
+
+#[async_trait::async_trait]
+impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
+    async fn synthesize(
+        &self,
+        _request: tinychannels::host::SpeechRequest,
+    ) -> anyhow::Result<tinychannels::host::SpeechResult> {
+        anyhow::bail!("scoped voice synthesis requires a conversation and turn identity")
+    }
+
+    async fn synthesize_scoped(
+        &self,
+        mut scope: tinychannels_bus::HostVoiceScope,
+        request: tinychannels::host::SpeechRequest,
+    ) -> anyhow::Result<tinychannels::host::SpeechResult> {
+        validate_voice_scope(&scope)?;
+        scope.configured_instance.clone_from(&self.1);
+        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        scope.channel.account_id = Some(self.1.clone());
+        let result = self
+            .0
+            .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
+                scope,
+                text: request.text,
+                voice: request.voice,
+                format: request.format,
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(tinychannels::host::SpeechResult {
+            audio_base64: result.audio_base64,
+            mime_type: result.mime_type,
+            duration_ms: result.duration_ms,
+            visemes: None,
+        })
+    }
+}
+
+pub(crate) struct ModuleVoiceMediaStore(pub(crate) HostChannels, pub(crate) String);
+
+#[async_trait::async_trait]
+impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
+    async fn store_voice(
+        &self,
+        mut request: tinychannels::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        validate_voice_scope(&request.scope)?;
+        request.scope.configured_instance.clone_from(&self.1);
+        request.scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        request.scope.channel.account_id = Some(self.1.clone());
+        let result = self
+            .0
+            .store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
+                scope: request.scope,
+                direction: request.direction,
+                audio_base64: request.audio_base64,
+                mime_type: request.mime_type,
+                codec: request.codec,
+                duration_ms: request.duration_ms,
+                file_name: request.file_name,
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let has_durable_reference = result
+            .media
+            .opaque_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty());
+        if !has_durable_reference {
+            anyhow::bail!("host did not return a durable voice media reference");
+        }
+        let mut result = result;
+        result.media.path = None;
+        result.media.local_cache_path = None;
+        result.media.url = None;
+        if result
+            .accessible_url
+            .as_deref()
+            .is_some_and(|url| url.trim().is_empty())
+        {
+            result.accessible_url = None;
+        }
+        Ok(result)
+    }
+
+    async fn read_voice(
+        &self,
+        mut scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        validate_voice_scope(&scope)?;
+        if opaque_id.trim().is_empty() {
+            anyhow::bail!("voice media reference is empty");
+        }
+        scope.configured_instance.clone_from(&self.1);
+        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        scope.channel.account_id = Some(self.1.clone());
+        let result = self
+            .0
+            .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
+                scope,
+                opaque_id,
+                max_bytes: 8 * 1024 * 1024,
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        Ok(result)
+    }
+}
+
+fn validate_voice_scope(scope: &tinychannels_bus::HostVoiceScope) -> anyhow::Result<()> {
+    if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
+        anyhow::bail!("voice callback requires a conversation and turn identity");
+    }
+    Ok(())
 }
 
 pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String);
@@ -290,6 +502,54 @@ impl tinychannels::host::EventSink for ModuleEvents {
             tinychannels_bus::ChannelIngress::Inbound(mut envelope) => {
                 envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
                 envelope.channel.account_id = Some(self.1.clone());
+                for part in &mut envelope.parts {
+                    let tinychannels_bus::ContentPart::VoiceNote { voice_note } = part else {
+                        continue;
+                    };
+                    if voice_note.transcript.as_ref().is_some_and(|transcript| {
+                        transcript.state == tinychannels_bus::VoiceTranscriptState::Complete
+                            && !transcript.text.trim().is_empty()
+                    }) {
+                        // Completed provider/host transcripts are already
+                        // authoritative. Avoid reading and retranscribing the
+                        // media during replay.
+                        continue;
+                    }
+                    let scope = tinychannels_bus::HostVoiceScope {
+                        configured_instance: self.1.clone(),
+                        channel: envelope.channel.clone(),
+                        conversation: envelope.conversation.clone(),
+                        turn_id: envelope.message_id.clone(),
+                    };
+                    let request = if let Some(opaque_id) = voice_note.media.opaque_id.clone() {
+                        match self
+                            .0
+                            .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
+                                scope: scope.clone(),
+                                opaque_id,
+                                max_bytes: 8 * 1024 * 1024,
+                            })
+                            .await
+                        {
+                            Ok(audio) => Some(tinychannels::host::TranscriptionRequest {
+                                audio_base64: audio.audio_base64,
+                                mime_type: Some(audio.mime_type),
+                                file_name: audio.file_name,
+                                language: None,
+                            }),
+                            Err(_) => None,
+                        }
+                    } else {
+                        None
+                    };
+                    tinychannels::host::enrich_voice_note(
+                        voice_note,
+                        scope,
+                        request,
+                        Some(Arc::new(ModuleTranscriber(self.0.clone(), self.1.clone()))),
+                    )
+                    .await;
+                }
                 self.0.deliver_inbound(&self.1, envelope).await;
                 Ok(true)
             }

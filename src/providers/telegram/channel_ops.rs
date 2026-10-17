@@ -6,12 +6,14 @@ use super::text::{TELEGRAM_MAX_MESSAGE_LENGTH, strip_tool_call_tags};
 use crate::config::StreamMode;
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
 
 impl TelegramChannel {
     pub(crate) fn inbound_envelope_from_update(
         update: &serde_json::Value,
         message: &ChannelMessage,
+        voice_note: Option<tinychannels_bus::VoiceNote>,
     ) -> tinychannels_bus::ChannelInboundEnvelope {
         let source = update
             .get("message")
@@ -84,10 +86,25 @@ impl TelegramChannel {
                 ..Default::default()
             },
             text: message.content.clone(),
-            parts: vec![tinychannels_bus::ContentPart::Text {
-                text: message.content.clone(),
-                markdown_dialect: None,
-            }],
+            parts: voice_note.map_or_else(
+                || {
+                    vec![tinychannels_bus::ContentPart::Text {
+                        text: message.content.clone(),
+                        markdown_dialect: None,
+                    }]
+                },
+                |voice_note| {
+                    let mut parts = Vec::new();
+                    if !message.content.trim().is_empty() {
+                        parts.push(tinychannels_bus::ContentPart::Text {
+                            text: message.content.clone(),
+                            markdown_dialect: None,
+                        });
+                    }
+                    parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
+                    parts
+                },
+            ),
             raw: Some(serde_json::json!({"providerMessageId": provider_message_id})),
             ..Default::default()
         }
@@ -126,6 +143,83 @@ impl TelegramChannel {
 impl Channel for TelegramChannel {
     fn name(&self) -> &str {
         "telegram"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        let progressive_edits = self.supports_progressive_edits();
+        let streaming_reply_pipeline = self.supports_draft_updates();
+        let reply_to_id = self.supports_reply_to_id();
+        let thread_id = self.supports_thread_id();
+        let mut actions = vec!["send".into()];
+        if progressive_edits {
+            actions.push("draft-update".into());
+        }
+        if self.supports_edit() {
+            actions.push("edit".into());
+        }
+        if reply_to_id || thread_id {
+            actions.push("reply".into());
+        }
+        if thread_id {
+            actions.push("thread-reply".into());
+        }
+        actions.extend(["react".into(), "reactions".into()]);
+        let mut parts = vec!["text".into()];
+        let (voice_in, voice_out) = if self.voice_media_store.is_some() {
+            parts.push("voice_note".into());
+            (
+                tinychannels_bus::VoiceCapabilities {
+                    supported: true,
+                    max_size_bytes: Some(8 * 1024 * 1024),
+                    transcript_sources: vec![
+                        tinychannels_bus::VoiceTranscriptSource::Provider,
+                        tinychannels_bus::VoiceTranscriptSource::HostStt,
+                    ],
+                    ..Default::default()
+                },
+                tinychannels_bus::VoiceCapabilities {
+                    supported: true,
+                    accepted_codecs: vec!["ogg_opus".into(), "m4a_aac".into(), "mp3".into()],
+                    max_size_bytes: Some(8 * 1024 * 1024),
+                    synthesis: self.voice_synthesis,
+                    ..Default::default()
+                },
+            )
+        } else {
+            (
+                tinychannels_bus::VoiceCapabilities::default(),
+                tinychannels_bus::VoiceCapabilities::default(),
+            )
+        };
+        tinychannels_bus::ChannelCapabilities {
+            remote_control: true,
+            chat_approvals: true,
+            history_key_ignores_thread: true,
+            reactions: true,
+            progressive_edits,
+            streaming_reply_pipeline,
+            addressing: tinychannels_bus::AddressingCapabilities {
+                reply_to_id,
+                thread_id,
+                ..Default::default()
+            },
+            content: tinychannels_bus::ContentCapabilities {
+                parts,
+                text: tinychannels_bus::ContentCapability {
+                    inbound: true,
+                    outbound: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            actions: tinychannels_bus::ActionCapabilities {
+                supported: actions,
+                ..Default::default()
+            },
+            voice_in,
+            voice_out,
+            ..Default::default()
+        }
     }
 
     fn supports_remote_control(&self) -> bool {
@@ -445,6 +539,242 @@ impl Channel for TelegramChannel {
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+        if message.parts.iter().any(|part| {
+            matches!(
+                part,
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
+                }
+            )
+        }) {
+            anyhow::bail!("voice synthesis must be prepared by the shared module runtime");
+        }
+        let voice_parts = message
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media { media, codec, .. },
+                } => Some((media, codec)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if voice_parts.len() == 1 {
+            let (media, codec) = voice_parts[0];
+            let caption_parts = message
+                .parts
+                .iter()
+                .filter_map(|part| match part {
+                    tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Text { text, .. },
+                    } => Some(Ok(text.as_str())),
+                    tinychannels_bus::OutboundContentPart::Voice { .. } => None,
+                    _ => Some(Err(anyhow::anyhow!(
+                        "Telegram voice send only supports transcript text"
+                    ))),
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?;
+            let caption = strip_tool_call_tags(&caption_parts.join("\n"));
+            // Telegram caps voice captions at 1024 characters. Keep the audio
+            // and deliver the full transcript as a follow-up text message instead
+            // of dropping the entire voice reply.
+            let transcript_fallback = caption.chars().count() > 1024;
+            let store = self.voice_media_store.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("Telegram voice upload requires host media resolution")
+            })?;
+            let conversation = message.conversation_ref.clone().unwrap_or_else(|| {
+                tinychannels_bus::ConversationRef {
+                    id: message.conversation_id.clone(),
+                    thread_id: message.thread_id.clone(),
+                    ..Default::default()
+                }
+            });
+            let opaque_id = media
+                .opaque_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| anyhow::anyhow!("voice media has no host-owned opaque reference"))?;
+            let channel =
+                message
+                    .channel_ref
+                    .clone()
+                    .unwrap_or_else(|| tinychannels_bus::ChannelRef {
+                        id: "telegram".into(),
+                        account_id: None,
+                    });
+            let turn_id = message
+                .turn_id
+                .clone()
+                .filter(|turn_id| !turn_id.trim().is_empty())
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Telegram voice upload requires originating turn identity")
+                })?;
+            let scope = tinychannels_bus::HostVoiceScope {
+                configured_instance: channel
+                    .account_id
+                    .clone()
+                    .unwrap_or_else(|| channel.id.clone()),
+                channel,
+                conversation: conversation.clone(),
+                turn_id,
+            };
+            let resolved = store.read_voice(scope, opaque_id.to_owned()).await?;
+            let audio = BASE64.decode(resolved.audio_base64.as_bytes())?;
+            let (method, field) =
+                if codec.as_deref() == Some("ogg_opus") || resolved.mime_type == "audio/ogg" {
+                    ("sendVoice", "voice")
+                } else {
+                    ("sendAudio", "audio")
+                };
+            let (chat_id, thread_id) = Self::parse_reply_target(&conversation.id);
+            let message_id = self
+                .send_voice_bytes_with_id(super::channel_send::TelegramVoiceUpload {
+                    method,
+                    field,
+                    chat_id: &chat_id,
+                    thread_id: thread_id
+                        .as_deref()
+                        .or(conversation.topic_id.as_deref())
+                        .or(conversation.thread_id.as_deref()),
+                    reply_to_id: message.reply_to_id.as_deref(),
+                    caption: (!transcript_fallback && !caption.trim().is_empty())
+                        .then_some(caption.as_str()),
+                    bytes: audio,
+                    file_name: resolved.file_name.as_deref().unwrap_or("voice.ogg"),
+                })
+                .await?;
+            let kind = tinychannels_bus::channel::MessageReceiptPartKind::Voice;
+            let receipt_part = tinychannels_bus::channel::MessageReceiptPart {
+                platform_message_id: message_id.clone(),
+                kind,
+                index: 0,
+                thread_id: conversation
+                    .topic_id
+                    .clone()
+                    .or(conversation.thread_id.clone()),
+                reply_to_id: message.reply_to_id.clone(),
+                edit_token: Some(message_id.clone()),
+                delete_token: Some(message_id.clone()),
+                raw: Some(tinychannels_bus::channel::MessageReceiptSourceResult {
+                    channel: Some("telegram".into()),
+                    message_id: Some(message_id.clone()),
+                    chat_id: Some(chat_id.clone()),
+                    ..Default::default()
+                }),
+            };
+            let mut receipt = tinychannels_bus::channel::MessageReceipt {
+                idempotency_key: Some(message.idempotency_key.clone()),
+                channel: Some(tinychannels_bus::ChannelRef {
+                    id: "telegram".into(),
+                    account_id: None,
+                }),
+                conversation: Some(conversation.clone()),
+                primary_platform_message_id: Some(message_id.clone()),
+                platform_message_ids: vec![message_id.clone()],
+                parts: vec![receipt_part],
+                thread_id: message.thread_id.clone(),
+                reply_to_id: message.reply_to_id.clone(),
+                edit_token: Some(message_id.clone()),
+                delete_token: Some(message_id.clone()),
+                sent_at: std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                raw: None,
+            };
+            let mut error = None;
+            if transcript_fallback {
+                let thread = thread_id
+                    .as_deref()
+                    .or(conversation.topic_id.as_deref())
+                    .or(conversation.thread_id.as_deref());
+                match self
+                    .send_text_chunks_with_ids(
+                        &caption,
+                        &chat_id,
+                        thread,
+                        Self::parse_message_id(message.reply_to_id.as_deref()),
+                    )
+                    .await
+                {
+                    Ok(text_ids) => {
+                        for (index, text_id) in text_ids.into_iter().enumerate() {
+                            receipt.platform_message_ids.push(text_id.clone());
+                            receipt
+                                .parts
+                                .push(tinychannels_bus::channel::MessageReceiptPart {
+                                    platform_message_id: text_id.clone(),
+                                    kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                                    index: index + 1,
+                                    thread_id: conversation
+                                        .topic_id
+                                        .clone()
+                                        .or(conversation.thread_id.clone()),
+                                    reply_to_id: message.reply_to_id.clone(),
+                                    edit_token: Some(text_id.clone()),
+                                    delete_token: Some(text_id.clone()),
+                                    raw: Some(
+                                        tinychannels_bus::channel::MessageReceiptSourceResult {
+                                            channel: Some("telegram".into()),
+                                            message_id: Some(text_id),
+                                            chat_id: Some(chat_id.clone()),
+                                            ..Default::default()
+                                        },
+                                    ),
+                                });
+                        }
+                    }
+                    Err(send_error) => {
+                        let partial =
+                            send_error.downcast_ref::<super::channel_send::PartialTextSendError>();
+                        if let Some(partial) = partial {
+                            for (index, text_id) in partial.message_ids.iter().enumerate() {
+                                receipt.platform_message_ids.push(text_id.clone());
+                                receipt
+                                    .parts
+                                    .push(tinychannels_bus::channel::MessageReceiptPart {
+                                        platform_message_id: text_id.clone(),
+                                        kind:
+                                            tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                                        index: index + 1,
+                                        thread_id: conversation
+                                            .topic_id
+                                            .clone()
+                                            .or(conversation.thread_id.clone()),
+                                        reply_to_id: message.reply_to_id.clone(),
+                                        edit_token: Some(text_id.clone()),
+                                        delete_token: Some(text_id.clone()),
+                                        raw: Some(
+                                            tinychannels_bus::channel::MessageReceiptSourceResult {
+                                                channel: Some("telegram".into()),
+                                                message_id: Some(text_id.clone()),
+                                                chat_id: Some(chat_id.clone()),
+                                                ..Default::default()
+                                            },
+                                        ),
+                                    });
+                            }
+                            error = Some(partial.error.clone());
+                            if let Some(error) = &mut error {
+                                error.sent_before_error = true;
+                                error.retryable = false;
+                            }
+                        } else {
+                            error = Some(tinychannels_bus::channel::ChannelSendError {
+                                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                                message:
+                                    "Telegram sent voice audio but transcript delivery is uncertain"
+                                        .into(),
+                                sent_before_error: true,
+                                retryable: false,
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            }
+            return Ok(tinychannels_bus::channel::ChannelSendOutcome { receipt, error });
+        }
         let text_parts = message
             .parts
             .iter()
@@ -452,7 +782,7 @@ impl Channel for TelegramChannel {
                 tinychannels_bus::OutboundContentPart::Content {
                     part: tinychannels_bus::ContentPart::Text { text, .. },
                 } => Ok(text.as_str()),
-                _ => anyhow::bail!("Telegram typed sends currently support text content only"),
+                _ => anyhow::bail!("Telegram typed send does not support this content combination"),
             })
             .collect::<anyhow::Result<Vec<_>>>()?;
         if text_parts.is_empty() {
@@ -837,7 +1167,17 @@ Ensure only one `openhuman` process is using this bot token."
                         continue;
                     };
 
-                    let ingress = Self::inbound_envelope_from_update(update, &msg);
+                    let voice_note = match self.voice_note_for_ingress(update, &msg).await {
+                        Ok(note) => note,
+                        Err(error) if Self::parse_update_voice_attachment(update).is_some() => {
+                            tracing::warn!(
+                                "Telegram voice could not be durably persisted: {error}"
+                            );
+                            None
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let ingress = Self::inbound_envelope_from_update(update, &msg, voice_note);
                     let delivered_by_event_sink = if let Some(events) = &self.events {
                         match events
                             .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(ingress))

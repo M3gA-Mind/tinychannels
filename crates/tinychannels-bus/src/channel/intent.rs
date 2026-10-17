@@ -148,6 +148,10 @@ impl<'de> Deserialize<'de> for OutboundPayload {
 pub enum OutboundVoice {
     Media {
         media: MediaReference,
+        /// Optional bounded inline payload for one native upload. The durable
+        /// reference remains the canonical media identity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        audio_base64: Option<String>,
         codec: Option<String>,
         duration_ms: Option<u64>,
     },
@@ -187,6 +191,9 @@ pub struct ChannelOutboundMessage {
     pub conversation_ref: Option<ConversationRef>,
     pub reply_to_id: Option<String>,
     pub thread_id: Option<String>,
+    /// Originating scoped host turn; distinct from the per-send idempotency key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
     pub idempotency_key: String,
     pub parts: Vec<OutboundContentPart>,
 }
@@ -293,6 +300,7 @@ impl ChannelOutboundMessage {
                     .as_ref()
                     .and_then(|reference| reference.thread_id.clone())
             }),
+            turn_id: intent.turn_id.clone(),
             idempotency_key: intent.idempotency_key.clone(),
             parts,
         }
@@ -334,6 +342,7 @@ impl ChannelOutboundMessage {
             }),
             reply_to_id: message.reply_to_id.clone(),
             thread_id: message.thread_ts.clone(),
+            turn_id: None,
             idempotency_key: message.idempotency_key.clone().unwrap_or_default(),
             parts: vec![OutboundContentPart::Content {
                 part: ContentPart::Text {
@@ -385,6 +394,9 @@ pub struct ChannelOutboundIntent {
     pub conversation_ref: Option<ConversationRef>,
     pub reply_to_id: Option<String>,
     pub thread_id: Option<String>,
+    /// Originating turn for scoped host operations; independent of delivery key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
     pub durability: DeliveryDurability,
     pub payload: OutboundPayload,
 }
@@ -399,6 +411,7 @@ impl Default for ChannelOutboundIntent {
             conversation_ref: None,
             reply_to_id: None,
             thread_id: None,
+            turn_id: None,
             durability: DeliveryDurability::BestEffort,
             payload: OutboundPayload::Text {
                 text: String::new(),

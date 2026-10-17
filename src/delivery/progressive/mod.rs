@@ -232,6 +232,34 @@ pub trait ProgressiveSender: Send + Sync {
             .await
     }
 
+    /// Whether a completed text final must bypass the edit-only draft path so
+    /// scoped final-output policy can add voice media. Legacy senders do not
+    /// opt into synthesized output.
+    async fn should_synthesize_final(
+        &self,
+        _channel: &str,
+        _context: Option<&ProgressiveOutputContext>,
+        _text: &str,
+    ) -> Result<bool, ProgressiveSendError> {
+        Ok(false)
+    }
+
+    /// Deliver the completed assistant final through shared turn policy.
+    /// Mid-turn typed content uses `send_parts_with_segment` and cannot trigger
+    /// automatic voice synthesis.
+    async fn send_final_parts_with_segment(
+        &self,
+        channel: &str,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+        context: Option<&ProgressiveOutputContext>,
+        sequence: u64,
+        segment_index: u32,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
+        self.send_parts_with_segment(channel, parts, text, context, sequence, segment_index)
+            .await
+    }
+
     /// Replace the text of a posted message.
     async fn edit(
         &self,

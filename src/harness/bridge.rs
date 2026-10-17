@@ -135,6 +135,7 @@ pub fn translate_output_event(
             parts.push(tinychannels_bus::OutboundContentPart::Voice {
                 voice: tinychannels_bus::OutboundVoice::Media {
                     media: voice.media,
+                    audio_base64: None,
                     codec: voice.codec,
                     duration_ms: voice.duration_ms,
                 },
@@ -189,6 +190,7 @@ pub fn translate_output_event(
         conversation_ref: Some(turn.envelope.conversation.clone()),
         reply_to_id: Some(turn.envelope.message_id.clone()).filter(|id| !id.is_empty()),
         thread_id: turn.envelope.conversation.thread_id.clone(),
+        turn_id: Some(turn.id.clone()),
         durability: options.durability,
         payload,
     }])

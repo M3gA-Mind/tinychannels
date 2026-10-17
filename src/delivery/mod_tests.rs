@@ -140,6 +140,7 @@ fn intent(payload: OutboundPayload) -> ChannelOutboundIntent {
         conversation_ref: None,
         reply_to_id: None,
         thread_id: None,
+        turn_id: None,
         durability: DeliveryDurability::Required,
         payload,
     }
@@ -633,6 +634,7 @@ fn payload_shape_maps_to_expected_durable_capability() {
                     },
                     codec: None,
                     duration_ms: None,
+                    audio_base64: None,
                 },
             },
             Media,

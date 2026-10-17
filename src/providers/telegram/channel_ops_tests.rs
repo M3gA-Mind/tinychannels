@@ -1,9 +1,532 @@
 use super::*;
 use crate::providers::telegram::fixtures::*;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+struct VoiceReadFixture;
+struct LargeVoiceReadFixture {
+    expected_scope: tinychannels_bus::HostVoiceScope,
+}
+
+fn outbound_voice_message(
+    opaque_id: Option<&str>,
+    turn_id: Option<&str>,
+) -> tinychannels_bus::ChannelOutboundMessage {
+    tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: turn_id.map(str::to_owned),
+        idempotency_key: "operation-key".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: opaque_id.map(str::to_owned),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                audio_base64: None,
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1000),
+            },
+        }],
+    }
+}
+
+#[test]
+fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() {
+    let without_store = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).capabilities();
+    assert!(!without_store.voice_in.supported);
+    assert!(!without_store.voice_out.supported);
+    assert!(!without_store.voice_out.synthesis);
+
+    let with_storage = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
+        .with_voice_media_store(Arc::new(VoiceReadFixture))
+        .capabilities();
+    assert!(with_storage.voice_in.supported);
+    assert_eq!(with_storage.content.parts, ["text", "voice_note"]);
+    assert!(with_storage.voice_out.supported);
+    assert!(!with_storage.voice_out.synthesis);
+    assert_eq!(
+        with_storage.voice_out.accepted_codecs,
+        ["ogg_opus", "m4a_aac", "mp3"]
+    );
+    assert_eq!(with_storage.voice_out.max_size_bytes, Some(8 * 1024 * 1024));
+
+    let with_all_ports = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
+        .with_voice_media_store(Arc::new(VoiceReadFixture))
+        .with_voice_synthesis(true)
+        .capabilities();
+    assert!(with_all_ports.voice_out.synthesis);
+}
+
+#[test]
+fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
+    let off = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
+        .with_voice_media_store(Arc::new(VoiceReadFixture))
+        .capabilities();
+    assert!(off.content.text.inbound && off.content.text.outbound);
+    assert_eq!(off.content.parts, ["text", "voice_note"]);
+    assert!(off.actions.supported.contains(&"send".into()));
+    assert!(!off.progressive_edits);
+    assert!(!off.streaming_reply_pipeline);
+
+    let on = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
+        .with_streaming(StreamMode::Partial, 100, true)
+        .with_voice_media_store(Arc::new(VoiceReadFixture))
+        .capabilities();
+    assert!(on.progressive_edits);
+    assert!(on.streaming_reply_pipeline);
+    assert!(on.actions.supported.contains(&"draft-update".into()));
+}
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for VoiceReadFixture {
+    async fn store_voice(
+        &self,
+        _request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        unreachable!()
+    }
+
+    async fn read_voice(
+        &self,
+        scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        assert_eq!(scope.turn_id, "turn-7");
+        assert_eq!(scope.channel.id, "telegram");
+        assert_eq!(scope.conversation.id, "100");
+        assert_eq!(opaque_id, "host-media-1");
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: "AQIDBA==".into(),
+            mime_type: "audio/ogg".into(),
+            file_name: Some("reply.ogg".into()),
+        })
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for LargeVoiceReadFixture {
+    async fn store_voice(
+        &self,
+        _request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        unreachable!()
+    }
+
+    async fn read_voice(
+        &self,
+        scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        assert_eq!(scope, self.expected_scope);
+        assert_eq!(opaque_id, "large-opaque-voice");
+        let bytes = vec![0x5a_u8; 129 * 1024];
+        assert!(bytes.len() > tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: BASE64.encode(bytes),
+            mime_type: "audio/ogg".into(),
+            file_name: Some("large-reply.ogg".into()),
+        })
+    }
+}
+
+#[tokio::test]
+async fn telegram_resolves_and_uploads_voice_larger_than_inline_intent_limit() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({"message_id": 53})),
+    )
+    .await;
+    let expected_conversation = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Dm,
+        id: "100".into(),
+        scope_id: Some("scope-9".into()),
+        parent_id: Some("parent-4".into()),
+        thread_id: Some("thread-5".into()),
+        topic_id: Some("77".into()),
+    };
+    let expected_channel = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram:bot-1".into()),
+    };
+    let expected_scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "telegram:bot-1".into(),
+        channel: expected_channel.clone(),
+        conversation: expected_conversation.clone(),
+        turn_id: "large-voice-origin-turn".into(),
+    };
+    let channel = channel_for(&server, &["*"])
+        .with_voice_media_store(Arc::new(LargeVoiceReadFixture { expected_scope }));
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: Some(expected_channel),
+        conversation_ref: Some(expected_conversation),
+        reply_to_id: Some("42".into()),
+        thread_id: None,
+        turn_id: Some("large-voice-origin-turn".into()),
+        idempotency_key: "send-idempotency-hash".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("large-opaque-voice".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                audio_base64: None,
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(2_000),
+            },
+        }],
+    };
+    let inline = serde_json::to_vec(&message).unwrap();
+    assert!(inline.len() < tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
+    assert!(!String::from_utf8_lossy(&inline).contains("audio_base64"));
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("53")
+    );
+    let uploads = raw_bodies(&server, "sendVoice").await;
+    assert_eq!(uploads.len(), 1);
+    assert!(uploads[0].contains("large-reply.ogg"));
+    assert!(uploads[0].contains(&"Z".repeat(129 * 1024)));
+    assert!(uploads[0].contains("reply_parameters"));
+}
+
+#[tokio::test]
+async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({
+            "message_id": 51
+        })),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: None,
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            ..Default::default()
+        }),
+        reply_to_id: Some("42".into()),
+        thread_id: None,
+        turn_id: Some("turn-7".into()),
+        idempotency_key: "send-key-hash".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("host-media-1".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                audio_base64: None,
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1000),
+            },
+        }],
+    };
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("51")
+    );
+    assert_eq!(
+        outcome.receipt.parts[0].kind,
+        tinychannels_bus::channel::MessageReceiptPartKind::Voice
+    );
+    let uploads = raw_bodies(&server, "sendVoice").await;
+    assert_eq!(uploads.len(), 1);
+    assert!(uploads[0].contains("name=\"voice\""));
+    assert!(uploads[0].contains("reply.ogg"));
+    assert!(uploads[0].contains("\u{1}\u{2}\u{3}\u{4}"));
+    assert!(uploads[0].contains("reply_parameters"));
+    assert!(uploads[0].contains("\"message_id\":42"));
+}
+
+#[tokio::test]
+async fn typed_voice_sends_long_transcript_as_receipted_followup_text() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({"message_id": 54})),
+    )
+    .await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({"message_id": 55})),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
+    let transcript = "transcript ".repeat(110);
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: None,
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            topic_id: Some("77".into()),
+            ..Default::default()
+        }),
+        reply_to_id: Some("42".into()),
+        thread_id: None,
+        turn_id: Some("turn-7".into()),
+        idempotency_key: "send-key-hash".into(),
+        parts: vec![
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: transcript.clone(),
+                    markdown_dialect: None,
+                },
+            },
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("host-media-1".into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    audio_base64: None,
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: Some(1000),
+                },
+            },
+        ],
+    };
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    assert_eq!(outcome.error, None);
+    assert_eq!(outcome.receipt.platform_message_ids, ["54", "55"]);
+    assert_eq!(
+        outcome
+            .receipt
+            .parts
+            .iter()
+            .map(|part| part.kind)
+            .collect::<Vec<_>>(),
+        [
+            tinychannels_bus::channel::MessageReceiptPartKind::Voice,
+            tinychannels_bus::channel::MessageReceiptPartKind::Text,
+        ]
+    );
+    let voice = raw_bodies(&server, "sendVoice").await;
+    assert_eq!(voice.len(), 1);
+    assert!(
+        !voice[0].contains(&transcript),
+        "overlong caption is omitted from multipart upload"
+    );
+    let text = json_bodies(&server, "sendMessage").await;
+    assert_eq!(text.len(), 1);
+    assert!(text[0]["text"].as_str().unwrap().contains("transcript"));
+    assert_eq!(text[0]["message_thread_id"], "77");
+    assert_eq!(text[0]["reply_to_message_id"], 42);
+}
+
+#[tokio::test]
+async fn long_voice_transcript_failure_retains_partial_receipts_without_retry() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({"message_id": 56})),
+    )
+    .await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .respond_with(ok_with(serde_json::json!({"message_id": 57})))
+        .up_to_n_times(1)
+        .mount(&server)
+        .await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ResponseTemplate::new(400).set_body_string("rejected"),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
+    let transcript = "long transcript ".repeat(400);
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: None,
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            ..Default::default()
+        }),
+        reply_to_id: Some("42".into()),
+        thread_id: None,
+        turn_id: Some("turn-7".into()),
+        idempotency_key: "send-key-hash".into(),
+        parts: vec![
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: transcript,
+                    markdown_dialect: None,
+                },
+            },
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("host-media-1".into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    audio_base64: None,
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: Some(1000),
+                },
+            },
+        ],
+    };
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    assert_eq!(outcome.receipt.platform_message_ids, ["56", "57"]);
+    let error = outcome
+        .error
+        .expect("later transcript chunk failure stays visible");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await.len(),
+        2,
+        "the operation makes one pass and preserves the accepted text chunk"
+    );
+    assert_eq!(
+        raw_bodies(&server, "sendVoice").await.len(),
+        1,
+        "ambiguous transcript failure must not repeat the voice upload"
+    );
+}
+
+#[tokio::test]
+async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({"message_id": 52})),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
+    let mut message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: None,
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            ..Default::default()
+        }),
+        reply_to_id: Some("42".into()),
+        thread_id: None,
+        turn_id: Some("turn-7".into()),
+        idempotency_key: "send-key-hash".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("host-media-1".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                audio_base64: None,
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1000),
+            },
+        }],
+    };
+    message.parts.insert(
+        0,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "recognized words".into(),
+                markdown_dialect: None,
+            },
+        },
+    );
+
+    let result = channel.send_typed_with_receipt(&message).await;
+    assert!(
+        result.is_ok(),
+        "mixed transcript+voice must be supported: {result:?}"
+    );
+    let uploads = raw_bodies(&server, "sendVoice").await;
+    assert_eq!(uploads.len(), 1);
+    assert!(uploads[0].contains("recognized words"));
+    assert!(uploads[0].contains("reply_parameters"));
+    assert_eq!(
+        result
+            .unwrap()
+            .receipt
+            .primary_platform_message_id
+            .as_deref(),
+        Some("52")
+    );
+}
+
+#[tokio::test]
+async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
+    let server = mock_api().await;
+    let message = outbound_voice_message(Some("voice-ref"), Some("turn-1"));
+    let missing_store = channel_for(&server, &["*"])
+        .send_typed_with_receipt(&message)
+        .await
+        .unwrap_err();
+    assert!(
+        missing_store
+            .to_string()
+            .contains("requires host media resolution")
+    );
+
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
+    let missing_reference = channel
+        .send_typed_with_receipt(&outbound_voice_message(None, Some("turn-1")))
+        .await
+        .unwrap_err();
+    assert!(
+        missing_reference
+            .to_string()
+            .contains("no host-owned opaque reference")
+    );
+
+    let missing_turn = channel
+        .send_typed_with_receipt(&outbound_voice_message(Some("voice-ref"), None))
+        .await
+        .unwrap_err();
+    assert!(
+        missing_turn
+            .to_string()
+            .contains("requires originating turn identity")
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
 
 /// Hang guard for loops that must terminate on their own.
 const GUARD: Duration = Duration::from_secs(20);
@@ -96,6 +619,7 @@ fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessag
         }),
         reply_to_id: Some("5".into()),
         thread_id: None,
+        turn_id: None,
         idempotency_key: id.into(),
         parts: vec![tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Text {
@@ -255,7 +779,7 @@ fn inbound_envelope_keeps_chat_channel_and_legacy_identity_fallbacks() {
             "reply_to_message": {"message_id": 3}
         }
     });
-    let channel = TelegramChannel::inbound_envelope_from_update(&channel_update, &legacy);
+    let channel = TelegramChannel::inbound_envelope_from_update(&channel_update, &legacy, None);
     assert_eq!(
         channel.conversation.kind,
         tinychannels_bus::ConversationKind::Channel
@@ -271,13 +795,89 @@ fn inbound_envelope_keeps_chat_channel_and_legacy_identity_fallbacks() {
             "from": {}
         }
     });
-    let unknown = TelegramChannel::inbound_envelope_from_update(&unknown_update, &legacy);
+    let unknown = TelegramChannel::inbound_envelope_from_update(&unknown_update, &legacy, None);
     assert_eq!(
         unknown.conversation.kind,
         tinychannels_bus::ConversationKind::Unknown
     );
     assert_eq!(unknown.conversation.id, "17");
     assert_eq!(unknown.sender.id, "legacy-sender");
+}
+
+#[test]
+fn voice_ingress_keeps_audio_part_beside_provider_transcript() {
+    let legacy = ChannelMessage {
+        id: "telegram_100_9".into(),
+        sender: "alice".into(),
+        reply_target: "100".into(),
+        content: "recognized words".into(),
+        channel: "telegram".into(),
+        ..Default::default()
+    };
+    let update = serde_json::json!({
+        "message": {
+            "message_id": 9,
+            "chat": {"id": 100, "type": "private"},
+            "from": {"id": 8},
+            "voice": {
+                "file_id": "opaque-provider-file-id",
+                "file_unique_id": "opaque-unique-id",
+                "file_size": 16,
+                "mime_type": "audio/ogg",
+                "duration": 3
+            }
+        }
+    });
+
+    let mut voice_note = tinychannels_bus::VoiceNote {
+        media: tinychannels_bus::MediaReference {
+            opaque_id: Some("store-owned-voice-7".into()),
+            content_type: Some("audio/ogg".into()),
+            kind: tinychannels_bus::MediaKind::Audio,
+            ..Default::default()
+        },
+        duration_ms: Some(3_000),
+        ..Default::default()
+    };
+    voice_note.transcript = Some(tinychannels_bus::VoiceTranscript {
+        text: legacy.content.clone(),
+        language: None,
+        state: tinychannels_bus::VoiceTranscriptState::Complete,
+        source: tinychannels_bus::VoiceTranscriptSource::Provider,
+    });
+    let envelope =
+        TelegramChannel::inbound_envelope_from_update(&update, &legacy, Some(voice_note));
+
+    assert_eq!(envelope.text, "recognized words");
+    assert_eq!(envelope.parts.len(), 2);
+    assert!(matches!(
+        envelope.parts[0],
+        tinychannels_bus::ContentPart::Text { .. }
+    ));
+    let tinychannels_bus::ContentPart::VoiceNote { voice_note } = &envelope.parts[1] else {
+        panic!("voice ingress must retain a typed audio part")
+    };
+    assert_eq!(voice_note.media.content_type.as_deref(), Some("audio/ogg"));
+    assert_eq!(voice_note.duration_ms, Some(3_000));
+    assert_eq!(
+        voice_note
+            .transcript
+            .as_ref()
+            .map(|transcript| transcript.text.as_str()),
+        Some("recognized words")
+    );
+    assert_eq!(
+        voice_note
+            .transcript
+            .as_ref()
+            .map(|transcript| transcript.source),
+        Some(tinychannels_bus::VoiceTranscriptSource::Provider)
+    );
+    assert_ne!(
+        voice_note.media.url.as_deref(),
+        Some("opaque-provider-file-id"),
+        "provider-private file IDs are not durable media URLs"
+    );
 }
 
 #[tokio::test]
@@ -903,6 +1503,7 @@ fn telegram_v2_ingress_preserves_plain_and_forum_addresses_without_legacy_topic_
     let plain = TelegramChannel::inbound_envelope_from_update(
         &serde_json::json!({"message":{"message_id":5,"date":12,"chat":{"id":100,"type":"private"},"from":{"id":7}}}),
         &legacy,
+        None,
     );
     assert_eq!(plain.message_id, "telegram_100_5");
     assert_eq!(
@@ -918,6 +1519,7 @@ fn telegram_v2_ingress_preserves_plain_and_forum_addresses_without_legacy_topic_
     let forum = TelegramChannel::inbound_envelope_from_update(
         &serde_json::json!({"message":{"message_id":5,"date":12,"message_thread_id":88,"chat":{"id":100,"type":"supergroup"},"from":{"id":7}}}),
         &legacy,
+        None,
     );
     assert_eq!(
         forum.conversation.kind,
