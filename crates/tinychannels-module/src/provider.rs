@@ -1068,9 +1068,15 @@ impl tinychannels::channel::ChannelAdapter for Running {
             let partial = error.sent_before_error
                 || outcome.receipt.primary_platform_message_id.is_some()
                 || !outcome.receipt.platform_message_ids.is_empty()
-                || !outcome.receipt.parts.is_empty();
-            error.sent_before_error |= partial;
-            if partial {
+                || !outcome.receipt.parts.is_empty()
+                || !error.continuation_message_ids.is_empty()
+                || error.partial_overflow.is_some();
+            let uncertain = error.kind == tinychannels::channel::SendErrorKind::Unknown;
+            if partial || uncertain {
+                error.unsupported = false;
+            }
+            error.sent_before_error |= partial || uncertain;
+            if partial || uncertain {
                 error.retryable = false;
             }
         }
