@@ -3767,6 +3767,22 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             .await
             .expect("text delta reaches progressive worker");
         assert!(matches!(draft, ProgressiveResult::Updated));
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if callback
+                    .requests
+                    .lock()
+                    .await
+                    .iter()
+                    .any(|request| matches!(request, ProgressiveTransportRequest::Send { .. }))
+                {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("text delta must create a provider draft before finalization");
         let final_result = replies
             .execute(ProgressiveCommand::FeedOutput {
                 handle,
@@ -3793,12 +3809,20 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             .count();
         assert_eq!(voice_sends, 1, "{mode:?} final must send one native voice part");
         assert!(terminal.iter().any(|request| matches!(request,
-            ProgressiveTransportRequest::OutputEvent { event, .. }
-                if matches!(&**event, tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta { .. })
+            ProgressiveTransportRequest::Send { turn_id: Some(actual_turn), .. }
+                if actual_turn == turn_id
         )), "the worker must first create/update the progressive text draft");
-        assert!(terminal.iter().any(|request| matches!(request,
-            ProgressiveTransportRequest::Delete { .. }
-        )), "the existing progressive draft must be cleaned up after final voice delivery");
+        let draft_delete = terminal.iter().find_map(|request| match request {
+            ProgressiveTransportRequest::Delete { turn_id: Some(actual_turn), receipt, .. }
+                if actual_turn == turn_id => receipt.as_ref(),
+            _ => None,
+        });
+        assert!(draft_delete.is_some(), "the existing progressive draft must be cleaned up after final voice delivery");
+        assert_eq!(
+            draft_delete.unwrap().platform_message_ids,
+            ["fixture-message"],
+            "cleanup must use the draft's provider receipt"
+        );
         drop(requests);
         replies.shutdown().await.expect("close scoped worker");
     }
