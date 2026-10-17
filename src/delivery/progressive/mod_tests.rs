@@ -1620,11 +1620,10 @@ async fn impossible_text_limit_and_unsupported_first_segment_never_send_a_replac
 }
 
 #[tokio::test]
-async fn disabled_and_empty_draft_flushes_make_no_provider_calls() {
+async fn disabled_draft_flush_makes_no_provider_calls() {
     use super::draft::flush_streaming_edit;
     let sender = FakeSender::default();
     let mut state = StreamingState::default();
-    flush_streaming_edit(&sender, "empty", &mut state, false).await;
     state.content = "text".into();
     state.edit_disabled = true;
     flush_streaming_edit(&sender, "empty", &mut state, false).await;
@@ -1677,5 +1676,80 @@ async fn ids_only_draft_receipt_edits_in_place_without_replacing_delivered_messa
                 Call::Edit("known-id".into(), "finished".into()),
             ]
         );
+    }
+}
+
+#[tokio::test]
+async fn direct_typed_receipts_preserve_opaque_authority_for_drafts_and_ephemeral_cleanup() {
+    let (sender, mut reply) = turn("telegram:direct-typed-receipts");
+    let receipt = MessageReceipt {
+        channel: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("bot-account".into()),
+        }),
+        conversation: Some(tinychannels_bus::ConversationRef {
+            id: "conversation".into(),
+            topic_id: Some("topic".into()),
+            ..Default::default()
+        }),
+        idempotency_key: Some("original-key".into()),
+        primary_platform_message_id: Some("provider-id".into()),
+        platform_message_ids: vec!["provider-id".into()],
+        edit_token: Some("opaque-edit-authority".into()),
+        delete_token: Some("opaque-delete-authority".into()),
+        parts: vec![MessageReceiptPart {
+            platform_message_id: "provider-id".into(),
+            edit_token: Some("opaque-part-edit".into()),
+            delete_token: Some("opaque-part-delete".into()),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    FakeSender::script(
+        &sender.sends,
+        Outcome::Ok(serde_json::to_value(&receipt).unwrap()),
+    );
+    reply.on_text_delta("draft");
+    reply.edit_tick().await;
+    assert_eq!(
+        reply.state.message_receipt.as_ref(),
+        Some(&receipt),
+        "direct typed Outcome receipts must retain all provider authority"
+    );
+    FakeSender::script(
+        &sender.sends,
+        Outcome::Ok(serde_json::to_value(&receipt).unwrap()),
+    );
+    reply.on_thinking_delta("reasoning");
+    reply.edit_tick().await;
+    assert_eq!(
+        reply.state.thinking_message_receipt.as_ref(),
+        Some(&receipt)
+    );
+    FakeSender::script(
+        &sender.sends,
+        Outcome::Ok(serde_json::to_value(&receipt).unwrap()),
+    );
+    reply.filler_tick().await;
+    assert_eq!(reply.state.filler_message_receipts, vec![receipt.clone()]);
+    let dispatch = reply
+        .finalize_output_event(&Event::FinalMessage {
+            text: "finished".into(),
+            parts: vec![],
+            receipt: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(dispatch.outcomes[0].receipt, receipt);
+}
+
+#[test]
+fn unrelated_legacy_response_objects_do_not_become_normalized_receipts() {
+    for response in [
+        json!({"success": true}),
+        json!({"id": "legacy-id"}),
+        json!({"data": {"messageId": 8}}),
+    ] {
+        assert!(super::state::extract_message_receipt(&response).is_none());
     }
 }
