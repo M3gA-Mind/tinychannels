@@ -515,6 +515,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             conversation_ref: Some(self.scope.conversation.clone()),
             reply_to_id: self.scope.reply_to_id.clone(),
             thread_id: self.scope.thread_id.clone(),
+            turn_id: Some("turn-kit".into()),
             payload,
             ..Default::default()
         };
@@ -1844,6 +1845,33 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     );
     let running = Running::start_telegram(channel, hooks, host, None, true);
     let handle = running.adapter_handle();
+    let repository = provider_host.media_repository().expect("configured Telegram host media repository");
+    let media_scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "telegram:account-a".into(),
+        channel: tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: Some("telegram:account-a".into()) },
+        conversation: ConversationRef { kind: ConversationKind::Group, id: "-100".into(), thread_id: Some("77".into()), topic_id: Some("77".into()), ..Default::default() },
+        turn_id: "turn-kit".into(),
+    };
+    let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=").unwrap();
+    let media_inputs: [(ConformanceFeature, tinychannels_bus::MediaKind, &str, &str, &[u8]); 6] = [
+        (ConformanceFeature::Image, tinychannels_bus::MediaKind::Image, "image/png", "fixture.png", &png),
+        (ConformanceFeature::Video, tinychannels_bus::MediaKind::Video, "video/mp4", "fixture.mp4", b"telegram conformance mp4 fixture"),
+        (ConformanceFeature::Audio, tinychannels_bus::MediaKind::Audio, "audio/ogg", "fixture.ogg", include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
+        (ConformanceFeature::VoiceOut, tinychannels_bus::MediaKind::Audio, "audio/ogg", "voice.ogg", include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")),
+        (ConformanceFeature::File, tinychannels_bus::MediaKind::Document, "application/pdf", "fixture.pdf", b"%PDF-1.4\nfixture"),
+        (ConformanceFeature::Sticker, tinychannels_bus::MediaKind::Image, "image/webp", "sticker-512.webp", include_bytes!("../../../src/providers/telegram/fixtures/sticker-512.webp")),
+    ];
+    let mut media = std::collections::HashMap::new();
+    for (feature, kind, content_type, file_name, bytes) in media_inputs {
+        let reference = repository.store_media(tinychannels::host::MediaStoreRequest {
+            metadata: tinychannels::host::MediaMetadata {
+                scope: media_scope.clone(), kind, content_type: content_type.into(),
+                file_name: Some(file_name.into()), duration_ms: Some(200), codec: Some(if content_type == "audio/ogg" { "ogg_opus".into() } else { String::new() }),
+                voice_direction: None, dedupe_key: None, max_bytes: 20 * 1024 * 1024,
+            }, bytes: bytes.to_vec(),
+        }).await.expect("store scoped Telegram conformance fixture");
+        media.insert(feature, reference);
+    }
     let fixture = RunningTelegramConformance {
         adapter: handle,
         running: running.clone(),
@@ -1866,7 +1894,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         observed: std::sync::Mutex::new(Vec::new()),
         request_cursor: std::sync::Mutex::new(0),
         response_ids,
-        media: std::collections::HashMap::new(),
+        media,
         callbacks,
     };
     let descriptor = fixture.adapter.descriptor();
