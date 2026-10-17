@@ -62,6 +62,18 @@ impl Sender {
 
 #[async_trait]
 impl ProgressiveSender for Sender {
+    async fn output_event(
+        &self,
+        channel: &str,
+        event: &ChannelOutputEvent,
+    ) -> std::result::Result<(), ProgressiveSendError> {
+        self.invoke(ProgressiveTransportRequest::OutputEvent {
+            channel: channel.to_owned(),
+            event: event.clone(),
+        })
+        .await
+        .map(drop)
+    }
     async fn send(
         &self,
         channel: &str,
@@ -422,7 +434,7 @@ async fn run(
         tokio::select! {
             command = inbox.recv() => match command {
                 Some(Command::Feed(events, response)) => {
-                    let result = apply(&mut reply, events);
+                    let result = apply(&mut reply, events).await;
                     let _ = response.send(result);
                 }
                 Some(Command::Finish(text, response)) => {
@@ -440,7 +452,7 @@ async fn run(
     }
 }
 
-fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>) -> Result<()> {
+async fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>) -> Result<()> {
     let text = events
         .iter()
         .filter_map(|event| match event {
@@ -466,6 +478,8 @@ fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>) -> Resul
         return Err(Error::failed("progressive content exceeds its limit"));
     }
     for event in events {
+        reply.on_output_event(&event).await
+            .map_err(|_| Error::failed("host output event callback failed"))?;
         match event {
             ChannelOutputEvent::TextDelta { text } => reply.on_text_delta(&text),
             ChannelOutputEvent::ThinkingDelta { text, .. } => reply.on_thinking_delta(&text),

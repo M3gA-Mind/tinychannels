@@ -97,6 +97,15 @@ pub enum ProgressiveSendError {
 /// [`ProgressiveSendError`].
 #[async_trait]
 pub trait ProgressiveSender: Send + Sync {
+    /// Forward the canonical event to the host's channel/web output surface.
+    /// Implementations that predate the v2 callback retain the no-op default.
+    async fn output_event(
+        &self,
+        _channel: &str,
+        _event: &tinychannels_bus::module_progressive::ChannelOutputEvent,
+    ) -> Result<(), ProgressiveSendError> {
+        Ok(())
+    }
     /// Post a new message. Returns the backend's raw response; the message id
     /// is read from it with [`extract_message_id`].
     async fn send(&self, channel: &str, text: &str) -> Result<Value, ProgressiveSendError>;

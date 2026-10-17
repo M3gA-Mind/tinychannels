@@ -52,6 +52,14 @@ impl ProgressiveReply {
         &self.channel
     }
 
+    /// Forward one canonical output event to the host event adapter.
+    pub async fn on_output_event(
+        &self,
+        event: &tinychannels_bus::module_progressive::ChannelOutputEvent,
+    ) -> Result<(), super::ProgressiveSendError> {
+        self.sender.output_event(&self.channel, event).await
+    }
+
     /// Current per-turn state (for logging and tests).
     pub fn state(&self) -> &StreamingState {
         &self.state

@@ -212,6 +212,11 @@ pub enum ProgressiveResult {
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum ProgressiveTransportRequest {
+    /// Ordered, host-authorized projection of one canonical turn event.
+    OutputEvent {
+        channel: String,
+        event: ChannelOutputEvent,
+    },
     Send {
         channel: String,
         message: Value,
