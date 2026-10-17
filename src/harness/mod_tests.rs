@@ -258,7 +258,8 @@ fn lifecycle_and_native_events_preserve_structured_data() {
     for (event, data) in [
         (
             ChannelOutputEvent::Lifecycle {
-                event: lifecycle.clone(),
+                stage: lifecycle.stage.clone(),
+                message: lifecycle.message.clone(),
             },
             serde_json::json!({"lifecycle": lifecycle}),
         ),
