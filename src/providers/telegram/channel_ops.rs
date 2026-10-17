@@ -567,18 +567,21 @@ impl Channel for TelegramChannel {
                 .as_deref()
                 .filter(|id| !id.trim().is_empty())
                 .ok_or_else(|| anyhow::anyhow!("voice media has no host-owned opaque reference"))?;
-            let scope = tinychannels_bus::HostVoiceScope {
-                configured_instance: String::new(),
-                channel: tinychannels_bus::ChannelRef {
+            let channel = message.channel_ref.clone().unwrap_or_else(|| {
+                tinychannels_bus::ChannelRef {
                     id: "telegram".into(),
                     account_id: None,
-                },
+                }
+            });
+            let turn_id = message.turn_id.clone()
+                .filter(|turn_id| !turn_id.trim().is_empty())
+                .ok_or_else(|| anyhow::anyhow!("Telegram voice upload requires originating turn identity"))?;
+            let scope = tinychannels_bus::HostVoiceScope {
+                configured_instance: channel.account_id.clone().unwrap_or_else(|| channel.id.clone()),
+                channel,
                 conversation: conversation.clone(),
-                turn_id: message.idempotency_key.clone(),
+                turn_id,
             };
-            if scope.turn_id.trim().is_empty() {
-                anyhow::bail!("Telegram voice upload requires turn identity");
-            }
             let resolved = store.read_voice(scope, opaque_id.to_owned()).await?;
             let audio = BASE64.decode(resolved.audio_base64.as_bytes())?;
             let (method, field) =
@@ -619,7 +622,7 @@ impl Channel for TelegramChannel {
                 raw: Some(tinychannels_bus::channel::MessageReceiptSourceResult {
                     channel: Some("telegram".into()),
                     message_id: Some(message_id.clone()),
-                    chat_id: Some(chat_id),
+                    chat_id: Some(chat_id.clone()),
                     ..Default::default()
                 }),
             };
@@ -676,14 +679,42 @@ impl Channel for TelegramChannel {
                             });
                         }
                     }
-                    Err(_) => {
-                        error = Some(tinychannels_bus::channel::ChannelSendError {
-                            kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                            message: "Telegram sent voice audio but transcript delivery is uncertain".into(),
-                            sent_before_error: true,
-                            retryable: false,
-                            ..Default::default()
-                        });
+                    Err(error) => {
+                        let partial = error.downcast_ref::<super::channel_send::PartialTextSendError>();
+                        if let Some(partial) = partial {
+                            for (index, text_id) in partial.message_ids.iter().enumerate() {
+                                receipt.platform_message_ids.push(text_id.clone());
+                                receipt.parts.push(tinychannels_bus::channel::MessageReceiptPart {
+                                    platform_message_id: text_id.clone(),
+                                    kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                                    index: index as u32 + 1,
+                                    thread_id: conversation.topic_id.clone()
+                                        .or(conversation.thread_id.clone()),
+                                    reply_to_id: message.reply_to_id.clone(),
+                                    edit_token: Some(text_id.clone()),
+                                    delete_token: Some(text_id.clone()),
+                                    raw: Some(tinychannels_bus::channel::MessageReceiptSourceResult {
+                                        channel: Some("telegram".into()),
+                                        message_id: Some(text_id.clone()),
+                                        chat_id: Some(chat_id.clone()),
+                                        ..Default::default()
+                                    }),
+                                });
+                            }
+                            error = Some(partial.error.clone());
+                            if let Some(error) = &mut error {
+                                error.sent_before_error = true;
+                                error.retryable = false;
+                            }
+                        } else {
+                            error = Some(tinychannels_bus::channel::ChannelSendError {
+                                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                                message: "Telegram sent voice audio but transcript delivery is uncertain".into(),
+                                sent_before_error: true,
+                                retryable: false,
+                                ..Default::default()
+                            });
+                        }
                     }
                 }
             }
