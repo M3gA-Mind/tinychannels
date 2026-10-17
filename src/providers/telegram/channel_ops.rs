@@ -382,9 +382,14 @@ impl TelegramChannel {
                 && (-90.0..=90.0).contains(&latitude)
                 && (-180.0..=180.0).contains(&longitude)
             {
-                let live_until_unix_ms = source
+                let live_until_unix_ms = location
                     .get("live_period")
                     .and_then(serde_json::Value::as_u64)
+                    .or_else(|| {
+                        source
+                            .get("live_period")
+                            .and_then(serde_json::Value::as_u64)
+                    })
                     .filter(|seconds| *seconds > 0)
                     .and_then(|seconds| {
                         message_date_ms.map(|date| date.saturating_add(seconds.saturating_mul(1000)))
