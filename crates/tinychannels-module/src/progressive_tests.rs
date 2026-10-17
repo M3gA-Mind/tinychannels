@@ -368,6 +368,18 @@ async fn open_scoped_provider(
     turn_id: &str,
     capabilities: tinychannels_bus::ChannelCapabilities,
 ) -> String {
+    let hooks = Arc::new(crate::provider::Hooks::default());
+    *hooks
+        .configured_instance
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(account.to_owned());
+    *hooks
+        .media_account_scope
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(format!(
+        "{}:media-v1:fixture",
+        tinychannels_bus::provider_id(provider)
+    ));
     replies.running.lock().await.insert(
         account.to_owned(),
         Running::start(
@@ -375,7 +387,7 @@ async fn open_scoped_provider(
                 name: provider,
                 capabilities,
             }),
-            Arc::new(crate::provider::Hooks::default()),
+            hooks,
             replies.host.clone(),
         ),
     );
@@ -4388,7 +4400,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     });
     capabilities.voice_out.max_size_bytes = Some(1);
     let sender = Arc::new(Sender {
-        media_account_scope: None,
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
@@ -4455,7 +4467,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
     capabilities.voice_out.max_duration_ms = Some(1_000);
     let sender = Arc::new(Sender {
-        media_account_scope: None,
+        media_account_scope: Some("telegram:media-v1:fixture".into()),
         host: host.clone(),
         context: Some(duration_context.clone()),
         capabilities: capabilities.clone(),
