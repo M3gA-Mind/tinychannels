@@ -710,7 +710,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
         callback.sends.lock().await.last().unwrap()["text"],
         "complete answer"
     );
-    let result = replies
+    let error = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle: handle.clone(),
             events: vec![ChannelOutputEvent::TextDelta {
@@ -722,7 +722,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
         .unwrap_err();
     assert!(error.to_string().contains("closed"));
     replies.shutdown().await.unwrap();
-    let error = replies
+    let result = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle,
             events: vec![],

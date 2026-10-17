@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::delivery::progressive::{
-    EDIT_FLUSH_INTERVAL, FILLER_INTERVAL, ProgressiveOutputContext, ProgressiveReply,
-    ProgressiveSendError, ProgressiveSender, TYPING_REFRESH_INTERVAL,
+    EDIT_FLUSH_INTERVAL, FILLER_INTERVAL, ProgressiveOutputContext, ProgressiveOutputDispatch,
+    ProgressiveReply, ProgressiveSendError, ProgressiveSender, TYPING_REFRESH_INTERVAL,
 };
 use tinychannels_bus::module_progressive::{
     ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
