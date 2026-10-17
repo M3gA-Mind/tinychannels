@@ -17,7 +17,7 @@ use tinychannels_bus::module_progressive::{
     ProgressiveTransportResult,
 };
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
-use tokio::sync::{Mutex, Notify, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 const MAX_ACTIVE: usize = 16;
@@ -435,7 +435,7 @@ struct Entry {
 struct TerminalMemo {
     fingerprint: [u8; 32],
     result: Option<std::result::Result<ProgressiveResult, String>>,
-    notify: Arc<Notify>,
+    notify: watch::Sender<Option<std::result::Result<ProgressiveResult, String>>>,
 }
 struct State {
     terminal: bool,
@@ -558,41 +558,78 @@ impl Replies {
                         }
                         Some(memo) => {
                             if let Some(result) = memo.result.clone() {
-                                memo.notify.notify_one();
                                 return result.map_err(Error::failed);
                             }
-                            memo.notify.clone()
+                            memo.notify.subscribe()
                         }
                         None => {
+                            let (notify, _) = watch::channel(None);
                             *memo = Some(TerminalMemo {
                                 fingerprint,
                                 result: None,
-                                notify: Arc::new(Notify::new()),
+                                notify,
                             });
                             break;
                         }
                     }
                 };
-                wait.notified().await;
+                let mut wait = wait;
+                loop {
+                    if let Some(result) = wait.borrow().clone() {
+                        return result.map_err(Error::failed);
+                    }
+                    if wait.changed().await.is_err() {
+                        return Err(Error::failed("progressive terminal result was lost"));
+                    }
+                }
             }
         } else if entry.terminal_feed.lock().await.is_some() {
             return Err(Error::failed("progressive reply is terminal"));
+        }
+        let (reply, wait) = oneshot::channel();
+        if let Some(fingerprint) = fingerprint {
+            let retained = entry.clone();
+            let (owner_tx, owner_rx) = oneshot::channel();
+            tokio::spawn(async move {
+                let result = async {
+                    let closing = retained.closing.lock().await;
+                    if closing.is_some() {
+                        return Err(Error::failed("progressive reply is closed"));
+                    }
+                    if retained
+                        .commands
+                        .send(Command::Feed(events, forward, Some(fingerprint), reply))
+                        .await
+                        .is_err()
+                    {
+                        drop(closing);
+                        return Err(Error::failed("progressive reply is closed"));
+                    }
+                    drop(closing);
+                    wait.await
+                        .map_err(|_| Error::failed("progressive worker stopped"))?
+                }
+                .await;
+                record_terminal(&retained.terminal_feed, Some(fingerprint), &result).await;
+                let _ = owner_tx.send(result);
+            });
+            // The spawned owner continues admission and delivery even if this caller disconnects.
+            // Identical retries observe the retained watch result rather than sending again.
+            return owner_rx
+                .await
+                .map_err(|_| Error::failed("terminal delivery owner stopped"))?;
         }
         let closing = entry.closing.lock().await;
         if closing.is_some() {
             return Err(Error::failed("progressive reply is closed"));
         }
-        let (reply, wait) = oneshot::channel();
         if entry
             .commands
-            .send(Command::Feed(events, forward, fingerprint, reply))
+            .send(Command::Feed(events, forward, None, reply))
             .await
             .is_err()
         {
-            drop(closing);
-            let failure = Err(Error::failed("progressive reply is closed"));
-            record_terminal(&entry.terminal_feed, fingerprint, &failure).await;
-            return failure;
+            return Err(Error::failed("progressive reply is closed"));
         }
         drop(closing);
         Ok(wait
@@ -1042,13 +1079,12 @@ async fn record_terminal(
     };
     let mut memo = terminal_feed.lock().await;
     if let Some(memo) = memo.as_mut().filter(|memo| memo.fingerprint == fingerprint) {
-        memo.result = Some(
-            result
-                .as_ref()
-                .map(Clone::clone)
-                .map_err(ToString::to_string),
-        );
-        memo.notify.notify_one();
+        let result = result
+            .as_ref()
+            .map(Clone::clone)
+            .map_err(ToString::to_string);
+        memo.result = Some(result.clone());
+        memo.notify.send_replace(Some(result));
     }
 }
 
