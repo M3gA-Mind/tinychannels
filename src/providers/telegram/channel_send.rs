@@ -1,7 +1,6 @@
 //! Telegram channel — outbound message sending: text chunking, media uploads, reaction sending,
 //! and attachment dispatch.
 
-use super::attachments::{TelegramAttachment, TelegramAttachmentKind, is_http_url};
 use super::channel_types::TelegramChannel;
 
 #[derive(Debug)]
@@ -478,55 +477,6 @@ impl TelegramChannel {
 
         tracing::info!("Telegram {method} sent to {chat_id}: {url}");
         Ok(())
-    }
-
-    pub(crate) async fn send_attachment(
-        &self,
-        chat_id: &str,
-        thread_id: Option<&str>,
-        attachment: &TelegramAttachment,
-    ) -> anyhow::Result<()> {
-        let target = attachment.target.trim();
-
-        if is_http_url(target) {
-            return match attachment.kind {
-                TelegramAttachmentKind::Image => {
-                    self.send_photo_by_url(chat_id, thread_id, target, None)
-                        .await
-                }
-                TelegramAttachmentKind::Document => {
-                    self.send_document_by_url(chat_id, thread_id, target, None)
-                        .await
-                }
-                TelegramAttachmentKind::Video => {
-                    self.send_video_by_url(chat_id, thread_id, target, None)
-                        .await
-                }
-                TelegramAttachmentKind::Audio => {
-                    self.send_audio_by_url(chat_id, thread_id, target, None)
-                        .await
-                }
-                TelegramAttachmentKind::Voice => {
-                    self.send_voice_by_url(chat_id, thread_id, target, None)
-                        .await
-                }
-            };
-        }
-
-        let path = Path::new(target);
-        if !path.exists() {
-            anyhow::bail!("Telegram attachment path not found: {target}");
-        }
-
-        match attachment.kind {
-            TelegramAttachmentKind::Image => self.send_photo(chat_id, thread_id, path, None).await,
-            TelegramAttachmentKind::Document => {
-                self.send_document(chat_id, thread_id, path, None).await
-            }
-            TelegramAttachmentKind::Video => self.send_video(chat_id, thread_id, path, None).await,
-            TelegramAttachmentKind::Audio => self.send_audio(chat_id, thread_id, path, None).await,
-            TelegramAttachmentKind::Voice => self.send_voice(chat_id, thread_id, path, None).await,
-        }
     }
 
     /// Send a document/file to a Telegram chat
