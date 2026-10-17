@@ -1258,14 +1258,14 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .await
         .unwrap();
     let pdf_reference: MediaUploadResult = runtime_proxy
-        .call_confidential(
-            "FinishMediaUpload",
-            MediaUploadFinish(pdf_handle),
-        )
+        .call_confidential("FinishMediaUpload", MediaUploadFinish(pdf_handle))
         .await
         .unwrap();
     assert_eq!(pdf_reference.kind, MediaKind::Document);
-    assert_eq!(pdf_reference.size_bytes, Some((MEDIA_UPLOAD_CHUNK_BYTES + 17) as u64));
+    assert_eq!(
+        pdf_reference.size_bytes,
+        Some((MEDIA_UPLOAD_CHUNK_BYTES + 17) as u64)
+    );
 
     let send = ChannelOutboundIntent {
         idempotency_key: "media-wire-send".into(),
