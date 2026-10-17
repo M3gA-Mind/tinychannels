@@ -520,6 +520,8 @@ struct IngressVoiceCallback {
     read_requests: Arc<Mutex<Vec<tinychannels_bus::HostReadVoiceMediaRequest>>>,
     stt_requests: Arc<Mutex<Vec<tinychannels_bus::HostVoiceTranscriptionRequest>>>,
     inbound: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    events: Arc<Mutex<Vec<tinychannels_bus::ChannelEvent>>>,
+    ingress_changed: Arc<tokio::sync::Notify>,
     stt_calls: Arc<AtomicUsize>,
 }
 
@@ -548,6 +550,13 @@ impl IngressVoiceCallback {
 
     async fn deliver_inbound(&self, channel: String, message: serde_json::Value) -> Result<()> {
         self.inbound.lock().await.push((channel, message));
+        self.ingress_changed.notify_one();
+        Ok(())
+    }
+
+    async fn deliver_event(&self, event: tinychannels_bus::ChannelEvent) -> Result<()> {
+        self.events.lock().await.push(event);
+        self.ingress_changed.notify_one();
         Ok(())
     }
 }
