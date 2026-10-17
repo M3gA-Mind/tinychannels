@@ -192,7 +192,7 @@ impl ScopedMediaStore {
             .ok_or_else(|| anyhow::anyhow!("media metadata is unavailable"))?
             .version;
         self.documents
-            .delete(MEDIA_COLLECTION, opaque_id, Precondition::Exact(version))
+            .delete(MEDIA_COLLECTION, opaque_id, Precondition::Version(version))
             .await
             .map_err(|_| anyhow::anyhow!("media metadata could not be deleted"))?;
         self.blobs
@@ -212,7 +212,7 @@ impl ScopedMediaStore {
         else {
             return Ok(None);
         };
-        let record = serde_json::from_value(document.document)
+        let record = serde_json::from_value(document.doc)
             .map_err(|_| anyhow::anyhow!("media metadata is invalid"))?;
         Ok(Some(record))
     }
