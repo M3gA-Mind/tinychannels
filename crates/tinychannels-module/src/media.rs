@@ -56,21 +56,6 @@ pub(crate) struct MediaUploads {
     state: Mutex<State>,
 }
 
-struct FinalizeGuard {
-    flag: std::sync::Arc<AtomicBool>,
-    changed: std::sync::Arc<Notify>,
-    complete: bool,
-}
-
-impl Drop for FinalizeGuard {
-    fn drop(&mut self) {
-        if !self.complete {
-            self.flag.store(false, Ordering::SeqCst);
-            self.changed.notify_waiters();
-        }
-    }
-}
-
 impl MediaUploads {
     pub(crate) async fn binding_handle(
         &self,
@@ -202,11 +187,11 @@ impl MediaUploads {
         Ok(upload.next_sequence as u32)
     }
 
-    pub(crate) async fn finish<P: MediaPersistence>(
-        &self,
+    pub(crate) async fn finish(
+        self: std::sync::Arc<Self>,
         request: MediaUploadFinish,
         activation: String,
-        repository: &P,
+        repository: std::sync::Arc<dyn MediaPersistence>,
     ) -> Result<MediaUploadResult> {
         let mut state = self.state.lock().await;
         Self::prune(&mut state);
@@ -243,12 +228,6 @@ impl MediaUploads {
         }
         upload.finalizing.store(true, Ordering::SeqCst);
         let changed = upload.changed.clone();
-        let flag = upload.finalizing.clone();
-        let mut finalize_guard = FinalizeGuard {
-            flag,
-            changed: changed.clone(),
-            complete: false,
-        };
         let instance = upload.request.instance.clone();
         let activation_for_terminal = upload.activation.clone();
         let request_metadata = upload.request.clone();
@@ -257,56 +236,62 @@ impl MediaUploads {
         if bytes.len() != request_metadata.byte_count {
             if let Some(upload) = state.uploads.get_mut(&request.0.0) {
                 upload.finalizing.store(false, Ordering::SeqCst);
+                upload.changed.notify_waiters();
             }
             return Err(Error::failed("media upload byte count does not match"));
         }
         drop(state);
-        let media = repository
-            .store_public_media(tinychannels::host::MediaStoreRequest {
-                metadata: tinychannels::host::MediaMetadata {
-                    scope: request_metadata.scope,
-                    kind: request_metadata.kind,
-                    content_type: request_metadata.content_type,
-                    file_name: request_metadata.file_name,
-                    duration_ms: request_metadata.duration_ms,
-                    codec: request_metadata.codec,
-                    voice_direction: None,
-                    dedupe_key: None,
-                    max_bytes: tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES as u64,
-                },
-                bytes,
-            })
-            .await;
-        let mut state = self.state.lock().await;
-        Self::prune(&mut state);
-        let Some(upload) = state.uploads.remove(&request.0.0) else {
-            return Err(Error::failed("media upload is no longer active"));
-        };
-        let media = match media {
-            Ok(media) => media,
-            Err(error) => {
-                let mut upload = upload;
-                upload.finalizing.store(false, Ordering::SeqCst);
-                upload.expires = Instant::now() + UPLOAD_LIFETIME;
-                state.uploads.insert(request.0.0, upload);
-                finalize_guard.complete = true;
+        let owner = self.clone();
+        let handle = request.0.0;
+        let task = tokio::spawn(async move {
+            let media = repository
+                .store_public_media(tinychannels::host::MediaStoreRequest {
+                    metadata: tinychannels::host::MediaMetadata {
+                        scope: request_metadata.scope,
+                        kind: request_metadata.kind,
+                        content_type: request_metadata.content_type,
+                        file_name: request_metadata.file_name,
+                        duration_ms: request_metadata.duration_ms,
+                        codec: request_metadata.codec,
+                        voice_direction: None,
+                        dedupe_key: Some(format!("module-upload:{handle}")),
+                        max_bytes: tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES as u64,
+                    },
+                    bytes,
+                })
+                .await;
+            let mut state = owner.state.lock().await;
+            Self::prune(&mut state);
+            let Some(mut upload) = state.uploads.remove(&handle) else {
                 changed.notify_waiters();
-                return Err(error);
+                return Err(Error::failed("media upload is no longer active"));
+            };
+            match media {
+                Ok(media) => {
+                    state.terminal.insert(
+                        handle,
+                        TerminalEntry {
+                            value: Terminal::Finished(media.clone()),
+                            instance,
+                            activation: activation_for_terminal,
+                            expires: Instant::now() + TERMINAL_LIFETIME,
+                        },
+                    );
+                    Self::trim_terminal(&mut state);
+                    changed.notify_waiters();
+                    Ok(media)
+                }
+                Err(error) => {
+                    upload.finalizing.store(false, Ordering::SeqCst);
+                    upload.expires = Instant::now() + UPLOAD_LIFETIME;
+                    state.uploads.insert(handle, upload);
+                    changed.notify_waiters();
+                    Err(error)
+                }
             }
-        };
-        state.terminal.insert(
-            request.0.0,
-            TerminalEntry {
-                value: Terminal::Finished(media.clone()),
-                instance,
-                activation: activation_for_terminal,
-                expires: Instant::now() + TERMINAL_LIFETIME,
-            },
-        );
-        Self::trim_terminal(&mut state);
-        finalize_guard.complete = true;
-        changed.notify_waiters();
-        Ok(media)
+        });
+        task.await
+            .map_err(|_| Error::failed("media upload finalization failed"))?
     }
 
     pub(crate) async fn abort(&self, request: MediaUploadFinish) -> Result<()> {
