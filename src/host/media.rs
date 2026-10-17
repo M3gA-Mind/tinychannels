@@ -34,6 +34,15 @@ struct MediaRecord {
     file_name: Option<String>,
     digest: String,
     created_at_unix_ms: u64,
+    state: MediaRecordState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MediaRecordState {
+    Writing,
+    Ready,
+    Deleting,
 }
 
 /// Blob-backed storage that validates the complete channel scope on every read.
@@ -99,17 +108,32 @@ impl ScopedMediaStore {
             file_name,
             digest: digest.clone(),
             created_at_unix_ms: now_unix_ms(),
+            state: MediaRecordState::Writing,
         };
 
         let _write = self.writes.lock().await;
-        if let Some(existing) = self.record(&opaque_id).await? {
-            if existing.scope == record.scope && existing.digest == digest {
+        if let Some((existing, _)) = self.record(&opaque_id).await? {
+            if existing.state == MediaRecordState::Ready
+                && existing.scope == record.scope
+                && existing.digest == digest
+            {
                 return Ok(existing.media);
             }
             anyhow::bail!("media deduplication key conflicts with stored media");
         }
 
-        self.blobs
+        // Reserve the metadata id before writing the blob. The bus storage
+        // grant is module-wide; this record also binds the id to the complete
+        // authenticated account/conversation/turn scope.
+        let document = serde_json::to_value(&record)?;
+        let reservation_version = self
+            .documents
+            .put(MEDIA_COLLECTION, &opaque_id, document, Precondition::Absent)
+            .await
+            .map_err(|_| anyhow::anyhow!("media metadata reservation failed"))?;
+
+        if self
+            .blobs
             .put_stream(
                 &key,
                 Box::pin(Cursor::new(bytes)),
@@ -117,15 +141,34 @@ impl ScopedMediaStore {
                 Some(&content_type),
             )
             .await
-            .map_err(|_| anyhow::anyhow!("media blob could not be stored"))?;
-        let document = serde_json::to_value(&record)?;
-        if let Err(error) = self
-            .documents
-            .put(MEDIA_COLLECTION, &opaque_id, document, Precondition::Absent)
-            .await
+            .is_err()
         {
-            let _ = self.blobs.delete(&key).await;
-            return Err(anyhow::anyhow!("media metadata could not be stored: {error}"));
+            let _ = self
+                .documents
+                .delete(
+                    MEDIA_COLLECTION,
+                    &opaque_id,
+                    Precondition::Version(reservation_version),
+                )
+                .await;
+            anyhow::bail!("media blob could not be stored");
+        }
+        let mut ready = record;
+        ready.state = MediaRecordState::Ready;
+        if self
+            .documents
+            .put(
+                MEDIA_COLLECTION,
+                &opaque_id,
+                serde_json::to_value(&ready)?,
+                Precondition::Version(reservation_version),
+            )
+            .await
+            .is_err()
+        {
+            // Leave the reservation and blob for explicit recovery. Deleting
+            // the blob here could erase bytes committed by another process.
+            anyhow::bail!("media metadata could not be finalized");
         }
         Ok(reference)
     }
@@ -138,11 +181,11 @@ impl ScopedMediaStore {
         max_bytes: u64,
     ) -> anyhow::Result<StoredMedia> {
         validate_scope(&scope)?;
-        let record = self
+        let (record, _) = self
             .record(opaque_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("media reference is unavailable"))?;
-        if record.scope != scope {
+        if record.scope != scope || record.state != MediaRecordState::Ready {
             anyhow::bail!("media reference is outside the configured channel scope");
         }
         let key = blob_key(opaque_id)?;
@@ -178,31 +221,45 @@ impl ScopedMediaStore {
     /// Delete one media object after validating its complete stored scope.
     pub async fn delete(&self, scope: MediaScope, opaque_id: &str) -> anyhow::Result<bool> {
         validate_scope(&scope)?;
-        let Some(record) = self.record(opaque_id).await? else {
+        let Some((mut record, version)) = self.record(opaque_id).await? else {
             return Ok(false);
         };
         if record.scope != scope {
             anyhow::bail!("media reference is outside the configured channel scope");
         }
-        let version = self
-            .documents
-            .get(MEDIA_COLLECTION, opaque_id)
-            .await
-            .map_err(|_| anyhow::anyhow!("media metadata is unavailable"))?
-            .ok_or_else(|| anyhow::anyhow!("media metadata is unavailable"))?
-            .version;
-        self.documents
-            .delete(MEDIA_COLLECTION, opaque_id, Precondition::Version(version))
-            .await
-            .map_err(|_| anyhow::anyhow!("media metadata could not be deleted"))?;
+        let tombstone_version = if record.state == MediaRecordState::Deleting {
+            version
+        } else {
+            record.state = MediaRecordState::Deleting;
+            self.documents
+                .put(
+                    MEDIA_COLLECTION,
+                    opaque_id,
+                    serde_json::to_value(&record)?,
+                    Precondition::Version(version),
+                )
+                .await
+                .map_err(|_| anyhow::anyhow!("media cleanup reservation failed"))?
+        };
         self.blobs
             .delete(&blob_key(opaque_id)?)
             .await
             .map_err(|_| anyhow::anyhow!("media blob cleanup is pending"))?;
+        self.documents
+            .delete(
+                MEDIA_COLLECTION,
+                opaque_id,
+                Precondition::Version(tombstone_version),
+            )
+            .await
+            .map_err(|_| anyhow::anyhow!("media cleanup metadata is pending"))?;
         Ok(true)
     }
 
-    async fn record(&self, opaque_id: &str) -> anyhow::Result<Option<MediaRecord>> {
+    async fn record(
+        &self,
+        opaque_id: &str,
+    ) -> anyhow::Result<Option<(MediaRecord, tinystoragedrivers_core::Version)>> {
         blob_key(opaque_id)?;
         let Some(document) = self
             .documents
@@ -214,7 +271,7 @@ impl ScopedMediaStore {
         };
         let record = serde_json::from_value(document.doc)
             .map_err(|_| anyhow::anyhow!("media metadata is invalid"))?;
-        Ok(Some(record))
+        Ok(Some((record, document.version)))
     }
 }
 
