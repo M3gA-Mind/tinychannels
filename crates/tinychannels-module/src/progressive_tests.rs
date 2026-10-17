@@ -2924,7 +2924,9 @@ async fn unsupported_and_successful_media_facts_survive_later_provider_failure()
             unsupported: vec![tinychannels_bus::OutboundContentPart::Content {
                 part: unsupported_part,
             }],
-            failure: Some(ProgressiveOutputFailure::ProviderTransport),
+            failure: Some(
+                tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport,
+            ),
         }
     );
     let sent = callback
