@@ -1,4 +1,40 @@
 use super::*;
+use base64::Engine as _;
+use sha2::Digest as _;
+
+#[tokio::test]
+#[ignore = "requires the separately built TinyVoice module; run with TINYVOICE_MODULE_ARTIFACT"]
+async fn codec_adapter_calls_loaded_tinyvoice_module() {
+    use tinybus::broker::Broker;
+    use tinybus::module::ModuleHost;
+    use tinyvoice_bus::codec::AudioCodec;
+
+    let path = std::env::var("TINYVOICE_MODULE_ARTIFACT").expect("module artifact env");
+    let bytes = std::fs::read(&path).expect("read TinyVoice artifact");
+    assert_eq!(hex::encode(sha2::Sha256::digest(&bytes)), "0f3075a34d223a88048a8c959a80e9c4cd51047851d10212d805353743433ed8");
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    let broker = Broker::new();
+    let _broker_task = broker.spawn(bus.clone());
+    let host = ModuleHost::new(broker);
+    host.load_file(&path).expect("load compiled TinyVoice module");
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap()).await.unwrap();
+    let client = ModuleVoiceCodec(HostChannels::new(connection));
+    let wav = include_bytes!("../../../../tinyvoice/crates/tinyvoice/tests/fixtures/voice-envelope.wav");
+    let wav_b64 = base64::engine::general_purpose::STANDARD.encode(wav);
+    let opus = client.transcode(tinychannels::host::VoiceCodecRequest {
+        audio_base64: wav_b64,
+        from: "wav_pcm16".into(),
+        target: "ogg_opus".into(),
+    }).await.expect("compiled TinyVoice WAV→Opus transcode");
+    let round_trip = client.transcode(tinychannels::host::VoiceCodecRequest {
+        audio_base64: opus.audio_base64,
+        from: "ogg_opus".into(),
+        target: "wav_pcm16".into(),
+    }).await.expect("compiled TinyVoice Opus→WAV transcode");
+    let decoded = base64::engine::general_purpose::STANDARD.decode(round_trip.audio_base64).unwrap();
+    assert!(decoded.starts_with(b"RIFF"));
+    assert_ne!(AudioCodec::WavPcm16, AudioCodec::OggOpus);
+}
 
 struct SlowChannel {
     started: StdMutex<Option<oneshot::Sender<()>>>,
