@@ -384,39 +384,40 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         request.scope.configured_instance.clone_from(&self.1);
         request.scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         request.scope.channel.account_id = Some(self.1.clone());
-        let result = self
+        use base64::Engine;
+        let audio = base64::engine::general_purpose::STANDARD
+            .decode(request.audio_base64.as_bytes())
+            .map_err(|_| anyhow::anyhow!("voice media payload is invalid"))?;
+        if audio.is_empty() || audio.len() > 8 * 1024 * 1024 {
+            anyhow::bail!("voice media exceeds the configured size limit");
+        }
+        let storage = self
             .0
-            .store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
-                scope: request.scope,
-                direction: request.direction,
-                audio_base64: request.audio_base64,
-                mime_type: request.mime_type,
-                codec: request.codec,
-                duration_ms: request.duration_ms,
-                file_name: request.file_name,
-            })
+            .storage()
             .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        let has_durable_reference = result
-            .media
-            .opaque_id
-            .as_deref()
-            .is_some_and(|id| !id.trim().is_empty());
-        if !has_durable_reference {
-            anyhow::bail!("host did not return a durable voice media reference");
-        }
-        let mut result = result;
-        result.media.path = None;
-        result.media.local_cache_path = None;
-        result.media.url = None;
-        if result
-            .accessible_url
-            .as_deref()
-            .is_some_and(|url| url.trim().is_empty())
-        {
-            result.accessible_url = None;
-        }
-        Ok(result)
+            .map_err(|error| anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind()))?;
+        let media_store = tinychannels::host::ScopedMediaStore::new(
+            Arc::clone(storage.documents()),
+            Arc::clone(storage.blobs()),
+        );
+        let media = media_store
+            .store(tinychannels::host::MediaStoreRequest {
+                metadata: tinychannels::host::MediaMetadata {
+                    scope: request.scope,
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    content_type: request.mime_type,
+                    file_name: request.file_name,
+                    duration_ms: request.duration_ms,
+                    dedupe_key: None,
+                    max_bytes: 8 * 1024 * 1024,
+                },
+                bytes: audio,
+            })
+            .await?;
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media,
+            accessible_url: None,
+        })
     }
 
     async fn read_voice(
@@ -431,16 +432,22 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         scope.configured_instance.clone_from(&self.1);
         scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         scope.channel.account_id = Some(self.1.clone());
-        let result = self
+        let storage = self
             .0
-            .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
-                scope,
-                opaque_id,
-                max_bytes: 8 * 1024 * 1024,
-            })
+            .storage()
             .await
-            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        Ok(result)
+            .map_err(|error| anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind()))?;
+        let media_store = tinychannels::host::ScopedMediaStore::new(
+            Arc::clone(storage.documents()),
+            Arc::clone(storage.blobs()),
+        );
+        let stored = media_store.read(scope, &opaque_id, 8 * 1024 * 1024).await?;
+        use base64::Engine;
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(stored.bytes),
+            mime_type: stored.content_type,
+            file_name: stored.file_name,
+        })
     }
 }
 
