@@ -233,14 +233,14 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
         };
         drop(running);
 
-        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&entry.intent);
-        let outcome = match provider.send_typed(message).await {
+        let adapter = provider.adapter_handle();
+        let outcome = match adapter.send(entry.intent.clone()).await {
             Ok(outcome) => outcome,
             Err(error) => {
                 return Err(DeliveryAttemptFailure {
-                    error: "provider send failed".into(),
-                    sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
-                    permanent: None,
+                    error: error.message,
+                    sent_before_error: error.sent_before_error,
+                    permanent: Some(!error.retryable),
                     receipt: None,
                 });
             }

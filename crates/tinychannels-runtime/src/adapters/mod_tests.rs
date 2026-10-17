@@ -63,7 +63,7 @@ async fn local_adapter_delegates_outbound_delivery() {
     let sink = Arc::new(RecordingOutboundSink::default());
     let adapter = local_adapter(sink.clone());
 
-    let receipt = adapter
+    let outcome = adapter
         .send(ChannelOutboundIntent {
             idempotency_key: "turn-1:text".into(),
             channel_id: "local".into(),
@@ -80,10 +80,10 @@ async fn local_adapter_delegates_outbound_delivery() {
         .expect("send");
 
     assert_eq!(
-        receipt.receipt.primary_platform_message_id.as_deref(),
+        outcome.receipt.primary_platform_message_id.as_deref(),
         Some("local-1")
     );
-    assert!(receipt.error.is_none());
+    assert!(outcome.error.is_none());
     assert_eq!(
         sink.ids.lock().expect("ids lock").as_slice(),
         ["turn-1:text"]

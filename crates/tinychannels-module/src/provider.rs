@@ -622,6 +622,12 @@ pub(crate) struct Running {
     finished: Arc<AtomicBool>,
 }
 impl Running {
+    pub(crate) fn adapter_handle(
+        self: &Arc<Self>,
+    ) -> Arc<dyn tinychannels::channel::ChannelAdapter> {
+        self.clone()
+    }
+
     pub(crate) fn start(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
@@ -805,6 +811,8 @@ impl Running {
 
     fn adapter_descriptor(&self) -> tinychannels_bus::ChannelDescriptor {
         let channel_id = tinychannels_bus::provider_id(&self.configured_instance).to_owned();
+        let capabilities = serde_json::to_string(&self.channel.capabilities())
+            .unwrap_or_else(|_| "{}".into());
         tinychannels_bus::ChannelDescriptor {
             id: channel_id,
             display_name: self.channel.name().to_owned(),
@@ -812,6 +820,7 @@ impl Running {
             metadata: std::collections::BTreeMap::from([
                 ("configuredInstance".into(), self.configured_instance.clone()),
                 ("adapterMode".into(), "legacy-backed".into()),
+                ("capabilities".into(), capabilities),
             ]),
             ..Default::default()
         }
@@ -838,6 +847,7 @@ impl Running {
             || intent.conversation_ref.as_ref().is_some_and(|conversation| {
                 conversation.id != intent.conversation_id
                     || (intent.thread_id.is_some()
+                        && conversation.thread_id.is_some()
                         && conversation.thread_id != intent.thread_id)
             })
         {
@@ -946,8 +956,19 @@ impl tinychannels::channel::ChannelAdapter for Running {
         intent: tinychannels_bus::ChannelOutboundIntent,
     ) -> std::result::Result<tinychannels::channel::MessageReceipt, tinychannels::channel::ChannelSendError> {
         self.validate_adapter_intent(&intent)?;
+        let mut intent = intent;
+        let expected_channel = tinychannels_bus::provider_id(&self.configured_instance).to_owned();
+        intent.channel_ref.get_or_insert_with(|| tinychannels_bus::ChannelRef {
+            id: expected_channel,
+            account_id: Some(self.configured_instance.clone()),
+        });
+        intent.conversation_ref.get_or_insert_with(|| tinychannels_bus::ConversationRef {
+            id: intent.conversation_id.clone(),
+            thread_id: intent.thread_id.clone(),
+            ..Default::default()
+        });
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
-        let outcome = self.send_typed(message).await.map_err(|error| {
+        let mut outcome = self.send_typed(message).await.map_err(|error| {
             let sent_before_error = matches!(error, RunningSendError::AfterDispatch(_));
             tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Unknown,
@@ -957,14 +978,15 @@ impl tinychannels::channel::ChannelAdapter for Running {
                 ..Default::default()
             }
         })?;
-        if let Some(mut error) = outcome.error {
-            error.sent_before_error |= !outcome.receipt.platform_message_ids.is_empty();
-            error.continuation_message_ids.extend(
-                outcome.receipt.platform_message_ids.iter().cloned(),
-            );
-            return Err(error);
+        if let Some(error) = &mut outcome.error {
+            let partial = !outcome.receipt.platform_message_ids.is_empty()
+                || !outcome.receipt.parts.is_empty();
+            error.sent_before_error |= partial;
+            if partial {
+                error.retryable = false;
+            }
         }
-        Ok(outcome.receipt)
+        Ok(outcome)
     }
 
     async fn status(
