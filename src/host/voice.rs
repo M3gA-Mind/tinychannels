@@ -145,7 +145,8 @@ pub async fn prepare_voice_reply(
     if max_size_bytes.is_some_and(|limit| size_bytes > limit) {
         anyhow::bail!("synthesized voice exceeds provider size limit");
     }
-    if max_duration_ms.is_some_and(|limit| synthesized.duration_ms.is_some_and(|duration| duration > limit)) {
+    let duration_ms = encoded.duration_ms.or(synthesized.duration_ms);
+    if max_duration_ms.is_some_and(|limit| duration_ms.is_some_and(|duration| duration > limit)) {
         anyhow::bail!("synthesized voice exceeds provider duration limit");
     }
     let (mime_type, file_name) = match target {
@@ -160,7 +161,7 @@ pub async fn prepare_voice_reply(
             audio_base64: encoded.audio_base64,
             mime_type: mime_type.into(),
             codec: Some(target.into()),
-            duration_ms: synthesized.duration_ms,
+            duration_ms,
             file_name: Some(file_name.into()),
             direction: tinychannels_bus::HostVoiceMediaDirection::Outbound,
             scope,
@@ -180,13 +181,13 @@ pub async fn prepare_voice_reply(
     media.kind = tinychannels_bus::MediaKind::Audio;
     media.content_type = Some(mime_type.into());
     media.codec = Some(target.into());
-    media.duration_ms = synthesized.duration_ms;
+    media.duration_ms = duration_ms;
     media.size_bytes = Some(size_bytes);
     let note = VoiceNote {
         media,
         codec: Some(target.into()),
-        duration_ms: synthesized.duration_ms,
-        waveform: None,
+        duration_ms,
+        waveform: encoded.waveform,
         push_to_talk: false,
         transcript: None,
     };
