@@ -255,7 +255,7 @@ fn inbound_envelope_keeps_chat_channel_and_legacy_identity_fallbacks() {
             "reply_to_message": {"message_id": 3}
         }
     });
-    let channel = TelegramChannel::inbound_envelope_from_update(&channel_update, &legacy);
+    let channel = TelegramChannel::inbound_envelope_from_update(&channel_update, &legacy, None);
     assert_eq!(
         channel.conversation.kind,
         tinychannels_bus::ConversationKind::Channel
@@ -271,7 +271,7 @@ fn inbound_envelope_keeps_chat_channel_and_legacy_identity_fallbacks() {
             "from": {}
         }
     });
-    let unknown = TelegramChannel::inbound_envelope_from_update(&unknown_update, &legacy);
+    let unknown = TelegramChannel::inbound_envelope_from_update(&unknown_update, &legacy, None);
     assert_eq!(
         unknown.conversation.kind,
         tinychannels_bus::ConversationKind::Unknown
@@ -305,7 +305,24 @@ fn voice_ingress_keeps_audio_part_beside_provider_transcript() {
         }
     });
 
-    let envelope = TelegramChannel::inbound_envelope_from_update(&update, &legacy);
+    let mut voice_note = tinychannels_bus::VoiceNote {
+        media: tinychannels_bus::MediaReference {
+            opaque_id: Some("store-owned-voice-7".into()),
+            content_type: Some("audio/ogg".into()),
+            kind: tinychannels_bus::MediaKind::Audio,
+            ..Default::default()
+        },
+        duration_ms: Some(3_000),
+        ..Default::default()
+    };
+    voice_note.transcript = Some(tinychannels_bus::VoiceTranscript {
+        text: legacy.content.clone(),
+        language: None,
+        state: tinychannels_bus::VoiceTranscriptState::Complete,
+        source: tinychannels_bus::VoiceTranscriptSource::Provider,
+    });
+    let envelope =
+        TelegramChannel::inbound_envelope_from_update(&update, &legacy, Some(voice_note));
 
     assert_eq!(envelope.text, "recognized words");
     assert_eq!(envelope.parts.len(), 1);
@@ -326,7 +343,7 @@ fn voice_ingress_keeps_audio_part_beside_provider_transcript() {
             .transcript
             .as_ref()
             .map(|transcript| transcript.source),
-        Some(tinychannels_bus::VoiceTranscriptSource::HostStt)
+        Some(tinychannels_bus::VoiceTranscriptSource::Provider)
     );
     assert_ne!(
         voice_note.media.url.as_deref(),
@@ -958,6 +975,7 @@ fn telegram_v2_ingress_preserves_plain_and_forum_addresses_without_legacy_topic_
     let plain = TelegramChannel::inbound_envelope_from_update(
         &serde_json::json!({"message":{"message_id":5,"date":12,"chat":{"id":100,"type":"private"},"from":{"id":7}}}),
         &legacy,
+        None,
     );
     assert_eq!(plain.message_id, "telegram_100_5");
     assert_eq!(
@@ -973,6 +991,7 @@ fn telegram_v2_ingress_preserves_plain_and_forum_addresses_without_legacy_topic_
     let forum = TelegramChannel::inbound_envelope_from_update(
         &serde_json::json!({"message":{"message_id":5,"date":12,"message_thread_id":88,"chat":{"id":100,"type":"supergroup"},"from":{"id":7}}}),
         &legacy,
+        None,
     );
     assert_eq!(
         forum.conversation.kind,

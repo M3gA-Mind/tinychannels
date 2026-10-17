@@ -112,10 +112,7 @@ impl TelegramChannel {
     }
 
     /// Inject host-owned persistence for normalized voice media.
-    pub fn with_voice_media_store(
-        mut self,
-        store: Arc<dyn crate::host::VoiceMediaStore>,
-    ) -> Self {
+    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
         self.voice_media_store = Some(store);
         self
     }

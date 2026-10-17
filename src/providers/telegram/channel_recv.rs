@@ -749,6 +749,128 @@ impl TelegramChannel {
         }
     }
 
+    pub(crate) async fn voice_note_for_ingress(
+        &self,
+        update: &serde_json::Value,
+        message: &ChannelMessage,
+    ) -> anyhow::Result<Option<tinychannels_bus::VoiceNote>> {
+        let Some(voice) = Self::parse_update_voice_attachment(update) else {
+            return Ok(None);
+        };
+        let Some(store) = self.voice_media_store.as_ref() else {
+            anyhow::bail!("host voice media storage is unavailable");
+        };
+        let (bytes, file_name, _) = self
+            .download_telegram_voice_file(&voice.file_id, voice.file_unique_id.as_deref())
+            .await?;
+        if bytes.len() as u64 > super::channel_types::TELEGRAM_MAX_STORED_VOICE_BYTES {
+            anyhow::bail!("voice media exceeds the inline host storage callback limit");
+        }
+        let source = update
+            .get("message")
+            .or_else(|| update.get("edited_message"))
+            .unwrap_or(&serde_json::Value::Null);
+        let chat = source.get("chat").unwrap_or(&serde_json::Value::Null);
+        let chat_id = chat
+            .get("id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| {
+                message
+                    .reply_target
+                    .split(':')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            });
+        let topic_id = source
+            .get("message_thread_id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string());
+        let message_id = source
+            .get("message_id")
+            .and_then(serde_json::Value::as_i64)
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| message.id.clone());
+        let result = store
+            .store_voice(crate::host::VoiceMediaRequest {
+                audio_base64: BASE64.encode(&bytes),
+                mime_type: voice
+                    .mime_type
+                    .clone()
+                    .unwrap_or_else(|| "audio/ogg".into()),
+                codec: Some("ogg_opus".into()),
+                duration_ms: source
+                    .get("voice")
+                    .and_then(|voice| voice.get("duration"))
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|seconds| seconds.saturating_mul(1000)),
+                file_name: Some(file_name),
+                direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
+                scope: tinychannels_bus::HostVoiceScope {
+                    configured_instance: String::new(),
+                    channel: tinychannels_bus::ChannelRef {
+                        id: "telegram".into(),
+                        account_id: None,
+                    },
+                    conversation: tinychannels_bus::ConversationRef {
+                        kind: match chat.get("type").and_then(serde_json::Value::as_str) {
+                            Some("private") => tinychannels_bus::ConversationKind::Dm,
+                            Some("group" | "supergroup") => {
+                                tinychannels_bus::ConversationKind::Group
+                            }
+                            Some("channel") => tinychannels_bus::ConversationKind::Channel,
+                            _ => tinychannels_bus::ConversationKind::Unknown,
+                        },
+                        id: chat_id,
+                        thread_id: Some(message_id.clone()),
+                        topic_id,
+                        ..Default::default()
+                    },
+                    turn_id: message_id,
+                },
+            })
+            .await?;
+        let mut media = result.media;
+        if !media
+            .opaque_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+        {
+            anyhow::bail!("host voice media storage returned no durable opaque reference");
+        }
+        // Provider-originated identifiers and URLs are private/expiring; only
+        // the host's opaque reference crosses into history.
+        media.url = None;
+        media.path = None;
+        media.local_cache_path = None;
+        media.kind = tinychannels_bus::MediaKind::Audio;
+        media.content_type = Some(voice.mime_type.unwrap_or_else(|| "audio/ogg".into()));
+        media.codec = Some("ogg_opus".into());
+        let duration_ms = media.duration_ms.or_else(|| {
+            source
+                .get("voice")?
+                .get("duration")?
+                .as_u64()
+                .map(|s| s.saturating_mul(1000))
+        });
+        let transcript =
+            (!message.content.trim().is_empty()).then(|| tinychannels_bus::VoiceTranscript {
+                text: message.content.clone(),
+                language: None,
+                state: tinychannels_bus::VoiceTranscriptState::Complete,
+                source: tinychannels_bus::VoiceTranscriptSource::HostStt,
+            });
+        Ok(Some(tinychannels_bus::VoiceNote {
+            media,
+            codec: Some("ogg_opus".into()),
+            duration_ms,
+            waveform: None,
+            push_to_talk: true,
+            transcript,
+        }))
+    }
+
     pub(crate) fn voice_message_content(
         transcript: &str,
         caption: Option<&str>,
