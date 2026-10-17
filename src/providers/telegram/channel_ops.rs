@@ -180,6 +180,7 @@ impl Channel for TelegramChannel {
             .extend(["react".into(), "reactions".into()]);
         if self.voice_media_store.is_some() {
             capabilities.voice_in.supported = true;
+            capabilities.content.parts.push("voice_note".into());
             capabilities.voice_in.max_size_bytes = Some(8 * 1024 * 1024);
             capabilities.voice_in.transcript_sources = vec![
                 tinychannels_bus::VoiceTranscriptSource::Provider,

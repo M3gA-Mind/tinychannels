@@ -18,6 +18,7 @@ fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() 
         .with_voice_media_store(Arc::new(VoiceReadFixture))
         .capabilities();
     assert!(with_storage.voice_in.supported);
+    assert_eq!(with_storage.content.parts, ["text", "voice_note"]);
     assert!(with_storage.voice_out.supported);
     assert!(!with_storage.voice_out.synthesis);
     assert_eq!(
