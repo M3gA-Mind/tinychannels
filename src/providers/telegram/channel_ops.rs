@@ -6,7 +6,6 @@ use super::text::{TELEGRAM_MAX_MESSAGE_LENGTH, strip_tool_call_tags};
 use crate::config::StreamMode;
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
-use base64::Engine;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
 
