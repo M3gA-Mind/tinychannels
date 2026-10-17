@@ -2638,7 +2638,7 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
         .collect::<Vec<_>>();
     assert_eq!(callbacks.len(), 1);
     assert_eq!(callbacks[0]["type"], "button_callback");
-    assert_eq!(callbacks[0]["query_id"], "allowed-id");
+    assert_eq!(callbacks[0]["queryId"], "allowed-id");
     assert_eq!(callbacks[0]["actor"]["id"], "42");
     let acknowledgments = json_bodies(&server, "answerCallbackQuery").await;
     assert_eq!(acknowledgments.len(), 2);
