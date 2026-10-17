@@ -227,6 +227,9 @@ impl ScopedMediaStore {
         if record.scope != scope {
             anyhow::bail!("media reference is outside the configured channel scope");
         }
+        if record.state == MediaRecordState::Writing {
+            anyhow::bail!("media write is still in progress");
+        }
         let tombstone_version = if record.state == MediaRecordState::Deleting {
             version
         } else {
@@ -379,7 +382,11 @@ fn validate_content_type(
 
 fn content_matches(content_type: &str, bytes: &[u8]) -> bool {
     match content_type {
-        "image/png" => bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "image/png" => {
+            bytes.starts_with(b"\x89PNG\r\n\x1a\n")
+                && bytes.len() >= 45
+                && bytes.ends_with(b"IEND\xaeB`\x82")
+        }
         "image/jpeg" => bytes.starts_with(&[0xff, 0xd8, 0xff]),
         "image/gif" => bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a"),
         "image/webp" => bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP"),
