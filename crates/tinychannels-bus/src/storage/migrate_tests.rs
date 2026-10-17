@@ -395,7 +395,7 @@ async fn unreadable_v1_rows_are_dropped_and_the_rest_still_migrate() {
     );
     assert_eq!(
         body(&storage, schema::WHATSAPP_SESSION, "acct/k1").await,
-        Some(json!({ "data_b64": "AQID" }))
+        Some(json!({ "account": "acct", "key": "k1", "data_b64": "AQID" }))
     );
 }
 

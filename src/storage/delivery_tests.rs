@@ -371,6 +371,26 @@ async fn a_delivery_stored_under_the_wrong_id_is_unreadable_not_returned() {
 }
 
 #[tokio::test]
+async fn a_result_stored_under_the_wrong_id_is_unreadable_not_returned() {
+    let docs = docs();
+    let store = DocumentDeliveryStore::new(Arc::clone(&docs));
+    store
+        .save_result(result("real", now_unix_ms()))
+        .await
+        .unwrap();
+    let stored = docs.get(RESULTS_COLLECTION, "real").await.unwrap().unwrap();
+    docs.put(RESULTS_COLLECTION, "other", stored.doc, Precondition::Absent)
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        store.load_result("other").await,
+        Err(DeliveryQueueError::Store(message)) if message.contains("unreadable")
+    ));
+    assert!(store.load_result("real").await.unwrap().is_some());
+}
+
+#[tokio::test]
 async fn a_result_expires_through_record_metadata_and_keeps_no_time_but_completion() {
     let docs = docs();
     let store = DocumentDeliveryStore::new(Arc::clone(&docs));
