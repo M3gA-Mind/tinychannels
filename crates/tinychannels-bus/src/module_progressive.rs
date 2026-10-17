@@ -263,7 +263,16 @@ pub enum ProgressiveResult {
     DeliveryBatch {
         outcomes: Vec<crate::channel::ChannelSendOutcome>,
         unsupported: Vec<crate::channel::OutboundContentPart>,
+        failure: Option<ProgressiveOutputFailure>,
     },
+}
+
+/// Content-free reason that an ordered output batch stopped before completion.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ProgressiveOutputFailure {
+    ObservationCallback,
+    ProviderTransport,
 }
 
 /// The host supplies its managed REST transport and captured credential.
