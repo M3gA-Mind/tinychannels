@@ -82,7 +82,9 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
     );
     let uploads = raw_bodies(&server, "sendVoice").await;
     assert_eq!(uploads.len(), 1);
-    assert!(uploads[0].contains("AQIDBA"));
+    assert!(uploads[0].contains("name=\"voice\""));
+    assert!(uploads[0].contains("reply.ogg"));
+    assert!(uploads[0].contains("\u{1}\u{2}\u{3}\u{4}"));
 }
 
 /// Hang guard for loops that must terminate on their own.
