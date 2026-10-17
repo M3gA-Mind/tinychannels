@@ -3041,7 +3041,7 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
     let replaced_read = service
         .begin_media_read(MediaReadBegin {
             instance: "fixture".into(),
-            scope: read_scope,
+            scope: read_scope.clone(),
             media: result.clone(),
             max_bytes: bytes_len(&result),
         })
