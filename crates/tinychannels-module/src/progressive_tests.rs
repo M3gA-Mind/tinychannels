@@ -3905,7 +3905,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         turn_id: "turn-voice-1".into(),
         channel: tinychannels_bus::ChannelRef {
             id: "telegram".into(),
-            account_id: Some("telegram:media-v1:fixture".into()),
+            account_id: Some("telegram:bot-1".into()),
         },
         conversation: tinychannels_bus::ConversationRef {
             kind: tinychannels_bus::ConversationKind::Dm,
