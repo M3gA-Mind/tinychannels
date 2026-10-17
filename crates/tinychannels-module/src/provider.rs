@@ -615,12 +615,77 @@ async fn listen_with_supervision(
 /// A resource is retained until its owning task acknowledges cleanup.
 pub(crate) struct Running {
     pub(crate) channel: Arc<dyn Channel>,
+    configured_instance: String,
     send: mpsc::Sender<SendCommand>,
     cancel: watch::Sender<bool>,
     worker: Mutex<Option<JoinHandle<()>>>,
     finished: Arc<AtomicBool>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AdapterMode {
+    LegacyBacked,
+}
+
+pub(crate) struct ConfiguredAdapterHandle {
+    pub(crate) configured_instance: String,
+    pub(crate) mode: AdapterMode,
+    adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
+}
+
+impl ConfiguredAdapterHandle {
+    #[cfg(test)]
+    pub(crate) fn adapter(&self) -> &dyn tinychannels::channel::ChannelAdapter {
+        self.adapter.as_ref()
+    }
+
+    pub(crate) fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
+        debug_assert_eq!(
+            self.adapter.descriptor().account_id.as_deref(),
+            Some(self.configured_instance.as_str())
+        );
+        self.adapter.descriptor()
+    }
+
+    pub(crate) fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.adapter.declared_capabilities()
+    }
+
+    pub(crate) fn proactive_target(&self) -> Option<String> {
+        self.adapter.proactive_target()
+    }
+
+    pub(crate) async fn send(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        debug_assert_eq!(self.mode, AdapterMode::LegacyBacked);
+        self.adapter.send(intent).await
+    }
+}
+
+pub(crate) struct ConfiguredAdapterFactory;
+
+impl ConfiguredAdapterFactory {
+    pub(crate) fn legacy(running: Arc<Running>) -> ConfiguredAdapterHandle {
+        let configured_instance = running.configured_instance.clone();
+        let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = running;
+        ConfiguredAdapterHandle {
+            configured_instance,
+            mode: AdapterMode::LegacyBacked,
+            adapter,
+        }
+    }
+}
+
 impl Running {
+    pub(crate) fn adapter_handle(self: &Arc<Self>) -> ConfiguredAdapterHandle {
+        ConfiguredAdapterFactory::legacy(self.clone())
+    }
+
     pub(crate) fn start(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
@@ -664,6 +729,7 @@ impl Running {
             .clone()
             .unwrap_or_else(|| listen_channel.name().to_owned());
         let worker_cancel = cancel.clone();
+        let worker_instance = configured_instance.clone();
         let worker = tokio::spawn(async move {
             let name = listen_channel.name().to_owned();
             host.report_status(&name, "connecting", None).await;
@@ -709,9 +775,8 @@ impl Running {
                                 outcome.receipt.idempotency_key =
                                     Some(message.idempotency_key.clone());
                                 outcome.receipt.channel = Some(tinychannels_bus::ChannelRef {
-                                    id: tinychannels_bus::provider_id(&configured_instance)
-                                        .to_owned(),
-                                    account_id: Some(configured_instance.clone()),
+                                    id: tinychannels_bus::provider_id(&worker_instance).to_owned(),
+                                    account_id: Some(worker_instance.clone()),
                                 });
                                 if outcome.receipt.conversation.is_none() {
                                     outcome.receipt.conversation =
@@ -771,6 +836,7 @@ impl Running {
         });
         Arc::new(Self {
             channel,
+            configured_instance,
             send,
             cancel,
             worker: Mutex::new(Some(worker)),
@@ -799,6 +865,59 @@ impl Running {
                 "typed send returned no receipt".into(),
             )),
         }
+    }
+
+    fn adapter_descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
+        let channel_id = tinychannels_bus::provider_id(self.channel.name()).to_owned();
+        tinychannels_bus::channel::ChannelDescriptor {
+            id: channel_id,
+            display_name: self.channel.name().to_owned(),
+            account_id: Some(self.configured_instance.clone()),
+            metadata: std::collections::BTreeMap::from([
+                (
+                    "configuredInstance".into(),
+                    self.configured_instance.clone(),
+                ),
+                ("adapterMode".into(), "legacy-backed".into()),
+            ]),
+            ..Default::default()
+        }
+    }
+
+    fn validate_adapter_intent(
+        &self,
+        intent: &tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        let expected_channel = tinychannels_bus::provider_id(self.channel.name());
+        if tinychannels_bus::provider_id(&intent.channel_id) != expected_channel
+            || intent.channel_ref.as_ref().is_some_and(|reference| {
+                reference.id != expected_channel
+                    || reference
+                        .account_id
+                        .as_deref()
+                        .is_some_and(|account_id| account_id != self.configured_instance.as_str())
+            })
+        {
+            return Err(adapter_scope_error(
+                "channel account does not match configured instance",
+            ));
+        }
+        if intent.conversation_id.trim().is_empty()
+            || intent
+                .conversation_ref
+                .as_ref()
+                .is_some_and(|conversation| {
+                    conversation.id != intent.conversation_id
+                        || (intent.thread_id.is_some()
+                            && conversation.thread_id.is_some()
+                            && conversation.thread_id != intent.thread_id)
+                })
+        {
+            return Err(adapter_scope_error(
+                "conversation address is incomplete or inconsistent",
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) async fn interact(
@@ -851,6 +970,189 @@ impl Running {
         }
         worker.take();
         Ok(())
+    }
+}
+
+fn adapter_scope_error(message: &str) -> tinychannels::channel::ChannelSendError {
+    tinychannels::channel::ChannelSendError {
+        kind: tinychannels::channel::SendErrorKind::Forbidden,
+        message: message.into(),
+        retryable: false,
+        ..Default::default()
+    }
+}
+
+/// The module's configured runtime handle is the adapter factory's concrete
+/// legacy-backed entry until its provider receives a native adapter port.
+/// It reuses the already-running listener and typed send worker.
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelAdapter for Running {
+    fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
+        self.adapter_descriptor()
+    }
+
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.channel.capabilities()
+    }
+
+    fn proactive_target(&self) -> Option<String> {
+        self.channel.proactive_target()
+    }
+
+    async fn start(
+        &self,
+        _sink: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Err(tinychannels::channel::ChannelSendError {
+            kind: tinychannels::channel::SendErrorKind::Forbidden,
+            message: "configured adapter is already started by the module runtime".into(),
+            retryable: false,
+            ..Default::default()
+        })
+    }
+
+    async fn stop(&self) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        Running::stop(self)
+            .await
+            .map_err(|error| tinychannels::channel::ChannelSendError {
+                kind: tinychannels::channel::SendErrorKind::Transient,
+                message: error.to_string(),
+                retryable: true,
+                sent_before_error: true,
+                ..Default::default()
+            })
+    }
+
+    async fn send(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    > {
+        self.validate_adapter_intent(&intent)?;
+        let capabilities = self.channel.capabilities();
+        if !adapter_payload_supported(&intent.payload, &capabilities) {
+            return Err(tinychannels::channel::ChannelSendError {
+                kind: tinychannels::channel::SendErrorKind::BadFormat,
+                message: "configured provider does not advertise this outbound content kind".into(),
+                unsupported: true,
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        let mut intent = intent;
+        let expected_channel = tinychannels_bus::provider_id(&self.configured_instance).to_owned();
+        intent
+            .channel_ref
+            .get_or_insert_with(|| tinychannels_bus::ChannelRef {
+                id: expected_channel,
+                account_id: Some(self.configured_instance.clone()),
+            });
+        if let Some(channel_ref) = &mut intent.channel_ref
+            && channel_ref.account_id.is_none()
+        {
+            channel_ref.account_id = Some(self.configured_instance.clone());
+        }
+        intent
+            .conversation_ref
+            .get_or_insert_with(|| tinychannels_bus::ConversationRef {
+                id: intent.conversation_id.clone(),
+                thread_id: intent.thread_id.clone(),
+                ..Default::default()
+            });
+        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+        let mut outcome = self.send_typed(message).await.map_err(|error| {
+            let sent_before_error = matches!(error, RunningSendError::AfterDispatch(_));
+            tinychannels::channel::ChannelSendError {
+                kind: tinychannels::channel::SendErrorKind::Unknown,
+                message: error.to_string(),
+                retryable: !sent_before_error,
+                sent_before_error,
+                ..Default::default()
+            }
+        })?;
+        if let Some(error) = &mut outcome.error {
+            let partial = error.sent_before_error
+                || outcome.receipt.primary_platform_message_id.is_some()
+                || !outcome.receipt.platform_message_ids.is_empty()
+                || !outcome.receipt.parts.is_empty()
+                || !error.continuation_message_ids.is_empty()
+                || error.partial_overflow.is_some();
+            let uncertain = error.kind == tinychannels::channel::SendErrorKind::Unknown;
+            if partial || uncertain {
+                error.unsupported = false;
+            }
+            error.sent_before_error |= partial || uncertain;
+            if partial || uncertain {
+                error.retryable = false;
+            }
+        }
+        Ok(outcome)
+    }
+
+    async fn status(
+        &self,
+    ) -> std::result::Result<
+        tinychannels::controllers::ChannelAccountSnapshot,
+        tinychannels::channel::ChannelSendError,
+    > {
+        let healthy = self.channel.health_check().await;
+        Ok(tinychannels::controllers::ChannelAccountSnapshot {
+            channel_id: tinychannels_bus::provider_id(self.channel.name()).into(),
+            account_id: Some(self.configured_instance.clone()),
+            states: vec![
+                tinychannels::controllers::ChannelAccountState::Configured,
+                tinychannels::controllers::ChannelAccountState::Enabled,
+            ],
+            health_state: Some(if healthy { "healthy" } else { "unhealthy" }.into()),
+            ..Default::default()
+        })
+    }
+}
+
+fn adapter_payload_supported(
+    payload: &tinychannels_bus::OutboundPayload,
+    capabilities: &tinychannels_bus::ChannelCapabilities,
+) -> bool {
+    use tinychannels_bus::{ContentPart, OutboundContentPart, OutboundPayload};
+    let supports_voice = |voice: &tinychannels_bus::OutboundVoice| match voice {
+        tinychannels_bus::OutboundVoice::Media { .. } => capabilities.voice_out.supported,
+        tinychannels_bus::OutboundVoice::Synthesize { .. } => {
+            capabilities.voice_out.supported && capabilities.voice_out.synthesis
+        }
+    };
+    let supports_part = |part: &ContentPart| match part {
+        ContentPart::Text { .. } => capabilities.content.text.outbound,
+        ContentPart::Image { .. } => capabilities.content.image.outbound,
+        ContentPart::Video { .. } => capabilities.content.video.outbound,
+        ContentPart::Audio { .. } => capabilities.content.audio.outbound,
+        ContentPart::File { .. } => capabilities.content.file.outbound,
+        ContentPart::VoiceNote { .. } => capabilities.voice_out.supported,
+        ContentPart::Sticker { .. } => capabilities.content.sticker.outbound,
+        ContentPart::Location { .. } => capabilities.content.location.outbound,
+        ContentPart::Contact { .. } => capabilities.content.contact.outbound,
+        ContentPart::Buttons { .. } => capabilities.content.buttons.outbound,
+        ContentPart::Poll { .. } => capabilities.content.poll.outbound,
+        ContentPart::Presentation { .. } => capabilities.content.presentation.outbound,
+        ContentPart::Native { .. } => capabilities.content.native.outbound,
+    };
+    match payload {
+        OutboundPayload::Text { .. } => capabilities.content.text.outbound,
+        OutboundPayload::Media { text, media_urls } => {
+            text.as_ref()
+                .is_none_or(|_| capabilities.content.text.outbound)
+                && (media_urls.is_empty() || capabilities.content.image.outbound)
+        }
+        OutboundPayload::Voice { voice } => supports_voice(voice),
+        OutboundPayload::Files { .. } => capabilities.content.file.outbound,
+        OutboundPayload::Poll { .. } => capabilities.content.poll.outbound,
+        OutboundPayload::PresentationBlocks { .. } => capabilities.content.presentation.outbound,
+        OutboundPayload::NativeChannelData { .. } => capabilities.content.native.outbound,
+        OutboundPayload::Parts { parts } => parts.iter().all(|part| match part {
+            OutboundContentPart::Content { part } => supports_part(part),
+            OutboundContentPart::Voice { voice } => supports_voice(voice),
+        }),
     }
 }
 

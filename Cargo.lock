@@ -2769,6 +2769,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tinychannels-bus",
+ "tinychannels-conformance",
  "tinychannels-runtime",
  "tinystoragedrivers-core",
  "tokio",
@@ -2803,6 +2804,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinychannels-conformance"
+version = "0.1.34"
+dependencies = [
+ "async-trait",
+ "serde_json",
+ "tinychannels-bus",
+ "tinychannels-runtime",
+ "tokio",
+]
+
+[[package]]
 name = "tinychannels-module"
 version = "0.1.34"
 dependencies = [
@@ -2820,6 +2832,7 @@ dependencies = [
  "tinybus-module",
  "tinychannels",
  "tinychannels-bus",
+ "tinychannels-conformance",
  "tinystoragedrivers-bus",
  "tinystoragedrivers-busproxy",
  "tinystoragedrivers-client",
@@ -2829,6 +2842,7 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "tracing",
  "uuid",
+ "wiremock",
 ]
 
 [[package]]

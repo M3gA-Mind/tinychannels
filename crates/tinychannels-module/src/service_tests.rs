@@ -83,6 +83,36 @@ impl tinychannels::Channel for CaptureTypedChannel {
         "fixture"
     }
 
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        let outbound = tinychannels_bus::ContentCapability {
+            outbound: true,
+            ..Default::default()
+        };
+        tinychannels_bus::ChannelCapabilities {
+            content: tinychannels_bus::ContentCapabilities {
+                text: outbound.clone(),
+                image: outbound.clone(),
+                video: outbound.clone(),
+                audio: outbound.clone(),
+                file: outbound.clone(),
+                sticker: outbound.clone(),
+                location: outbound.clone(),
+                contact: outbound.clone(),
+                buttons: outbound.clone(),
+                poll: outbound.clone(),
+                presentation: outbound.clone(),
+                native: outbound,
+                ..Default::default()
+            },
+            voice_out: tinychannels_bus::VoiceCapabilities {
+                supported: true,
+                synthesis: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
     async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
         anyhow::bail!("typed test provider expects typed sends")
     }
@@ -111,6 +141,16 @@ struct CaptureVoiceReceiptChannel(
 impl tinychannels::Channel for CaptureVoiceReceiptChannel {
     fn name(&self) -> &str {
         "fixture"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        tinychannels_bus::ChannelCapabilities {
+            voice_out: tinychannels_bus::VoiceCapabilities {
+                supported: true,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
     }
 
     async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
@@ -245,10 +285,12 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
     let host = HostChannels::new(connection.clone());
     let (sent, mut received) = tokio::sync::mpsc::channel(8);
     let channel = Arc::new(CaptureTypedChannel(sent));
+    let hooks = Arc::new(Hooks::default());
+    let _provider_host = hooks.host(host.clone(), "account-a".into());
     let mut running = HashMap::new();
     running.insert(
         "fixture".to_owned(),
-        Running::start(channel, Arc::new(Hooks::default()), host.clone()),
+        Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
         progressive: Arc::new(crate::progressive::Replies::new(
@@ -502,7 +544,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         conversation_id: "room".into(),
                         channel_ref: Some(tinychannels_bus::channel::ChannelRef {
                             id: "fixture".into(),
-                            account_id: Some("account-a".into()),
+                            account_id: None,
                         }),
                         conversation_ref: Some(tinychannels_bus::channel::ConversationRef {
                             kind: tinychannels_bus::channel::ConversationKind::Thread,

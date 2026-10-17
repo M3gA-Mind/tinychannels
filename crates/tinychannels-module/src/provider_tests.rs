@@ -6,6 +6,121 @@ use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinychannels::host::EventSink as _;
 use tinychannels_bus::{ChannelInboundEnvelope, ContentPart, ConversationKind, ConversationRef};
+use tinychannels_conformance::AdapterFixture as _;
+
+struct RunningTelegramConformance {
+    adapter: ConfiguredAdapterHandle,
+    server: wiremock::MockServer,
+    scope: tinychannels_conformance::ExpectedScope,
+    observed: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
+    request_cursor: std::sync::Mutex<usize>,
+}
+
+#[async_trait::async_trait]
+impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
+    fn adapter(&self) -> &dyn tinychannels::channel::ChannelAdapter {
+        self.adapter.adapter()
+    }
+
+    fn expected_scope(
+        &self,
+        _feature: tinychannels_conformance::ConformanceFeature,
+    ) -> tinychannels_conformance::ExpectedScope {
+        self.scope.clone()
+    }
+
+    fn clear_observations(&self) {
+        self.observed.lock().unwrap().clear();
+    }
+
+    fn observations(&self) -> Vec<tinychannels_conformance::WireObservation> {
+        self.observed.lock().unwrap().clone()
+    }
+
+    async fn exercise(
+        &self,
+        feature: tinychannels_conformance::ConformanceFeature,
+    ) -> std::result::Result<
+        Option<tinychannels_bus::channel::ChannelSendOutcome>,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        use tinychannels_conformance::ConformanceFeature as Feature;
+        let payload = match feature {
+            Feature::Text | Feature::ThreadAddressing | Feature::ReplyAddressing => {
+                tinychannels_bus::OutboundPayload::Text {
+                    text: "module-kit".into(),
+                }
+            }
+            Feature::Image => tinychannels_bus::OutboundPayload::Media {
+                text: None,
+                media_urls: vec!["https://example.invalid/image.png".into()],
+            },
+            _ => {
+                return Err(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
+                    message: "fixture does not expose this operation".into(),
+                    unsupported: true,
+                    ..Default::default()
+                });
+            }
+        };
+        let intent = tinychannels_bus::ChannelOutboundIntent {
+            idempotency_key: "module-kit-send".into(),
+            channel_id: "telegram:account-a".into(),
+            conversation_id: self.scope.conversation.id.clone(),
+            channel_ref: Some(self.scope.channel.clone()),
+            conversation_ref: Some(self.scope.conversation.clone()),
+            reply_to_id: self.scope.reply_to_id.clone(),
+            thread_id: self.scope.thread_id.clone(),
+            payload,
+            ..Default::default()
+        };
+        let result = self.adapter.send(intent).await;
+        let requests = self.server.received_requests().await.unwrap_or_default();
+        let mut cursor = self.request_cursor.lock().unwrap();
+        for request in requests.iter().skip(*cursor) {
+            if !request.url.path().ends_with("/sendMessage") {
+                continue;
+            }
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
+            let chat = body
+                .get("chat_id")
+                .and_then(|value| value.as_str())
+                .unwrap_or_default();
+            let mut conversation = self.scope.conversation.clone();
+            conversation.id = chat.to_owned();
+            let payload_kinds = if body.get("text").is_some() {
+                vec!["text".into()]
+            } else {
+                vec![]
+            };
+            let wire_id = |field: &str| {
+                body.get(field).map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| value.to_string())
+                })
+            };
+            self.observed
+                .lock()
+                .unwrap()
+                .push(tinychannels_conformance::WireObservation {
+                    feature,
+                    operation: "send".into(),
+                    channel: self.scope.channel.clone(),
+                    conversation,
+                    reply_to_id: wire_id("reply_to_message_id"),
+                    thread_id: wire_id("message_thread_id"),
+                    payload_kinds,
+                    platform_message_ids: vec!["321".into()],
+                    request: body,
+                });
+        }
+        *cursor = requests.len();
+        result.map(Some)
+    }
+}
 
 #[derive(Clone, Default)]
 struct IngressVoiceCallback {
@@ -865,6 +980,7 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
         let (cancel, _) = watch::channel(false);
         let running = Arc::new(Running {
             channel: Arc::new(InteractionChannel::default()),
+            configured_instance: "interaction-fixture:account-a".into(),
             send,
             cancel,
             worker: Mutex::new(None),
@@ -896,4 +1012,257 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
             );
         }
     }
+}
+
+#[tokio::test]
+async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
+    let (send, mut commands) = mpsc::channel::<SendCommand>(1);
+    let (cancel, _) = watch::channel(false);
+    let running = Arc::new(Running {
+        channel: Arc::new(InteractionChannel::default()),
+        configured_instance: "interaction-fixture:account-a".into(),
+        send,
+        cancel,
+        worker: Mutex::new(None),
+        finished: Arc::new(AtomicBool::new(false)),
+    });
+    let adapter = running.adapter_handle();
+    let error = adapter
+        .send(tinychannels_bus::ChannelOutboundIntent {
+            channel_id: "interaction-fixture".into(),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "interaction-fixture".into(),
+                account_id: Some("interaction-fixture:account-b".into()),
+            }),
+            conversation_id: "chat-1".into(),
+            payload: tinychannels_bus::OutboundPayload::Text {
+                text: "hello".into(),
+            },
+            ..Default::default()
+        })
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Forbidden);
+    assert!(commands.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
+    let (send, mut commands) = mpsc::channel::<SendCommand>(1);
+    let (cancel, _) = watch::channel(false);
+    let running = Arc::new(Running {
+        channel: Arc::new(InteractionChannel::default()),
+        configured_instance: "interaction-fixture:account-a".into(),
+        send,
+        cancel,
+        worker: Mutex::new(None),
+        finished: Arc::new(AtomicBool::new(false)),
+    });
+    let adapter = running.adapter_handle();
+    let task = tokio::spawn(async move {
+        adapter
+            .send(tinychannels_bus::ChannelOutboundIntent {
+                channel_id: "interaction-fixture".into(),
+                channel_ref: Some(tinychannels_bus::ChannelRef {
+                    id: "interaction-fixture".into(),
+                    account_id: Some("interaction-fixture:account-a".into()),
+                }),
+                conversation_id: "chat-1".into(),
+                conversation_ref: Some(tinychannels_bus::ConversationRef {
+                    id: "chat-1".into(),
+                    thread_id: Some("thread-2".into()),
+                    ..Default::default()
+                }),
+                thread_id: Some("thread-2".into()),
+                payload: tinychannels_bus::OutboundPayload::Text {
+                    text: "hello".into(),
+                },
+                ..Default::default()
+            })
+            .await
+    });
+    let command = commands.recv().await.expect("adapter dispatch");
+    let outcome = Box::new(tinychannels_bus::channel::ChannelSendOutcome {
+        receipt: tinychannels_bus::channel::MessageReceipt {
+            primary_platform_message_id: Some("msg-1".into()),
+            platform_message_ids: vec!["msg-1".into()],
+            ..Default::default()
+        },
+        error: Some(tinychannels_bus::channel::ChannelSendError {
+            message: "second chunk failed".into(),
+            retryable: true,
+            ..Default::default()
+        }),
+    });
+    command.started.send(()).unwrap();
+    command
+        .reply
+        .send(Ok(
+            tinychannels_bus::module_interaction::ChannelInteractionResult::Sent(outcome),
+        ))
+        .unwrap();
+    let outcome = task.await.unwrap().unwrap();
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("msg-1")
+    );
+    let error = outcome.error.expect("partial send error");
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+}
+
+async fn send_configured_outcome(
+    outcome: tinychannels_bus::channel::ChannelSendOutcome,
+) -> tinychannels_bus::channel::ChannelSendOutcome {
+    let (send, mut commands) = mpsc::channel::<SendCommand>(1);
+    let (cancel, _) = watch::channel(false);
+    let running = Arc::new(Running {
+        channel: Arc::new(InteractionChannel::default()),
+        configured_instance: "interaction-fixture:account-a".into(),
+        send,
+        cancel,
+        worker: Mutex::new(None),
+        finished: Arc::new(AtomicBool::new(false)),
+    });
+    let adapter = running.adapter_handle();
+    let task = tokio::spawn(async move {
+        adapter
+            .send(tinychannels_bus::ChannelOutboundIntent {
+                channel_id: "interaction-fixture".into(),
+                channel_ref: Some(tinychannels_bus::ChannelRef {
+                    id: "interaction-fixture".into(),
+                    account_id: Some("interaction-fixture:account-a".into()),
+                }),
+                conversation_id: "chat-1".into(),
+                conversation_ref: Some(tinychannels_bus::ConversationRef {
+                    id: "chat-1".into(),
+                    ..Default::default()
+                }),
+                payload: tinychannels_bus::OutboundPayload::Text {
+                    text: "hello".into(),
+                },
+                ..Default::default()
+            })
+            .await
+    });
+    let command = commands.recv().await.expect("adapter dispatch");
+    command.started.send(()).unwrap();
+    command
+        .reply
+        .send(Ok(
+            tinychannels_bus::module_interaction::ChannelInteractionResult::Sent(Box::new(outcome)),
+        ))
+        .unwrap();
+    task.await.unwrap().unwrap()
+}
+
+#[tokio::test]
+async fn configured_adapter_disables_retry_for_continuation_only_and_unknown_outcomes() {
+    let continuation_only =
+        send_configured_outcome(tinychannels_bus::channel::ChannelSendOutcome {
+            error: Some(tinychannels_bus::channel::ChannelSendError {
+                continuation_message_ids: vec!["continuation-2".into()],
+                retryable: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await;
+    let error = continuation_only.error.unwrap();
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+
+    let unknown_without_id =
+        send_configured_outcome(tinychannels_bus::channel::ChannelSendOutcome {
+            error: Some(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels::channel::SendErrorKind::Unknown,
+                message: "platform outcome unknown".into(),
+                retryable: true,
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .await;
+    let error = unknown_without_id.error.unwrap();
+    assert!(!error.retryable);
+}
+
+#[test]
+fn raw_voice_synthesis_requires_the_configured_native_synthesis_capability() {
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.voice_out.supported = true;
+    capabilities.voice_out.synthesis = false;
+    let payload = tinychannels_bus::OutboundPayload::Voice {
+        voice: tinychannels_bus::OutboundVoice::Synthesize {
+            text: "spoken text".into(),
+            voice: None,
+        },
+    };
+    assert!(!adapter_payload_supported(&payload, &capabilities));
+    capabilities.voice_out.synthesis = true;
+    assert!(adapter_payload_supported(&payload, &capabilities));
+}
+
+#[tokio::test]
+async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance() {
+    use tinychannels_conformance::{ConformanceFeature, ExpectedScope, check_feature};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": { "message_id": 321 }
+        })))
+        .mount(&server)
+        .await;
+    let channel = Arc::new(
+        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
+            .with_api_base_for_test(server.uri()),
+    );
+    let instance = "telegram:account-a".to_owned();
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), instance.clone());
+    let running = Running::start_outbound(channel, hooks, host);
+    let handle = running.adapter_handle();
+    let fixture = RunningTelegramConformance {
+        adapter: handle,
+        server,
+        scope: ExpectedScope {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some(instance),
+            },
+            conversation: ConversationRef {
+                kind: ConversationKind::Group,
+                id: "100".into(),
+                thread_id: Some("77".into()),
+                ..Default::default()
+            },
+            reply_to_id: Some("5".into()),
+            thread_id: Some("77".into()),
+        },
+        observed: std::sync::Mutex::new(Vec::new()),
+        request_cursor: std::sync::Mutex::new(0),
+    };
+    let descriptor = fixture.adapter.descriptor();
+    assert_eq!(descriptor.id, "telegram");
+    assert_eq!(descriptor.account_id.as_deref(), Some("telegram:account-a"));
+    check_feature(&fixture, ConformanceFeature::Text)
+        .await
+        .unwrap();
+    let observation = fixture.observations().pop().unwrap();
+    assert_eq!(observation.request["chat_id"], "100");
+    assert_eq!(observation.request["text"], "module-kit");
+    assert_eq!(observation.platform_message_ids, ["321"]);
+    assert_eq!(observation.reply_to_id.as_deref(), Some("5"));
+    assert_eq!(observation.thread_id.as_deref(), Some("77"));
+    check_feature(&fixture, ConformanceFeature::Image)
+        .await
+        .unwrap();
+    assert!(fixture.observations().is_empty());
+    running.stop().await.unwrap();
 }

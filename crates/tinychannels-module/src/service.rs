@@ -39,7 +39,7 @@ use std::sync::Arc;
 use tinychannels::config::WhatsAppConfigExt as _;
 
 use crate::delivery::HostDeliveryStore;
-use crate::provider::{Hooks, Running, RunningSendError};
+use crate::provider::{Hooks, Running};
 use crate::relay::Relays;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tinybus::{Connection, Error as BusError, Result as BusResult};
@@ -95,7 +95,7 @@ async fn configured_capabilities(
     running
         .get(name)
         .or_else(|| running.get(tinychannels_bus::provider_id(name)))
-        .map(|provider| crate::interaction::configured_capabilities(provider.channel.as_ref()))
+        .map(crate::interaction::configured_adapter_capabilities)
         .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
 }
 
@@ -233,14 +233,14 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
         };
         drop(running);
 
-        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&entry.intent);
-        let outcome = match provider.send_typed(message).await {
+        let adapter = provider.adapter_handle();
+        let outcome = match adapter.send(entry.intent.clone()).await {
             Ok(outcome) => outcome,
             Err(error) => {
                 return Err(DeliveryAttemptFailure {
-                    error: "provider send failed".into(),
-                    sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
-                    permanent: None,
+                    error: error.message,
+                    sent_before_error: error.sent_before_error,
+                    permanent: Some(!error.retryable),
                     receipt: None,
                 });
             }
@@ -852,14 +852,13 @@ impl Channels {
                     message: format!("channel {name} is not running"),
                 })?
         };
-        let outcome = entry
-            .send_typed(tinychannels_bus::ChannelOutboundMessage::from_intent(
-                &intent,
-            ))
+        let adapter = entry.adapter_handle();
+        let outcome = adapter
+            .send(intent)
             .await
             .map_err(|error| BusError::MethodFailed {
                 name: SEND_FAILED_ERROR.to_owned(),
-                message: error.to_string(),
+                message: error.message,
             })?;
         let has_provider_receipt = outcome.receipt.primary_platform_message_id.is_some()
             || !outcome.receipt.platform_message_ids.is_empty()

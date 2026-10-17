@@ -49,12 +49,15 @@ uuid = { version = "1", features = ["v4"] }
 base64 = "0.23"
 
 [dev-dependencies]
+tinychannels = { path = "../..", features = ["test-support"] }
+tinychannels-conformance = { path = "../tinychannels-conformance" }
 tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["test-support"] }
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 serde_json = "1"
 futures-util = "0.3"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+wiremock = "0.6"
 
 [features]
 default = []

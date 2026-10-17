@@ -1,9 +1,6 @@
 //! Adapter traits for direct providers, relay connectors, and host bridges.
 
-use crate::channel::{
-    ChannelDescriptor, ChannelInboundEnvelope, ChannelOutboundIntent, ChannelSendError,
-    MessageReceipt,
-};
+use crate::channel::{ChannelDescriptor, ChannelOutboundIntent, ChannelSendError, MessageReceipt};
 use crate::controllers::ChannelAccountSnapshot;
 use async_trait::async_trait;
 use serde_json::Value;
@@ -13,13 +10,25 @@ pub use tinychannels_bus::channel::adapter::*;
 /// Sink used by adapters to deliver normalized inbound envelopes.
 #[async_trait]
 pub trait ChannelInboundSink: Send + Sync {
-    async fn push(&self, envelope: ChannelInboundEnvelope) -> Result<(), ChannelSendError>;
+    /// Publish an ordered ingress item. Messages and lifecycle events share
+    /// this one seam so providers cannot reorder events through side queues.
+    async fn push(&self, ingress: tinychannels_bus::ChannelIngress)
+    -> Result<(), ChannelSendError>;
 }
 
 /// Base channel adapter contract.
 #[async_trait]
 pub trait ChannelAdapter: Send + Sync {
     fn descriptor(&self) -> ChannelDescriptor;
+
+    /// Capability facts for this configured account, sourced from its provider.
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        tinychannels_bus::ChannelCapabilities::unknown()
+    }
+
+    fn proactive_target(&self) -> Option<String> {
+        None
+    }
 
     fn receive_ack_policy(&self) -> ChannelReceiveAckPolicy {
         ChannelReceiveAckPolicy::AfterReceiveRecord
@@ -32,8 +41,10 @@ pub trait ChannelAdapter: Send + Sync {
 
     async fn stop(&self) -> Result<(), ChannelSendError>;
 
-    async fn send(&self, intent: ChannelOutboundIntent)
-    -> Result<MessageReceipt, ChannelSendError>;
+    async fn send(
+        &self,
+        intent: ChannelOutboundIntent,
+    ) -> Result<crate::channel::ChannelSendOutcome, ChannelSendError>;
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError>;
 }
@@ -100,3 +111,7 @@ pub trait ChannelStreamingDraft: Send + Sync {
         intent: ChannelOutboundIntent,
     ) -> Result<MessageReceipt, ChannelSendError>;
 }
+
+#[cfg(test)]
+#[path = "adapter_tests.rs"]
+mod tests;
