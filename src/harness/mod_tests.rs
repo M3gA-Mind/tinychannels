@@ -441,7 +441,8 @@ fn voice_note_projection_keeps_transcript_precedence_and_audio_order() {
         transcript: Some(tinychannels_bus::VoiceTranscript {
             text: "recognized words".into(),
             language: Some("en".into()),
-            ..Default::default()
+            state: tinychannels_bus::VoiceTranscriptState::Complete,
+            source: tinychannels_bus::VoiceTranscriptSource::Provider,
         }),
         ..Default::default()
     };
