@@ -80,3 +80,23 @@ marker. Terminal receipts are included in idempotent replays.
 The controller vocabulary includes complete Discord guild, text-channel and
 permission DTOs. Provider APIs re-export these types at their existing paths;
 REST calls and permission calculations remain implementation behavior.
+
+The deployed OpenHuman web chat vocabulary is available from
+`tinychannels_bus::web`. It is a distinct snake-case `event`-tagged protocol,
+separate from provider `ChannelEvent`'s `type` tag and the progressive output
+event's `type` tag. The web DTOs retain optional-field omission and accept the
+historical `chat_error` cancellation shape alongside `chat_cancelled`.
+Tenant/profile stamps stay in the host. Ordered message `parts` use
+`OutboundContentPart`, including typed media and voice notes; `full_response`
+remains a compatibility projection. Socket event aliases are transport names
+and never rewrite the payload discriminator. Alias generation suppresses
+parent and subagent stream deltas, matching the deployed socket server.
+
+Export the deterministic JSON Schema for TypeScript generation with
+`cargo run -p tinychannels-bus --example web_schema`; the public
+`web_event_schema_json()` function exposes the same schema to codegen tools.
+The transport-free helpers also carry the web payload cap and timing
+calculations for migration into host adapters. Logging and clock acquisition
+remain host responsibilities. This contract does not claim that OpenHuman's
+current host, TUI, or frontend has migrated to these types; those integrations
+belong to their dependent epic leaves.

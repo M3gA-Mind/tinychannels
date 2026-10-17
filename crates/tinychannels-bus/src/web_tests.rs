@@ -260,8 +260,10 @@ fn flattened_context_is_the_only_owner_of_turn_request_id() {
         r#"{"event":"artifact_pending","client_id":"c","thread_id":"t","request_id":"r","turn_request_id":"turn"}"#,
     )
     .unwrap();
+    let encoded = serde_json::to_string(&event).unwrap();
+    assert_eq!(encoded.matches("turn_request_id").count(), 1);
     assert_eq!(
-        serde_json::to_value(event).unwrap()["turn_request_id"],
+        serde_json::from_str::<serde_json::Value>(&encoded).unwrap()["turn_request_id"],
         "turn"
     );
 }
