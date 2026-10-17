@@ -669,16 +669,7 @@ async fn output_callback_failure_cleans_up_without_sending_a_replacement() {
             .to_string()
             .contains("host output event callback failed")
     );
-    assert_eq!(callback.sends.lock().await.len(), 1);
-    let requests = callback.requests.lock().await;
-    let ProgressiveTransportRequest::SendTyped { parts: sent_parts, .. } = requests
-        .iter()
-        .find(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
-        .unwrap()
-    else {
-        panic!("expected typed provider send")
-    };
-    assert_eq!(sent_parts, &parts);
+    assert!(callback.sends.lock().await.is_empty());
     assert!(
         callback
             .requests
@@ -839,6 +830,17 @@ async fn unsupported_rich_final_returns_the_unflattened_parts() {
         .await
         .unwrap();
     assert_eq!(result, ProgressiveResult::DeliveryUnsupported { parts });
-    assert!(callback.sends.lock().await.is_empty());
+    assert_eq!(callback.sends.lock().await.len(), 1);
+    let requests = callback.requests.lock().await;
+    let ProgressiveTransportRequest::SendTyped {
+        parts: sent_parts, ..
+    } = requests
+        .iter()
+        .find(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+        .unwrap()
+    else {
+        panic!("expected typed provider send")
+    };
+    assert_eq!(sent_parts, &parts);
     replies.shutdown().await.unwrap();
 }
