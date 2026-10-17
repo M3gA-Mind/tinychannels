@@ -49,7 +49,9 @@ pub(super) async fn flush_streaming_edit(
                     channel,
                     message_id,
                 );
-                mark_channel_edits_unsupported(channel);
+                if use_global_edit_latch {
+                    mark_channel_edits_unsupported(channel);
+                }
                 state.latch_draft_edits_unsupported();
             }
             Err(ProgressiveSendError::MessageGone) => {
