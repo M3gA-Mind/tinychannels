@@ -23,6 +23,14 @@ and observation requests retain that scope. Bridge idempotency keys include
 the event sequence and full channel/conversation scope. Replaying one event
 must reuse its sequence; each new event must advance it.
 
+Typed provider sends include a stable per-turn scoped sequence key. A terminal
+feed is fingerprinted before dispatch; an identical retry waits for or returns
+the retained terminal result without sending again, while changed terminal
+content is rejected. `Close` and shutdown remove ephemeral state without
+sending a synthetic cancellation message. Scoped opens currently resolve a
+local configured channel instance. Managed/relay provider descriptors and web
+surface registration are supplied by their owning host integrations.
+
 The TinyAgents `AgentProgress` source variants map as follows:
 
 | Source event | Channel output projection |
