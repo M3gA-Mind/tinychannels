@@ -15,7 +15,6 @@
 //! [`crate::remote::session_store`].
 
 pub mod delivery;
-mod migrate;
 pub mod records;
 pub mod schema;
 #[cfg(feature = "whatsapp-web")]

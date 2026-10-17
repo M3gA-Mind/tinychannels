@@ -20,21 +20,17 @@
 
 use serde::Deserialize;
 use serde_json::{Map, Value};
-use tinychannels_bus::DeliveryTerminalResult;
 use tinystoragedrivers_core::Key;
 use tinystoragedrivers_core::Result;
 use tinystoragedrivers_core::schema::{SourceRecord, Step, TargetRecord};
 
-use super::records::{StoredDelivery, StoredResult, to_stored_ms};
+use super::records::{ChatBinding, StoredDelivery, StoredResult, to_stored_ms};
 use super::schema::{
     DELIVERY_FAILED, DELIVERY_PENDING, DELIVERY_RESULTS, REMOTE_BINDINGS, REMOTE_BUSY, REMOTE_META,
     WHATSAPP_DEVICE, WHATSAPP_IDENTITY, WHATSAPP_LID_MAPPING, WHATSAPP_PREKEY, WHATSAPP_SENDER_KEY,
     WHATSAPP_SESSION, WHATSAPP_SIGNED_PREKEY, WHATSAPP_SYNC_KEY,
 };
-use crate::delivery::QueuedDelivery;
-use crate::remote::ChatBinding;
-
-const LOG_PREFIX: &str = "[channel-storage-migrate]";
+use crate::module_delivery::{DeliveryQueueEntry as QueuedDelivery, DeliveryTerminalResult};
 
 /// Every step, in the order the schema runs them.
 pub(crate) fn steps() -> Vec<Step> {
@@ -126,11 +122,9 @@ fn rewritten(collection: &str, id: Key, body: Value, source: &SourceRecord) -> T
     }
 }
 
-fn skipped(collection: &str, id: &str, why: &str) {
-    tracing::warn!(
-        "{LOG_PREFIX} dropping unreadable v1 record collection={collection} id={id}: {why}"
-    );
-}
+/// A record unreadable under v1 is dropped; the contract crate carries no
+/// logging dependency, so the drop is silent here.
+fn skipped(_collection: &str, _id: &str, _why: &str) {}
 
 fn key_of(parts: &[&str]) -> Result<Key> {
     Key::of(parts)
@@ -222,11 +216,7 @@ fn remote_binding(record: SourceRecord) -> Option<TargetRecord> {
     let target = rewritten(REMOTE_BINDINGS, id, body, &record);
     // `updated_at` was the binding's last write: the closest thing v2 keeps is
     // the creation time of the migrated record.
-    let updated_ms = legacy
-        .updated_at
-        .as_deref()
-        .and_then(|text| chrono::DateTime::parse_from_rfc3339(text).ok())
-        .map(|time| time.timestamp_millis());
+    let updated_ms = legacy.updated_at.as_deref().and_then(parse_rfc3339_ms);
     Some(match updated_ms {
         Some(ms) if ms > 0 => target.created_ms(ms),
         _ => target,
@@ -307,3 +297,71 @@ fn whatsapp(
 #[cfg(test)]
 #[path = "migrate_tests.rs"]
 mod tests;
+
+/// Milliseconds since the Unix epoch for an RFC 3339 timestamp
+/// (`YYYY-MM-DDTHH:MM:SS[.fraction](Z|+HH:MM|-HH:MM)`), or `None` when it is
+/// not one. Pure integer math so the contract needs no date library.
+fn parse_rfc3339_ms(text: &str) -> Option<i64> {
+    let b = text.as_bytes();
+    let num = |from: usize, len: usize| -> Option<i64> {
+        let part = b.get(from..from + len)?;
+        part.iter()
+            .all(u8::is_ascii_digit)
+            .then(|| part.iter().fold(0i64, |n, d| n * 10 + i64::from(d - b'0')))
+    };
+    if b.len() < 20
+        || b[4] != b'-'
+        || b[7] != b'-'
+        || !matches!(b[10], b'T' | b't' | b' ')
+        || b[13] != b':'
+        || b[16] != b':'
+    {
+        return None;
+    }
+    let (year, month, day) = (num(0, 4)?, num(5, 2)?, num(8, 2)?);
+    let (hour, minute, second) = (num(11, 2)?, num(14, 2)?, num(17, 2)?);
+    if !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour > 23
+        || minute > 59
+        || second > 60
+    {
+        return None;
+    }
+    let mut at = 19;
+    let mut millis = 0i64;
+    if b[at] == b'.' {
+        at += 1;
+        let start = at;
+        while b.get(at).is_some_and(u8::is_ascii_digit) {
+            if at - start < 3 {
+                millis = millis * 10 + i64::from(b[at] - b'0');
+            }
+            at += 1;
+        }
+        if at == start {
+            return None;
+        }
+        for _ in (at - start)..3 {
+            millis *= 10;
+        }
+    }
+    let offset_secs = match b.get(at)? {
+        b'Z' | b'z' if at + 1 == b.len() => 0,
+        sign @ (b'+' | b'-') if at + 6 == b.len() && b[at + 3] == b':' => {
+            let secs = num(at + 1, 2)? * 3600 + num(at + 4, 2)? * 60;
+            if *sign == b'+' { secs } else { -secs }
+        }
+        _ => return None,
+    };
+    // Days from civil (Howard Hinnant's algorithm).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + hour * 3600 + minute * 60 + second - offset_secs;
+    Some(secs * 1000 + millis)
+}

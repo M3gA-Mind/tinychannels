@@ -94,7 +94,7 @@ whatsapp-web = [
 # Pure path, no version requirement: neither crate is published, so a
 # version here would only ever be used by a `cargo publish` that cannot
 # happen, while still needing to be bumped in lockstep by every release.
-tinychannels-bus = { path = "crates/tinychannels-bus" }
+tinychannels-bus = { path = "crates/tinychannels-bus", features = ["storage"] }
 tinychannels-runtime = { path = "crates/tinychannels-runtime" }
 # Storage ports only: no driver crate and no database client. The host (or the
 # bus client in the module crate) supplies the backend.

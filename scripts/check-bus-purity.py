@@ -27,8 +27,8 @@ for source in (ROOT / 'crates/tinychannels-bus/src').rglob('*.rs'):
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--offline', action='store_true', help='Use only cached Cargo registry data')
 args = parser.parse_args()
-features = list(tomllib.loads((ROOT / 'crates/tinychannels-bus/Cargo.toml').read_text()).get('features', {}))
-for mode in ('default', 'all'):
+features = [f for f in tomllib.loads((ROOT / 'crates/tinychannels-bus/Cargo.toml').read_text()).get('features', {}) if f != 'storage']
+for mode in ('default', 'all', 'storage'):
     probe = ROOT / 'target/bus-purity' / mode
     probe.mkdir(parents=True, exist_ok=True)
     (probe / 'src').mkdir(exist_ok=True)
@@ -36,7 +36,7 @@ for mode in ('default', 'all'):
     (probe / 'Cargo.toml').write_text(
         '[package]\nname="contract-purity-probe"\nversion="0.0.0"\nedition="2024"\n'
         '[workspace]\n[dependencies]\ntinychannels-bus = { path = ' + json.dumps(str(ROOT / 'crates/tinychannels-bus'))
-        + (', features = ' + json.dumps(features) if mode == 'all' else '') + ' }\n')
+        + (', features = ' + json.dumps(features) if mode == 'all' else ', features = ["storage"]' if mode == 'storage' else '') + ' }\n')
     graph = json.loads(subprocess.check_output([
         'cargo', 'metadata', *(['--offline'] if args.offline else []), '--format-version=1', '--manifest-path', str(probe / 'Cargo.toml')
     ], cwd=ROOT))
@@ -52,7 +52,20 @@ for mode in ('default', 'all'):
         for edge in nodes[package]['deps']:
             if any(kind['kind'] != 'dev' for kind in edge['dep_kinds']):
                 pending.append(edge['pkg'])
-    unsafe = sorted({packages[p] for p in seen} - ALLOWED)
+    exempt = set()
+    if mode == 'storage':
+        # Documented exemption, scoped to the `storage` feature only: the
+        # storage ports crate and its own closure. Everything else the feature
+        # pulls in must still be on the allow-list.
+        pending = [p['id'] for p in graph['packages'] if p['name'] == 'tinystoragedrivers-core']
+        while pending:
+            package = pending.pop()
+            if package in exempt:
+                continue
+            exempt.add(package)
+            pending += [e['pkg'] for e in nodes[package]['deps']
+                        if any(k['kind'] != 'dev' for k in e['dep_kinds'])]
+    unsafe = sorted({packages[p] for p in seen - exempt} - ALLOWED)
     if unsafe:
         raise SystemExit(f'{mode}: unsafe contract dependencies: {unsafe}')
     print(f'{mode}: pure contract closure ({len(seen)} packages)')

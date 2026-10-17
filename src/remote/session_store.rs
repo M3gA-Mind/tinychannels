@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tinystoragedrivers_core::{
     CollectionSpec, DocumentStore, DocumentStoreExt, Key, Precondition, WriteOptions,
 };
@@ -41,17 +41,7 @@ pub const BUSY_COLLECTION: &str = schema::REMOTE_BUSY;
 pub const META_COLLECTION: &str = schema::REMOTE_META;
 const LEGACY_MARKER_ID: &str = "legacy-import";
 
-/// A chat's binding to a host conversation thread. When it was last bound is
-/// the record's own `updated_ms` metadata, not a field here.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct ChatBinding {
-    pub thread_id: String,
-    pub sender_key: String,
-    /// Title captured at `/new` time so `/status` can show it without listing
-    /// every thread.
-    #[serde(default)]
-    pub title: Option<String>,
-}
+pub use tinychannels_bus::storage::ChatBinding;
 
 #[derive(Debug, Default, Deserialize)]
 struct LegacyStoreFile {
