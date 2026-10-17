@@ -34,6 +34,7 @@ struct Callback {
     transcription_gate: Arc<tokio::sync::Notify>,
     voice_scopes: Arc<Mutex<Vec<tinychannels_bus::HostVoiceScope>>>,
     voice_requests: Arc<Mutex<Vec<serde_json::Value>>>,
+    voice_publication_failures: Arc<AtomicUsize>,
     controller_blocked: Arc<AtomicBool>,
     controllers_started: Arc<AtomicUsize>,
     controller_started: Arc<tokio::sync::Notify>,
@@ -121,6 +122,9 @@ impl Callback {
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         self.voice_scopes.lock().await.push(request.scope);
         self.voice_requests.lock().await.push(serde_json::json!({"kind":"store","direction":request.direction,"codec":request.codec,"durationMs":request.duration_ms,"mediaReference":request.media_reference}));
+        if consume_failure(&self.voice_publication_failures) {
+            return Err(tinybus::Error::failed("fixture publication denial"));
+        }
         let media = request
             .media_reference
             .unwrap_or(tinychannels_bus::MediaReference {
@@ -263,6 +267,7 @@ async fn connected_host() -> (HostChannels, Callback, Connection) {
         transcription_gate: Arc::new(tokio::sync::Notify::new()),
         voice_scopes: Arc::new(Mutex::new(Vec::new())),
         voice_requests: Arc::new(Mutex::new(Vec::new())),
+        voice_publication_failures: Arc::new(AtomicUsize::new(0)),
         controller_blocked: Arc::new(AtomicBool::new(false)),
         controllers_started: Arc::new(AtomicUsize::new(0)),
         controller_started: Arc::new(tokio::sync::Notify::new()),
@@ -528,6 +533,14 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         .await
         .unwrap();
     assert_eq!(resolved.audio_base64, "UklGRgAAAABXQVZF");
+    let mut foreign_scope = scope.clone();
+    foreign_scope.conversation.id = "foreign-conversation".into();
+    assert!(provider_host
+        .voice_media_store()
+        .unwrap()
+        .read_voice(foreign_scope, opaque_id.to_owned())
+        .await
+        .is_err());
     let legacy_id = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
     assert!(
         provider_host
@@ -589,6 +602,48 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         callback.events.lock().await.as_slice(),
         ["transcription:complete", "event:channel:reaction_sent"]
     );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn denied_voice_publication_removes_unclaimed_shared_media() {
+    let (host, callback, _server) = connected_host().await;
+    callback
+        .voice_publication_failures
+        .store(1, Ordering::SeqCst);
+    let provider_host = Arc::new(crate::provider::Hooks::default().host(host.clone(), "telegram".into()));
+    let store = provider_host.voice_media_store().unwrap();
+    let scope = tinychannels_bus::HostVoiceScope {
+        conversation: tinychannels_bus::ConversationRef {
+            id: "conversation-denied".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-denied".into(),
+        ..Default::default()
+    };
+    assert!(store
+        .store_voice(tinychannels::host::VoiceMediaRequest {
+            audio_base64: "UklGRgAAAABXQVZF".into(),
+            mime_type: "audio/wav".into(),
+            codec: Some("wav_pcm16".into()),
+            duration_ms: None,
+            file_name: Some("voice.wav".into()),
+            direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
+            scope: scope.clone(),
+        })
+        .await
+        .is_err());
+    let requests = callback.voice_requests.lock().await;
+    let publication = requests
+        .iter()
+        .find(|request| request["kind"] == "store")
+        .unwrap();
+    let opaque_id = publication["mediaReference"]["opaque_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    drop(requests);
+    assert!(store.read_voice(scope, opaque_id).await.is_err());
     host.shutdown().await.unwrap();
 }
 
