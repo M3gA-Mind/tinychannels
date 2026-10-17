@@ -762,7 +762,9 @@ impl TelegramChannel {
                         topic_id,
                         ..Default::default()
                     },
-                    turn_id: message_id,
+                    // Match ChannelInboundEnvelope.message_id so the host's
+                    // scoped read/STT callbacks resolve the same turn.
+                    turn_id: message.id.clone(),
                 },
             })
             .await?;
