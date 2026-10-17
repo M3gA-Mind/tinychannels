@@ -7,7 +7,7 @@ use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::host::{LifecycleRegistry, ShutdownHook};
 use tinychannels::{Channel, ChannelHostBuilder, SendMessage};
-use tinychannels_bus::{ChannelSupervisionPolicy, HostEventPublication};
+use tinychannels_bus::{ChannelSupervisionPolicy, HostEventPublication, HostTranscriptionRequest};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
