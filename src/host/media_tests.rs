@@ -4,8 +4,8 @@ use std::ops::Range;
 use std::sync::Arc;
 use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
 use tinystoragedrivers_core::{
-    Blob, BlobMeta, BlobStore, MemoryStorage, Scope, StorageBackend,
-    error::{Result as StorageResult, StorageError},
+    Blob, BlobMeta, BlobStore, MemoryStorage, Scope, StorageBackend, Result as StorageResult,
+    StorageError,
 };
 
 fn media_scope() -> MediaScope {
