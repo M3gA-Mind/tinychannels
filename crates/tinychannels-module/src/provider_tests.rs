@@ -2059,3 +2059,155 @@ async fn configured_telegram_native_optional_ports_share_ordered_queue_and_rejec
     );
     running.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_scope() {
+    use tinychannels_bus::ChannelEventKind;
+    use tinychannels_bus::channel::approval_action_id;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let updates = serde_json::json!([
+        {
+            "update_id": 501,
+            "callback_query": {
+                "id": "spoofed-display-name", "data": "opaque-spoof",
+                "from": {"id": 99, "first_name": "alice"},
+                "message": {"message_id": 80, "message_thread_id": 77,
+                    "chat": {"id": -100, "type": "supergroup"}}
+            }
+        },
+        {
+            "update_id": 502,
+            "callback_query": {
+                "id": "allowed-id-query", "data": "approval-v1:request-42:0",
+                "from": {"id": 42, "username": "outsider"},
+                "message": {"message_id": 81, "message_thread_id": 77,
+                    "chat": {"id": -100, "type": "supergroup"}}
+            }
+        },
+        {
+            "update_id": 503,
+            "callback_query": {
+                "id": "allowed-username-query", "data": "approval-v1:request-42:1",
+                "from": {"id": 43, "username": "alice"},
+                "message": {"message_id": 82,
+                    "chat": {"id": 100, "type": "private"}}
+            }
+        },
+        {
+            "update_id": 504,
+            "message": {"message_id": 83, "date": 1700000000,
+                "chat": {"id": -100, "type": "supergroup"},
+                "from": {"id": 42, "username": "outsider"}, "text": "ingress frontier"}
+        }
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true, "result": updates
+        })))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true, "result": []
+        })))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/answerCallbackQuery"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true, "result": true
+        })))
+        .mount(&server)
+        .await;
+
+    let instance = "telegram:configured-callback-account".to_owned();
+    let channel = Arc::new(
+        tinychannels::TelegramChannel::new(
+            "test-token".into(),
+            vec!["alice".into(), "42".into()],
+            false,
+        )
+        .with_api_base_for_test(server.uri()),
+    );
+    let hooks = Arc::new(Hooks::default());
+    let (host, callback, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let running = Running::start_telegram(channel, hooks, host, None, false);
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let frontier_seen = callback
+                .inbound
+                .lock()
+                .await
+                .iter()
+                .any(|(_, message)| message.to_string().contains("ingress frontier"));
+            if frontier_seen {
+                break;
+            }
+            callback.ingress_changed.notified().await;
+        }
+    })
+    .await
+    .expect("ordered message after callback batch establishes ingress frontier");
+
+    let events = callback.events.lock().await.clone();
+    let callbacks = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            ChannelEventKind::ButtonCallback {
+                query_id,
+                action_id,
+                provider_message_id,
+                actor,
+            } => Some((event, query_id, action_id, provider_message_id, actor)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(callbacks.len(), 2, "spoofed first_name must not authorize ingress");
+    let (by_id, query_id, action_id, provider_message_id, actor) = callbacks[0];
+    assert_eq!(query_id, "allowed-id-query");
+    assert_eq!(action_id, "approval-v1:request-42:0");
+    assert_eq!(approval_action_id("request-42", 0).as_deref(), Some(action_id));
+    assert_eq!(provider_message_id.as_deref(), Some("81"));
+    assert_eq!(actor.id, "42");
+    assert_eq!(actor.name.as_deref(), Some("outsider"));
+    assert_eq!(by_id.channel.account_id.as_deref(), Some(instance.as_str()));
+    assert_eq!(by_id.conversation.as_ref().unwrap().id, "-100");
+    assert_eq!(by_id.conversation.as_ref().unwrap().topic_id.as_deref(), Some("77"));
+    let (_, query_id, action_id, provider_message_id, actor) = callbacks[1];
+    assert_eq!(query_id, "allowed-username-query");
+    assert_eq!(action_id, "approval-v1:request-42:1");
+    assert_eq!(provider_message_id.as_deref(), Some("82"));
+    assert_eq!(actor.id, "43");
+    assert_eq!(actor.name.as_deref(), Some("alice"));
+
+    let acknowledgments = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path() == "/bottest-token/answerCallbackQuery")
+        .map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).unwrap())
+        .map(|body| body["callback_query_id"].as_str().unwrap().to_owned())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        acknowledgments,
+        [
+            "spoofed-display-name".to_owned(),
+            "allowed-id-query".to_owned(),
+            "allowed-username-query".to_owned(),
+        ]
+        .into_iter()
+        .collect()
+    );
+    running.stop().await.unwrap();
+}
