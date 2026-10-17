@@ -132,6 +132,43 @@ struct Callback {
     voice_store_calls: Arc<AtomicUsize>,
 }
 
+#[derive(Clone, Default)]
+struct StubTinyVoiceCodec(Arc<AtomicUsize>);
+
+#[tinybus::interface(name = "ai.tinyhumans.tinyvoice.Voice")]
+impl StubTinyVoiceCodec {
+    async fn codec_transcode(
+        &self,
+        request: tinyvoice_bus::codec::CodecTranscodeRequest,
+    ) -> tinyvoice_bus::Result<tinyvoice_bus::codec::CodecOutput> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(tinyvoice_bus::codec::CodecOutput {
+            audio_base64: request.audio_base64,
+        })
+    }
+
+    async fn codec_probe(
+        &self,
+        _request: tinyvoice_bus::codec::CodecInput,
+    ) -> tinyvoice_bus::Result<tinyvoice_bus::codec::CodecInfo> {
+        Ok(tinyvoice_bus::codec::CodecInfo {
+            codec: tinyvoice_bus::codec::AudioCodec::OggOpus,
+            duration_ms: 1_500,
+            sample_rate: 48_000,
+            channels: 1,
+        })
+    }
+
+    async fn codec_waveform(
+        &self,
+        request: tinyvoice_bus::codec::WaveformRequest,
+    ) -> tinyvoice_bus::Result<tinyvoice_bus::codec::WaveformResult> {
+        Ok(tinyvoice_bus::codec::WaveformResult {
+            peaks: vec![0, 255; request.buckets.min(2)],
+        })
+    }
+}
+
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
 impl Callback {
     async fn get_voice_reply_policy(
