@@ -1,5 +1,6 @@
 use super::*;
 use crate::providers::telegram::fixtures::*;
+use base64::Engine;
 use std::sync::Arc;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -762,8 +763,8 @@ async fn telegram_media_only_update_persists_into_scoped_blobs() {
         .await;
 
     let repository = ScopedMediaRepository::new();
-    let channel = channel_for(&server, &["alice"])
-        .with_media_repository(Arc::new(repository.clone()));
+    let channel =
+        channel_for(&server, &["alice"]).with_media_repository(Arc::new(repository.clone()));
     let update = serde_json::json!({
         "update_id": 10,
         "message": {
@@ -790,8 +791,14 @@ async fn telegram_media_only_update_persists_into_scoped_blobs() {
     let [tinychannels_bus::ContentPart::Image { media, .. }] = envelope.parts.as_slice() else {
         panic!("media-only update should emit its typed image part");
     };
-    assert!(envelope.message.is_empty());
-    assert!(media.opaque_id.as_deref().unwrap().starts_with("tinychannels_media_v1_"));
+    assert!(envelope.text.is_empty());
+    assert!(
+        media
+            .opaque_id
+            .as_deref()
+            .unwrap()
+            .starts_with("tinychannels_media_v1_")
+    );
     assert_eq!(media.local_cache_path, None);
     assert_eq!(media.accessible_url, None);
     assert!(!media.opaque_id.as_deref().unwrap().contains("/file/bot"));
