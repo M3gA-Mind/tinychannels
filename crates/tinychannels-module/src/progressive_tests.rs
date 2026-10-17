@@ -317,7 +317,7 @@ async fn reply_capacity_refuses_seventeenth_and_shutdown_drains_every_worker() {
             .is_err()
     );
     replies.shutdown().await.unwrap();
-    assert_eq!(callback.sends.lock().await.len(), MAX_ACTIVE);
+    assert!(callback.sends.lock().await.is_empty());
     assert!(replies.state.lock().await.entries.is_empty());
     assert!(
         replies
@@ -330,30 +330,18 @@ async fn reply_capacity_refuses_seventeenth_and_shutdown_drains_every_worker() {
 }
 
 #[tokio::test]
-async fn shutdown_starts_every_close_before_waiting_for_blocked_delivery() {
-    let (replies, callback) = fixture(true).await;
+async fn shutdown_aborts_every_open_reply_without_sending_cancellation_text() {
+    let (replies, callback) = fixture(false).await;
     let replies = Arc::new(replies);
     open(&replies).await;
     open(&replies).await;
     let retained = replies.clone();
     let shutdown = tokio::spawn(async move { retained.shutdown().await });
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let entered = callback.entered.notified();
-            if callback.sends.lock().await.len() == 2 {
-                break;
-            }
-            entered.await;
-        }
-    })
-    .await
-    .expect("every reply must begin closing even while another delivery is blocked");
-    assert!(shutdown.await.unwrap().is_err());
-    assert_eq!(replies.state.lock().await.entries.len(), 2);
-    callback.released.notify_waiters();
+    shutdown.await.unwrap().unwrap();
+    assert_eq!(replies.state.lock().await.entries.len(), 0);
+    assert!(callback.sends.lock().await.is_empty());
     replies.shutdown().await.unwrap();
     assert!(replies.state.lock().await.entries.is_empty());
-    assert_eq!(callback.sends.lock().await.len(), 2);
 }
 
 #[tokio::test]
