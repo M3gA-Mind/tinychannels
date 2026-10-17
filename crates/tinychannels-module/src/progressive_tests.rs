@@ -1,6 +1,6 @@
 use super::*;
 use base64::Engine as _;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinychannels_bus::module_progressive::SubagentOutput;
@@ -2343,6 +2343,7 @@ async fn scoped_output_survives_more_than_two_hundred_seconds_until_host_lease()
 #[tokio::test(start_paused = true)]
 async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked() {
     let (replies, callback) = fixture(false).await;
+    let replies = Arc::new(replies);
     *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
         mode: tinychannels_bus::HostVoiceReplyMode::Always,
         inbound_has_voice: false,
