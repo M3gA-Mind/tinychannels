@@ -3,6 +3,8 @@ use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tinychannels_bus::module_progressive::SubagentOutput;
 use tokio::sync::Notify;
+use base64::Engine as _;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 struct ConfiguredChannel(&'static str);
 struct ConfiguredChannelWithCapabilities {
@@ -124,10 +126,53 @@ struct Callback {
     block: bool,
     entered: Arc<Notify>,
     released: Arc<Notify>,
+    voice_policy: Arc<Mutex<Option<tinychannels_bus::HostVoiceReplyPolicy>>>,
+    synthesis_calls: Arc<AtomicUsize>,
+    voice_store_calls: Arc<AtomicUsize>,
 }
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
 impl Callback {
+    async fn get_voice_reply_policy(
+        &self,
+        _request: tinychannels_bus::HostVoiceReplyPolicyRequest,
+    ) -> Result<tinychannels_bus::HostVoiceReplyPolicy> {
+        Ok(self.voice_policy.lock().await.clone().unwrap_or(
+            tinychannels_bus::HostVoiceReplyPolicy {
+                mode: tinychannels_bus::HostVoiceReplyMode::Mirror,
+                inbound_has_voice: false,
+                explicitly_requested: false,
+            },
+        ))
+    }
+
+    async fn synthesize_speech(
+        &self,
+        _request: tinychannels_bus::HostSpeechSynthesisRequest,
+    ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
+        self.synthesis_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(tinychannels_bus::HostSpeechSynthesisResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(progressive_test_wav()),
+            mime_type: "audio/wav".into(),
+            duration_ms: Some(1_000),
+        })
+    }
+
+    async fn store_voice_media(
+        &self,
+        _request: tinychannels_bus::HostStoreVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        self.voice_store_calls.fetch_add(1, Ordering::SeqCst);
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("durable-host-voice".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            },
+            accessible_url: Some("https://media.example/authorized/voice".into()),
+        })
+    }
+
     async fn dispatch_controller_backend(
         &self,
         request: ChannelBackendRequest,
