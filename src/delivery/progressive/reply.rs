@@ -231,7 +231,17 @@ impl ProgressiveReply {
                 outcome,
             )));
         }
+        let should_synthesize = parts.is_empty()
+            && self
+                .sender
+                .should_synthesize_final(
+                    &self.channel,
+                    self.output_context.as_ref(),
+                    text,
+                )
+                .await?;
         if parts.is_empty()
+            && !should_synthesize
             && let Some(outcome) = self.finalize_existing_text(text).await?
         {
             dispatch.push_outcome(outcome);

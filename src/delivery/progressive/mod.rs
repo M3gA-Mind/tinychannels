@@ -232,6 +232,18 @@ pub trait ProgressiveSender: Send + Sync {
             .await
     }
 
+    /// Whether a completed text final must bypass the edit-only draft path so
+    /// scoped final-output policy can add voice media. Legacy senders do not
+    /// opt into synthesized output.
+    async fn should_synthesize_final(
+        &self,
+        _channel: &str,
+        _context: Option<&ProgressiveOutputContext>,
+        _text: &str,
+    ) -> Result<bool, ProgressiveSendError> {
+        Ok(false)
+    }
+
     /// Deliver the completed assistant final through shared turn policy.
     /// Mid-turn typed content uses `send_parts_with_segment` and cannot trigger
     /// automatic voice synthesis.

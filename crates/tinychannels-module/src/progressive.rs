@@ -207,6 +207,33 @@ impl ProgressiveSender for Sender {
         send_typed_part(self, channel, parts, text, context, sequence, 0, false).await
     }
 
+    async fn should_synthesize_final(
+        &self,
+        _channel: &str,
+        context: Option<&ProgressiveOutputContext>,
+        text: &str,
+    ) -> std::result::Result<bool, ProgressiveSendError> {
+        if text.trim().is_empty() || !self.capabilities.voice_out.synthesis {
+            return Ok(false);
+        }
+        let Some(context) = context else { return Ok(false) };
+        let scope = tinychannels_bus::HostVoiceScope {
+            configured_instance: self.channel.clone(),
+            channel: context.channel.clone(),
+            conversation: context.conversation.clone(),
+            turn_id: context.turn_id.clone(),
+        };
+        let policy = self.host.voice_reply_policy(
+            tinychannels_bus::HostVoiceReplyPolicyRequest { scope },
+        ).await.ok();
+        Ok(policy.is_some_and(|policy| match policy.mode {
+            tinychannels_bus::HostVoiceReplyMode::Mirror => policy.inbound_has_voice,
+            tinychannels_bus::HostVoiceReplyMode::Always => true,
+            tinychannels_bus::HostVoiceReplyMode::Never => false,
+            tinychannels_bus::HostVoiceReplyMode::SpeakReply => policy.explicitly_requested,
+        }))
+    }
+
     async fn send_parts_with_segment(
         &self,
         channel: &str,
