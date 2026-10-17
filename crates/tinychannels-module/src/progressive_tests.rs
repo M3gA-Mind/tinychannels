@@ -4219,8 +4219,10 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         Arc::clone(storage.documents()),
         Arc::clone(storage.blobs()),
     );
+    let mut storage_scope = scope.clone();
+    storage_scope.channel.account_id = Some("telegram:media-v1:fixture".into());
     let stored = media_store
-        .read(scope.clone(), published_id, 1024 * 1024)
+        .read(storage_scope, published_id, 1024 * 1024)
         .await
         .expect("progressive policy voice reference resolves in scoped storage");
     assert_eq!(publication.scope, scope);
