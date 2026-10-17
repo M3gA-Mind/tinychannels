@@ -184,7 +184,7 @@ fn web_events_keep_ordered_typed_media_and_voice_parts() {
     assert_eq!(parts[0]["part"]["kind"], "text");
     assert_eq!(parts[1]["part"]["kind"], "voice_note");
     assert_eq!(
-        parts[1]["part"]["voice_note"]["media"]["url"],
+        parts[1]["part"]["voiceNote"]["media"]["url"],
         "https://example.test/audio.ogg"
     );
 }
