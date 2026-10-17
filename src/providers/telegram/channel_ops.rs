@@ -1134,6 +1134,10 @@ Ensure only one `openhuman` process is using this bot token."
                         .and_then(serde_json::Value::as_str)
                     {
                         self.acknowledge_callback(query_id).await;
+                        if !self.callback_is_allowed(update) {
+                            tracing::debug!("dropped Telegram callback from a disallowed user");
+                            continue;
+                        }
                         if let (Some(event), Some(events)) =
                             (Self::callback_event(update), &self.events)
                             && let Err(error) = events
