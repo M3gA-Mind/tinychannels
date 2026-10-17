@@ -121,11 +121,13 @@ impl Callback {
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         self.voice_scopes.lock().await.push(request.scope);
         self.voice_requests.lock().await.push(serde_json::json!({"kind":"store","direction":request.direction,"codec":request.codec,"durationMs":request.duration_ms,"mediaReference":request.media_reference}));
-        let media = request.media_reference.unwrap_or(tinychannels_bus::MediaReference {
-            opaque_id: Some("voice-1".into()),
-            kind: tinychannels_bus::MediaKind::Audio,
-            ..Default::default()
-        });
+        let media = request
+            .media_reference
+            .unwrap_or(tinychannels_bus::MediaReference {
+                opaque_id: Some("voice-1".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            });
         let opaque_id = media.opaque_id.as_deref().unwrap_or("unknown");
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
             media,
@@ -502,7 +504,7 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         .voice_media_store()
         .unwrap()
         .store_voice(tinychannels::host::VoiceMediaRequest {
-            audio_base64: "UklGRg==".into(),
+            audio_base64: "UklGRgAAAABXQVZF".into(),
             mime_type: "audio/wav".into(),
             codec: Some("wav_pcm16".into()),
             duration_ms: Some(1_250),
@@ -527,20 +529,24 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         .unwrap();
     assert_eq!(resolved.audio_base64, "UklGRgAAAABXQVZF");
     let legacy_id = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
-    assert!(provider_host
-        .voice_media_store()
-        .unwrap()
-        .read_voice(scope.clone(), legacy_id.into())
-        .await
-        .is_ok());
-    assert!(provider_host
-        .voice_media_store()
-        .unwrap()
-        .read_voice(scope.clone(), "tinychannels_media_v1_malformed".into())
-        .await
-        .is_err());
+    assert!(
+        provider_host
+            .voice_media_store()
+            .unwrap()
+            .read_voice(scope.clone(), legacy_id.into())
+            .await
+            .is_ok()
+    );
+    assert!(
+        provider_host
+            .voice_media_store()
+            .unwrap()
+            .read_voice(scope.clone(), "tinychannels_media_v1_malformed".into())
+            .await
+            .is_err()
+    );
     let scopes = callback.voice_scopes.lock().await;
-    assert_eq!(scopes.len(), 2);
+    assert_eq!(scopes.len(), 3);
     for observed in scopes.iter() {
         assert_eq!(observed.configured_instance, "telegram");
         assert_eq!(observed.channel.id, "telegram");
