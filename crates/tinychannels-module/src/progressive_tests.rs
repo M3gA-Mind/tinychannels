@@ -323,6 +323,66 @@ async fn cancelled_terminal_feed_replays_retained_receipt_without_resending() {
 }
 
 #[tokio::test]
+async fn identical_terminal_waiters_share_result_when_one_waiter_cancels() {
+    let (replies, callback) = fixture(true).await;
+    let handle = open(&replies).await;
+    let events = vec![ChannelOutputEvent::FinalMessage {
+        text: "shared terminal".into(),
+        parts: vec![],
+        receipt: None,
+    }];
+    let retained = Arc::new(replies);
+    let first_replies = retained.clone();
+    let first_handle = handle.clone();
+    let first_events = events.clone();
+    let first = tokio::spawn(async move {
+        first_replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle: first_handle,
+                events: first_events,
+            })
+            .await
+    });
+    tokio::time::timeout(Duration::from_secs(2), callback.entered.notified())
+        .await
+        .unwrap();
+    let mut waiters = Vec::new();
+    for _ in 0..3 {
+        let replies = retained.clone();
+        let events = events.clone();
+        let handle = handle.clone();
+        waiters.push(tokio::spawn(async move {
+            replies
+                .execute(ProgressiveCommand::FeedOutput { handle, events })
+                .await
+        }));
+    }
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    waiters[0].abort();
+    callback.released.notify_one();
+    let result = tokio::time::timeout(Duration::from_secs(2), first)
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(result, ProgressiveResult::DeliveryOutcome { .. }));
+    for waiter in waiters.into_iter().skip(1) {
+        assert!(matches!(
+            tokio::time::timeout(Duration::from_secs(2), waiter)
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap(),
+            ProgressiveResult::DeliveryOutcome { .. }
+        ));
+    }
+    assert_eq!(callback.sends.lock().await.len(), 1);
+    retained.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn handles_cannot_cross_private_runtime_reply_stores() {
     let (first, _) = fixture(false).await;
     let (second, _) = fixture(false).await;
