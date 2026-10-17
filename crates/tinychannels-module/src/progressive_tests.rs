@@ -76,6 +76,7 @@ struct Callback {
     requests: Arc<Mutex<Vec<ProgressiveTransportRequest>>>,
     output_result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
     send_result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
+    send_queue: Arc<Mutex<std::collections::VecDeque<ProgressiveTransportResult>>>,
     block: bool,
     entered: Arc<Notify>,
     released: Arc<Notify>,
@@ -110,7 +111,14 @@ impl Callback {
                 self.released.notified().await;
             }
         }
-        let configured = if matches!(request, ProgressiveTransportRequest::OutputEvent { .. }) {
+        let queued = if typed_send {
+            self.send_queue.lock().await.pop_front()
+        } else {
+            None
+        };
+        let configured = if queued.is_some() {
+            queued
+        } else if matches!(request, ProgressiveTransportRequest::OutputEvent { .. }) {
             self.output_result.lock().await.clone()
         } else {
             self.send_result.lock().await.clone()
@@ -921,6 +929,113 @@ async fn no_edit_channel_sends_final_text_in_configured_segments() {
         ["abcd", "efgh", "ij"]
     );
     assert!(matches!(result, ProgressiveResult::DeliveryOutcome { .. }));
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts() {
+    let (base, callback) = fixture(false).await;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.text.text_limit = Some(4);
+    let mut configured = HashMap::new();
+    configured.insert(
+        "discord:partial-segments".to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities,
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            base.host.clone(),
+        ),
+    );
+    callback
+        .send_queue
+        .lock()
+        .await
+        .push_back(ProgressiveTransportResult::Outcome(
+            tinychannels_bus::channel::ChannelSendOutcome {
+                receipt: tinychannels_bus::channel::MessageReceipt {
+                    platform_message_ids: vec!["seg-1".into()],
+                    ..Default::default()
+                },
+                error: None,
+            },
+        ));
+    callback
+        .send_queue
+        .lock()
+        .await
+        .push_back(ProgressiveTransportResult::Outcome(
+            tinychannels_bus::channel::ChannelSendOutcome {
+                receipt: tinychannels_bus::channel::MessageReceipt {
+                    platform_message_ids: vec!["seg-2".into()],
+                    ..Default::default()
+                },
+                error: Some(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                    message: "partial segment".into(),
+                    sent_before_error: true,
+                    retryable: true,
+                    ..Default::default()
+                }),
+            },
+        ));
+    let replies = Replies::new(base.host.clone(), Arc::new(Mutex::new(configured)));
+    let opened = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:partial-segments".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "partial-segments".into(),
+        })
+        .await
+        .unwrap();
+    let ProgressiveResult::Opened { handle } = opened else {
+        panic!("expected open")
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "abcdefghij".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    let ProgressiveResult::DeliveryOutcome { outcome } = result else {
+        panic!("expected retained delivery outcome")
+    };
+    assert_eq!(outcome.receipt.platform_message_ids, ["seg-1", "seg-2"]);
+    assert!(outcome.error.is_some());
+    assert_eq!(callback.sends.lock().await.len(), 2, "segment 3 must not be attempted");
+    let typed: Vec<_> = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .filter_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                sequence,
+                segment_index,
+                idempotency_key,
+                ..
+            } => Some((*sequence, *segment_index, idempotency_key.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(typed.len(), 2);
+    assert_eq!(typed[0].1, Some(0));
+    assert_eq!(typed[1].1, Some(1));
+    assert_ne!(typed[0].2, typed[1].2);
     replies.shutdown().await.unwrap();
 }
 
