@@ -1067,11 +1067,11 @@ async fn module_event_enrichment_separates_accounts_and_overwrites_provider_auth
             expires_at: None,
         },
     };
-    crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into())
+    crate::provider::ModuleEvents(host.clone(), "telegram:account-a".into(), None)
         .publish_channel_event(source.clone())
         .await
         .unwrap();
-    crate::provider::ModuleEvents(host.clone(), "telegram:account-b".into())
+    crate::provider::ModuleEvents(host.clone(), "telegram:account-b".into(), None)
         .publish_channel_event(source)
         .await
         .unwrap();
@@ -1111,7 +1111,7 @@ async fn module_unified_ingress_acknowledges_message_before_following_event() {
     use tinychannels::host::EventSink;
 
     let (host, callback, _server) = connected_host().await;
-    let events = crate::provider::ModuleEvents(host.clone(), "telegram:bot-a".into());
+    let events = crate::provider::ModuleEvents(host.clone(), "telegram:bot-a".into(), None);
     let handled = events
         .publish_inbound(tinychannels_bus::ChannelMessage {
             id: "telegram_100_5".into(),
