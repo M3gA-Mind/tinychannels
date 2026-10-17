@@ -622,6 +622,13 @@ impl TelegramChannel {
                 if rows.iter().flatten().any(|button| button.disabled) {
                     anyhow::bail!("Telegram inline keyboards cannot render disabled buttons");
                 }
+                if rows
+                    .iter()
+                    .flatten()
+                    .any(|button| button.style.is_some())
+                {
+                    anyhow::bail!("Telegram inline keyboards do not support button styles");
+                }
                 let mut keyboard = Vec::new();
                 for row in rows {
                     let mut native_row = Vec::new();
@@ -1488,7 +1495,9 @@ impl Channel for TelegramChannel {
                 sticker: if media_enabled {
                     tinychannels_bus::ContentCapability {
                         inbound: true,
+                        outbound: true,
                         accepted_types: vec!["image/webp".into()],
+                        emitted_types: vec!["image/webp".into()],
                         max_size_bytes: Some(20 * 1024 * 1024),
                         ..Default::default()
                     }
@@ -1496,15 +1505,24 @@ impl Channel for TelegramChannel {
                     tinychannels_bus::ContentCapability::default()
                 },
                 location: tinychannels_bus::ContentCapability {
+                    inbound: true,
                     outbound: true,
                     ..Default::default()
                 },
                 contact: tinychannels_bus::ContentCapability {
+                    inbound: true,
                     outbound: true,
                     ..Default::default()
                 },
                 buttons: tinychannels_bus::ContentCapability {
                     outbound: true,
+                    ..Default::default()
+                },
+                button_presentation: tinychannels_bus::ButtonPresentationCapabilities {
+                    max_actions_per_row: Some(8),
+                    max_rows: Some(100),
+                    max_label_length: Some(64),
+                    max_value_bytes: Some(64),
                     ..Default::default()
                 },
                 poll: tinychannels_bus::ContentCapability {
@@ -1524,7 +1542,13 @@ impl Channel for TelegramChannel {
             voice_in,
             voice_out,
             events: tinychannels_bus::EventCapabilities {
-                supported: vec!["button_callback".into(), "reaction".into()],
+                supported: vec![
+                    "button_callback".into(),
+                    "reaction_added".into(),
+                    "reaction_removed".into(),
+                    "outbound_reaction".into(),
+                    "message_updated".into(),
+                ],
             },
             ..Default::default()
         }
@@ -2584,8 +2608,13 @@ async fn send_typed_media_with_receipt(
         }
         let upload_plan = (|| -> anyhow::Result<(&str, &str, usize, Option<u64>)> {
             Ok(match media_kind {
+                tinychannels_bus::MediaKind::Image
+                    if method == "sendSticker" && stored.content_type == "image/webp" =>
+                {
+                    ("sendSticker", "sticker", 20 * 1024 * 1024, None)
+                }
                 tinychannels_bus::MediaKind::Image if method == "sendSticker" => {
-                    anyhow::bail!("Telegram sticker upload is not enabled for this format")
+                    anyhow::bail!("Telegram sticker upload supports WEBP stickers only")
                 }
                 tinychannels_bus::MediaKind::Image
                     if matches!(stored.content_type.as_str(), "image/jpeg" | "image/png") =>
