@@ -468,7 +468,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
                 bytes: audio,
             })
             .await?;
-        let projection = self
+        let projection = match self
             .0
             .store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
                 scope: projection_scope,
@@ -481,7 +481,20 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
                 media_reference: Some(media.clone()),
             })
             .await
-            .map_err(|_| anyhow::anyhow!("host voice media publication failed"))?;
+        {
+            Ok(projection) => projection,
+            Err(_) => {
+                // A denied publication must not strand a Ready blob that the caller never received.
+                // `delete` leaves its durable cleanup tombstone if the blob backend is transiently down.
+                let _ = media_store
+                    .delete(
+                        projection_scope,
+                        media.opaque_id.as_deref().unwrap_or_default(),
+                    )
+                    .await;
+                return Err(anyhow::anyhow!("host voice media publication failed"));
+            }
+        };
         let accessible_url = projection
             .accessible_url
             .filter(|url| !url.trim().is_empty());

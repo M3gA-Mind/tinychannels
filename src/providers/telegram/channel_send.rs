@@ -54,7 +54,9 @@ impl TelegramChannel {
         if upload.bytes.is_empty() || upload.bytes.len() > 20 * 1024 * 1024 {
             anyhow::bail!("media upload exceeds the supported inline limit");
         }
-        let mime = upload.content_type.parse::<mime::Mime>()
+        let mime = upload
+            .content_type
+            .parse::<mime::Mime>()
             .map_err(|_| anyhow::anyhow!("Telegram media has an invalid content type"))?;
         let part = Part::bytes(upload.bytes)
             .file_name(upload.file_name.to_owned())

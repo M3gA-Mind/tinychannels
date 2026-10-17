@@ -914,13 +914,15 @@ impl Channel for TelegramChannel {
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
-        let mut conversation = message.conversation_ref.clone().unwrap_or_else(|| {
-            tinychannels_bus::ConversationRef {
-                id: message.conversation_id.clone(),
-                thread_id: message.thread_id.clone(),
-                ..Default::default()
-            }
-        });
+        let mut conversation =
+            message
+                .conversation_ref
+                .clone()
+                .unwrap_or_else(|| tinychannels_bus::ConversationRef {
+                    id: message.conversation_id.clone(),
+                    thread_id: message.thread_id.clone(),
+                    ..Default::default()
+                });
         if conversation.thread_id.is_none() {
             conversation.thread_id = message.thread_id.clone();
         }
@@ -943,7 +945,9 @@ impl Channel for TelegramChannel {
             .turn_id
             .clone()
             .filter(|turn_id| !turn_id.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("Telegram media send requires originating turn identity"))?;
+            .ok_or_else(|| {
+                anyhow::anyhow!("Telegram media send requires originating turn identity")
+            })?;
         let scope = tinychannels_bus::HostVoiceScope {
             configured_instance,
             channel: channel.clone(),
@@ -969,7 +973,8 @@ impl Channel for TelegramChannel {
         for part in &message.parts {
             match part {
                 tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Text { .. }
+                    part:
+                        tinychannels_bus::ContentPart::Text { .. }
                         | tinychannels_bus::ContentPart::Image { .. }
                         | tinychannels_bus::ContentPart::Video { .. }
                         | tinychannels_bus::ContentPart::Audio { .. }
@@ -1037,22 +1042,68 @@ impl Channel for TelegramChannel {
                 }
                 tinychannels_bus::OutboundContentPart::Content {
                     part: tinychannels_bus::ContentPart::Image { media, caption, .. },
-                } => ("sendPhoto", "photo", tinychannels_bus::MediaKind::Image, media, caption.as_deref(), "photo"),
+                } => (
+                    "sendPhoto",
+                    "photo",
+                    tinychannels_bus::MediaKind::Image,
+                    media,
+                    caption.as_deref(),
+                    "photo",
+                ),
                 tinychannels_bus::OutboundContentPart::Content {
                     part: tinychannels_bus::ContentPart::Video { media, caption, .. },
-                } => ("sendVideo", "video", tinychannels_bus::MediaKind::Video, media, caption.as_deref(), "video"),
+                } => (
+                    "sendVideo",
+                    "video",
+                    tinychannels_bus::MediaKind::Video,
+                    media,
+                    caption.as_deref(),
+                    "video",
+                ),
                 tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Audio { media, title, transcript, .. },
+                    part:
+                        tinychannels_bus::ContentPart::Audio {
+                            media,
+                            title,
+                            transcript,
+                            ..
+                        },
                 } => {
                     let caption = transcript.as_deref().or(title.as_deref());
-                    ("sendAudio", "audio", tinychannels_bus::MediaKind::Audio, media, caption, "audio")
+                    (
+                        "sendAudio",
+                        "audio",
+                        tinychannels_bus::MediaKind::Audio,
+                        media,
+                        caption,
+                        "audio",
+                    )
                 }
                 tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::File { media, file_name, caption },
-                } => ("sendDocument", "document", tinychannels_bus::MediaKind::Document, media, caption.as_deref(), file_name.as_deref().unwrap_or("file")),
+                    part:
+                        tinychannels_bus::ContentPart::File {
+                            media,
+                            file_name,
+                            caption,
+                        },
+                } => (
+                    "sendDocument",
+                    "document",
+                    tinychannels_bus::MediaKind::Document,
+                    media,
+                    caption.as_deref(),
+                    file_name.as_deref().unwrap_or("file"),
+                ),
                 tinychannels_bus::OutboundContentPart::Content {
                     part: tinychannels_bus::ContentPart::Sticker { media, .. },
-                } => ("sendSticker", "sticker", tinychannels_bus::MediaKind::Image, media, None, "sticker"),
+                } => (
+                    "sendSticker",
+                    "sticker",
+                    tinychannels_bus::MediaKind::Image,
+                    media,
+                    None,
+                    "sticker",
+                ),
                 _ => unreachable!("content combination was validated above"),
             };
             let Some(opaque_id) = media
@@ -1063,7 +1114,9 @@ impl Channel for TelegramChannel {
                 if receipt_parts.is_empty() {
                     anyhow::bail!("Telegram media has no host-owned opaque reference");
                 }
-                failed = Some(anyhow::anyhow!("Telegram media has no host-owned opaque reference"));
+                failed = Some(anyhow::anyhow!(
+                    "Telegram media has no host-owned opaque reference"
+                ));
                 break;
             };
             let stored = match repository
@@ -1088,7 +1141,11 @@ impl Channel for TelegramChannel {
                 failed = Some(anyhow::anyhow!("Telegram media failed upload validation"));
                 break;
             }
-            let file_name = stored.file_name.as_deref().unwrap_or(fallback_name).to_owned();
+            let file_name = stored
+                .file_name
+                .as_deref()
+                .unwrap_or(fallback_name)
+                .to_owned();
             let caption = caption.map(strip_tool_call_tags);
             let content_type = stored.content_type.clone();
             let receipt_index = receipt_parts.len();
@@ -1115,13 +1172,16 @@ impl Channel for TelegramChannel {
                     message.reply_to_id.as_deref(),
                 )),
                 Err(_) => {
-                    failed = Some(anyhow::anyhow!("Telegram media upload outcome is uncertain"));
+                    failed = Some(anyhow::anyhow!(
+                        "Telegram media upload outcome is uncertain"
+                    ));
                     break;
                 }
             }
         }
         if receipt_parts.is_empty() {
-            return Err(failed.unwrap_or_else(|| anyhow::anyhow!("Telegram media send produced no receipt")));
+            return Err(failed
+                .unwrap_or_else(|| anyhow::anyhow!("Telegram media send produced no receipt")));
         }
         let ids = receipt_parts
             .iter()
@@ -1130,7 +1190,10 @@ impl Channel for TelegramChannel {
         let single = (ids.len() == 1).then(|| ids[0].clone());
         let error = failed.map(|failure| tinychannels_bus::channel::ChannelSendError {
             kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-            message: if failure.downcast_ref::<super::channel_send::PartialTextSendError>().is_some() {
+            message: if failure
+                .downcast_ref::<super::channel_send::PartialTextSendError>()
+                .is_some()
+            {
                 "Telegram sent only part of the typed message; retry is unsafe".into()
             } else {
                 "Telegram typed media send is partial or uncertain; retry is unsafe".into()
