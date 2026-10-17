@@ -300,7 +300,7 @@ impl ChannelOutboundMessage {
                     .as_ref()
                     .and_then(|reference| reference.thread_id.clone())
             }),
-            turn_id: None,
+            turn_id: intent.turn_id.clone(),
             idempotency_key: intent.idempotency_key.clone(),
             parts,
         }
@@ -394,6 +394,9 @@ pub struct ChannelOutboundIntent {
     pub conversation_ref: Option<ConversationRef>,
     pub reply_to_id: Option<String>,
     pub thread_id: Option<String>,
+    /// Originating turn for scoped host operations; independent of delivery key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_id: Option<String>,
     pub durability: DeliveryDurability,
     pub payload: OutboundPayload,
 }
@@ -408,6 +411,7 @@ impl Default for ChannelOutboundIntent {
             conversation_ref: None,
             reply_to_id: None,
             thread_id: None,
+            turn_id: None,
             durability: DeliveryDurability::BestEffort,
             payload: OutboundPayload::Text {
                 text: String::new(),
