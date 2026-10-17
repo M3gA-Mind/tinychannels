@@ -614,13 +614,13 @@ async fn typed_voice_wire_failure_keeps_remote_uncertainty() {
         .await
         .unwrap_err();
 
+    assert_eq!(json_bodies(&server, "sendVoice").await.len(), 1);
     assert_eq!(
         error.kind,
         tinychannels_bus::channel::SendErrorKind::Unknown
     );
     assert!(error.sent_before_error);
     assert!(!error.retryable);
-    assert_eq!(json_bodies(&server, "sendVoice").await.len(), 1);
 }
 
 #[tokio::test]
