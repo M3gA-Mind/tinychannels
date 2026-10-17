@@ -251,8 +251,8 @@ impl MediaUploads {
         let owner = self.clone();
         let handle = request.0.0;
         let task = tokio::spawn(async move {
-            let media = repository
-                .store_public_media(tinychannels::host::MediaStoreRequest {
+            let write = std::panic::AssertUnwindSafe(repository.store_public_media(
+                tinychannels::host::MediaStoreRequest {
                     metadata: tinychannels::host::MediaMetadata {
                         scope: request_metadata.scope,
                         kind: request_metadata.kind,
@@ -265,8 +265,14 @@ impl MediaUploads {
                         max_bytes: tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES as u64,
                     },
                     bytes,
-                })
-                .await;
+                },
+            ))
+            .catch_unwind();
+            let media = match tokio::time::timeout(UPLOAD_LIFETIME, write).await {
+                Ok(Ok(result)) => result,
+                Ok(Err(_)) => Err(Error::failed("media storage failed")),
+                Err(_) => Err(Error::failed("media storage timed out")),
+            };
             let mut state = owner.state.lock().await;
             Self::prune(&mut state);
             let Some(mut upload) = state.uploads.remove(&handle) else {
