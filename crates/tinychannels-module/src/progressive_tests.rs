@@ -51,7 +51,7 @@ impl Callback {
             }
             _ => {}
         }
-        if typed_send {
+        if typed_send || matches!(request, ProgressiveTransportRequest::Send { .. }) {
             if self.block {
                 self.entered.notify_one();
                 self.released.notified().await;
