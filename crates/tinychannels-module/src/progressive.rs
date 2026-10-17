@@ -41,9 +41,16 @@ impl Sender {
             .await
             .map_err(|_| ProgressiveSendError::Unavailable)?;
         match result {
-            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Success(
-                value,
-            )) => Ok(value),
+            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Success(value)) => {
+                if value.get("error").is_some()
+                    || value.get("success").and_then(Value::as_bool) == Some(false)
+                    || value.get("status").and_then(Value::as_str) == Some("unknown_after_send")
+                {
+                    Err(ProgressiveSendError::Other(anyhow::anyhow!("progressive delivery failed")))
+                } else {
+                    Ok(value)
+                }
+            }
             ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Unavailable) => {
                 Err(ProgressiveSendError::Unavailable)
             }
@@ -435,7 +442,12 @@ async fn run(
             command = inbox.recv() => match command {
                 Some(Command::Feed(events, response)) => {
                     let result = apply(&mut reply, events).await;
+                    let failed = result.is_err();
                     let _ = response.send(result);
+                    if failed {
+                        reply.finalize("Sorry, the response could not be delivered.").await;
+                        break;
+                    }
                 }
                 Some(Command::Finish(text, response)) => {
                     reply.finalize(&text).await;
