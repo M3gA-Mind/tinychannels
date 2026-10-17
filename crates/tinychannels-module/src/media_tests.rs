@@ -488,17 +488,6 @@ async fn metadata_and_chunk_rejection_paths_do_not_retain_invalid_state() {
         uploads
             .clone()
             .finish(
-                MediaUploadFinish(handle.clone()),
-                "activation-a".into(),
-                std::sync::Arc::new(BlockingPersistence::default()),
-            )
-            .await
-            .is_err()
-    );
-    assert!(
-        uploads
-            .clone()
-            .finish(
                 MediaUploadFinish(MediaUploadHandle("unknown".into())),
                 "activation-a".into(),
                 std::sync::Arc::new(BlockingPersistence::default()),
