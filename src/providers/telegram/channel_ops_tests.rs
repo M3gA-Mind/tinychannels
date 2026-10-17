@@ -92,7 +92,7 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
 #[tokio::test]
 async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() {
     let server = mock_api().await;
-    mount_post(server.as_ref(), "sendVoice", ok_with(serde_json::json!({"message_id": 52}))).await;
+    mount_post(&server, "sendVoice", ok_with(serde_json::json!({"message_id": 52}))).await;
     let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
     let mut message = tinychannels_bus::ChannelOutboundMessage {
         channel_id: "telegram".into(),
