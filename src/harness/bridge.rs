@@ -57,7 +57,7 @@ pub fn translate_output_event(
         ChannelOutputEvent::FinalMessage {
             text, mut parts, ..
         } => {
-            if !text.is_empty() {
+            if parts.is_empty() && !text.is_empty() {
                 parts.insert(
                     0,
                     tinychannels_bus::OutboundContentPart::Content {

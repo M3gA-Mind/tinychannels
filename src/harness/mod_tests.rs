@@ -346,6 +346,38 @@ fn native_approval_requires_enough_actions_and_a_nonempty_row() {
 }
 
 #[test]
+fn final_parts_are_authoritative_over_legacy_text_projection() {
+    let parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Text {
+                text: "**already included**".into(),
+                markdown_dialect: Some("commonmark".into()),
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Text {
+                text: "second block".into(),
+                markdown_dialect: Some("plain".into()),
+            },
+        },
+    ];
+    let intents = translate_output_event(
+        &turn(),
+        ChannelOutputEvent::FinalMessage {
+            text: "**already included**".into(),
+            parts: parts.clone(),
+            receipt: None,
+        },
+        &Default::default(),
+        &Default::default(),
+        BridgeTranslationOptions::default(),
+    )
+    .unwrap();
+    assert_eq!(intents.len(), 1);
+    assert_eq!(intents[0].payload, OutboundPayload::Parts { parts });
+}
+
+#[test]
 fn lifecycle_and_native_events_preserve_structured_data() {
     let lifecycle = crate::harness::HarnessLifecycleEvent {
         stage: "started".into(),
