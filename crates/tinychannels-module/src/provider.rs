@@ -820,7 +820,7 @@ impl Running {
     fn validate_adapter_intent(
         &self,
         intent: &tinychannels_bus::ChannelOutboundIntent,
-    ) -> Result<(), tinychannels::channel::ChannelSendError> {
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         let expected_channel = tinychannels_bus::provider_id(&self.configured_instance);
         if intent.channel_id != expected_channel
             || intent
