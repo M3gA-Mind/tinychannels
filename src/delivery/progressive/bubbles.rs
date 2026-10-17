@@ -73,6 +73,7 @@ pub(super) async fn flush_thinking_message(
     sender: &dyn ProgressiveSender,
     channel: &str,
     state: &mut StreamingState,
+    use_global_edit_latch: bool,
 ) {
     state.thinking_dirty = false;
     let Some(text) = thinking_bubble_text(&state.thinking_accumulator) else {
@@ -80,7 +81,7 @@ pub(super) async fn flush_thinking_message(
     };
 
     if let Some(msg_id) = state.thinking_message_id.clone() {
-        if channel_edits_unsupported(channel) {
+        if use_global_edit_latch && channel_edits_unsupported(channel) {
             tracing::debug!(
                 "[channel-inbound][thinking] skipping edit channel='{}' msg_id={} — no edit route on this backend, bubble stays until finalize deletes it",
                 channel,
@@ -98,7 +99,9 @@ pub(super) async fn flush_thinking_message(
                     channel,
                     msg_id,
                 );
-                mark_channel_edits_unsupported(channel);
+                if use_global_edit_latch {
+                    mark_channel_edits_unsupported(channel);
+                }
                 state.latch_thinking_edits_unsupported();
             }
             Err(ProgressiveSendError::MessageGone) => {

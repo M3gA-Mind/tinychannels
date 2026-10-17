@@ -87,10 +87,11 @@ pub(super) async fn finalize_channel_reply(
     channel: &str,
     state: &mut StreamingState,
     final_text: &str,
+    use_global_edit_latch: bool,
 ) {
     // Reply first, clean up second: the chat is never momentarily empty.
     if let Some(message_id) = state.message_id.clone() {
-        if channel_edits_unsupported(channel) {
+        if use_global_edit_latch && channel_edits_unsupported(channel) {
             tracing::info!(
                 "[channel-inbound] final edit skipped channel='{}' msg_id={} — no edit route on this backend, replacing the draft with a fresh atomic reply",
                 channel,
@@ -128,7 +129,9 @@ pub(super) async fn finalize_channel_reply(
                         channel,
                         message_id,
                     );
-                    mark_channel_edits_unsupported(channel);
+                    if use_global_edit_latch {
+                        mark_channel_edits_unsupported(channel);
+                    }
                     replace_draft(sender, channel, &message_id, final_text).await;
                 }
                 Err(err @ ProgressiveSendError::Other(_)) => {

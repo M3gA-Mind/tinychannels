@@ -10,6 +10,7 @@ pub(super) async fn flush_streaming_edit(
     sender: &dyn ProgressiveSender,
     channel: &str,
     state: &mut StreamingState,
+    use_global_edit_latch: bool,
 ) {
     let draft = state.compose_draft();
     if draft.is_empty() {
@@ -20,7 +21,7 @@ pub(super) async fn flush_streaming_edit(
     if let Some(message_id) = state.message_id.clone() {
         // Known-missing edit route: skip the guaranteed 404 and let
         // finalization replace the draft (delete + fresh atomic reply).
-        if channel_edits_unsupported(channel) {
+        if use_global_edit_latch && channel_edits_unsupported(channel) {
             tracing::debug!(
                 "[channel-inbound][stream] skipping edit channel='{}' msg_id={} — no edit route on this backend, draft stays as-is until finalize",
                 channel,
@@ -48,7 +49,9 @@ pub(super) async fn flush_streaming_edit(
                     channel,
                     message_id,
                 );
-                mark_channel_edits_unsupported(channel);
+                if use_global_edit_latch {
+                    mark_channel_edits_unsupported(channel);
+                }
                 state.latch_draft_edits_unsupported();
             }
             Err(ProgressiveSendError::MessageGone) => {
