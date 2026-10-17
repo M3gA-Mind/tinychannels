@@ -514,8 +514,8 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                         }),
                         reply_to_id: Some("source-message".into()),
                         thread_id: Some("thread".into()),
-                        turn_id: None,
-        durability: tinychannels_bus::DeliveryDurability::BestEffort,
+                        turn_id: Some(format!("source-turn-{index}")),
+                        durability: tinychannels_bus::DeliveryDurability::BestEffort,
                         payload,
                     },
                 ),
@@ -523,6 +523,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
             .await
             .unwrap();
         let typed = received.recv().await.unwrap();
+        assert_eq!(typed.turn_id.as_deref(), Some(format!("source-turn-{index}").as_str()));
         assert_eq!(typed.reply_to_id.as_deref(), Some("source-message"));
         assert_eq!(typed.thread_id.as_deref(), Some("thread"));
         assert_eq!(
@@ -1292,6 +1293,9 @@ async fn large_voice_bytes_use_compact_scoped_reference_in_best_effort_and_requi
             assert_eq!(result.message_id.as_deref(), Some("voice-message"));
         }
         let message = received.recv().await.expect("typed provider send");
+        assert_eq!(message.turn_id.as_deref(), Some(format!("{id}-origin-turn").as_str()),
+            "the real service dispatch retains the source turn separately from the idempotency key");
+        assert_eq!(message.idempotency_key, id);
         assert!(matches!(
             &message.parts[0],
             tinychannels_bus::OutboundContentPart::Voice {
