@@ -336,7 +336,12 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
         ..Default::default()
     };
     assert!(configured_media_account_scope("matrix", &missing_authority).is_some());
-    missing_authority.matrix.as_mut().unwrap().homeserver.clear();
+    missing_authority
+        .matrix
+        .as_mut()
+        .unwrap()
+        .homeserver
+        .clear();
     assert!(configured_media_account_scope("matrix", &missing_authority).is_none());
 
     let mut missing_authority = tinychannels_bus::ChannelsConfig {
@@ -636,13 +641,15 @@ async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
         stt[0].scope.channel.account_id.as_deref(),
         Some("telegram:bot-a")
     );
-    assert!(!stt[0]
-        .scope
-        .channel
-        .account_id
-        .as_deref()
-        .unwrap()
-        .contains("media-v1"));
+    assert!(
+        !stt[0]
+            .scope
+            .channel
+            .account_id
+            .as_deref()
+            .unwrap()
+            .contains("media-v1")
+    );
     assert_eq!(
         stt[0].scope.conversation,
         ConversationRef {
