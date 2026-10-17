@@ -441,24 +441,47 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
         tinychannels_bus::channel::ChannelSendError,
     > {
         use tinychannels_conformance::ConformanceFeature as Feature;
+        use tinychannels_bus::{ContentPart as Part, OutboundContentPart as OutPart};
+        let media = || self.media.get(&feature).cloned().unwrap_or_default();
+        let content = |part| tinychannels_bus::OutboundPayload::Parts {
+            parts: vec![OutPart::Content { part }],
+        };
         let payload = match feature {
             Feature::Text | Feature::ThreadAddressing | Feature::ReplyAddressing => {
-                tinychannels_bus::OutboundPayload::Text {
-                    text: "module-kit".into(),
-                }
+                tinychannels_bus::OutboundPayload::Text { text: "module-kit".into() }
             }
-            Feature::Image => tinychannels_bus::OutboundPayload::Media {
-                text: None,
-                media_urls: vec!["https://example.invalid/image.png".into()],
-            },
-            _ => {
-                return Err(tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
-                    message: "fixture does not expose this operation".into(),
-                    unsupported: true,
-                    ..Default::default()
-                });
-            }
+            Feature::Image => content(Part::Image { media: media(), caption: Some("image case".into()), alt_text: None }),
+            Feature::Video => content(Part::Video { media: media(), caption: Some("video case".into()), duration_ms: Some(1000), thumbnail: None }),
+            Feature::Audio => content(Part::Audio { media: media(), codec: Some("mp3".into()), duration_ms: Some(1000), title: Some("audio case".into()), transcript: None }),
+            Feature::File => content(Part::File { media: media(), file_name: Some("fixture.pdf".into()), caption: Some("file case".into()) }),
+            Feature::Sticker => content(Part::Sticker { media: media(), pack_id: None, sticker_id: None, emoji: Some("🙂".into()), alt_text: None }),
+            Feature::Location => content(Part::Location { latitude: 29.3759, longitude: 47.9774, label: None, address: None, accuracy_meters: Some(10.0), live_until_unix_ms: None }),
+            Feature::Contact => content(Part::Contact {
+                display_name: "Telegram Fixture".into(),
+                phone_numbers: vec![tinychannels_bus::ContactMethod { value: "+15550123".into(), label: Some("CELL".into()) }],
+                emails: Vec::new(), organization: None,
+            }),
+            Feature::Buttons => tinychannels_bus::OutboundPayload::Parts { parts: vec![
+                OutPart::Content { part: Part::Text { text: "Choose an action".into(), markdown_dialect: None } },
+                OutPart::Content { part: Part::Buttons { rows: vec![vec![tinychannels_bus::ButtonAction { id: "opaque-action".into(), label: "Continue".into(), style: None, disabled: false }]] } },
+            ] },
+            Feature::Poll => content(Part::Poll { question: "Choose one".into(), options: vec!["First".into(), "Second".into()], multiple_choice: false, closes_at_unix_ms: None, provider_poll_id: None }),
+            Feature::Presentation => content(Part::Presentation { blocks: serde_json::json!({"kind":"approval","id":"fixture-request","prompt":"Approve this action?","choices":["Approve","Deny"]}) }),
+            Feature::NativeData => tinychannels_bus::OutboundPayload::NativeChannelData { data: serde_json::json!({"kind":"provider_specific"}) },
+            Feature::VoiceOut => tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Media { media: media(), audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: Some(1000) } },
+            Feature::VoiceSynthesis => tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Synthesize { text: "speak this".into(), voice: None } },
+            Feature::ReadReceipts => return Err(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Unsupported,
+                message: "Telegram Bot API has no read-receipt operation".into(),
+                unsupported: true,
+                ..Default::default()
+            }),
+            _ => return Err(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Unsupported,
+                message: format!("{feature:?} fixture operation has not been invoked"),
+                unsupported: true,
+                ..Default::default()
+            }),
         };
         let intent = tinychannels_bus::ChannelOutboundIntent {
             idempotency_key: "module-kit-send".into(),
@@ -1759,7 +1782,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         .unwrap();
     let observation = fixture.observations().pop().unwrap();
     assert_eq!(observation.request["chat_id"], "-100");
-    assert_eq!(observation.request["text"], "module-kit");
+    assert_eq!(observation.request["text"], "module\\-kit");
     assert_eq!(observation.platform_message_ids, ["321"]);
     assert_eq!(observation.reply_to_id.as_deref(), Some("5"));
     assert_eq!(observation.thread_id.as_deref(), Some("77"));
