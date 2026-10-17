@@ -94,6 +94,11 @@ pub struct HostStoreVoiceMediaRequest {
     pub codec: Option<String>,
     pub duration_ms: Option<u64>,
     pub file_name: Option<String>,
+    /// Existing shared-pipeline media to materialize or authorize for a link.
+    /// Hosts that support this projection reuse the blob instead of storing a
+    /// second copy. Older hosts may ignore the field and retain compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_reference: Option<MediaReference>,
 }
 
 /// Opaque durable media reference authorized by the host.
