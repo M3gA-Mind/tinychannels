@@ -3889,8 +3889,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         )
         .await
         .unwrap();
-    let _storage =
-        crate::storage_fixture::StorageHost::serve(&connection, "voice-pipeline").await;
+    let _storage = crate::storage_fixture::StorageHost::serve(&connection, "voice-pipeline").await;
     let host = HostChannels::new(connection);
     let context = ProgressiveOutputContext {
         turn_id: "turn-voice-1".into(),
@@ -4157,7 +4156,10 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         conversation: context.conversation.clone(),
         turn_id: context.turn_id.clone(),
     };
-    let storage = host.storage().await.expect("host-scoped storage is available");
+    let storage = host
+        .storage()
+        .await
+        .expect("host-scoped storage is available");
     let media_store = tinychannels::host::ScopedMediaStore::new(
         Arc::clone(storage.documents()),
         Arc::clone(storage.blobs()),
