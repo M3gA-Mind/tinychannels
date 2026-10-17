@@ -8,7 +8,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_core::{BlobStore, CollectionSpec, DocumentStore, Precondition};
+use tinystoragedrivers_core::{BlobReader, BlobStore, CollectionSpec, DocumentStore, Precondition};
 use tokio::io::AsyncReadExt;
 
 const MEDIA_COLLECTION: &str = "channels_media_metadata";
@@ -171,6 +171,43 @@ impl ScopedMediaStore {
             anyhow::bail!("media metadata could not be finalized");
         }
         Ok(reference)
+    }
+
+    /// Read an untrusted stream incrementally under `max_bytes`, validate its
+    /// actual body/MIME, then persist it through the scoped blob port.
+    pub async fn store_stream(
+        &self,
+        scope: MediaScope,
+        kind: tinychannels_bus::MediaKind,
+        content_type: String,
+        file_name: Option<String>,
+        duration_ms: Option<u64>,
+        reader: BlobReader,
+        dedupe_key: Option<String>,
+        max_bytes: u64,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        let bounded = max_bytes.saturating_add(1);
+        let capacity = usize::try_from(bounded.min(64 * 1024)).unwrap_or(64 * 1024);
+        let mut bytes = Vec::with_capacity(capacity);
+        reader
+            .take(bounded)
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| anyhow::anyhow!("media download could not be read"))?;
+        if bytes.is_empty() || bytes.len() as u64 > max_bytes {
+            anyhow::bail!("media exceeds the configured size limit");
+        }
+        self.store(
+            scope,
+            kind,
+            content_type,
+            file_name,
+            duration_ms,
+            bytes,
+            dedupe_key,
+            max_bytes,
+        )
+        .await
     }
 
     /// Resolve a durable reference only for the scope that stored it.

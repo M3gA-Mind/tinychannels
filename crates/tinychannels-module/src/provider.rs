@@ -258,6 +258,10 @@ impl tinychannels::host::StorageProvider for ModuleStorage {
             .await
             .map_err(|error| anyhow::anyhow!("host storage: {:?}", error.kind()))
     }
+
+    async fn blobs(&self) -> anyhow::Result<Arc<dyn tinystoragedrivers_core::BlobStore>> {
+        Ok(Arc::clone(self.0.storage().await?.blobs()))
+    }
 }
 
 struct ModuleAllowlist(HostChannels);
