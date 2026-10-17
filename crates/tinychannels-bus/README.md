@@ -101,3 +101,23 @@ calculations for migration into host adapters. Logging and clock acquisition
 remain host responsibilities. This contract does not claim that OpenHuman's
 current host, TUI, or frontend has migrated to these types; those integrations
 belong to their dependent epic leaves.
+
+`src/fixtures/web/` contains hand-authored historical compatibility fixtures,
+not captured runtime transcripts. Their shapes were derived from the deployed
+host at OpenHuman base `ba83482245`, including constructors in
+`crates/openhuman-core/src/channels/web_chat/presentation.rs`,
+`crates/openhuman-core/src/channels/web_chat/ops.rs`,
+`crates/openhuman-core/src/channels/proactive.rs`,
+`crates/openhuman-core/src/flows/ops/streaming.rs`,
+`crates/openhuman-core/src/cron/scheduler/`,
+`crates/openhuman-core/src/agent/orchestration/background_delivery.rs`,
+`crates/openhuman-core/src/agent/tinyagents/host/progress_sink.rs`,
+`crates/openhuman-core/src/channels/host/adapters.rs`,
+`crates/openhuman-core/src/channels/providers/relay/channel.rs`,
+and the RPC Socket.IO adapter. These fixtures pin serialized field presence,
+omission, nulls, and nested payloads against that source audit. Some valid
+representable states are not emitted by the current constructors (for example,
+an empty citations list); those are compatibility-shape fixtures, not claims
+of observed runtime output. `historical_events.json` includes the per-variant
+field shapes for the remaining deployed event names plus the two legacy names
+still accepted by clients.

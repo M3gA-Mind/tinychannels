@@ -14,6 +14,7 @@ const THREAD_GOAL: &str = include_str!("fixtures/web/thread_goal_updated.json");
 const THREAD_TODOS: &str = include_str!("fixtures/web/thread_todos_changed.json");
 const TOOL_RESULT: &str = include_str!("fixtures/web/tool_result.json");
 const APPROVAL_DECIDED: &str = include_str!("fixtures/web/approval_decided.json");
+const ADDITIONAL_HISTORICAL_EVENTS: &str = include_str!("fixtures/web/historical_events.json");
 const WEB_SCHEMA: &str = include_str!("../schema/web-channel-event.schema.json");
 
 fn assert_historical_fixture_round_trips(fixture: &str) {
@@ -41,6 +42,11 @@ fn deployed_web_event_goldens_keep_their_serialized_shapes() {
         APPROVAL_DECIDED,
     ] {
         assert_historical_fixture_round_trips(fixture);
+    }
+    let additional: Vec<serde_json::Value> =
+        serde_json::from_str(ADDITIONAL_HISTORICAL_EVENTS).unwrap();
+    for fixture in additional {
+        assert_historical_fixture_round_trips(&fixture.to_string());
     }
 }
 
