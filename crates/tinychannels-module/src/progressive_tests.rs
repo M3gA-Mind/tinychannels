@@ -921,6 +921,95 @@ async fn no_edit_channel_sends_final_text_in_configured_segments() {
     replies.shutdown().await.unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn configured_progressive_channel_posts_and_edits_one_draft() {
+    let (base, callback) = fixture(false).await;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.progressive_edits = true;
+    let mut configured = HashMap::new();
+    configured.insert(
+        "discord:editable".to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities,
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            base.host.clone(),
+        ),
+    );
+    let replies = Replies::new(base.host.clone(), Arc::new(Mutex::new(configured)));
+    let opened = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:editable".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "editable-turn".into(),
+        })
+        .await
+        .unwrap();
+    let ProgressiveResult::Opened { handle } = opened else {
+        panic!("expected opened output")
+    };
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "hello".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    let requests = callback.requests.lock().await;
+    assert!(requests.iter().any(|request| matches!(request,
+        ProgressiveTransportRequest::Send { message, .. }
+            if message["text"] == "hello"
+    )));
+    assert!(requests.iter().any(|request| matches!(request,
+        ProgressiveTransportRequest::Edit { text, message_id, .. }
+            if text == "hello" && message_id == "fixture-message"
+    )));
+    drop(requests);
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::Cancellation { reason: None }],
+        })
+        .await
+        .unwrap();
+    let before = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .filter(|request| matches!(request, ProgressiveTransportRequest::Typing { .. }))
+        .count();
+    tokio::time::advance(Duration::from_secs(12)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    let after = callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .filter(|request| matches!(request, ProgressiveTransportRequest::Typing { .. }))
+        .count();
+    assert_eq!(after, before, "terminal cancel must stop typing refresh");
+    replies.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn open_output_uses_configured_account_and_preserves_full_conversation_scope() {
     use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
