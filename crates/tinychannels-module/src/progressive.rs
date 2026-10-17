@@ -362,9 +362,6 @@ fn merge_receipt(
         *aggregate = next;
         return;
     }
-    aggregate
-        .platform_message_ids
-        .extend(next.platform_message_ids);
     if next.parts.is_empty() && (next.edit_token.is_some() || next.delete_token.is_some()) {
         for (offset, platform_message_id) in next.platform_message_ids.iter().enumerate() {
             aggregate
@@ -379,6 +376,9 @@ fn merge_receipt(
                 });
         }
     }
+    aggregate
+        .platform_message_ids
+        .extend(next.platform_message_ids);
     aggregate.parts.extend(next.parts);
     if aggregate.primary_platform_message_id.is_none() {
         aggregate.primary_platform_message_id = next.primary_platform_message_id;
