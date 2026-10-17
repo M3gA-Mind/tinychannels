@@ -819,7 +819,16 @@ impl TelegramChannel {
             .is_some();
         let has_voice = message.and_then(|message| message.get("voice")).is_some();
         let has_media = message.is_some_and(|message| {
-            ["photo", "document", "video", "audio", "sticker"]
+            [
+                "photo",
+                "document",
+                "video",
+                "audio",
+                "sticker",
+                "location",
+                "venue",
+                "contact",
+            ]
                 .iter()
                 .any(|field| message.get(field).is_some())
         });
@@ -881,7 +890,14 @@ impl TelegramChannel {
         let message = update
             .get("message")
             .or_else(|| update.get("edited_message"))?;
-        Self::update_media_attachment(update)?;
+        let message_has_structured_content = message.is_some_and(|message| {
+            ["location", "venue", "contact"]
+                .iter()
+                .any(|field| message.get(field).is_some())
+        });
+        if Self::update_media_attachment(update).is_none() && !message_has_structured_content {
+            return None;
+        }
         let caption = message.get("caption").and_then(serde_json::Value::as_str);
         let ctx = self.parse_incoming_message_context(message, caption)?;
         if self.mention_only && Self::is_group_message(message) && ctx.mention_text.is_none() {

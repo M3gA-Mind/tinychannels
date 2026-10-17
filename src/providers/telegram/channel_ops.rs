@@ -361,6 +361,89 @@ impl TelegramChannel {
             parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
         }
         parts.extend(media_parts);
+        let message_date_ms = source
+            .get("date")
+            .and_then(serde_json::Value::as_u64)
+            .map(|seconds| seconds.saturating_mul(1000));
+        let venue = source.get("venue");
+        let location = source
+            .get("location")
+            .or_else(|| venue.and_then(|venue| venue.get("location")));
+        if let Some(location) = location {
+            let latitude = location
+                .get("latitude")
+                .and_then(serde_json::Value::as_f64);
+            let longitude = location
+                .get("longitude")
+                .and_then(serde_json::Value::as_f64);
+            if let (Some(latitude), Some(longitude)) = (latitude, longitude)
+                && latitude.is_finite()
+                && longitude.is_finite()
+                && (-90.0..=90.0).contains(&latitude)
+                && (-180.0..=180.0).contains(&longitude)
+            {
+                let live_until_unix_ms = source
+                    .get("live_period")
+                    .and_then(serde_json::Value::as_u64)
+                    .filter(|seconds| *seconds > 0)
+                    .and_then(|seconds| {
+                        message_date_ms.map(|date| date.saturating_add(seconds.saturating_mul(1000)))
+                    });
+                parts.push(tinychannels_bus::ContentPart::Location {
+                    latitude,
+                    longitude,
+                    label: venue
+                        .and_then(|venue| venue.get("title"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                    address: venue
+                        .and_then(|venue| venue.get("address"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned),
+                    accuracy_meters: location
+                        .get("horizontal_accuracy")
+                        .and_then(serde_json::Value::as_f64)
+                        .filter(|accuracy| accuracy.is_finite() && *accuracy >= 0.0),
+                    live_until_unix_ms,
+                });
+            }
+        }
+        if let Some(contact) = source.get("contact") {
+            let first_name = contact
+                .get("first_name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let last_name = contact
+                .get("last_name")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let display_name = [first_name, last_name]
+                .into_iter()
+                .filter(|name| !name.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let phone_numbers = contact
+                .get("phone_number")
+                .and_then(serde_json::Value::as_str)
+                .filter(|phone| !phone.trim().is_empty())
+                .map(|value| {
+                    vec![tinychannels_bus::ContactMethod {
+                        value: value.to_owned(),
+                        label: None,
+                    }]
+                })
+                .unwrap_or_default();
+            if !display_name.is_empty() || !phone_numbers.is_empty() {
+                parts.push(tinychannels_bus::ContentPart::Contact {
+                    display_name,
+                    phone_numbers,
+                    emails: Vec::new(),
+                    organization: None,
+                });
+            }
+        }
         let media = parts
             .iter()
             .flat_map(|part| match part {
