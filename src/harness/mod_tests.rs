@@ -284,7 +284,13 @@ fn lifecycle_and_native_events_preserve_structured_data() {
                 max_iterations: None,
                 stop: None,
             },
-            serde_json::json!({"lifecycle": lifecycle}),
+            serde_json::json!({"lifecycle": {
+                "stage": lifecycle.stage,
+                "message": lifecycle.message,
+                "iteration": null,
+                "maxIterations": null,
+                "stop": null,
+            }}),
         ),
         (
             ChannelOutputEvent::Native {
