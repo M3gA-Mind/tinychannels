@@ -605,28 +605,24 @@ async fn empty_thinking_and_filler_without_an_id_do_not_claim_cleanup_ownership(
 #[test]
 fn unicode_segment_boundaries_match_configured_units() {
     let source = "a😀éz";
-    let utf8 = super::reply::split_text_by_limit(
-        source,
-        4,
-        tinychannels_bus::LengthUnit::Utf8Bytes,
-    )
-    .unwrap();
+    let utf8 =
+        super::reply::split_text_by_limit(source, 4, tinychannels_bus::LengthUnit::Utf8Bytes)
+            .unwrap();
     assert_eq!(utf8.concat(), source);
     assert!(utf8.iter().all(|segment| segment.len() <= 4));
-    let utf16 = super::reply::split_text_by_limit(
-        source,
-        2,
-        tinychannels_bus::LengthUnit::Utf16Units,
-    )
-    .unwrap();
+    let utf16 =
+        super::reply::split_text_by_limit(source, 2, tinychannels_bus::LengthUnit::Utf16Units)
+            .unwrap();
     assert_eq!(utf16.concat(), source);
-    assert!(utf16.iter().all(|segment| segment.encode_utf16().count() <= 2));
-    assert!(super::reply::split_text_by_limit(
-        "😀",
-        1,
-        tinychannels_bus::LengthUnit::Utf8Bytes,
-    )
-    .is_err());
+    assert!(
+        utf16
+            .iter()
+            .all(|segment| segment.encode_utf16().count() <= 2)
+    );
+    assert!(
+        super::reply::split_text_by_limit("😀", 1, tinychannels_bus::LengthUnit::Utf8Bytes,)
+            .is_err()
+    );
 }
 
 #[test]

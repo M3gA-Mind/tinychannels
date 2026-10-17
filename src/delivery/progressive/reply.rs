@@ -132,9 +132,12 @@ impl ProgressiveReply {
                         },
                     });
                 }
-                outbound.extend(parts.iter().cloned().map(|part| {
-                    tinychannels_bus::OutboundContentPart::Content { part }
-                }));
+                outbound.extend(
+                    parts
+                        .iter()
+                        .cloned()
+                        .map(|part| tinychannels_bus::OutboundContentPart::Content { part }),
+                );
                 match self.send_content_parts(&outbound, "").await {
                     Ok(outcome) => dispatch.outcomes.push(outcome),
                     Err(super::ProgressiveSendError::UnsupportedContent) => {
@@ -146,7 +149,10 @@ impl ProgressiveReply {
             Event::VoiceNote { text, voice } if deliver_typed_content => {
                 let mut outbound = Vec::new();
                 if let Some(text) = text.clone().or_else(|| {
-                    voice.transcript.as_ref().map(|transcript| transcript.text.clone())
+                    voice
+                        .transcript
+                        .as_ref()
+                        .map(|transcript| transcript.text.clone())
                 }) {
                     outbound.push(tinychannels_bus::OutboundContentPart::Content {
                         part: tinychannels_bus::ContentPart::Text {
@@ -455,12 +461,17 @@ pub(super) fn segment_text_parts(
     projection: &str,
     limit: u64,
     unit: tinychannels_bus::LengthUnit,
-) -> Result<Vec<(Vec<tinychannels_bus::OutboundContentPart>, String)>, super::ProgressiveSendError> {
+) -> Result<Vec<(Vec<tinychannels_bus::OutboundContentPart>, String)>, super::ProgressiveSendError>
+{
     let text_parts = parts
         .iter()
         .map(|part| match part {
             tinychannels_bus::OutboundContentPart::Content {
-                part: tinychannels_bus::ContentPart::Text { text, markdown_dialect },
+                part:
+                    tinychannels_bus::ContentPart::Text {
+                        text,
+                        markdown_dialect,
+                    },
             } => Some((text.as_str(), markdown_dialect.clone())),
             _ => None,
         })
