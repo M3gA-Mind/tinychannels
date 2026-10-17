@@ -548,10 +548,13 @@ impl TelegramChannel {
                 if text.is_empty() {
                     anyhow::bail!("Telegram inline buttons require message text");
                 }
+                if rows.iter().flatten().any(|button| button.disabled) {
+                    anyhow::bail!("Telegram inline keyboards cannot render disabled buttons");
+                }
                 let mut keyboard = Vec::new();
                 for row in rows {
                     let mut native_row = Vec::new();
-                    for button in row.iter().filter(|button| !button.disabled) {
+                    for button in row {
                         if button.id.is_empty()
                             || button.id.len() > 64
                             || button.label.is_empty()
@@ -610,15 +613,15 @@ impl TelegramChannel {
                         .unwrap_or_default()
                         .as_secs();
                     let seconds = closes_at.saturating_div(1000).saturating_sub(now);
-                    if !(5..=600).contains(&seconds) {
-                        anyhow::bail!("Telegram poll close time must be 5..600 seconds ahead");
+                    if !(5..=2_628_000).contains(&seconds) {
+                        anyhow::bail!("Telegram poll close time must be 5..2628000 seconds ahead");
                     }
-                    body["open_period"] = serde_json::json!(seconds);
+                    body["close_date"] = serde_json::json!(closes_at.saturating_div(1000));
                 }
                 tinychannels_bus::channel::MessageReceiptPartKind::Poll
             }
             ContentPart::Presentation { blocks } => {
-                let text = presentation_text(blocks);
+                let text = presentation_text(blocks)?;
                 if text.trim().is_empty() {
                     anyhow::bail!("Telegram presentation contains no renderable text");
                 }
