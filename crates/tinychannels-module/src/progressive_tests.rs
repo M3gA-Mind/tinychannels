@@ -3,6 +3,24 @@ use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
 use tokio::sync::Notify;
 
+struct ConfiguredChannel(&'static str);
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for ConfiguredChannel {
+    fn name(&self) -> &str {
+        self.0
+    }
+    async fn send(&self, _message: &tinychannels::SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
 #[test]
 fn legacy_feed_retains_the_v1_event_wire_shape() {
     let command = ProgressiveCommand::Feed {
@@ -743,46 +761,84 @@ async fn typed_final_delivery_returns_partial_receipt_without_retrying() {
 }
 
 #[tokio::test]
-async fn typed_send_preserves_configured_account_and_full_conversation_scope() {
+async fn open_output_uses_configured_account_and_preserves_full_conversation_scope() {
     use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
 
     let (replies, callback) = fixture(false).await;
-    let context = ProgressiveOutputContext {
-        turn_id: "turn-topic-9".into(),
-        channel: ChannelRef {
-            id: "discord".into(),
-            account_id: Some("discord:account-b".into()),
-        },
-        conversation: ConversationRef {
-            kind: ConversationKind::Thread,
-            id: "room-1".into(),
-            scope_id: Some("guild-7".into()),
-            parent_id: Some("room-1".into()),
-            thread_id: Some("thread-8".into()),
-            topic_id: Some("topic-9".into()),
-        },
+    let mut configured = HashMap::new();
+    for account in ["discord:account-a", "discord:account-b"] {
+        let channel = Arc::new(ConfiguredChannel("discord"));
+        configured.insert(
+            account.to_owned(),
+            Running::start(
+                channel,
+                Arc::new(crate::provider::Hooks::default()),
+                replies.host.clone(),
+            ),
+        );
+    }
+    let replies = Replies::new(replies.host.clone(), Arc::new(Mutex::new(configured)));
+    let channel_ref = ChannelRef {
+        id: "discord".into(),
+        account_id: Some("discord:account-b".into()),
     };
-    let sender = Sender {
-        host: replies.host.clone(),
-        context: Some(context.clone()),
+    let conversation = ConversationRef {
+        kind: ConversationKind::Thread,
+        id: "room-1".into(),
+        scope_id: Some("guild-7".into()),
+        parent_id: Some("room-1".into()),
+        thread_id: Some("thread-8".into()),
+        topic_id: Some("topic-9".into()),
     };
-    sender
-        .send_parts("discord:room-1", &[], "scoped", Some(&context))
+    let forged = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:forged".into()),
+            },
+            conversation: conversation.clone(),
+            turn_id: "forged-turn".into(),
+        })
+        .await
+        .unwrap_err();
+    assert!(forged.to_string().contains("not configured"));
+    let handle = match replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: channel_ref.clone(),
+            conversation: conversation.clone(),
+            turn_id: "turn-topic-9".into(),
+        })
+        .await
+        .unwrap()
+    {
+        ProgressiveResult::Opened { handle } => handle,
+        _ => panic!("expected scoped open"),
+    };
+    let outcome = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "scoped".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
         .await
         .unwrap();
+    assert!(matches!(outcome, ProgressiveResult::DeliveryOutcome { .. }));
     let requests = callback.requests.lock().await;
     let ProgressiveTransportRequest::SendTyped {
         turn_id,
-        channel_ref,
-        conversation,
+        channel_ref: sent_channel,
+        conversation: sent_conversation,
         ..
     } = requests.last().unwrap()
     else {
         panic!("expected typed provider send")
     };
     assert_eq!(turn_id.as_deref(), Some("turn-topic-9"));
-    assert_eq!(channel_ref.as_ref(), Some(&context.channel));
-    assert_eq!(conversation.as_ref(), Some(&context.conversation));
+    assert_eq!(sent_channel.as_ref(), Some(&channel_ref));
+    assert_eq!(sent_conversation.as_ref(), Some(&conversation));
     replies.shutdown().await.unwrap();
 }
 
