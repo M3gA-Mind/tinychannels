@@ -28,6 +28,7 @@ impl TelegramChannel {
         String,
         Option<String>,
         Option<String>,
+        Option<String>,
         Option<u64>,
         &'static str,
     )> {
@@ -44,6 +45,7 @@ impl TelegramChannel {
                     .get("file_unique_id")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned),
+                None,
                 None,
                 None,
                 "photo",
@@ -81,6 +83,10 @@ impl TelegramChannel {
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned),
                 attachment
+                    .get("mime_type")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                attachment
                     .get("duration")
                     .and_then(serde_json::Value::as_u64)
                     .map(|seconds| seconds.saturating_mul(1000)),
@@ -95,7 +101,7 @@ impl TelegramChannel {
         update: &serde_json::Value,
         message: &ChannelMessage,
     ) -> anyhow::Result<Vec<tinychannels_bus::ContentPart>> {
-        let Some((kind, file_id, unique_id, file_name, duration_ms, field)) =
+        let Some((kind, file_id, unique_id, file_name, mime_hint, duration_ms, field)) =
             Self::update_media_attachment(update)
         else {
             return Ok(Vec::new());
@@ -144,13 +150,9 @@ impl TelegramChannel {
         let hint = file_name
             .as_deref()
             .and_then(super::attachments::infer_attachment_mime)
-            .unwrap_or_else(|| match kind {
-                tinychannels_bus::MediaKind::Image => "image/jpeg",
-                tinychannels_bus::MediaKind::Video => "video/mp4",
-                tinychannels_bus::MediaKind::Audio => "audio/mpeg",
-                tinychannels_bus::MediaKind::Document => response_mime.as_deref().unwrap_or(""),
-                tinychannels_bus::MediaKind::Unknown => "",
-            });
+            .or(mime_hint.as_deref())
+            .or(response_mime.as_deref())
+            .unwrap_or("");
         if let Some(actual) = response_mime.as_deref()
             && !actual.eq_ignore_ascii_case(hint)
         {
