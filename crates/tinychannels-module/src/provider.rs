@@ -23,9 +23,6 @@ impl<T> Drop for AbortOnDrop<T> {
 enum ProviderOperation {
     Send(SendMessage),
     SendTyped(tinychannels_bus::ChannelOutboundMessage),
-    NativeReaction(tinychannels_bus::ChannelRef, tinychannels_bus::ConversationRef, String, tinychannels_bus::channel::ChannelReaction, bool),
-    NativeEdit(tinychannels_bus::channel::MessageReceipt, tinychannels_bus::ChannelOutboundIntent),
-    NativeDelete(tinychannels_bus::channel::MessageReceipt),
     NativeDraft(Option<tinychannels_bus::channel::MessageReceipt>, tinychannels_bus::ChannelOutboundIntent),
     Interaction(tinychannels_bus::ChannelInteraction),
 }
@@ -1606,6 +1603,28 @@ impl Running {
                             })
                             .map_err(|_| Error::failed("provider typed send failed"))
                         },
+                        ProviderOperation::NativeDraft(previous, intent) => {
+                            if let Some(native) = &worker_native {
+                                match native.drafts.upsert_draft(previous.as_ref(), intent.clone()).await {
+                                    Ok(receipt) => Ok(tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
+                                        tinychannels_bus::channel::ChannelSendOutcome { receipt, error: None }
+                                    ))),
+                                    Err(error) => Ok(tinychannels_bus::ChannelInteractionResult::Sent(Box::new(
+                                        tinychannels_bus::channel::ChannelSendOutcome {
+                                            receipt: tinychannels_bus::channel::MessageReceipt {
+                                                idempotency_key: Some(intent.idempotency_key),
+                                                channel: intent.channel_ref,
+                                                conversation: intent.conversation_ref,
+                                                ..Default::default()
+                                            },
+                                            error: Some(error),
+                                        }
+                                    ))),
+                                }
+                            } else {
+                                Err(Error::failed("native draft port is unavailable"))
+                            }
+                        }
                         ProviderOperation::Interaction(interaction) => {
                             dispatch_interaction(send_channel.clone(), worker_native.clone(), interaction, &mut typing)
                                 .await
@@ -1727,6 +1746,47 @@ impl Running {
             ));
         }
         Ok(())
+    }
+
+    pub(crate) async fn upsert_native_draft(
+        &self,
+        previous: Option<tinychannels_bus::channel::MessageReceipt>,
+        mut intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, RunningSendError> {
+        if self.native_ports.is_none() {
+            return Err(RunningSendError::NotDispatched("native draft port is unavailable".into()));
+        }
+        self.validate_adapter_intent(&intent).map_err(|e| RunningSendError::NotDispatched(e.message))?;
+        let expected_channel = tinychannels_bus::ChannelRef {
+            id: tinychannels_bus::provider_id(&self.configured_instance).to_owned(),
+            account_id: Some(self.configured_instance.clone()),
+        };
+        intent.channel_ref = Some(expected_channel.clone());
+        let conversation = intent.conversation_ref.clone().unwrap_or_else(|| tinychannels_bus::ConversationRef {
+            id: intent.conversation_id.clone(), thread_id: intent.thread_id.clone(), ..Default::default()
+        });
+        intent.conversation_ref = Some(conversation.clone());
+        if let Some(receipt) = &previous {
+            let valid_id = receipt.primary_platform_message_id.as_deref().is_some_and(|id| !id.trim().is_empty())
+                || receipt.parts.iter().any(|part| !part.platform_message_id.trim().is_empty());
+            if receipt.channel.as_ref() != Some(&expected_channel)
+                || receipt.conversation.as_ref() != Some(&conversation)
+                || !valid_id
+                || receipt.parts.iter().any(|part| part.platform_message_id.trim().is_empty())
+            {
+                return Err(RunningSendError::NotDispatched("draft receipt scope does not match Telegram intent".into()));
+            }
+        }
+        match self.submit(ProviderOperation::NativeDraft(previous, intent)).await? {
+            tinychannels_bus::ChannelInteractionResult::Sent(outcome) => {
+                if let Some(error) = outcome.error {
+                    Err(RunningSendError::AfterDispatch(error.message))
+                } else {
+                    Ok(outcome.receipt)
+                }
+            }
+            _ => Err(RunningSendError::AfterDispatch("native draft returned no receipt".into())),
+        }
     }
 
     pub(crate) async fn interact(
