@@ -1177,6 +1177,28 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         )
         .await
         .unwrap();
+    other_runtime_proxy
+        .call_confidential::<()>(
+            "StartChannelConfigured",
+            (
+                "telegram",
+                ChannelsConfig {
+                    telegram: Some(tinychannels_bus::config::TelegramConfig {
+                        bot_token: "456:other-fixture".into(),
+                        chat_id: None,
+                        allowed_users: vec!["42".into()],
+                        stream_mode: Default::default(),
+                        draft_update_interval_ms: 1_000,
+                        silent_streaming: true,
+                        mention_only: false,
+                    }),
+                    ..Default::default()
+                },
+                tinychannels_bus::HttpProxyPolicy::default(),
+            ),
+        )
+        .await
+        .unwrap();
 
     let scope = tinychannels_bus::HostVoiceScope {
         configured_instance: "caller-cannot-select-this".into(),
@@ -1216,20 +1238,20 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .call_confidential("BeginMediaUpload", begin)
         .await
         .unwrap();
-    assert!(
-        other_runtime_proxy
-            .call_confidential::<MediaUploadResult>(
-                "FinishMediaUpload",
-                MediaUploadFinish(handle.clone()),
-            )
-            .await
-            .is_err()
-    );
+    let other_runtime_error = other_runtime_proxy
+        .call_confidential::<MediaUploadResult>(
+            "FinishMediaUpload",
+            MediaUploadFinish(handle.clone()),
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(other_runtime_error.wire_name(), tinybus::Error::FAILED);
     let png = base64::engine::general_purpose::STANDARD
         .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII=")
         .unwrap();
     assert_eq!(png.len(), 68);
     assert!(MEDIA_UPLOAD_CHUNK_BYTES > png.len());
+    let png_for_wire_check = png.clone();
     runtime_proxy
         .call_confidential::<u32>(
             "AppendMediaUploadChunk",
@@ -1252,6 +1274,11 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     assert!(reference.path.is_none());
     assert!(reference.url.is_none());
     assert!(reference.local_cache_path.is_none());
+    let replay: MediaUploadResult = runtime_proxy
+        .call_confidential("FinishMediaUpload", finish.clone())
+        .await
+        .unwrap();
+    assert_eq!(replay, reference);
 
     // Exercise the public framed request boundary at the advertised maximum
     // chunk, followed by a final partial chunk. The ordinary channel message
@@ -1334,21 +1361,35 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         },
         ..Default::default()
     };
-    runtime_proxy
+    let send_result = runtime_proxy
         .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
             "SendChannelIntent",
             ("telegram", send),
         )
         .await
         .unwrap();
+    assert_eq!(send_result.message_id.as_deref(), Some("91"));
+    assert!(send_result.error.is_none());
     let requests = telegram_api.received_requests().await.unwrap();
-    assert!(
-        requests
-            .iter()
-            .any(|request| request.url.path().ends_with("/sendPhoto"))
-    );
+    let upload = requests
+        .iter()
+        .find(|request| request.url.path().ends_with("/sendPhoto"))
+        .expect("typed image send must reach Telegram's photo upload endpoint");
+    let upload_text = String::from_utf8_lossy(&upload.body);
+    assert!(upload_text.contains("name=\"chat_id\"\r\n\r\n42"));
+    assert!(upload_text.contains("name=\"message_thread_id\"\r\n\r\n17"));
+    assert!(upload_text.contains("name=\"caption\"\r\n\r\nfixture"));
+    assert!(upload_text.contains("filename=\"tiny.png\""));
+    assert!(upload
+        .body
+        .windows(png_for_wire_check.len())
+        .any(|bytes| bytes == png_for_wire_check));
 
     runtime_proxy
+        .call_confidential::<()>("StopChannel", "telegram")
+        .await
+        .unwrap();
+    other_runtime_proxy
         .call_confidential::<()>("StopChannel", "telegram")
         .await
         .unwrap();
