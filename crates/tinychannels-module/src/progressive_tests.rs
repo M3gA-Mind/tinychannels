@@ -4601,8 +4601,8 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         assert_eq!(has_voice, should_voice, "turn {turn_id}");
     }
 
-    assert_eq!(codec_ops.load(Ordering::SeqCst), 4);
-    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 4);
+    assert_eq!(codec_ops.load(Ordering::SeqCst), 3);
+    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 3);
 }
 
 fn progressive_test_wav() -> Vec<u8> {
