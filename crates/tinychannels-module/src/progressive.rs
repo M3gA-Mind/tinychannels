@@ -1021,17 +1021,19 @@ async fn apply(
                 break;
             }
         }
-        if dispatch.failure.is_some() || dispatch.outcomes.iter().any(|outcome| outcome.error.is_some()) {
+        if dispatch.failure.is_some()
+            || dispatch
+                .outcomes
+                .iter()
+                .any(|outcome| outcome.error.is_some())
+        {
             break;
         }
     }
     Ok(dispatch.into_result())
 }
 
-fn absorb_progressive_error(
-    dispatch: &mut ProgressiveOutputDispatch,
-    error: ProgressiveSendError,
-) {
+fn absorb_progressive_error(dispatch: &mut ProgressiveOutputDispatch, error: ProgressiveSendError) {
     use tinychannels_bus::module_progressive::ProgressiveOutputFailure;
     match error {
         ProgressiveSendError::PartialOutcome(outcome) => dispatch.outcomes.push(outcome),
@@ -1043,9 +1045,9 @@ fn absorb_progressive_error(
             ));
             dispatch.failure = Some(ProgressiveOutputFailure::ProviderTransport);
         }
-        error => {
+        _error => {
             dispatch.outcomes.push(progressive_error_outcome(
-                &error.to_string(),
+                "progressive provider send failed with an unknown outcome",
                 true,
             ));
             dispatch.failure = Some(ProgressiveOutputFailure::ProviderTransport);
@@ -1082,7 +1084,10 @@ fn delivery_has_failure(result: &Result<ProgressiveResult>) -> bool {
             if outcomes.iter().any(|outcome| outcome.error.is_some())
     ) || matches!(
         result,
-        Ok(ProgressiveResult::DeliveryBatch { failure: Some(_), .. })
+        Ok(ProgressiveResult::DeliveryBatch {
+            failure: Some(_),
+            ..
+        })
     )
 }
 

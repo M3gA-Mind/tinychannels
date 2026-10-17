@@ -224,6 +224,44 @@ async fn open(replies: &Replies) -> String {
     }
 }
 
+async fn open_scoped(
+    replies: &Replies,
+    account: &str,
+    turn_id: &str,
+    capabilities: tinychannels_bus::ChannelCapabilities,
+) -> String {
+    replies.running.lock().await.insert(
+        account.to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities,
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            replies.host.clone(),
+        ),
+    );
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some(account.to_owned()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: turn_id.to_owned(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected scoped output handle")
+    };
+    handle
+}
+
 #[tokio::test]
 async fn terminal_retry_reuses_one_module_send_and_rejects_changed_content() {
     let (replies, callback) = fixture(false).await;
@@ -1404,6 +1442,128 @@ async fn native_approval_and_clarification_events_deliver_prompts() {
             if id == "approval-7"
     )));
     drop(requests);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn later_provider_rpc_failure_retains_prior_receipt_and_stops_terminal_batch() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open_scoped(
+        &replies,
+        "discord:provider-error",
+        "provider-error-turn",
+        tinychannels_bus::ChannelCapabilities::default(),
+    )
+    .await;
+    let mut accepted = tinychannels_bus::channel::ChannelSendOutcome::default();
+    accepted.receipt.platform_message_ids = vec!["first-media".into()];
+    *callback.send_queue.lock().await = [
+        ProgressiveTransportResult::Outcome(accepted),
+        ProgressiveTransportResult::Failed,
+    ]
+    .into();
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![
+                ChannelOutputEvent::Media {
+                    text: None,
+                    parts: vec![tinychannels_bus::ContentPart::Image {
+                        media: tinychannels_bus::MediaReference {
+                            kind: tinychannels_bus::MediaKind::Image,
+                            url: Some("https://media.invalid/one.png".into()),
+                            ..Default::default()
+                        },
+                        caption: None,
+                        alt_text: None,
+                    }],
+                },
+                ChannelOutputEvent::Media {
+                    text: None,
+                    parts: vec![tinychannels_bus::ContentPart::Image {
+                        media: tinychannels_bus::MediaReference {
+                            kind: tinychannels_bus::MediaKind::Image,
+                            url: Some("https://media.invalid/two.png".into()),
+                            ..Default::default()
+                        },
+                        caption: None,
+                        alt_text: None,
+                    }],
+                },
+                ChannelOutputEvent::FinalMessage {
+                    text: "do not send after transport error".into(),
+                    parts: vec![],
+                    receipt: None,
+                },
+            ],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result,
+        ProgressiveResult::DeliveryBatch {
+            outcomes,
+            failure: Some(tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport),
+            ..
+        } if outcomes.len() == 2
+            && outcomes[0].receipt.platform_message_ids == ["first-media"]
+            && outcomes[1].error.as_ref().is_some_and(|error| error.sent_before_error)
+    ));
+    assert_eq!(callback.sends.lock().await.len(), 2);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn later_observation_failure_retains_prior_receipt_and_stops_terminal_batch() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open_scoped(
+        &replies,
+        "discord:observation-error",
+        "observation-error-turn",
+        tinychannels_bus::ChannelCapabilities::default(),
+    )
+    .await;
+    let mut accepted = tinychannels_bus::channel::ChannelSendOutcome::default();
+    accepted.receipt.platform_message_ids = vec!["observed-media".into()];
+    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(accepted)].into();
+    *callback.output_queue.lock().await = [
+        ProgressiveTransportResult::Acknowledged,
+        ProgressiveTransportResult::Failed,
+    ]
+    .into();
+    let media = || ChannelOutputEvent::Media {
+        text: None,
+        parts: vec![tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                kind: tinychannels_bus::MediaKind::Image,
+                url: Some("https://media.invalid/one.png".into()),
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        }],
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![
+                media(),
+                ChannelOutputEvent::FinalMessage {
+                    text: "must not reach observation or provider".into(),
+                    parts: vec![],
+                    receipt: None,
+                },
+            ],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result,
+        ProgressiveResult::DeliveryBatch {
+            outcomes,
+            failure: Some(tinychannels_bus::module_progressive::ProgressiveOutputFailure::ObservationCallback),
+            ..
+        } if outcomes.len() == 1 && outcomes[0].receipt.platform_message_ids == ["observed-media"]
+    ));
+    assert_eq!(callback.sends.lock().await.len(), 1);
     replies.shutdown().await.unwrap();
 }
 

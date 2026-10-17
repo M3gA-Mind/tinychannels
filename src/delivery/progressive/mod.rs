@@ -49,7 +49,11 @@ impl ProgressiveOutputDispatch {
     /// Normalize accumulated engine facts into the public module result DTO.
     pub fn into_result(self) -> tinychannels_bus::module_progressive::ProgressiveResult {
         use tinychannels_bus::module_progressive::ProgressiveResult as Result;
-        match (self.outcomes.len(), self.unsupported.is_empty(), self.failure) {
+        match (
+            self.outcomes.len(),
+            self.unsupported.is_empty(),
+            self.failure,
+        ) {
             (0, true, None) => Result::Updated,
             (1, true, None) => Result::DeliveryOutcome {
                 outcome: self.outcomes.into_iter().next().expect("one outcome"),
@@ -69,9 +73,7 @@ impl ProgressiveOutputDispatch {
     }
 
     /// Recover accumulated delivery facts before terminal output is applied.
-    pub fn from_result(
-        result: &tinychannels_bus::module_progressive::ProgressiveResult,
-    ) -> Self {
+    pub fn from_result(result: &tinychannels_bus::module_progressive::ProgressiveResult) -> Self {
         use tinychannels_bus::module_progressive::ProgressiveResult as Result;
         match result {
             Result::DeliveryOutcome { outcome } => Self {
@@ -86,7 +88,11 @@ impl ProgressiveOutputDispatch {
                 unsupported: parts.clone(),
                 ..Default::default()
             },
-            Result::DeliveryBatch { outcomes, unsupported, failure } => Self {
+            Result::DeliveryBatch {
+                outcomes,
+                unsupported,
+                failure,
+            } => Self {
                 outcomes: outcomes.clone(),
                 unsupported: unsupported.clone(),
                 failure: *failure,
