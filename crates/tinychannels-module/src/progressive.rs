@@ -133,7 +133,7 @@ impl ProgressiveSender for Sender {
 }
 
 enum Command {
-    Feed(Vec<ProgressiveEvent>, oneshot::Sender<Result<()>>),
+    Feed(Vec<ChannelOutputEvent>, bool, oneshot::Sender<Result<()>>),
     Finish(String, oneshot::Sender<()>),
 }
 
@@ -182,9 +182,9 @@ impl Replies {
             ProgressiveCommand::Open { channel } => self.open(channel).await,
             ProgressiveCommand::Feed { handle, events } => {
                 let events = events.into_iter().map(compat_event).collect();
-                self.feed(handle, events).await
+                self.feed(handle, events, false).await
             }
-            ProgressiveCommand::FeedOutput { handle, events } => self.feed(handle, events).await,
+            ProgressiveCommand::FeedOutput { handle, events } => self.feed(handle, events, true).await,
             ProgressiveCommand::Finish { handle, text } => {
                 if text.len() > MAX_CONTENT {
                     return Err(Error::failed("progressive content exceeds its limit"));
@@ -207,6 +207,7 @@ impl Replies {
         &self,
         handle: String,
         events: Vec<ChannelOutputEvent>,
+        forward: bool,
     ) -> Result<ProgressiveResult> {
         if events.len() > 32 {
             return Err(Error::failed("too many progressive events"));
@@ -219,7 +220,7 @@ impl Replies {
         let (reply, wait) = oneshot::channel();
         entry
             .commands
-            .send(Command::Feed(events, reply))
+            .send(Command::Feed(events, forward, reply))
             .await
             .map_err(|_| Error::failed("progressive reply is closed"))?;
         drop(closing);
@@ -440,8 +441,8 @@ async fn run(
     loop {
         tokio::select! {
             command = inbox.recv() => match command {
-                Some(Command::Feed(events, response)) => {
-                    let result = apply(&mut reply, events).await;
+                Some(Command::Feed(events, forward, response)) => {
+                    let result = apply(&mut reply, events, forward).await;
                     let failed = result.is_err();
                     let _ = response.send(result);
                     if failed {
@@ -464,11 +465,11 @@ async fn run(
     }
 }
 
-async fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>) -> Result<()> {
+async fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>, forward: bool) -> Result<()> {
     let text = events
         .iter()
         .filter_map(|event| match event {
-            ChannelOutputEvent::TextDelta { text } => Some(text.len()),
+            ChannelOutputEvent::TextDelta { text, .. } => Some(text.len()),
             _ => None,
         })
         .sum::<usize>();
@@ -490,12 +491,12 @@ async fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>) ->
         return Err(Error::failed("progressive content exceeds its limit"));
     }
     for event in events {
-        reply
-            .on_output_event(&event)
-            .await
-            .map_err(|_| Error::failed("host output event callback failed"))?;
+        if forward {
+            reply.on_output_event(&event).await
+                .map_err(|_| Error::failed("host output event callback failed"))?;
+        }
         match event {
-            ChannelOutputEvent::TextDelta { text } => reply.on_text_delta(&text),
+            ChannelOutputEvent::TextDelta { text, .. } => reply.on_text_delta(&text),
             ChannelOutputEvent::ThinkingDelta { text, .. } => reply.on_thinking_delta(&text),
             ChannelOutputEvent::ToolCallStarted {
                 tool_name,
