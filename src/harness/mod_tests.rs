@@ -1,5 +1,6 @@
 use crate::channel::{
     ChannelInboundEnvelope, ChannelPresentationCapabilities, ChannelRef, ChannelStaticCapabilities,
+    ContentPart,
     ConversationKind, ConversationRef, MediaKind, MediaReference, OutboundPayload, SenderRef,
 };
 use crate::harness::{
@@ -85,28 +86,30 @@ fn approval_degrades_to_text_when_native_actions_unavailable() {
 }
 
 #[test]
-fn media_event_projects_media_urls() {
+fn media_event_preserves_ordered_typed_content_parts() {
     let intents = translate_output_event(
         &turn(),
         ChannelOutputEvent::Media {
             text: Some("image".into()),
-            media: vec![MediaReference {
-                kind: MediaKind::Image,
-                url: Some("https://example.test/image.png".into()),
-                ..Default::default()
+            parts: vec![ContentPart::Image {
+                media: MediaReference {
+                    kind: MediaKind::Image,
+                    url: Some("https://example.test/image.png".into()),
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: Some("preview".into()),
             }],
         },
         &ChannelStaticCapabilities::default(),
         &ChannelPresentationCapabilities::default(),
         BridgeTranslationOptions::default(),
     );
-    let OutboundPayload::Media { media_urls, .. } = &intents[0].payload else {
-        panic!("expected media payload");
+    let OutboundPayload::NativeChannelData { data } = &intents[0].payload else {
+        panic!("expected typed media projection");
     };
-    assert_eq!(
-        media_urls,
-        &vec!["https://example.test/image.png".to_string()]
-    );
+    assert_eq!(data["parts"][0]["kind"], "image");
+    assert_eq!(data["parts"][0]["altText"], "preview");
     assert_eq!(intents[0].thread_id, None);
     assert_eq!(
         intents[0]
@@ -260,6 +263,9 @@ fn lifecycle_and_native_events_preserve_structured_data() {
             ChannelOutputEvent::Lifecycle {
                 stage: lifecycle.stage.clone(),
                 message: lifecycle.message.clone(),
+                iteration: None,
+                max_iterations: None,
+                stop: None,
             },
             serde_json::json!({"lifecycle": lifecycle}),
         ),
