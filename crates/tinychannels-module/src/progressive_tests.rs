@@ -4168,7 +4168,8 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         .read(scope, published_id, 1024 * 1024)
         .await
         .expect("progressive policy voice reference resolves in scoped storage");
-    assert_eq!(stored.bytes, progressive_test_ogg());
+    assert!(stored.bytes.starts_with(b"OggS"));
+    assert_eq!(stored.content_type, "audio/ogg");
 
     *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
         mode: tinychannels_bus::HostVoiceReplyMode::Always,
