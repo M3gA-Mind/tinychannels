@@ -436,6 +436,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         request.scope.configured_instance.clone_from(&self.1);
         request.scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         request.scope.channel.account_id = Some(self.1.clone());
+        let projection_scope = request.scope.clone();
         use base64::Engine;
         let audio = base64::engine::general_purpose::STANDARD
             .decode(request.audio_base64.as_bytes())
@@ -460,15 +461,38 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
                     content_type: request.mime_type,
                     file_name: request.file_name,
                     duration_ms: request.duration_ms,
+                    voice_direction: Some(request.direction),
                     dedupe_key: None,
                     max_bytes: 8 * 1024 * 1024,
                 },
                 bytes: audio,
             })
             .await?;
+        let projection = self
+            .0
+            .store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
+                scope: projection_scope,
+                direction: request.direction,
+                audio_base64: request.audio_base64,
+                mime_type: media.content_type.clone().unwrap_or_default(),
+                codec: media.codec.clone(),
+                duration_ms: media.duration_ms,
+                file_name: media.file_name.clone(),
+                media_reference: Some(media.clone()),
+            })
+            .await
+            .ok();
+        let accessible_url = projection
+            .as_ref()
+            .and_then(|result| result.accessible_url.clone())
+            .filter(|url| !url.trim().is_empty());
+        let mut media = media;
+        if let Some(projected) = projection.map(|result| result.media) {
+            media.local_cache_path = projected.local_cache_path;
+        }
         Ok(tinychannels_bus::HostStoreVoiceMediaResult {
             media,
-            accessible_url: None,
+            accessible_url,
         })
     }
 
@@ -484,6 +508,17 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         scope.configured_instance.clone_from(&self.1);
         scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         scope.channel.account_id = Some(self.1.clone());
+        if !opaque_id.starts_with("tinychannels_media_v1_") {
+            return self
+                .0
+                .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
+                    scope,
+                    opaque_id,
+                    max_bytes: 8 * 1024 * 1024,
+                })
+                .await
+                .map_err(|error| anyhow::anyhow!("legacy scoped voice media is unavailable: {:?}", error.kind()));
+        }
         let storage = self
             .0
             .storage()
