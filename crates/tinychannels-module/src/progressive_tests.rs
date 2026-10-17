@@ -161,7 +161,7 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
         second
             .execute(ProgressiveCommand::Feed {
                 handle: handle.clone(),
-                events: vec![ProgressiveEvent::TextDelta("fixture".into())]
+                events: vec![ProgressiveEvent::TextDelta { text: "fixture".into() }]
             })
             .await
             .is_err()
@@ -184,15 +184,15 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     );
     apply(
         &mut reply,
-        vec![ProgressiveEvent::TextDelta("x".repeat(MAX_CONTENT))],
+        vec![ProgressiveEvent::TextDelta { text: "x".repeat(MAX_CONTENT) }],
     )
     .unwrap();
     assert!(
         apply(
             &mut reply,
             vec![
-                ProgressiveEvent::ToolCall("fixture-tool".into()),
-                ProgressiveEvent::TextDelta("extra".into())
+                ProgressiveEvent::ToolProgress { label: "fixture-tool".into(), message: None },
+                ProgressiveEvent::TextDelta { text: "extra".into() }
             ]
         )
         .is_err()
@@ -204,7 +204,7 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
         replies
             .execute(ProgressiveCommand::Feed {
                 handle: handle.clone(),
-                events: vec![ProgressiveEvent::ThinkingDelta("x".repeat(MAX_REQUEST))]
+                events: vec![ProgressiveEvent::ThinkingDelta { text: "x".repeat(MAX_REQUEST), iteration: None }]
             })
             .await
             .is_err()
@@ -334,13 +334,14 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
             .execute(ProgressiveCommand::Feed {
                 handle: handle.clone(),
                 events: vec![
-                    ProgressiveEvent::ThinkingDelta("considering".into()),
-                    ProgressiveEvent::ToolCall("lookup".into()),
-                    ProgressiveEvent::ToolResult {
-                        tool_name: "lookup".into(),
-                        success: true
+                    ProgressiveEvent::ThinkingDelta { text: "considering".into(), iteration: None },
+                    ProgressiveEvent::ToolProgress { label: "lookup".into(), message: None },
+                    ProgressiveEvent::ToolCallCompleted {
+                        call_id: "call-1".into(), tool_name: "lookup".into(), success: true,
+                        output_chars: 0, output: String::new(), arguments: None, elapsed_ms: 0,
+                        iteration: 1, display_label: None, display_detail: None, structured: None,
                     },
-                    ProgressiveEvent::TextDelta("partial answer".into()),
+                    ProgressiveEvent::TextDelta { text: "partial answer".into() },
                 ],
             })
             .await
@@ -361,7 +362,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
     let error = replies
         .execute(ProgressiveCommand::Feed {
             handle: handle.clone(),
-            events: vec![ProgressiveEvent::TextDelta("late".into())],
+            events: vec![ProgressiveEvent::TextDelta { text: "late".into() }],
         })
         .await
         .unwrap_err();
@@ -395,7 +396,7 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
     let error = replies
         .execute(ProgressiveCommand::Feed {
             handle: handle.clone(),
-            events: vec![ProgressiveEvent::TextDelta("x".into()); 33],
+            events: vec![ProgressiveEvent::TextDelta { text: "x".into() }; 33],
         })
         .await
         .unwrap_err();
@@ -432,15 +433,15 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
     );
     apply(
         &mut reply,
-        vec![ProgressiveEvent::ThinkingDelta("x".repeat(MAX_CONTENT))],
+        vec![ProgressiveEvent::ThinkingDelta { text: "x".repeat(MAX_CONTENT), iteration: None }],
     )
     .unwrap();
     assert!(
         apply(
             &mut reply,
             vec![
-                ProgressiveEvent::TextDelta("not committed".into()),
-                ProgressiveEvent::ThinkingDelta("extra".into())
+                ProgressiveEvent::TextDelta { text: "not committed".into() },
+                ProgressiveEvent::ThinkingDelta { text: "extra".into(), iteration: None }
             ]
         )
         .is_err()

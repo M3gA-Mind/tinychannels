@@ -210,7 +210,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             methods::EXECUTE_PROGRESSIVE,
             ProgressiveCommand::Feed {
                 handle: handle.clone(),
-                events: vec![ProgressiveEvent::TextDelta("artifact draft".into())],
+                events: vec![ProgressiveEvent::TextDelta { text: "artifact draft".into() }],
             },
         )
         .await
