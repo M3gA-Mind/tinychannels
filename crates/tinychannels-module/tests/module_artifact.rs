@@ -1104,7 +1104,11 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .unwrap();
     connection
         .serve_at(
-            other_reservation.host_object_path.clone().try_into().unwrap(),
+            other_reservation
+                .host_object_path
+                .clone()
+                .try_into()
+                .unwrap(),
             Callback(
                 Arc::new(Mutex::new(Vec::new())),
                 Arc::new(Mutex::new(DeliveryState::default())),
@@ -1212,13 +1216,15 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .call_confidential("BeginMediaUpload", begin)
         .await
         .unwrap();
-    assert!(other_runtime_proxy
-        .call_confidential::<MediaUploadResult>(
-            "FinishMediaUpload",
-            MediaUploadFinish(handle.clone()),
-        )
-        .await
-        .is_err());
+    assert!(
+        other_runtime_proxy
+            .call_confidential::<MediaUploadResult>(
+                "FinishMediaUpload",
+                MediaUploadFinish(handle.clone()),
+            )
+            .await
+            .is_err()
+    );
     let png = base64::engine::general_purpose::STANDARD
         .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/f9sAAAAASUVORK5CYII=")
         .unwrap();
@@ -1346,10 +1352,12 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .call_confidential::<()>("StopChannel", "telegram")
         .await
         .unwrap();
-    assert!(runtime_proxy
-        .call_confidential::<MediaUploadResult>("FinishMediaUpload", finish)
-        .await
-        .is_err());
+    assert!(
+        runtime_proxy
+            .call_confidential::<MediaUploadResult>("FinishMediaUpload", finish)
+            .await
+            .is_err()
+    );
     module_proxy
         .call_confidential::<()>("StopRuntime", reservation.handle)
         .await
