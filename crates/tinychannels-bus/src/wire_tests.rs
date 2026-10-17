@@ -159,6 +159,19 @@ fn button_callback_event_round_trips_actor_and_action_identity() {
 }
 
 #[test]
+fn approval_action_ids_are_stable_bounded_and_correlatable_without_choice_text() {
+    let action = tinychannels_bus::channel::approval_action_id("request:opaque", 2).unwrap();
+    assert_eq!(action, "approval-v1:request:opaque:2");
+    assert_eq!(
+        tinychannels_bus::channel::parse_approval_action_id(&action),
+        Some(("request:opaque", 2))
+    );
+    assert!(tinychannels_bus::channel::approval_action_id(&"r".repeat(54), 0).is_none());
+    assert!(tinychannels_bus::channel::approval_action_id("", 0).is_none());
+    assert!(tinychannels_bus::channel::parse_approval_action_id("approval-v1:r:nope").is_none());
+}
+
+#[test]
 fn http_proxy_policy_round_trips_without_changing_its_wire_fields() {
     let policy = HttpProxyPolicy {
         http_proxy: Some("http://proxy.invalid:8080".into()),
