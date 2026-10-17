@@ -1807,8 +1807,6 @@ async fn filler_callback_error_after_acceptance_is_not_retried() {
     reply.filler_tick().await;
     reply.filler_tick().await;
     reply.filler_tick().await;
-    assert!(reply.state().filler_delivery_uncertain);
-    assert!(reply.state().filler_disabled);
     let sends = callback
         .requests
         .lock()
@@ -1817,6 +1815,8 @@ async fn filler_callback_error_after_acceptance_is_not_retried() {
         .filter(|request| matches!(request, ProgressiveTransportRequest::Send { .. }))
         .count();
     assert_eq!(sends, 1, "accepted-then-error filler must not be retried");
+    assert!(reply.state().filler_delivery_uncertain);
+    assert!(reply.state().filler_disabled);
     replies.shutdown().await.unwrap();
 }
 
