@@ -9,6 +9,12 @@ use std::sync::{Arc, Mutex};
 #[derive(Default)]
 struct RecordingOutboundSink {
     ids: Mutex<Vec<String>>,
+    scopes: Mutex<
+        Vec<(
+            Option<tinychannels_bus::ChannelRef>,
+            Option<tinychannels_bus::ConversationRef>,
+        )>,
+    >,
 }
 
 #[async_trait]
@@ -21,6 +27,10 @@ impl LocalOutboundSink for RecordingOutboundSink {
             .lock()
             .expect("ids lock")
             .push(intent.idempotency_key);
+        self.scopes
+            .lock()
+            .expect("scopes lock")
+            .push((intent.channel_ref, intent.conversation_ref));
         Ok(MessageReceipt {
             primary_platform_message_id: Some("local-1".into()),
             platform_message_ids: vec!["local-1".into()],
@@ -107,8 +117,15 @@ async fn local_adapter_delegates_outbound_delivery() {
             idempotency_key: "turn-1:text".into(),
             channel_id: "local".into(),
             conversation_id: "chat-1".into(),
-            channel_ref: None,
-            conversation_ref: None,
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "local".into(),
+                account_id: None,
+            }),
+            conversation_ref: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "chat-1".into(),
+                ..Default::default()
+            }),
             reply_to_id: None,
             thread_id: None,
             turn_id: None,
@@ -141,6 +158,13 @@ async fn local_adapter_delegates_outbound_delivery() {
             .as_ref()
             .map(|reference| reference.id.as_str()),
         Some("chat-1")
+    );
+    assert_eq!(
+        sink.scopes.lock().expect("scopes lock")[0].0.as_ref(),
+        Some(&tinychannels_bus::ChannelRef {
+            id: "local".into(),
+            account_id: Some("host".into()),
+        })
     );
 }
 

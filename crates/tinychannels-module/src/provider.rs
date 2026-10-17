@@ -892,9 +892,10 @@ impl Running {
         if tinychannels_bus::provider_id(&intent.channel_id) != expected_channel
             || intent.channel_ref.as_ref().is_some_and(|reference| {
                 reference.id != expected_channel
-                    || reference.account_id.as_deref().is_some_and(|account_id| {
-                        account_id != self.configured_instance.as_str()
-                    })
+                    || reference
+                        .account_id
+                        .as_deref()
+                        .is_some_and(|account_id| account_id != self.configured_instance.as_str())
             })
         {
             return Err(adapter_scope_error(

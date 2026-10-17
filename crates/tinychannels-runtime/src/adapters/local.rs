@@ -82,13 +82,13 @@ impl ChannelAdapter for LocalChannelAdapter {
         {
             channel.account_id.clone_from(&self.descriptor.account_id);
         }
-        intent.conversation_ref.get_or_insert_with(|| {
-            tinychannels_bus::ConversationRef {
+        intent
+            .conversation_ref
+            .get_or_insert_with(|| tinychannels_bus::ConversationRef {
                 id: intent.conversation_id.clone(),
                 thread_id: intent.thread_id.clone(),
                 ..Default::default()
-            }
-        });
+            });
         if let Some(conversation) = &mut intent.conversation_ref
             && conversation.thread_id.is_none()
         {
@@ -270,9 +270,10 @@ fn validate_scope(
     if tinychannels_bus::provider_id(&intent.channel_id) != expected_channel
         || intent.channel_ref.as_ref().is_some_and(|reference| {
             reference.id != expected_channel
-                || reference.account_id.as_ref().is_some_and(|account_id| {
-                    descriptor.account_id.as_ref() != Some(account_id)
-                })
+                || reference
+                    .account_id
+                    .as_ref()
+                    .is_some_and(|account_id| descriptor.account_id.as_ref() != Some(account_id))
         })
         || intent.conversation_id.trim().is_empty()
         || intent
