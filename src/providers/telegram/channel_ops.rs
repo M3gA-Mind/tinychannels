@@ -95,25 +95,29 @@ impl TelegramChannel {
                 ..Default::default()
             },
             text: message.content.clone(),
-            parts: voice_note.map_or_else(
-                || {
-                    vec![tinychannels_bus::ContentPart::Text {
-                        text: message.content.clone(),
-                        markdown_dialect: None,
-                    }]
-                },
-                |voice_note| {
-                    let mut parts = Vec::new();
-                    if !message.content.trim().is_empty() {
-                        parts.push(tinychannels_bus::ContentPart::Text {
+            parts: voice_note
+                .map_or_else(
+                    || {
+                        vec![tinychannels_bus::ContentPart::Text {
                             text: message.content.clone(),
                             markdown_dialect: None,
-                        });
-                    }
-                    parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
-                    parts
-                },
-            ).into_iter().chain(media_parts).collect(),
+                        }]
+                    },
+                    |voice_note| {
+                        let mut parts = Vec::new();
+                        if !message.content.trim().is_empty() {
+                            parts.push(tinychannels_bus::ContentPart::Text {
+                                text: message.content.clone(),
+                                markdown_dialect: None,
+                            });
+                        }
+                        parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
+                        parts
+                    },
+                )
+                .into_iter()
+                .chain(media_parts)
+                .collect(),
             raw: Some(serde_json::json!({"providerMessageId": provider_message_id})),
             ..Default::default()
         }
@@ -1189,16 +1193,14 @@ Ensure only one `openhuman` process is using this bot token."
                     let media_parts = match self.media_parts_for_ingress(update, &msg).await {
                         Ok(parts) => parts,
                         Err(_) => {
-                            tracing::warn!("Telegram attachment could not be persisted as typed media");
+                            tracing::warn!(
+                                "Telegram attachment could not be persisted as typed media"
+                            );
                             Vec::new()
                         }
                     };
-                    let ingress = Self::inbound_envelope_with_media(
-                        update,
-                        &msg,
-                        voice_note,
-                        media_parts,
-                    );
+                    let ingress =
+                        Self::inbound_envelope_with_media(update, &msg, voice_note, media_parts);
                     let delivered_by_event_sink = if let Some(events) = &self.events {
                         match events
                             .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(ingress))

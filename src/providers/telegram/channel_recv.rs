@@ -51,11 +51,11 @@ impl TelegramChannel {
                 "photo",
             ));
         }
-        for (field, kind, default_mime) in [
-            ("document", tinychannels_bus::MediaKind::Document, "application/octet-stream"),
-            ("video", tinychannels_bus::MediaKind::Video, "video/mp4"),
-            ("audio", tinychannels_bus::MediaKind::Audio, "audio/mpeg"),
-            ("sticker", tinychannels_bus::MediaKind::Image, "image/webp"),
+        for (field, kind) in [
+            ("document", tinychannels_bus::MediaKind::Document),
+            ("video", tinychannels_bus::MediaKind::Video),
+            ("audio", tinychannels_bus::MediaKind::Audio),
+            ("sticker", tinychannels_bus::MediaKind::Image),
         ] {
             let Some(attachment) = message.get(field) else {
                 continue;
@@ -66,11 +66,6 @@ impl TelegramChannel {
             else {
                 continue;
             };
-            let mime = attachment
-                .get("mime_type")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(default_mime)
-                .to_owned();
             return Some((
                 kind,
                 file_id.to_owned(),
@@ -122,7 +117,14 @@ impl TelegramChannel {
             .get("id")
             .and_then(serde_json::Value::as_i64)
             .map(|id| id.to_string())
-            .unwrap_or_else(|| message.reply_target.split(':').next().unwrap_or_default().to_owned());
+            .unwrap_or_else(|| {
+                message
+                    .reply_target
+                    .split(':')
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned()
+            });
         let topic_id = source
             .get("message_thread_id")
             .and_then(serde_json::Value::as_i64)
@@ -1195,7 +1197,9 @@ impl TelegramChannel {
             .await
             .map_err(|_| anyhow::anyhow!("Telegram media download failed"))?;
         if !response.status().is_success()
-            || response.content_length().is_some_and(|length| length > max_bytes)
+            || response
+                .content_length()
+                .is_some_and(|length| length > max_bytes)
         {
             anyhow::bail!("Telegram media download was rejected");
         }
@@ -1203,7 +1207,14 @@ impl TelegramChannel {
             .headers()
             .get(reqwest::header::CONTENT_TYPE)
             .and_then(|value| value.to_str().ok())
-            .map(|value| value.split(';').next().unwrap_or_default().trim().to_ascii_lowercase());
+            .map(|value| {
+                value
+                    .split(';')
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_ascii_lowercase()
+            });
         let mut bytes = Vec::new();
         while let Some(chunk) = response
             .chunk()

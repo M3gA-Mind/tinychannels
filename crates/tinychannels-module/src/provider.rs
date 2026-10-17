@@ -481,7 +481,9 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
                 media_reference: Some(media.clone()),
             })
             .await
-            .map_err(|error| anyhow::anyhow!("host voice media publication failed: {:?}", error.kind()))?;
+            .map_err(|error| {
+                anyhow::anyhow!("host voice media publication failed: {:?}", error.kind())
+            })?;
         let accessible_url = projection
             .accessible_url
             .filter(|url| !url.trim().is_empty());
@@ -533,7 +535,10 @@ async fn read_scoped_voice_media(
             })
             .await
             .map_err(|error| {
-                anyhow::anyhow!("legacy scoped voice media is unavailable: {:?}", error.kind())
+                anyhow::anyhow!(
+                    "legacy scoped voice media is unavailable: {:?}",
+                    error.kind()
+                )
             });
     }
     let storage = host.storage().await.map_err(|error| {
