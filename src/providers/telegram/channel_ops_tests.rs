@@ -363,6 +363,30 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
                 "audio.wav",
                 BASE64.decode("UklGRgAAAABXQVZF").unwrap(),
             ),
+            "stored-video-mp4" => (
+                tinychannels_bus::MediaKind::Video,
+                "video/mp4",
+                "clip.mp4",
+                b"\0\0\0\x18ftypisom\0\0\0\0isom".to_vec(),
+            ),
+            "stored-document-pdf" => (
+                tinychannels_bus::MediaKind::File,
+                "application/pdf",
+                "report.pdf",
+                b"%PDF-1.7\nfixture".to_vec(),
+            ),
+            "stored-video-webm" => (
+                tinychannels_bus::MediaKind::Video,
+                "video/webm",
+                "clip.webm",
+                b"\x1a\x45\xdf\xa3fixture".to_vec(),
+            ),
+            "stored-image-gif" => (
+                tinychannels_bus::MediaKind::Image,
+                "image/gif",
+                "image.gif",
+                b"GIF89a".to_vec(),
+            ),
             _ => panic!("unexpected typed media id: {opaque_id}"),
         };
         assert!(bytes.len() as u64 <= max_bytes);
@@ -1212,7 +1236,7 @@ async fn typed_audio_upload_preserves_caption_title_and_duration() {
                 kind: tinychannels_bus::MediaKind::Audio,
                 ..Default::default()
             },
-            codec: Some("wav_pcm16".into()),
+            codec: Some("mp3".into()),
             duration_ms: Some(1_250),
             title: Some("Original title".into()),
             transcript: Some("spoken words".into()),
@@ -1230,6 +1254,183 @@ async fn typed_audio_upload_preserves_caption_title_and_duration() {
     assert!(body.contains("name=\"title\"\r\n\r\nOriginal title"));
     assert!(body.contains("name=\"duration\"\r\n\r\n2"));
     assert!(body.contains("Content-Type: audio/mpeg"));
+}
+
+#[tokio::test]
+async fn typed_video_and_file_upload_use_native_multipart_with_real_receipts() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVideo",
+        ok_with(serde_json::json!({"message_id": 51})),
+    )
+    .await;
+    mount_post(
+        &server,
+        "sendDocument",
+        ok_with(serde_json::json!({"message_id": 52})),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("video-and-file", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Video {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-video-mp4".into()),
+                    kind: tinychannels_bus::MediaKind::Video,
+                    ..Default::default()
+                },
+                caption: Some("video caption".into()),
+                duration_ms: Some(2_200),
+                thumbnail: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::File {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-document-pdf".into()),
+                    kind: tinychannels_bus::MediaKind::File,
+                    ..Default::default()
+                },
+                file_name: Some("report.pdf".into()),
+                caption: Some("file caption".into()),
+            },
+        },
+    ];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["51", "52"]);
+    assert_eq!(outcome.receipt.parts.len(), 2);
+    assert_eq!(outcome.receipt.parts[0].thread_id.as_deref(), Some("77"));
+    assert_eq!(outcome.receipt.parts[1].thread_id.as_deref(), Some("77"));
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[0].url.path().ends_with("/sendVideo"));
+    assert!(requests[1].url.path().ends_with("/sendDocument"));
+    let video = String::from_utf8_lossy(&requests[0].body);
+    assert!(video.contains("Content-Type: video/mp4"));
+    assert!(video.contains("name=\"caption\"\r\n\r\nvideo caption"));
+    assert!(video.contains("name=\"duration\"\r\n\r\n3"));
+    assert!(video.contains("name=\"message_thread_id\"\r\n\r\n77"));
+    assert!(
+        requests[0]
+            .body
+            .windows(8)
+            .any(|window| window == b"ftypisom")
+    );
+    let file = String::from_utf8_lossy(&requests[1].body);
+    assert!(file.contains("Content-Type: application/pdf"));
+    assert!(file.contains("report.pdf"));
+    assert!(file.contains("name=\"caption\"\r\n\r\nfile caption"));
+    assert!(
+        requests[1]
+            .body
+            .windows(8)
+            .any(|window| window == b"%PDF-1.7")
+    );
+}
+
+#[tokio::test]
+async fn unsupported_native_video_and_image_formats_fall_back_to_documents() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendDocument",
+        ok_with(serde_json::json!({"message_id": 61})),
+    )
+    .await;
+    mount_post(
+        &server,
+        "sendDocument",
+        ok_with(serde_json::json!({"message_id": 62})),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = typed_text("document-fallbacks", String::new());
+    message.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram-main".into()),
+    });
+    message.turn_id = Some("turn-42".into());
+    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
+        thread_id: Some("77".into()),
+        topic_id: Some("topic-77".into()),
+        ..Default::default()
+    });
+    message.parts = vec![
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Video {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-video-webm".into()),
+                    kind: tinychannels_bus::MediaKind::Video,
+                    ..Default::default()
+                },
+                caption: Some("webm fallback".into()),
+                duration_ms: None,
+                thumbnail: None,
+            },
+        },
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Image {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("stored-image-gif".into()),
+                    kind: tinychannels_bus::MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: Some("gif fallback".into()),
+                alt_text: None,
+            },
+        },
+    ];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(outcome.receipt.platform_message_ids, ["61", "62"]);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert!(request.url.path().ends_with("/sendDocument"));
+        let body = String::from_utf8_lossy(&request.body);
+        assert!(body.contains("name=\"message_thread_id\"\r\n\r\n77"));
+    }
+    let webm = String::from_utf8_lossy(&requests[0].body);
+    assert!(webm.contains("Content-Type: video/webm"));
+    assert!(webm.contains("webm fallback"));
+    assert!(
+        requests[0]
+            .body
+            .windows(4)
+            .any(|window| window == b"\x1a\x45\xdf\xa3")
+    );
+    let gif = String::from_utf8_lossy(&requests[1].body);
+    assert!(gif.contains("Content-Type: image/gif"));
+    assert!(gif.contains("gif fallback"));
+    assert!(
+        requests[1]
+            .body
+            .windows(6)
+            .any(|window| window == b"GIF89a")
+    );
 }
 
 #[tokio::test]
