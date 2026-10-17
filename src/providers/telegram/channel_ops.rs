@@ -2246,3 +2246,160 @@ impl crate::channel::ChannelDelete for TelegramChannel {
             })
     }
 }
+
+#[async_trait]
+impl crate::channel::ChannelTyping for TelegramChannel {
+    async fn start_typing(&self, conversation_id: &str) -> Result<(), crate::channel::ChannelSendError> {
+        self.send_typing_action_once(conversation_id).await;
+        Ok(())
+    }
+
+    async fn stop_typing(&self, _conversation_id: &str) -> Result<(), crate::channel::ChannelSendError> {
+        // Bot API chat actions expire after five seconds and have no stop call.
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl crate::channel::ChannelStreamingDraft for TelegramChannel {
+    async fn upsert_draft(
+        &self,
+        previous: Option<&tinychannels_bus::channel::MessageReceipt>,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError> {
+        use tinychannels_bus::OutboundPayload;
+        let text = match &intent.payload {
+            OutboundPayload::Text { text } => text.clone(),
+            OutboundPayload::Parts { parts } => {
+                let mut texts = Vec::with_capacity(parts.len());
+                for part in parts {
+                    match part {
+                        tinychannels_bus::OutboundContentPart::Content {
+                            part: tinychannels_bus::ContentPart::Text { text, .. },
+                        } => texts.push(text.as_str()),
+                        _ => return Err(crate::channel::ChannelSendError {
+                            kind: crate::channel::SendErrorKind::BadFormat,
+                            message: "Telegram draft payload must contain only text".into(),
+                            unsupported: true,
+                            retryable: false,
+                            ..Default::default()
+                        }),
+                    }
+                }
+                if texts.is_empty() {
+                    return Err(crate::channel::ChannelSendError {
+                        kind: crate::channel::SendErrorKind::BadFormat,
+                        message: "Telegram draft requires text".into(),
+                        retryable: false,
+                        ..Default::default()
+                    });
+                }
+                texts.join("\n")
+            }
+            _ => return Err(crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::BadFormat,
+                message: "Telegram draft payload must be text".into(),
+                unsupported: true,
+                retryable: false,
+                ..Default::default()
+            }),
+        };
+        let conversation = intent.conversation_ref.clone().unwrap_or_else(|| tinychannels_bus::ConversationRef {
+            id: intent.conversation_id.clone(),
+            thread_id: intent.thread_id.clone(),
+            ..Default::default()
+        });
+        if conversation.id != intent.conversation_id {
+            return Err(crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Forbidden,
+                message: "Telegram draft conversation scope mismatch".into(),
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        let rendered = markdown_v2_text(&strip_tool_call_tags(&text));
+        let (chat_id, encoded_thread) = Self::parse_reply_target(&conversation.id);
+        let thread = conversation.topic_id.as_deref().or(conversation.thread_id.as_deref()).or(encoded_thread.as_deref());
+        let message_id = if let Some(previous) = previous {
+            let expected_channel = tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: previous.channel.as_ref().and_then(|c| c.account_id.clone()) };
+            if previous.channel.as_ref().map(|c| c.id.as_str()) != Some("telegram")
+                || previous.conversation.as_ref() != Some(&conversation)
+                || previous.parts.iter().any(|part| part.thread_id.as_deref() != thread)
+            {
+                return Err(crate::channel::ChannelSendError {
+                    kind: crate::channel::SendErrorKind::Forbidden,
+                    message: "Telegram draft receipt scope mismatch".into(),
+                    retryable: false,
+                    ..Default::default()
+                });
+            }
+            let _ = expected_channel;
+            let id = previous.primary_platform_message_id.as_deref().or_else(|| previous.parts.first().map(|p| p.platform_message_id.as_str())).ok_or_else(|| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::BadFormat,
+                message: "Telegram draft receipt has no provider message ID".into(),
+                retryable: false,
+                ..Default::default()
+            })?;
+            let parsed = id.parse::<i64>().map_err(|_| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::BadFormat,
+                message: "Telegram draft receipt has an invalid provider message ID".into(),
+                retryable: false,
+                ..Default::default()
+            })?;
+            let response = self.http_client().post(self.api_url("editMessageText")).json(&serde_json::json!({
+                "chat_id": chat_id,
+                "message_id": parsed,
+                "text": rendered,
+                "parse_mode": "MarkdownV2"
+            })).send().await.map_err(|error| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Transient,
+                message: error.to_string(),
+                retryable: false,
+                sent_before_error: true,
+                ..Default::default()
+            })?;
+            let body = response.json::<serde_json::Value>().await.map_err(|error| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Transient,
+                message: error.to_string(),
+                retryable: false,
+                sent_before_error: true,
+                ..Default::default()
+            })?;
+            if !body.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+                return Err(crate::channel::ChannelSendError {
+                    kind: crate::channel::SendErrorKind::Unknown,
+                    message: "Telegram draft edit was rejected or uncertain".into(),
+                    retryable: false,
+                    sent_before_error: true,
+                    ..Default::default()
+                });
+            }
+            return Ok(previous.clone());
+        } else {
+            let mut body = serde_json::json!({ "chat_id": chat_id, "text": rendered, "parse_mode": "MarkdownV2" });
+            if let Some(thread) = thread { body["message_thread_id"] = serde_json::Value::String(thread.to_owned()); }
+            if let Some(reply) = intent.reply_to_id.as_deref() {
+                let parsed = reply.parse::<i64>().map_err(|_| crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::BadFormat, message: "Telegram reply ID must be numeric".into(), retryable: false, ..Default::default() })?;
+                body["reply_parameters"] = serde_json::json!({ "message_id": parsed });
+            }
+            let response = self.http_client().post(self.api_url("sendMessage")).json(&body).send().await.map_err(|error| crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::Transient, message: error.to_string(), retryable: false, sent_before_error: true, ..Default::default() })?;
+            let body = response.json::<serde_json::Value>().await.map_err(|error| crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::Transient, message: error.to_string(), retryable: false, sent_before_error: true, ..Default::default() })?;
+            if !body.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false) {
+                return Err(crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::Unknown, message: "Telegram draft creation failed".into(), retryable: false, sent_before_error: true, ..Default::default() });
+            }
+            body.get("result").and_then(|m| m.get("message_id")).and_then(serde_json::Value::as_i64).map(|id| id.to_string()).ok_or_else(|| crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::Unknown, message: "Telegram draft response omitted message ID".into(), retryable: false, sent_before_error: true, ..Default::default() })?
+        };
+        let part = tinychannels_bus::channel::MessageReceiptPart { platform_message_id: message_id.clone(), kind: tinychannels_bus::channel::MessageReceiptPartKind::Text, thread_id: thread.map(str::to_owned), reply_to_id: intent.reply_to_id.clone(), edit_token: Some(message_id.clone()), delete_token: Some(message_id.clone()), ..Default::default() };
+        Ok(tinychannels_bus::channel::MessageReceipt {
+            idempotency_key: Some(intent.idempotency_key),
+            channel: intent.channel_ref.or_else(|| Some(tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None })),
+            conversation: Some(conversation),
+            primary_platform_message_id: Some(message_id.clone()),
+            platform_message_ids: vec![message_id],
+            parts: vec![part],
+            thread_id: thread.map(str::to_owned),
+            reply_to_id: intent.reply_to_id,
+            ..Default::default()
+        })
+    }
+}
