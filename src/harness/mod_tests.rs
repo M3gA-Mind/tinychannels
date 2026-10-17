@@ -1,12 +1,12 @@
 use crate::channel::{
     ChannelInboundEnvelope, ChannelPresentationCapabilities, ChannelRef, ChannelStaticCapabilities,
-    ContentPart, ConversationKind, ConversationRef, MediaKind, MediaReference, OutboundPayload,
-    SenderRef,
+    ConversationKind, ConversationRef, MediaKind, MediaReference, OutboundPayload, SenderRef,
 };
 use crate::harness::{
     BridgeTranslationOptions, ChannelOutputEvent, ChannelTurn, TurnAdmissionVerdict,
     translate_output_event,
 };
+use tinychannels_bus::ContentPart;
 
 fn turn() -> ChannelTurn {
     ChannelTurn {
@@ -40,7 +40,10 @@ fn turn() -> ChannelTurn {
 fn text_delta_uses_draft_when_editing_supported() {
     let intents = translate_output_event(
         &turn(),
-        ChannelOutputEvent::TextDelta { text: "hi".into() },
+        ChannelOutputEvent::TextDelta {
+            text: "hi".into(),
+            iteration: None,
+        },
         &ChannelStaticCapabilities::default(),
         &ChannelPresentationCapabilities {
             supports_edit: true,
@@ -58,7 +61,10 @@ fn text_delta_uses_draft_when_editing_supported() {
 fn text_delta_degrades_to_segment_send_without_editing() {
     let intents = translate_output_event(
         &turn(),
-        ChannelOutputEvent::TextDelta { text: "hi".into() },
+        ChannelOutputEvent::TextDelta {
+            text: "hi".into(),
+            iteration: None,
+        },
         &ChannelStaticCapabilities::default(),
         &ChannelPresentationCapabilities::default(),
         BridgeTranslationOptions::default(),
@@ -297,6 +303,7 @@ fn blocked_streaming_uses_text_even_when_edits_are_available() {
         &turn(),
         ChannelOutputEvent::TextDelta {
             text: "delta".into(),
+            iteration: None,
         },
         &ChannelStaticCapabilities {
             block_streaming: true,
@@ -330,6 +337,7 @@ fn tool_progress_projection_preserves_call_identity_arguments_and_result() {
         display_label: Some("Search the web".into()),
         display_detail: Some("weather".into()),
         structured: Some(serde_json::json!({"kind": "search", "count": 2})),
+        failure: None,
     };
     let intents = translate_output_event(
         &turn(),

@@ -1,7 +1,6 @@
 //! Harness-facing channel turn and output event types.
 
-use crate::channel::{ChannelInboundEnvelope, MediaReference};
-use serde_json::Value;
+use crate::channel::ChannelInboundEnvelope;
 
 /// Turn admission verdict.
 #[derive(

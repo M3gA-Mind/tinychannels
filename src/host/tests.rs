@@ -19,6 +19,7 @@ impl TurnDispatcher for MockDispatcher {
             let _ = tx
                 .send(ChannelOutputEvent::TextDelta {
                     text: "thinking".into(),
+                    iteration: None,
                 })
                 .await;
             let _ = tx
