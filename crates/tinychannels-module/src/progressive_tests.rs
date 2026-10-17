@@ -414,7 +414,6 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
         Arc::new(Sender {
             host: replies.host.clone(),
             context: None,
-            text_limit: None,
         }),
         "discord:fixture",
         tinychannels_bus::ChannelCapabilities::unknown(),
@@ -710,7 +709,6 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
         Arc::new(Sender {
             host: replies.host.clone(),
             context: None,
-            text_limit: None,
         }),
         "discord:fixture",
         tinychannels_bus::ChannelCapabilities::unknown(),
@@ -753,7 +751,6 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
     let sender = Sender {
         host: replies.host.clone(),
         context: None,
-        text_limit: None,
     };
     sender
         .edit("discord:room", "message-id", "updated")
@@ -777,7 +774,6 @@ async fn transport_failures_preserve_recovery_classification() {
     let sender = Sender {
         host: replies.host.clone(),
         context: None,
-        text_limit: None,
     };
     for result in [
         ProgressiveTransportResult::Unavailable,
