@@ -42,6 +42,23 @@ impl LocalOutboundSink for FixedOutboundSink {
     }
 }
 
+#[derive(Default)]
+struct IntentRecordingSink(Mutex<Vec<ChannelOutboundIntent>>);
+
+#[async_trait]
+impl LocalOutboundSink for IntentRecordingSink {
+    async fn send(
+        &self,
+        intent: ChannelOutboundIntent,
+    ) -> Result<MessageReceipt, ChannelSendError> {
+        self.0.lock().expect("intents lock").push(intent);
+        Ok(MessageReceipt {
+            primary_platform_message_id: Some("sent".into()),
+            ..Default::default()
+        })
+    }
+}
+
 struct NoopInboundSink;
 
 #[async_trait]
@@ -381,6 +398,175 @@ async fn local_adapter_capability_gate_covers_canonical_payload_kinds() {
             payload,
             ..Default::default()
         }).await.is_ok());
+    }
+}
+
+#[tokio::test]
+async fn local_adapter_rejects_unadvertised_payloads_without_calling_sink() {
+    let sink = Arc::new(RecordingOutboundSink::default());
+    let adapter = LocalChannelAdapter::new(
+        ChannelDescriptor {
+            id: "local".into(),
+            account_id: Some("host".into()),
+            ..Default::default()
+        },
+        tinychannels_bus::ChannelCapabilities::default(),
+        sink.clone(),
+    );
+    let media = tinychannels_bus::MediaReference::default();
+    let payloads = [
+        OutboundPayload::Text { text: "text".into() },
+        OutboundPayload::Media { text: None, media_urls: vec![] },
+        OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Media {
+            media: media.clone(), audio_base64: None, codec: None, duration_ms: None,
+        } },
+        OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Synthesize {
+            text: "speech".into(), voice: None,
+        } },
+        OutboundPayload::Files { file_urls: vec![] },
+        OutboundPayload::Poll { question: "Q?".into(), options: vec![] },
+        OutboundPayload::PresentationBlocks { blocks: serde_json::json!([]) },
+        OutboundPayload::NativeChannelData { data: serde_json::json!({}) },
+    ];
+
+    for payload in payloads {
+        let error = adapter.send(ChannelOutboundIntent {
+            idempotency_key: "unsupported".into(),
+            channel_id: "local".into(),
+            conversation_id: "chat".into(),
+            payload,
+            ..Default::default()
+        }).await.unwrap_err();
+        assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::BadFormat);
+        assert!(error.unsupported);
+        assert!(!error.retryable && !error.sent_before_error);
+    }
+    assert!(sink.ids.lock().expect("ids lock").is_empty());
+}
+
+#[tokio::test]
+async fn local_adapter_forwards_typed_turn_and_delivery_scope_unchanged() {
+    let sink = Arc::new(IntentRecordingSink::default());
+    let adapter = LocalChannelAdapter::new(
+        ChannelDescriptor {
+            id: "local".into(),
+            account_id: Some("host".into()),
+            ..Default::default()
+        },
+        tinychannels_bus::ChannelCapabilities {
+            content: tinychannels_bus::ContentCapabilities {
+                text: tinychannels_bus::ContentCapability { outbound: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        sink.clone(),
+    );
+    let expected = ChannelOutboundIntent {
+        idempotency_key: "operation-9".into(),
+        channel_id: "local".into(),
+        conversation_id: "room-4".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef { id: "local".into(), account_id: Some("host".into()) }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Group,
+            id: "room-4".into(),
+            thread_id: Some("thread-7".into()),
+            ..Default::default()
+        }),
+        reply_to_id: Some("message-3".into()),
+        thread_id: Some("thread-7".into()),
+        turn_id: Some("turn-2".into()),
+        durability: DeliveryDurability::Durable,
+        payload: OutboundPayload::Text { text: "hello".into() },
+    };
+
+    let outcome = adapter.send(expected.clone()).await.expect("send");
+    assert_eq!(sink.0.lock().expect("intents lock").as_slice(), &[expected]);
+    assert_eq!(outcome.receipt.idempotency_key.as_deref(), Some("operation-9"));
+    assert!(outcome.error.is_none());
+}
+
+#[tokio::test]
+async fn local_adapter_normalizes_missing_receipt_scope_and_preserves_foreign_scope() {
+    let descriptor = ChannelDescriptor {
+        id: "local".into(),
+        account_id: Some("host".into()),
+        ..Default::default()
+    };
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.content.text.outbound = true;
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "operation".into(),
+        channel_id: "local".into(),
+        conversation_id: "room".into(),
+        thread_id: Some("topic".into()),
+        payload: OutboundPayload::Text { text: "hello".into() },
+        ..Default::default()
+    };
+    let adapter = LocalChannelAdapter::new(
+        descriptor.clone(),
+        capabilities.clone(),
+        Arc::new(FixedOutboundSink(Ok(MessageReceipt::default()))),
+    );
+    let outcome = adapter.send(intent.clone()).await.expect("send");
+    assert!(outcome.error.is_none());
+    assert_eq!(outcome.receipt.idempotency_key.as_deref(), Some("operation"));
+    assert_eq!(outcome.receipt.channel, Some(tinychannels_bus::ChannelRef {
+        id: "local".into(), account_id: Some("host".into()),
+    }));
+    assert_eq!(outcome.receipt.conversation, Some(tinychannels_bus::ConversationRef {
+        id: "room".into(), thread_id: Some("topic".into()), ..Default::default()
+    }));
+
+    let adapter = LocalChannelAdapter::new(
+        descriptor,
+        capabilities,
+        Arc::new(FixedOutboundSink(Ok(MessageReceipt {
+            channel: Some(tinychannels_bus::ChannelRef {
+                id: "local".into(), account_id: Some("other".into()),
+            }),
+            conversation: Some(tinychannels_bus::ConversationRef {
+                id: "other-room".into(), ..Default::default()
+            }),
+            primary_platform_message_id: Some("provider-sent".into()),
+            ..Default::default()
+        }))),
+    );
+    let outcome = adapter.send(intent).await.expect("partial scope is an outcome");
+    let error = outcome.error.expect("foreign provider scope is uncertain");
+    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Unknown);
+    assert!(error.sent_before_error && !error.retryable && !error.unsupported);
+    assert_eq!(outcome.receipt.channel.unwrap().account_id.as_deref(), Some("other"));
+    assert_eq!(outcome.receipt.conversation.unwrap().id, "other-room");
+}
+
+#[tokio::test]
+async fn local_adapter_marks_each_partial_effect_signal_non_retryable() {
+    let descriptor = ChannelDescriptor { id: "local".into(), ..Default::default() };
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.content.text.outbound = true;
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "operation".into(),
+        channel_id: "local".into(),
+        conversation_id: "room".into(),
+        payload: OutboundPayload::Text { text: "hello".into() },
+        ..Default::default()
+    };
+    let partial_errors = [
+        ChannelSendError { kind: tinychannels_bus::channel::SendErrorKind::Unknown, retryable: true, ..Default::default() },
+        ChannelSendError { kind: tinychannels_bus::channel::SendErrorKind::Transient, sent_before_error: true, retryable: true, unsupported: true, ..Default::default() },
+        ChannelSendError { continuation_message_ids: vec!["part-2".into()], retryable: true, ..Default::default() },
+        ChannelSendError { partial_overflow: Some(serde_json::json!({"sent": 1})), retryable: true, unsupported: true, ..Default::default() },
+    ];
+    for partial in partial_errors {
+        let adapter = LocalChannelAdapter::new(
+            descriptor.clone(),
+            capabilities.clone(),
+            Arc::new(FixedOutboundSink(Err(partial))),
+        );
+        let error = adapter.send(intent.clone()).await.unwrap_err();
+        assert!(error.sent_before_error);
+        assert!(!error.retryable && !error.unsupported);
     }
 }
 
