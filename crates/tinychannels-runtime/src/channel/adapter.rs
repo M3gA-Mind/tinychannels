@@ -2,6 +2,7 @@
 
 use crate::channel::{
     ChannelDescriptor, ChannelInboundEnvelope, ChannelOutboundIntent, ChannelSendError,
+    MessageReceipt,
 };
 use crate::controllers::ChannelAccountSnapshot;
 use async_trait::async_trait;
@@ -19,6 +20,11 @@ pub trait ChannelInboundSink: Send + Sync {
 #[async_trait]
 pub trait ChannelAdapter: Send + Sync {
     fn descriptor(&self) -> ChannelDescriptor;
+
+    /// Capability facts for this configured account, sourced from its provider.
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        tinychannels_bus::ChannelCapabilities::unknown()
+    }
 
     fn receive_ack_policy(&self) -> ChannelReceiveAckPolicy {
         ChannelReceiveAckPolicy::AfterReceiveRecord
