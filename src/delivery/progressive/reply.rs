@@ -249,16 +249,73 @@ impl ProgressiveReply {
         parts: &[tinychannels_bus::OutboundContentPart],
         text: &str,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, super::ProgressiveSendError> {
-        let outcome = self
-            .sender
-            .send_parts(
+        let text_only = parts.iter().all(|part| matches!(
+            part,
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { .. }
+            }
+        ));
+        let segments = match self.text_limit.filter(|_| text_only) {
+            Some((limit, unit)) => split_text_by_limit(text, limit, unit)?,
+            None => vec![text.to_owned()],
+        };
+        let dialect = parts.iter().find_map(|part| match part {
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { markdown_dialect, .. },
+            } => *markdown_dialect,
+            _ => None,
+        });
+        let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+        for (index, segment) in segments.iter().enumerate() {
+            let segment_parts = if text_only && segments.len() > 1 {
+                vec![tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: segment.clone(),
+                        markdown_dialect: dialect,
+                    },
+                }]
+            } else {
+                parts.to_vec()
+            };
+            let next = match self.sender.send_parts_with_segment(
                 &self.channel,
-                parts,
-                text,
+                &segment_parts,
+                segment,
                 self.output_context.as_ref(),
                 self.output_sequence,
-            )
-            .await?;
+                index as u32,
+            ).await {
+                Ok(next) => next,
+                Err(super::ProgressiveSendError::PartialOutcome(next)) => next,
+                Err(error) if index > 0 => {
+                    outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
+                        kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                        message: error.to_string(),
+                        sent_before_error: true,
+                        ..Default::default()
+                    });
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
+            let no_receipt = next.receipt.platform_message_ids.is_empty()
+                && next.receipt.parts.is_empty()
+                && next.error.is_none();
+            merge_receipt(&mut outcome.receipt, next.receipt, index == 0, index);
+            if next.error.is_some() {
+                outcome.error = next.error;
+                break;
+            }
+            if no_receipt {
+                outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                    message: "provider accepted a progressive send without a receipt id".into(),
+                    sent_before_error: true,
+                    ..Default::default()
+                });
+                break;
+            }
+        }
         abort_channel_reply(self.sender.as_ref(), &self.channel, &mut self.state).await;
         Ok(outcome)
     }
@@ -270,12 +327,13 @@ impl ProgressiveReply {
         text: &str,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, super::ProgressiveSendError> {
         self.sender
-            .send_parts(
+            .send_parts_with_segment(
                 &self.channel,
                 parts,
                 text,
                 self.output_context.as_ref(),
                 self.output_sequence,
+                0,
             )
             .await
     }
@@ -284,5 +342,98 @@ impl ProgressiveReply {
     /// turn that failed to start).
     pub async fn send_reply(&self, text: &str) {
         send_channel_reply(self.sender.as_ref(), &self.channel, text).await;
+    }
+}
+
+fn split_text_by_limit(
+    text: &str,
+    limit: u64,
+    unit: tinychannels_bus::LengthUnit,
+) -> Result<Vec<String>, super::ProgressiveSendError> {
+    if limit == 0 {
+        return Err(super::ProgressiveSendError::Other(anyhow::anyhow!(
+            "configured text limit is zero"
+        )));
+    }
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut used = 0u64;
+    for scalar in text.chars() {
+        let cost = match unit {
+            tinychannels_bus::LengthUnit::Characters => 1,
+            tinychannels_bus::LengthUnit::Utf8Bytes => scalar.len_utf8() as u64,
+            tinychannels_bus::LengthUnit::Utf16Units => scalar.len_utf16() as u64,
+        };
+        if cost > limit {
+            return Err(super::ProgressiveSendError::Other(anyhow::anyhow!(
+                "one text scalar exceeds configured text limit"
+            )));
+        }
+        if used > 0 && used + cost > limit {
+            segments.push(std::mem::take(&mut current));
+            used = 0;
+        }
+        current.push(scalar);
+        used += cost;
+    }
+    if !current.is_empty() || segments.is_empty() {
+        segments.push(current);
+    }
+    Ok(segments)
+}
+
+fn merge_receipt(
+    aggregate: &mut tinychannels_bus::channel::MessageReceipt,
+    next: tinychannels_bus::channel::MessageReceipt,
+    first: bool,
+    segment_index: usize,
+) {
+    if first {
+        *aggregate = next;
+        return;
+    }
+    if next.parts.is_empty() && (next.edit_token.is_some() || next.delete_token.is_some()) {
+        for (offset, platform_message_id) in next.platform_message_ids.iter().enumerate() {
+            aggregate.parts.push(tinychannels_bus::channel::MessageReceiptPart {
+                platform_message_id: platform_message_id.clone(),
+                kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                index: segment_index + offset,
+                edit_token: next.edit_token.clone(),
+                delete_token: next.delete_token.clone(),
+                ..Default::default()
+            });
+        }
+    }
+    aggregate
+        .platform_message_ids
+        .extend(next.platform_message_ids);
+    aggregate.parts.extend(next.parts);
+    if aggregate.primary_platform_message_id.is_none() {
+        aggregate.primary_platform_message_id = next.primary_platform_message_id;
+    }
+    if aggregate.channel.is_none() {
+        aggregate.channel = next.channel;
+    }
+    if aggregate.conversation.is_none() {
+        aggregate.conversation = next.conversation;
+    }
+    if aggregate.idempotency_key.is_none() {
+        aggregate.idempotency_key = next.idempotency_key;
+    }
+    if aggregate.thread_id.is_none() {
+        aggregate.thread_id = next.thread_id;
+    }
+    if aggregate.reply_to_id.is_none() {
+        aggregate.reply_to_id = next.reply_to_id;
+    }
+    if aggregate.edit_token.is_none() {
+        aggregate.edit_token = next.edit_token;
+    }
+    if aggregate.delete_token.is_none() {
+        aggregate.delete_token = next.delete_token;
+    }
+    aggregate.sent_at = aggregate.sent_at.max(next.sent_at);
+    if let Some(mut raw) = next.raw {
+        aggregate.raw.get_or_insert_with(Vec::new).append(&mut raw);
     }
 }
