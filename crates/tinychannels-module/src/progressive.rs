@@ -184,25 +184,29 @@ impl Replies {
         }
     }
 
-    async fn feed(&self, handle: String, events: Vec<ChannelOutputEvent>) -> Result<ProgressiveResult> {
-                if events.len() > 32 {
-                    return Err(Error::failed("too many progressive events"));
-                }
-                let entry = self.entry(&handle).await?;
-                let closing = entry.closing.lock().await;
-                if closing.is_some() {
-                    return Err(Error::failed("progressive reply is closed"));
-                }
-                let (reply, wait) = oneshot::channel();
-                entry
-                    .commands
-                    .send(Command::Feed(events, reply))
-                    .await
-                    .map_err(|_| Error::failed("progressive reply is closed"))?;
-                drop(closing);
-                wait.await
-                    .map_err(|_| Error::failed("progressive worker stopped"))??;
-                Ok(ProgressiveResult::Updated)
+    async fn feed(
+        &self,
+        handle: String,
+        events: Vec<ChannelOutputEvent>,
+    ) -> Result<ProgressiveResult> {
+        if events.len() > 32 {
+            return Err(Error::failed("too many progressive events"));
+        }
+        let entry = self.entry(&handle).await?;
+        let closing = entry.closing.lock().await;
+        if closing.is_some() {
+            return Err(Error::failed("progressive reply is closed"));
+        }
+        let (reply, wait) = oneshot::channel();
+        entry
+            .commands
+            .send(Command::Feed(events, reply))
+            .await
+            .map_err(|_| Error::failed("progressive reply is closed"))?;
+        drop(closing);
+        wait.await
+            .map_err(|_| Error::failed("progressive worker stopped"))??;
+        Ok(ProgressiveResult::Updated)
     }
 
     async fn entry(&self, handle: &str) -> Result<Arc<Entry>> {
@@ -311,16 +315,36 @@ impl Replies {
     }
 }
 
-fn compat_event(event: tinychannels_bus::module_progressive::ProgressiveEvent) -> ChannelOutputEvent {
+fn compat_event(
+    event: tinychannels_bus::module_progressive::ProgressiveEvent,
+) -> ChannelOutputEvent {
     use tinychannels_bus::module_progressive::ProgressiveEvent as Legacy;
     match event {
-        Legacy::TextDelta(text) => ChannelOutputEvent::TextDelta { text, iteration: None },
-        Legacy::ThinkingDelta(text) => ChannelOutputEvent::ThinkingDelta { text, iteration: None },
-        Legacy::ToolCall(tool_name) => ChannelOutputEvent::ToolProgress { label: tool_name, message: None },
+        Legacy::TextDelta(text) => ChannelOutputEvent::TextDelta {
+            text,
+            iteration: None,
+        },
+        Legacy::ThinkingDelta(text) => ChannelOutputEvent::ThinkingDelta {
+            text,
+            iteration: None,
+        },
+        Legacy::ToolCall(tool_name) => ChannelOutputEvent::ToolProgress {
+            label: tool_name,
+            message: None,
+        },
         Legacy::ToolResult { tool_name, success } => ChannelOutputEvent::ToolCallCompleted {
-            call_id: String::new(), tool_name, success, output_chars: 0, output: String::new(),
-            arguments: None, elapsed_ms: 0, iteration: 0, failure: None,
-            display_label: None, display_detail: None, structured: None,
+            call_id: String::new(),
+            tool_name,
+            success,
+            output_chars: 0,
+            output: String::new(),
+            arguments: None,
+            elapsed_ms: 0,
+            iteration: 0,
+            failure: None,
+            display_label: None,
+            display_detail: None,
+            structured: None,
         },
     }
 }
@@ -445,16 +469,21 @@ fn apply(reply: &mut ProgressiveReply, events: Vec<ChannelOutputEvent>) -> Resul
         match event {
             ChannelOutputEvent::TextDelta { text } => reply.on_text_delta(&text),
             ChannelOutputEvent::ThinkingDelta { text, .. } => reply.on_thinking_delta(&text),
-            ChannelOutputEvent::ToolCallStarted { tool_name, display_label, .. } => {
-                reply.on_tool_call(display_label.as_deref().unwrap_or(&tool_name))
-            }
+            ChannelOutputEvent::ToolCallStarted {
+                tool_name,
+                display_label,
+                ..
+            } => reply.on_tool_call(display_label.as_deref().unwrap_or(&tool_name)),
             ChannelOutputEvent::ToolProgress { label, message } => {
                 reply.on_tool_call(message.as_deref().unwrap_or(&label))
             }
             ChannelOutputEvent::ToolCallProgress { message, .. } => reply.on_tool_call(&message),
-            ChannelOutputEvent::ToolCallCompleted { tool_name, display_label, success, .. } => {
-                reply.on_tool_result(display_label.as_deref().unwrap_or(&tool_name), success)
-            }
+            ChannelOutputEvent::ToolCallCompleted {
+                tool_name,
+                display_label,
+                success,
+                ..
+            } => reply.on_tool_result(display_label.as_deref().unwrap_or(&tool_name), success),
             ChannelOutputEvent::FinalMessage { .. }
             | ChannelOutputEvent::ToolCallArgsDelta { .. }
             | ChannelOutputEvent::ApprovalRequest { .. }
