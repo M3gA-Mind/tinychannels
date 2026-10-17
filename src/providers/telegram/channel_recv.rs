@@ -722,11 +722,6 @@ impl TelegramChannel {
             .get("message_thread_id")
             .and_then(serde_json::Value::as_i64)
             .map(|id| id.to_string());
-        let message_id = source
-            .get("message_id")
-            .and_then(serde_json::Value::as_i64)
-            .map(|id| id.to_string())
-            .unwrap_or_else(|| message.id.clone());
         let result = store
             .store_voice(crate::host::VoiceMediaRequest {
                 audio_base64: BASE64.encode(&bytes),

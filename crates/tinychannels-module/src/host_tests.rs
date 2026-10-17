@@ -476,7 +476,7 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         Some("https://media.example.test/authorized/voice-1")
     );
     let scopes = callback.voice_scopes.lock().await;
-    assert_eq!(scopes.len(), 3);
+    assert_eq!(scopes.len(), 2);
     for observed in scopes.iter() {
         assert_eq!(observed.configured_instance, "telegram");
         assert_eq!(observed.channel.id, "telegram");

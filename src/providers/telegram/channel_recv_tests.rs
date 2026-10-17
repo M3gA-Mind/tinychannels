@@ -56,6 +56,35 @@ async fn mount_voice_download(server: &MockServer, bytes: Vec<u8>) {
         .await;
 }
 
+#[derive(Clone, Default)]
+struct RecordingVoiceStore(Arc<std::sync::Mutex<Vec<tinychannels_bus::HostVoiceScope>>>);
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for RecordingVoiceStore {
+    async fn store_voice(
+        &self,
+        request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        self.0.lock().unwrap().push(request.scope);
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("host-voice-reference".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                ..Default::default()
+            },
+            accessible_url: None,
+        })
+    }
+
+    async fn read_voice(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        _opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        unreachable!("inbound voice fixture only stores media")
+    }
+}
+
 // ── typing ───────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -529,6 +558,35 @@ async fn voice_update_parser_preserves_caption_without_claiming_transcription() 
         "STT enrichment belongs to shared ingress"
     );
     assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn stored_voice_scope_matches_normalized_ingress_turn_and_conversation() {
+    let server = mock_api().await;
+    mount_voice_download(&server, vec![1, 2, 3]).await;
+    let store = RecordingVoiceStore::default();
+    let channel = channel_for(&server, &["alice"]).with_voice_media_store(Arc::new(store.clone()));
+    let update = voice_update("supergroup", Some("caption"), Some(3));
+    let message = channel
+        .parse_update_message_or_voice(&update)
+        .await
+        .expect("voice message is accepted independently of STT");
+    let voice_note = channel
+        .voice_note_for_ingress(&update, &message)
+        .await
+        .unwrap()
+        .expect("durable voice reference");
+    let envelope =
+        TelegramChannel::inbound_envelope_from_update(&update, &message, Some(voice_note));
+
+    let scopes = store.0.lock().unwrap();
+    assert_eq!(scopes.len(), 1);
+    let scope = &scopes[0];
+    assert_eq!(scope.channel.id, envelope.channel.id);
+    assert_eq!(scope.channel.account_id, envelope.channel.account_id);
+    assert_eq!(scope.conversation, envelope.conversation);
+    assert_eq!(scope.turn_id, envelope.message_id);
+    assert_eq!(scope.turn_id, "telegram_888_60");
 }
 
 #[tokio::test]
