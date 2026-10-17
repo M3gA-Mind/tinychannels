@@ -17,7 +17,7 @@ use tinychannels_bus::module_progressive::{
     ProgressiveTransportResult,
 };
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
-use tokio::sync::{Mutex, Notify, mpsc, oneshot, watch};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 const MAX_ACTIVE: usize = 16;
