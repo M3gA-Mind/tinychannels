@@ -1643,7 +1643,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         instance.clone(),
         Some("telegram:media-v1:test".into()),
     );
-    let running = Running::start_outbound(channel, hooks, host);
+    let running = Running::start_telegram(channel, hooks, host, None, true);
     let handle = running.adapter_handle();
     let fixture = RunningTelegramConformance {
         adapter: handle,
@@ -1668,6 +1668,8 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     let descriptor = fixture.adapter.descriptor();
     assert_eq!(descriptor.id, "telegram");
     assert_eq!(descriptor.account_id.as_deref(), Some("telegram:account-a"));
+    assert_eq!(descriptor.metadata.get("adapterMode").map(String::as_str), Some("native-v2"));
+    assert_eq!(handle.mode, AdapterMode::TelegramNativeV2);
     check_feature(&fixture, ConformanceFeature::Text)
         .await
         .unwrap();
@@ -1900,5 +1902,71 @@ async fn configured_adapter_marks_first_unknown_media_upload_non_retryable() {
     assert!(!error.retryable);
     assert!(!error.unsupported);
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    running.stop().await.unwrap();
+}
+
+
+#[tokio::test]
+async fn configured_telegram_native_optional_ports_share_ordered_queue_and_reject_scope_mismatch() {
+    use tinychannels_bus::{ChannelInteraction, ChannelOutboundIntent, OutboundPayload};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    for endpoint in ["sendMessage", "editMessageText", "deleteMessage", "setMessageReaction"] {
+        let result = if endpoint == "deleteMessage" { serde_json::json!(true) }
+            else if endpoint == "setMessageReaction" { serde_json::json!(true) }
+            else { serde_json::json!({ "message_id": 321, "chat": {"id": -100} }) };
+        Mock::given(method("POST"))
+            .and(path(format!("/bottest-token/{endpoint}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true,"result":result})))
+            .mount(&server)
+            .await;
+    }
+    let instance = "telegram:account-a".to_owned();
+    let channel = Arc::new(
+        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
+            .with_api_base_for_test(server.uri()),
+    );
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let running = Running::start_telegram(channel, hooks, host, None, true);
+    let handle = running.adapter_handle();
+    assert_eq!(handle.mode, AdapterMode::TelegramNativeV2);
+
+    let channel_ref = tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: Some(instance.clone()) };
+    let conversation = ConversationRef { kind: ConversationKind::Group, id: "-100".into(), topic_id: Some("77".into()), ..Default::default() };
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "native-op".into(), channel_id: "telegram".into(), conversation_id: conversation.id.clone(),
+        channel_ref: Some(channel_ref.clone()), conversation_ref: Some(conversation.clone()),
+        payload: OutboundPayload::Text { text: "native send".into() }, ..Default::default()
+    };
+    let sent = handle.send(intent.clone()).await.unwrap();
+    assert_eq!(sent.receipt.primary_platform_message_id.as_deref(), Some("321"));
+    assert_eq!(sent.receipt.conversation.as_ref(), Some(&conversation));
+
+    handle.reactions().unwrap().send_reaction(
+        &channel_ref, &conversation, "321", &tinychannels_bus::ChannelReaction { value: "👍".into(), ..Default::default() }, false,
+    ).await.unwrap();
+    let receipt = sent.receipt.clone();
+    let edited = handle.edits().unwrap().edit(&receipt, intent.clone()).await.unwrap();
+    assert_eq!(edited.conversation.as_ref(), Some(&conversation));
+    handle.deletes().unwrap().delete(&receipt).await.unwrap();
+
+    let before = server.received_requests().await.unwrap().len();
+    let mut wrong_scope = receipt.clone();
+    wrong_scope.conversation.as_mut().unwrap().topic_id = Some("other-topic".into());
+    let invalid = handle.edits().unwrap().edit(&wrong_scope, intent.clone()).await;
+    assert!(invalid.is_err());
+    assert_eq!(server.received_requests().await.unwrap().len(), before, "mismatched receipt must be rejected before provider I/O");
+
+    let draft = running.interact(ChannelInteraction::UpsertDraft { previous: None, intent: intent.clone() }).await.unwrap();
+    let ChannelInteractionResult::Sent(draft) = draft else { panic!("native draft returned no receipt"); };
+    assert_eq!(draft.receipt.primary_platform_message_id.as_deref(), Some("321"));
+    let before_bad_draft = server.received_requests().await.unwrap().len();
+    let bad = running.interact(ChannelInteraction::UpsertDraft { previous: Some(wrong_scope), intent }).await;
+    assert!(bad.is_err());
+    assert_eq!(server.received_requests().await.unwrap().len(), before_bad_draft, "mismatched prior draft scope must be rejected before provider I/O");
     running.stop().await.unwrap();
 }
