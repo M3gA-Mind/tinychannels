@@ -189,6 +189,7 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
         vec![ChannelOutputEvent::TextDelta {
             text: "x".repeat(MAX_CONTENT),
         }],
+        false,
     )
     .await
     .unwrap();
@@ -203,7 +204,8 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
                 ChannelOutputEvent::TextDelta {
                     text: "extra".into()
                 }
-            ]
+            ],
+            false,
         )
         .await
         .is_err()
@@ -362,12 +364,12 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
                         success: true,
                         output_chars: 0,
                         output: String::new(),
-                        arguments: None,
+                        arguments: Some(serde_json::json!({"q": "safe test"})),
                         elapsed_ms: 0,
                         iteration: 1,
                         display_label: None,
                         display_detail: None,
-                        structured: None,
+                        structured: Some(serde_json::json!({"kind": "search", "count": 1})),
                     },
                     ChannelOutputEvent::TextDelta {
                         text: "partial answer".into()
@@ -378,6 +380,15 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
             .unwrap(),
         ProgressiveResult::Updated
     );
+    let forwarded = callback.requests.lock().await.iter().any(|request| {
+        matches!(request, ProgressiveTransportRequest::OutputEvent {
+            event: ChannelOutputEvent::ToolCallCompleted { call_id, arguments, structured, .. },
+            ..
+        } if call_id == "call-1"
+            && arguments.as_ref().is_some_and(|value| value["q"] == "safe test")
+            && structured.as_ref().is_some_and(|value| value["count"] == 1))
+    });
+    assert!(forwarded, "the bounded worker forwards canonical events to the host bus");
     replies
         .execute(ProgressiveCommand::Finish {
             handle: handle.clone(),
@@ -469,6 +480,7 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
             text: "x".repeat(MAX_CONTENT),
             iteration: None,
         }],
+        false,
     )
     .await
     .unwrap();
@@ -483,7 +495,8 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
                     text: "extra".into(),
                     iteration: None
                 }
-            ]
+            ],
+            false,
         )
         .await
         .is_err()
