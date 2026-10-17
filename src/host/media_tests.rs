@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 use tinychannels_bus::{ChannelRef, ConversationKind, ConversationRef};
 use tinystoragedrivers_core::{
-    Blob, BlobMeta, BlobReader, BlobStore, DocumentStore, MemoryStorage, Precondition,
+    Blob, BlobMeta, BlobReader, BlobStore, MemoryStorage, Precondition,
     Result as StorageResult, Scope, StorageBackend, StorageError,
 };
 
