@@ -1313,13 +1313,9 @@ impl tinychannels::channel::ChannelStreamingDraft for TelegramNativeAdapter {
                 .map_err(adapter_operation_error)?;
             Ok(previous.clone())
         } else {
-            let message = tinychannels_bus::SendMessage {
-                content: text,
-                recipient: intent.conversation_id,
-                thread_ts: intent.thread_id,
-                reply_to_id: intent.reply_to_id,
-                ..Default::default()
-            };
+            let mut message = tinychannels_bus::SendMessage::new(text, intent.conversation_id);
+            message.thread_ts = intent.thread_id;
+            message.reply_to_id = intent.reply_to_id;
             match self
                 .running
                 .interact(tinychannels_bus::ChannelInteraction::SendDraft { message })
