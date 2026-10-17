@@ -501,10 +501,6 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
 #[tokio::test]
 async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     let (replies, _) = fixture(false).await;
-    let capabilities = tinychannels_bus::ChannelCapabilities {
-        progressive_edits: true,
-        ..Default::default()
-    };
     let mut reply = ProgressiveReply::new(
         Arc::new(Sender {
             host: replies.host.clone(),
