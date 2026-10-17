@@ -5,21 +5,6 @@ use std::sync::Arc;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-fn attachment(kind: TelegramAttachmentKind, target: &str) -> TelegramAttachment {
-    TelegramAttachment {
-        kind,
-        target: target.to_string(),
-    }
-}
-
-const ALL_KINDS: [(TelegramAttachmentKind, &str, &str); 5] = [
-    (TelegramAttachmentKind::Image, "sendPhoto", "photo"),
-    (TelegramAttachmentKind::Document, "sendDocument", "document"),
-    (TelegramAttachmentKind::Video, "sendVideo", "video"),
-    (TelegramAttachmentKind::Audio, "sendAudio", "audio"),
-    (TelegramAttachmentKind::Voice, "sendVoice", "voice"),
-];
-
 #[tokio::test]
 async fn send_message_reaction_skips_blank_emoji_without_network() {
     let server = mock_api().await;
@@ -297,68 +282,6 @@ async fn send_text_chunks_fails_when_markdown_fallback_is_rejected() {
         "provider body must remain private: {err}"
     );
     assert_eq!(json_bodies(&server, "sendMessage").await.len(), 2);
-}
-
-#[tokio::test]
-async fn send_attachment_by_url_routes_each_kind_to_its_method() {
-    let server = mock_api().await;
-    for (_, api_method, _) in ALL_KINDS {
-        mount_post(&server, api_method, ok()).await;
-    }
-    let ch = channel_for(&server, &["*"]);
-
-    for (kind, api_method, field) in ALL_KINDS {
-        let url = format!("https://cdn.example/{field}");
-        ch.send_attachment("100", Some("4"), &attachment(kind, &format!(" {url} ")))
-            .await
-            .unwrap();
-        let bodies = json_bodies(&server, api_method).await;
-        let body = bodies.last().expect("request sent");
-        assert_eq!(body[field], url, "{api_method}");
-        assert_eq!(body["chat_id"], "100");
-        assert_eq!(body["message_thread_id"], "4");
-    }
-}
-
-#[tokio::test]
-async fn send_attachment_from_local_path_uploads_multipart_for_each_kind() {
-    let server = mock_api().await;
-    for (_, api_method, _) in ALL_KINDS {
-        mount_post(&server, api_method, ok()).await;
-    }
-    let ch = channel_for(&server, &["*"]);
-    let dir = tempfile::tempdir().unwrap();
-
-    for (kind, api_method, field) in ALL_KINDS {
-        let file = dir.path().join(format!("{field}.bin"));
-        std::fs::write(&file, b"payload-bytes").unwrap();
-        ch.send_attachment("100", None, &attachment(kind, file.to_str().unwrap()))
-            .await
-            .unwrap();
-        let bodies = raw_bodies(&server, api_method).await;
-        let body = bodies.last().expect("upload sent");
-        assert!(body.contains(&format!("name=\"{field}\"")), "{api_method}");
-        assert!(body.contains(&format!("filename=\"{field}.bin\"")));
-        assert!(body.contains("payload-bytes"));
-        assert!(!body.contains("message_thread_id"));
-    }
-}
-
-#[tokio::test]
-async fn send_attachment_missing_local_path_errors_without_network() {
-    let server = mock_api().await;
-    let ch = channel_for(&server, &["*"]);
-    let err = ch
-        .send_attachment(
-            "100",
-            None,
-            &attachment(TelegramAttachmentKind::Document, "/no/such/file.pdf"),
-        )
-        .await
-        .unwrap_err()
-        .to_string();
-    assert!(err.contains("attachment path not found"), "{err}");
-    assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]

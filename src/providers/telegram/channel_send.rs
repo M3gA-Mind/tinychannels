@@ -1,5 +1,4 @@
-//! Telegram channel — outbound message sending: text chunking, media uploads, reaction sending,
-//! and attachment dispatch.
+//! Telegram channel — outbound text chunking, native media uploads, and reaction sending.
 
 use super::channel_types::TelegramChannel;
 
