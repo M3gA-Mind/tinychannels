@@ -544,31 +544,30 @@ impl Replies {
             None
         };
         if let Some(fingerprint) = fingerprint {
-            loop {
-                let wait = {
-                    let mut memo = entry.terminal_feed.lock().await;
-                    match memo.as_mut() {
-                        Some(memo) if memo.fingerprint != fingerprint => {
-                            return Err(Error::failed("progressive terminal content differs"));
-                        }
-                        Some(memo) => {
-                            if let Some(result) = memo.result.clone() {
-                                return result.map_err(Error::failed);
-                            }
-                            memo.notify.subscribe()
-                        }
-                        None => {
-                            let (notify, _) = watch::channel(None);
-                            *memo = Some(TerminalMemo {
-                                fingerprint,
-                                result: None,
-                                notify,
-                            });
-                            break;
-                        }
+            let wait = {
+                let mut memo = entry.terminal_feed.lock().await;
+                match memo.as_mut() {
+                    Some(memo) if memo.fingerprint != fingerprint => {
+                        return Err(Error::failed("progressive terminal content differs"));
                     }
-                };
-                let mut wait = wait;
+                    Some(memo) => {
+                        if let Some(result) = memo.result.clone() {
+                            return result.map_err(Error::failed);
+                        }
+                        Some(memo.notify.subscribe())
+                    }
+                    None => {
+                        let (notify, _) = watch::channel(None);
+                        *memo = Some(TerminalMemo {
+                            fingerprint,
+                            result: None,
+                            notify,
+                        });
+                        None
+                    }
+                }
+            };
+            if let Some(mut wait) = wait {
                 loop {
                     if let Some(result) = wait.borrow().clone() {
                         return result.map_err(Error::failed);
@@ -627,9 +626,8 @@ impl Replies {
             return Err(Error::failed("progressive reply is closed"));
         }
         drop(closing);
-        Ok(wait
-            .await
-            .map_err(|_| Error::failed("progressive worker stopped"))??)
+        wait.await
+            .map_err(|_| Error::failed("progressive worker stopped"))?
     }
 
     async fn entry(&self, handle: &str) -> Result<Arc<Entry>> {
@@ -1058,10 +1056,7 @@ async fn record_terminal(
     };
     let mut memo = terminal_feed.lock().await;
     if let Some(memo) = memo.as_mut().filter(|memo| memo.fingerprint == fingerprint) {
-        let result = result
-            .as_ref()
-            .map(Clone::clone)
-            .map_err(ToString::to_string);
+        let result = result.clone().map_err(ToString::to_string);
         memo.result = Some(result.clone());
         memo.notify.send_replace(Some(result));
     }
@@ -1098,13 +1093,11 @@ async fn apply(
     }
     let mut dispatch = ProgressiveOutputDispatch::default();
     for event in events {
-        if forward {
-            if reply.on_output_event(&event).await.is_err() {
-                dispatch.failure = Some(
-                    tinychannels_bus::module_progressive::ProgressiveOutputFailure::ObservationCallback,
-                );
-                break;
-            }
+        if forward && reply.on_output_event(&event).await.is_err() {
+            dispatch.failure = Some(
+                tinychannels_bus::module_progressive::ProgressiveOutputFailure::ObservationCallback,
+            );
+            break;
         }
         match reply.apply_output_event(&event, forward).await {
             Ok(dispatched) => dispatch.absorb(dispatched),
