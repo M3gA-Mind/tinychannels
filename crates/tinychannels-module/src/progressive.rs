@@ -579,6 +579,24 @@ async fn send_typed_part(
                         }
                     }
                 }
+                if prepared_text != text {
+                    let suffix = prepared_text.strip_prefix(text).unwrap_or(&prepared_text);
+                    if let Some(text_part) = prepared_parts.iter_mut().rev().find_map(|part| match part {
+                        tinychannels_bus::OutboundContentPart::Content {
+                            part: tinychannels_bus::ContentPart::Text { text, .. },
+                        } => Some(text),
+                        _ => None,
+                    }) {
+                        text_part.push_str(suffix);
+                    } else if !prepared_text.trim().is_empty() {
+                        prepared_parts.push(tinychannels_bus::OutboundContentPart::Content {
+                            part: tinychannels_bus::ContentPart::Text {
+                                text: prepared_text.clone(),
+                                markdown_dialect: None,
+                            },
+                        });
+                    }
+                }
             } else if had_synthesis {
                 // The model explicitly requested speech, but host policy denied it.
                 if prepared_text.trim().is_empty() {
