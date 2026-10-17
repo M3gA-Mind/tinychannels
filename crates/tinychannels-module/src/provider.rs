@@ -1030,7 +1030,7 @@ impl tinychannels::channel::ChannelAdapter for Running {
         let capabilities = self.channel.capabilities();
         if !adapter_payload_supported(&intent.payload, &capabilities) {
             return Err(tinychannels::channel::ChannelSendError {
-                kind: tinychannels::channel::SendErrorKind::BadFormat,
+                kind: tinychannels::channel::SendErrorKind::Unsupported,
                 message: "configured provider does not advertise this outbound content kind".into(),
                 retryable: false,
                 ..Default::default()
