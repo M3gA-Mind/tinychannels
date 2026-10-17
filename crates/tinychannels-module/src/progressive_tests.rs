@@ -4407,7 +4407,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         explicitly_requested: false,
     });
     let sender = Arc::new(Sender {
-        host,
+        host: host.clone(),
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
@@ -4538,6 +4538,69 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     ))));
     assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
     assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 1);
+
+    // Mirror, Never, and SpeakReply are evaluated against the host's scoped
+    // policy on each final turn. A denied policy sends the canonical text and
+    // performs no synthesis/store operation.
+    for (turn_id, mode, inbound_has_voice, explicitly_requested, should_voice) in [
+        ("mirror-off", tinychannels_bus::HostVoiceReplyMode::Mirror, false, false, false),
+        ("mirror-on", tinychannels_bus::HostVoiceReplyMode::Mirror, true, false, true),
+        ("never", tinychannels_bus::HostVoiceReplyMode::Never, true, true, false),
+        ("speak-no", tinychannels_bus::HostVoiceReplyMode::SpeakReply, false, false, false),
+        ("speak-yes", tinychannels_bus::HostVoiceReplyMode::SpeakReply, false, true, true),
+    ] {
+        *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+            mode,
+            inbound_has_voice,
+            explicitly_requested,
+        });
+        let mut case_context = context.clone();
+        case_context.turn_id = turn_id.into();
+        let case_sender = Arc::new(Sender {
+            host: host.clone(),
+            context: Some(case_context.clone()),
+            capabilities: capabilities.clone(),
+            channel: "telegram:bot-1".into(),
+            send_sequence: std::sync::atomic::AtomicU64::new(0),
+        });
+        let mut case_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+            case_sender,
+            "telegram:bot-1",
+            capabilities.clone(),
+            case_context,
+        );
+        case_reply
+            .send_parts(
+                &[tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: "policy response".into(),
+                        markdown_dialect: None,
+                    },
+                }],
+                "policy response",
+            )
+            .await
+            .expect("policy decision delivers a final response");
+        let requests = callback.requests.lock().await;
+        let parts = requests.iter().find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(actual_turn),
+                parts,
+                ..
+            } if actual_turn == turn_id => Some(parts),
+            _ => None,
+        });
+        let has_voice = parts.is_some_and(|parts| parts.iter().any(|part| matches!(
+            part,
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media { .. }
+            }
+        )));
+        assert_eq!(has_voice, should_voice, "turn {turn_id}");
+    }
+
+    assert_eq!(codec_ops.load(Ordering::SeqCst), 4);
+    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 4);
 }
 
 fn progressive_test_wav() -> Vec<u8> {
