@@ -43,12 +43,12 @@ def main():
     for source in (ROOT / 'crates/tinychannels-bus/src').rglob('*.rs'):
         if source.name.endswith('_tests.rs'):
             continue
-        content = source.read_text()
+        content = source.read_text(encoding='utf-8')
         for forbidden in FORBIDDEN:
             if forbidden in content:
                 raise SystemExit(f'{source.relative_to(ROOT)}: implementation token {forbidden!r}')
 
-    manifest = tomllib.loads(BUS_MANIFEST.read_text())
+    manifest = tomllib.loads(BUS_MANIFEST.read_text(encoding='utf-8'))
     forbidden_direct = declared_forbidden_dependencies(manifest)
     if forbidden_direct:
         raise SystemExit(f'contract manifest declares runtime dependencies: {sorted(forbidden_direct)}')
@@ -58,11 +58,13 @@ def main():
         probe = ROOT / 'target/bus-purity' / mode
         probe.mkdir(parents=True, exist_ok=True)
         (probe / 'src').mkdir(exist_ok=True)
-        (probe / 'src/lib.rs').write_text('pub use tinychannels_bus::*;\n')
+        (probe / 'src/lib.rs').write_text('pub use tinychannels_bus::*;\n', encoding='utf-8')
         (probe / 'Cargo.toml').write_text(
             '[package]\nname="contract-purity-probe"\nversion="0.0.0"\nedition="2024"\n'
             '[workspace]\n[dependencies]\ntinychannels-bus = { path = ' + json.dumps(str(BUS_MANIFEST.parent))
-            + (', features = ' + json.dumps(features) if mode == 'all' else '') + ' }\n')
+            + (', features = ' + json.dumps(features) if mode == 'all' else '') + ' }\n',
+            encoding='utf-8',
+        )
         graph = json.loads(subprocess.check_output([
             'cargo', 'metadata', *(['--offline'] if args.offline else []), '--format-version=1', '--manifest-path', str(probe / 'Cargo.toml')
         ], cwd=ROOT))
