@@ -277,6 +277,9 @@ pub enum ProgressiveTransportRequest {
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ProgressiveTransportResult {
     Success(Value),
+    /// Structured result for hosts that can preserve normalized receipts and
+    /// partial-send failure facts across the module boundary.
+    Outcome(crate::channel::ChannelSendOutcome),
     Unavailable,
     EditUnsupported,
     MessageGone,
