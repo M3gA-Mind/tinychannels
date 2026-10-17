@@ -64,9 +64,11 @@ impl Callback {
                 let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
                 outcome.receipt.primary_platform_message_id = Some("artifact-message".into());
                 outcome.receipt.platform_message_ids = vec!["artifact-message".into()];
-                return Ok(tinychannels_bus::ChannelBackendResult::ProgressiveTransport(
-                    ProgressiveTransportResult::Outcome(outcome),
-                ));
+                return Ok(
+                    tinychannels_bus::ChannelBackendResult::ProgressiveTransport(
+                        ProgressiveTransportResult::Outcome(outcome),
+                    ),
+                );
             }
             ProgressiveTransportRequest::OutputEvent { event, .. } => {
                 self.output_events.lock().unwrap().push(event);
@@ -222,69 +224,65 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     let ProgressiveResult::Opened { handle } = opened else {
         panic!("missing progressive artifact handle");
     };
+    let terminal_events = vec![
+        ChannelOutputEvent::TextDelta {
+            text: "artifact draft".into(),
+            iteration: Some(1),
+        },
+        ChannelOutputEvent::ToolCallCompleted {
+            call_id: "artifact-call".into(),
+            tool_name: "lookup".into(),
+            success: true,
+            output_chars: 5,
+            output: "found".into(),
+            arguments: Some(serde_json::json!({"query": "artifact"})),
+            elapsed_ms: 4,
+            iteration: 1,
+            failure: None,
+            display_label: Some("Lookup".into()),
+            display_detail: None,
+            structured: Some(serde_json::json!({"kind": "lookup", "count": 1})),
+        },
+        ChannelOutputEvent::FinalMessage {
+            text: "artifact final".into(),
+            parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "artifact final".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            receipt: None,
+        },
+    ];
     let updated: ProgressiveResult = first_client
         .call_confidential(
             methods::EXECUTE_PROGRESSIVE,
             ProgressiveCommand::FeedOutput {
                 handle: handle.clone(),
-                events: vec![
-                    ChannelOutputEvent::TextDelta {
-                        text: "artifact draft".into(),
-                        iteration: Some(1),
-                    },
-                    ChannelOutputEvent::ToolCallCompleted {
-                        call_id: "artifact-call".into(),
-                        tool_name: "lookup".into(),
-                        success: true,
-                        output_chars: 5,
-                        output: "found".into(),
-                        arguments: Some(serde_json::json!({"query": "artifact"})),
-                        elapsed_ms: 4,
-                        iteration: 1,
-                        failure: None,
-                        display_label: Some("Lookup".into()),
-                        display_detail: None,
-                        structured: Some(serde_json::json!({"kind": "lookup", "count": 1})),
-                    },
-                    ChannelOutputEvent::FinalMessage {
-                        text: "artifact final".into(),
-                        parts: vec![tinychannels_bus::OutboundContentPart::Content {
-                            part: tinychannels_bus::ContentPart::Text {
-                                text: "artifact final".into(),
-                                markdown_dialect: None,
-                            },
-                        }],
-                        receipt: None,
-                    },
-                ],
+                events: terminal_events.clone(),
             },
         )
         .await
         .unwrap();
-    assert!(matches!(updated, ProgressiveResult::DeliveryOutcome { outcome }
-        if outcome.receipt.platform_message_ids == ["artifact-message"]));
+    assert!(
+        matches!(updated, ProgressiveResult::DeliveryOutcome { outcome }
+        if outcome.receipt.platform_message_ids == ["artifact-message"])
+    );
     for _ in 0..2 {
         let result: ProgressiveResult = first_client
             .call_confidential(
                 methods::EXECUTE_PROGRESSIVE,
                 ProgressiveCommand::FeedOutput {
                     handle: handle.clone(),
-                    events: vec![ChannelOutputEvent::FinalMessage {
-                        text: "artifact final".into(),
-                        parts: vec![tinychannels_bus::OutboundContentPart::Content {
-                            part: tinychannels_bus::ContentPart::Text {
-                                text: "artifact final".into(),
-                                markdown_dialect: None,
-                            },
-                        }],
-                        receipt: None,
-                    }],
+                    events: terminal_events.clone(),
                 },
             )
             .await
             .unwrap();
-        assert!(matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
-            if outcome.receipt.platform_message_ids == ["artifact-message"]));
+        assert!(
+            matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
+            if outcome.receipt.platform_message_ids == ["artifact-message"])
+        );
     }
     assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 1);
     let output_events = callback.output_events.lock().unwrap();
