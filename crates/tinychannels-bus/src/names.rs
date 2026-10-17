@@ -96,6 +96,9 @@ macro_rules! channel_method_registry {
             #[doc = "Append one idempotent confidential media chunk."] APPEND_MEDIA_UPLOAD_CHUNK => "AppendMediaUploadChunk",
             #[doc = "Persist a complete upload as a scoped opaque media reference."] FINISH_MEDIA_UPLOAD => "FinishMediaUpload",
             #[doc = "Abort a buffered media upload; retries are idempotent."] ABORT_MEDIA_UPLOAD => "AbortMediaUpload",
+            #[doc = "Resolve scoped media once into a bounded confidential chunk session."] BEGIN_MEDIA_READ => "BeginMediaRead",
+            #[doc = "Return one bounded confidential media chunk."] READ_MEDIA_CHUNK => "ReadMediaChunk",
+            #[doc = "Abort a bounded media read and release temporary bytes."] ABORT_MEDIA_READ => "AbortMediaRead",
         ]);
     };
 }
@@ -104,7 +107,7 @@ macro_rules! define_method_table {
     ([$($(#[$doc:meta])* $name:ident => $method:literal),* $(,)?]) => {
         pub mod methods { $($(#[$doc])* pub const $name: &str = $method;)* }
         /// All module method names in the declaration order used by the interface.
-        pub const METHODS: [&str; 41] = [$(methods::$name),*];
+        pub const METHODS: [&str; 44] = [$(methods::$name),*];
     };
 }
 
