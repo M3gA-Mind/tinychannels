@@ -1361,14 +1361,14 @@ async fn send_typed_media_with_receipt(
     if conversation.id.trim().is_empty() {
         anyhow::bail!("Telegram media send requires a conversation identity");
     }
-    let channel = message
+    let channel_ref = message
         .channel_ref
         .clone()
         .unwrap_or_else(|| tinychannels_bus::ChannelRef {
             id: "telegram".into(),
             account_id: None,
         });
-    let configured_instance = channel
+    let configured_instance = channel_ref
         .account_id
         .clone()
         .filter(|value| !value.trim().is_empty())
@@ -1380,7 +1380,7 @@ async fn send_typed_media_with_receipt(
         .ok_or_else(|| anyhow::anyhow!("Telegram media send requires originating turn identity"))?;
     let scope = tinychannels_bus::HostVoiceScope {
         configured_instance,
-        channel: channel.clone(),
+        channel: channel_ref.clone(),
         conversation: conversation.clone(),
         turn_id,
     };
@@ -1635,7 +1635,7 @@ async fn send_typed_media_with_receipt(
     });
     let receipt = tinychannels_bus::channel::MessageReceipt {
         idempotency_key: Some(message.idempotency_key.clone()),
-        channel: Some(channel),
+        channel: Some(channel_ref),
         conversation: Some(conversation),
         primary_platform_message_id: ids.first().cloned(),
         platform_message_ids: ids,
