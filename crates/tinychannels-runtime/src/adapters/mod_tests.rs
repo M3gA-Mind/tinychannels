@@ -106,7 +106,11 @@ async fn local_adapter_delegates_outbound_delivery() {
         })
     );
     assert_eq!(
-        outcome.receipt.conversation.as_ref().map(|reference| reference.id.as_str()),
+        outcome
+            .receipt
+            .conversation
+            .as_ref()
+            .map(|reference| reference.id.as_str()),
         Some("chat-1")
     );
 }
@@ -129,11 +133,16 @@ async fn local_adapter_rejects_foreign_scope_before_dispatch() {
             thread_id: None,
             turn_id: None,
             durability: DeliveryDurability::BestEffort,
-            payload: OutboundPayload::Text { text: "nope".into() },
+            payload: OutboundPayload::Text {
+                text: "nope".into(),
+            },
         })
         .await
         .expect_err("foreign account is rejected");
-    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Forbidden);
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Forbidden
+    );
     assert!(sink.ids.lock().expect("ids lock").is_empty());
 
     let error = adapter
@@ -151,11 +160,16 @@ async fn local_adapter_rejects_foreign_scope_before_dispatch() {
             thread_id: None,
             turn_id: None,
             durability: DeliveryDurability::BestEffort,
-            payload: OutboundPayload::Text { text: "nope".into() },
+            payload: OutboundPayload::Text {
+                text: "nope".into(),
+            },
         })
         .await
         .expect_err("conflicting conversation address is rejected");
-    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Forbidden);
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Forbidden
+    );
     assert!(sink.ids.lock().expect("ids lock").is_empty());
 }
 

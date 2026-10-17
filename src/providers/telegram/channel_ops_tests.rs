@@ -15,7 +15,10 @@ impl tinychannels_runtime::adapters::LocalOutboundSink for TelegramConformanceSi
     async fn send(
         &self,
         intent: tinychannels_bus::ChannelOutboundIntent,
-    ) -> Result<tinychannels_bus::channel::MessageReceipt, tinychannels_bus::channel::ChannelSendError> {
+    ) -> Result<
+        tinychannels_bus::channel::MessageReceipt,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
         let outcome = self
             .0
@@ -65,8 +68,10 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
     async fn exercise(
         &self,
         feature: tinychannels_conformance::ConformanceFeature,
-    ) -> Result<Option<tinychannels_bus::channel::ChannelSendOutcome>, tinychannels_bus::channel::ChannelSendError>
-    {
+    ) -> Result<
+        Option<tinychannels_bus::channel::ChannelSendOutcome>,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
         use tinychannels_conformance::ConformanceFeature as Feature;
         let payload = match feature {
             Feature::Text => tinychannels_bus::OutboundPayload::Text {
