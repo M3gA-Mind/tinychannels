@@ -44,6 +44,9 @@ impl Sender {
             .await
             .map_err(|_| ProgressiveSendError::Unavailable)?;
         match result {
+            ChannelBackendResult::ProgressiveTransport(
+                ProgressiveTransportResult::Acknowledged,
+            ) => Ok(Value::Null),
             ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Outcome(
                 outcome,
             )) => match outcome.error {

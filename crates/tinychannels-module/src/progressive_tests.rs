@@ -64,10 +64,20 @@ impl Callback {
         let result = configured.unwrap_or_else(|| {
             if typed_send {
                 ProgressiveTransportResult::Outcome(Default::default())
+            } else if matches!(request, ProgressiveTransportRequest::OutputEvent { .. }) {
+                ProgressiveTransportResult::Acknowledged
             } else {
                 ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"}))
             }
         });
+        let result = if !typed_send
+            && matches!(request, ProgressiveTransportRequest::OutputEvent { .. })
+            && matches!(result, ProgressiveTransportResult::Outcome(_))
+        {
+            ProgressiveTransportResult::Acknowledged
+        } else {
+            result
+        };
         Ok(ChannelBackendResult::ProgressiveTransport(result))
     }
 }
@@ -603,6 +613,7 @@ async fn transport_failures_preserve_recovery_classification() {
             .await
             .unwrap_err();
         match result {
+            ProgressiveTransportResult::Acknowledged => unreachable!(),
             ProgressiveTransportResult::Unavailable => {
                 assert!(matches!(error, ProgressiveSendError::Unavailable))
             }
@@ -699,8 +710,8 @@ async fn typed_final_delivery_returns_partial_receipt_without_retrying() {
     let handle = open(&replies).await;
     let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
     outcome.receipt.platform_message_ids = vec!["accepted-part-1".into()];
-    outcome.error = Some(tinychannels_bus::ChannelSendError {
-        kind: tinychannels_bus::SendErrorKind::Transient,
+    outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
+        kind: tinychannels_bus::channel::SendErrorKind::Transient,
         message: "second part failed".into(),
         retryable: true,
         sent_before_error: true,
