@@ -14,14 +14,15 @@ transcripts survive replay. A failed or unavailable STT callback marks the
 transcript unavailable without removing the stored audio.
 
 The blob key is restricted to `channels/media/`; metadata lives in
-`channels_media_metadata`. The host grants only that blob prefix and metadata
-collection through `ScopedStorage`. The module validates the complete stored
-scope on every read and applies content-type, byte-size, and digest checks.
-Pending writes and deletions retain durable state for cleanup retries. Hosts
-still own their local-cache materialization: a returned `MediaReference.path`
-must be an actual path produced by host storage after its protected-path and
-symlink guards, never a blob key or provider URL. The OpenHuman adapter's
-narrow grant and guarded cache projection are downstream integration work.
+`channels_media_metadata`. The module validates the complete stored scope on
+every read and applies content-type, byte-size, and digest checks. Pending
+writes and deletions retain durable state for cleanup retries. OpenHuman's
+host adapter must grant only that blob prefix and metadata collection through
+`ScopedStorage`; that narrow grant remains downstream integration work. Hosts
+also own local-cache materialization: `MediaReference.local_cache_path` must
+be an actual path produced by host storage after its protected-path and symlink
+guards, never a blob key or provider URL. The OpenHuman guarded cache projection
+is likewise downstream work.
 
 For completed assistant turns, the module asks the host's scoped
 `GetVoiceReplyPolicy` callback for its mode and verified turn facts. Automatic

@@ -251,14 +251,7 @@ impl ScopedMediaStore {
         } = metadata;
         validate_scope(&scope)?;
         let normalized = normalized_content_type(&content_type);
-        let allowed_kind = match kind {
-            tinychannels_bus::MediaKind::Image => normalized.starts_with("image/"),
-            tinychannels_bus::MediaKind::Video => normalized.starts_with("video/"),
-            tinychannels_bus::MediaKind::Audio => normalized.starts_with("audio/"),
-            tinychannels_bus::MediaKind::Document => true,
-            tinychannels_bus::MediaKind::Unknown => false,
-        };
-        if !allowed_kind {
+        if !is_allowed_content_type(kind, &normalized) {
             anyhow::bail!("media content type or body is not allowed");
         }
         let bounded = max_bytes.saturating_add(1);
@@ -576,7 +569,17 @@ fn validate_content_type(
     content_type: &str,
     bytes: &[u8],
 ) -> anyhow::Result<()> {
-    let allowed = match kind {
+    if !is_allowed_content_type(kind, content_type) || !content_matches(content_type, bytes) {
+        anyhow::bail!("media content type or body is not allowed");
+    }
+    Ok(())
+}
+
+pub(crate) fn is_allowed_content_type(
+    kind: tinychannels_bus::MediaKind,
+    content_type: &str,
+) -> bool {
+    match kind {
         tinychannels_bus::MediaKind::Image => {
             matches!(
                 content_type,
@@ -601,11 +604,7 @@ fn validate_content_type(
                 | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         ),
         tinychannels_bus::MediaKind::Unknown => false,
-    };
-    if !allowed || !content_matches(content_type, bytes) {
-        anyhow::bail!("media content type or body is not allowed");
     }
-    Ok(())
 }
 
 fn content_matches(content_type: &str, bytes: &[u8]) -> bool {
