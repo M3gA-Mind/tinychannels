@@ -26,6 +26,7 @@ enum Terminal {
 
 struct TerminalEntry {
     value: Terminal,
+    instance: String,
     expires: Instant,
 }
 
@@ -43,6 +44,17 @@ pub(crate) struct MediaUploads {
 }
 
 impl MediaUploads {
+    pub(crate) async fn instance(&self, request: &MediaUploadFinish) -> Result<String> {
+        let mut state = self.state.lock().await;
+        Self::prune(&mut state);
+        state
+            .uploads
+            .get(&request.0.0)
+            .map(|upload| upload.request.instance.clone())
+            .or_else(|| state.terminal.get(&request.0.0).map(|entry| entry.instance.clone()))
+            .ok_or_else(|| Error::failed("media upload is unknown or expired"))
+    }
+
     pub(crate) async fn begin(&self, request: MediaUploadBegin) -> Result<MediaUploadHandle> {
         let max = tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES;
         if request.instance.trim().is_empty()
@@ -177,6 +189,7 @@ impl MediaUploads {
             request.0.0,
             TerminalEntry {
                 value: Terminal::Finished(media.clone()),
+                instance: upload.request.instance,
                 expires: Instant::now() + TERMINAL_LIFETIME,
             },
         );
@@ -193,13 +206,14 @@ impl MediaUploads {
                 Terminal::Finished(_) => Err(Error::failed("media upload is already finalized")),
             };
         }
-        if state.uploads.remove(&request.0.0).is_none() {
+        let Some(upload) = state.uploads.remove(&request.0.0) else {
             return Err(Error::failed("media upload is unknown or expired"));
-        }
+        };
         state.terminal.insert(
             request.0.0,
             TerminalEntry {
                 value: Terminal::Aborted,
+                instance: upload.request.instance,
                 expires: Instant::now() + TERMINAL_LIFETIME,
             },
         );
