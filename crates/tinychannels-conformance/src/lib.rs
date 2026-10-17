@@ -233,6 +233,8 @@ pub async fn check_feature(
             | ConformanceFeature::NativeData
             | ConformanceFeature::VoiceOut
             | ConformanceFeature::VoiceSynthesis
+            | ConformanceFeature::ReplyAddressing
+            | ConformanceFeature::ThreadAddressing
             | ConformanceFeature::Edit
             | ConformanceFeature::StreamingDraft
     );
