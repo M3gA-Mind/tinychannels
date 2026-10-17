@@ -616,3 +616,52 @@ fn feature_matrix_contains_each_canonical_media_and_event_case_once() {
     ];
     assert_eq!(ConformanceFeature::ALL, expected);
 }
+
+#[test]
+fn each_canonical_feature_uses_its_contract_capability() {
+    for feature in ConformanceFeature::ALL {
+        let mut capabilities = ChannelCapabilities::default();
+        match feature {
+            ConformanceFeature::Text => capabilities.content.text.outbound = true,
+            ConformanceFeature::Image => capabilities.content.image.outbound = true,
+            ConformanceFeature::Video => capabilities.content.video.outbound = true,
+            ConformanceFeature::Audio => capabilities.content.audio.outbound = true,
+            ConformanceFeature::File => capabilities.content.file.outbound = true,
+            ConformanceFeature::Sticker => capabilities.content.sticker.outbound = true,
+            ConformanceFeature::Location => capabilities.content.location.outbound = true,
+            ConformanceFeature::Contact => capabilities.content.contact.outbound = true,
+            ConformanceFeature::Buttons => capabilities.content.buttons.outbound = true,
+            ConformanceFeature::Poll => capabilities.content.poll.outbound = true,
+            ConformanceFeature::Presentation => capabilities.content.presentation.outbound = true,
+            ConformanceFeature::NativeData => capabilities.content.native.outbound = true,
+            ConformanceFeature::VoiceIn => capabilities.voice_in.supported = true,
+            ConformanceFeature::VoiceOut => capabilities.voice_out.supported = true,
+            ConformanceFeature::VoiceSynthesis => capabilities.voice_out.synthesis = true,
+            ConformanceFeature::ReplyAddressing => capabilities.addressing.reply_to_id = true,
+            ConformanceFeature::ThreadAddressing => capabilities.addressing.thread_id = true,
+            ConformanceFeature::Typing => capabilities.actions.supported.push("typing".into()),
+            ConformanceFeature::Reactions => capabilities.reactions = true,
+            ConformanceFeature::InboundReactions => {
+                capabilities.events.supported.push("reaction".into())
+            }
+            ConformanceFeature::Edit => capabilities.actions.supported.push("edit".into()),
+            ConformanceFeature::Delete => capabilities.actions.supported.push("unsend".into()),
+            ConformanceFeature::ReadReceipts => {
+                capabilities.events.supported.push("read_receipt".into())
+            }
+            ConformanceFeature::StreamingDraft => {
+                capabilities.progressive_edits = true;
+                capabilities.actions.supported.push("draft-update".into());
+            }
+        }
+        assert!(feature.declared(&capabilities), "{feature:?} contract capability");
+    }
+
+    let mut delete_capabilities = ChannelCapabilities::default();
+    delete_capabilities.actions.supported.push("delete".into());
+    assert!(ConformanceFeature::Delete.declared(&delete_capabilities));
+
+    let mut incomplete_draft = ChannelCapabilities::default();
+    incomplete_draft.actions.supported.push("draft-update".into());
+    assert!(!ConformanceFeature::StreamingDraft.declared(&incomplete_draft));
+}
