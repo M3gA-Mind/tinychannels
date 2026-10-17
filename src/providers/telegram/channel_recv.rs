@@ -890,11 +890,9 @@ impl TelegramChannel {
         let message = update
             .get("message")
             .or_else(|| update.get("edited_message"))?;
-        let message_has_structured_content = message.is_some_and(|message| {
-            ["location", "venue", "contact"]
-                .iter()
-                .any(|field| message.get(field).is_some())
-        });
+        let message_has_structured_content = ["location", "venue", "contact"]
+            .iter()
+            .any(|field| message.get(field).is_some());
         if Self::update_media_attachment(update).is_none() && !message_has_structured_content {
             return None;
         }
