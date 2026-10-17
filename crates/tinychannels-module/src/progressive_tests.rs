@@ -744,6 +744,61 @@ async fn progressive_open_and_handle_errors_are_closed_after_shutdown() {
 }
 
 #[tokio::test]
+async fn typed_transport_outcome_error_stops_later_batch_delivery() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open_scoped(
+        &replies,
+        "discord:outcome-error",
+        "outcome-error-turn",
+        tinychannels_bus::ChannelCapabilities::default(),
+    )
+    .await;
+    let mut partial = tinychannels_bus::channel::ChannelSendOutcome::default();
+    partial.receipt.platform_message_ids = vec!["accepted-before-error".into()];
+    partial.error = Some(tinychannels_bus::channel::ChannelSendError {
+        kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+        message: "provider outcome is ambiguous".into(),
+        sent_before_error: true,
+        ..Default::default()
+    });
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Outcome(Box::new(
+        partial.clone(),
+    )));
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![
+                ChannelOutputEvent::Media {
+                    text: None,
+                    parts: vec![tinychannels_bus::ContentPart::Image {
+                        media: tinychannels_bus::MediaReference {
+                            kind: tinychannels_bus::MediaKind::Image,
+                            url: Some("https://media.invalid/uncertain.png".into()),
+                            ..Default::default()
+                        },
+                        caption: None,
+                        alt_text: None,
+                    }],
+                },
+                ChannelOutputEvent::FinalMessage {
+                    text: "must not send after unknown outcome".into(),
+                    parts: vec![],
+                    receipt: None,
+                },
+            ],
+        })
+        .await
+        .unwrap();
+    let ProgressiveResult::Delivery(outcome) = result else {
+        panic!("expected delivery outcome");
+    };
+    assert!(outcome.error.is_some());
+    assert_eq!(outcome.receipts, vec![partial.receipt]);
+    assert_eq!(callback.sends.lock().await.len(), 1);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn shutdown_aborts_every_open_reply_without_sending_cancellation_text() {
     let (replies, callback) = fixture(false).await;
     let replies = Arc::new(replies);
