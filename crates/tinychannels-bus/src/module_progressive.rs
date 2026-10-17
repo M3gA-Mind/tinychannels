@@ -223,6 +223,9 @@ pub enum ProgressiveCommand {
         channel: crate::channel::ChannelRef,
         conversation: crate::channel::ConversationRef,
         turn_id: String,
+        /// Host-owned output lease in milliseconds; the host selects a value
+        /// that covers its turn backstop and closes this handle on completion.
+        lifetime_ms: u64,
     },
     Feed {
         handle: String,
