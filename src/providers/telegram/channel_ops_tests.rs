@@ -943,7 +943,7 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
     )
     .await;
     let channel =
-        channel_for(&server, &["*"]).with_media_repository(Arc::new(UncheckedMediaReadFixture));
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
     let mut message = typed_text("ordered-image", "before".into());
     message.channel_ref = Some(tinychannels_bus::ChannelRef {
         id: "telegram".into(),
@@ -1029,7 +1029,7 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
 async fn typed_image_rejects_non_numeric_platform_thread_before_upload() {
     let server = mock_api().await;
     let channel =
-        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(UncheckedMediaReadFixture));
     let mut message = typed_text("invalid-thread", "caption".into());
     message.channel_ref = Some(tinychannels_bus::ChannelRef {
         id: "telegram".into(),
