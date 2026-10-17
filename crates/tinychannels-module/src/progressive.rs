@@ -429,9 +429,6 @@ fn apply(reply: &mut ProgressiveReply, events: Vec<ProgressiveEvent>) -> Result<
             ProgressiveEvent::ToolResult { tool_name, success } => {
                 reply.on_tool_result(&tool_name, success)
             }
-            ProgressiveEvent::AgentProgress { kind, data } => {
-                reply.on_agent_progress(&kind, &data)
-            }
         }
     }
     Ok(())

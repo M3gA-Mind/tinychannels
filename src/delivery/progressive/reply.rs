@@ -82,39 +82,6 @@ impl ProgressiveReply {
         self.state.thinking_dirty = true;
     }
 
-    /// Apply a portable harness progress fact without exposing its payload as
-    /// channel text. Only explicitly safe labels affect the visible draft;
-    /// arguments, model I/O, and structured results remain transport data.
-    pub fn on_agent_progress(&mut self, kind: &str, data: &serde_json::Value) {
-        match kind {
-            "tool_call_started" => {
-                let label = data
-                    .get("displayLabel")
-                    .and_then(serde_json::Value::as_str)
-                    .or_else(|| data.get("toolName").and_then(serde_json::Value::as_str));
-                if let Some(label) = label {
-                    self.on_tool_call(label);
-                }
-            }
-            "tool_call_progress" => {
-                if let Some(message) = data.get("message").and_then(serde_json::Value::as_str) {
-                    self.state.last_tool = Some(message.to_owned());
-                    self.state.dirty = true;
-                }
-            }
-            "tool_call_completed" => {
-                let name = data.get("displayLabel")
-                    .or_else(|| data.get("toolName"))
-                    .and_then(serde_json::Value::as_str);
-                let success = data.get("success").and_then(serde_json::Value::as_bool);
-                if let (Some(name), Some(success)) = (name, success) {
-                    self.on_tool_result(name, success);
-                }
-            }
-            _ => {}
-        }
-    }
-
     /// Flush pending draft and thinking updates.
     pub async fn edit_tick(&mut self) {
         if !self.progressive_ui {

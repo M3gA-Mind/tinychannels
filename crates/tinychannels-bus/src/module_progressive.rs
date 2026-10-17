@@ -11,15 +11,6 @@ pub enum ProgressiveEvent {
     ThinkingDelta(String),
     ToolCall(String),
     ToolResult { tool_name: String, success: bool },
-    /// Lossless bus projection of one provider-neutral harness progress fact.
-    /// `kind` is the source enum's snake-case variant name and `data` contains
-    /// its fields using camelCase keys. Hosts must construct this with an
-    /// exhaustive match over their concrete progress enum; this contract does
-    /// not import or serialize a harness implementation type.
-    AgentProgress {
-        kind: String,
-        data: Value,
-    },
 }
 
 /// A handle belongs to the private runtime that opened it.
