@@ -1447,7 +1447,7 @@ impl ConfiguredAdapterFactory {
 
 impl Running {
     pub(crate) fn adapter_handle(self: &Arc<Self>) -> ConfiguredAdapterHandle {
-        if self.channel.name() == "telegram" {
+        if self.native_ports.is_some() {
             ConfiguredAdapterFactory::telegram(self.clone())
         } else {
             ConfiguredAdapterFactory::legacy(self.clone())
@@ -1554,13 +1554,29 @@ impl Running {
                             .await
                             .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
                             .map_err(|error| Error::failed(error.to_string())),
-                        ProviderOperation::SendTyped(message) => async {
-                            if let Some(native) = &worker_native {
-                                native.typed_send.send_typed(&message).await.map_err(|error| anyhow::anyhow!(error.message))
+                        ProviderOperation::SendTyped(message) => {
+                            let sent = if let Some(native) = &worker_native {
+                                match native.typed_send.send_typed(&message).await {
+                                    Ok(outcome) => Ok(outcome),
+                                    Err(error) => Ok(tinychannels_bus::channel::ChannelSendOutcome {
+                                        receipt: tinychannels_bus::channel::MessageReceipt {
+                                            idempotency_key: Some(message.idempotency_key.clone()),
+                                            channel: Some(message.channel_ref.clone().unwrap_or_else(|| tinychannels_bus::ChannelRef {
+                                                id: tinychannels_bus::provider_id(&worker_instance).to_owned(),
+                                                account_id: Some(worker_instance.clone()),
+                                            })),
+                                            conversation: Some(message.conversation_ref.clone().unwrap_or_else(|| tinychannels_bus::ConversationRef { id: message.conversation_id.clone(), thread_id: message.thread_id.clone(), ..Default::default() })),
+                                            thread_id: message.thread_id.clone(),
+                                            reply_to_id: message.reply_to_id.clone(),
+                                            ..Default::default()
+                                        },
+                                        error: Some(error),
+                                    }),
+                                }
                             } else {
                                 send_channel.send_typed_with_receipt(&message).await
-                            }
-                        }.await
+                            };
+                            sent
                             .map(|mut outcome| {
                                 outcome.receipt.idempotency_key =
                                     Some(message.idempotency_key.clone());
@@ -1588,7 +1604,8 @@ impl Running {
                                 }
                                 tinychannels_bus::ChannelInteractionResult::Sent(Box::new(outcome))
                             })
-                            .map_err(|error| Error::failed(error.to_string())),
+                            .map_err(|_| Error::failed("provider typed send failed"))
+                        },
                         ProviderOperation::Interaction(interaction) => {
                             dispatch_interaction(send_channel.clone(), worker_native.clone(), interaction, &mut typing)
                                 .await
