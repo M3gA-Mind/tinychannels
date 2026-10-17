@@ -1783,7 +1783,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
             if has_message {
                 let id = next_id_for_mock.fetch_add(1, Ordering::SeqCst).to_string();
                 response_ids_for_mock.lock().unwrap().push((endpoint.to_owned(), id.clone()));
-                result["message_id"] = serde_json::Value::String(id);
+                result["message_id"] = serde_json::Value::Number(id.parse::<u64>().unwrap().into());
             }
             ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true, "result": result}))
         })
