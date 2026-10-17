@@ -3755,6 +3755,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             capabilities.clone(),
         )
         .await;
+        let before = callback.requests.lock().await.len();
         let draft = replies
             .execute(ProgressiveCommand::FeedOutput {
                 handle: handle.clone(),
@@ -3766,7 +3767,6 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             .await
             .expect("text delta reaches progressive worker");
         assert!(matches!(draft, ProgressiveResult::Updated));
-        let before = callback.requests.lock().await.len();
         let final_result = replies
             .execute(ProgressiveCommand::FeedOutput {
                 handle,
