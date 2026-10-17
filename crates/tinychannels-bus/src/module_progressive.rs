@@ -296,6 +296,10 @@ pub enum ProgressiveTransportRequest {
         channel_ref: Option<crate::channel::ChannelRef>,
         #[serde(skip_serializing_if = "Option::is_none")]
         conversation: Option<crate::channel::ConversationRef>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sequence: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        idempotency_key: Option<String>,
         message: Value,
     },
     /// Provider-facing typed delivery. Observation callbacks are separate and

@@ -31,6 +31,7 @@ const TURN_LIFETIME: Duration = Duration::from_secs(180);
 struct Sender {
     host: HostChannels,
     context: Option<ProgressiveOutputContext>,
+    send_sequence: std::sync::atomic::AtomicU64,
 }
 
 impl Sender {
@@ -109,11 +110,33 @@ impl ProgressiveSender for Sender {
         channel: &str,
         text: &str,
     ) -> std::result::Result<Value, ProgressiveSendError> {
-        let intent = tinychannels::outbound_intent_from_legacy_message(
-            channel,
-            serde_json::json!({"text": text}),
-        );
-        let message = tinychannels::legacy_message_value_from_outbound_intent(&intent);
+        let (message, sequence, idempotency_key) = if let Some(context) = &self.context {
+            let sequence = self.send_sequence.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let scope = serde_json::to_vec(&(
+                &context.turn_id,
+                &context.channel,
+                &context.conversation,
+                sequence,
+                text,
+                "progressive_send",
+            ))
+            .expect("scoped progressive identity serializes");
+            (
+                serde_json::json!({"text": text}),
+                Some(sequence),
+                Some(hex::encode(Sha256::digest(scope))),
+            )
+        } else {
+            let intent = tinychannels::outbound_intent_from_legacy_message(
+                channel,
+                serde_json::json!({"text": text}),
+            );
+            (
+                tinychannels::legacy_message_value_from_outbound_intent(&intent),
+                None,
+                None,
+            )
+        };
         self.invoke(ProgressiveTransportRequest::Send {
             channel: channel.into(),
             turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
@@ -122,6 +145,8 @@ impl ProgressiveSender for Sender {
                 .context
                 .as_ref()
                 .map(|context| context.conversation.clone()),
+            sequence,
+            idempotency_key,
             message,
         })
         .await
@@ -853,6 +878,7 @@ async fn run(
             Arc::new(Sender {
                 host,
                 context: Some(context.clone()),
+                send_sequence: std::sync::atomic::AtomicU64::new(0),
             }),
             channel,
             capabilities,
@@ -863,6 +889,7 @@ async fn run(
             Arc::new(Sender {
                 host,
                 context: None,
+                send_sequence: std::sync::atomic::AtomicU64::new(0),
             }),
             channel,
             capabilities,
@@ -1036,7 +1063,18 @@ async fn apply(
 fn absorb_progressive_error(dispatch: &mut ProgressiveOutputDispatch, error: ProgressiveSendError) {
     use tinychannels_bus::module_progressive::ProgressiveOutputFailure;
     match error {
-        ProgressiveSendError::PartialOutcome(outcome) => dispatch.outcomes.push(outcome),
+        ProgressiveSendError::PartialOutcome(mut outcome) => {
+            outcome.error.get_or_insert_with(|| {
+                tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                    message: "progressive provider returned a partial or uncertain outcome".into(),
+                    sent_before_error: true,
+                    ..Default::default()
+                }
+            });
+            dispatch.outcomes.push(outcome);
+            dispatch.failure = Some(ProgressiveOutputFailure::ProviderTransport);
+        }
         ProgressiveSendError::UnsupportedContent => {}
         ProgressiveSendError::Unavailable => {
             dispatch.outcomes.push(progressive_error_outcome(
