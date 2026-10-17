@@ -1,7 +1,9 @@
 use super::*;
+use crate::host::MediaRepository as _;
 use crate::providers::telegram::fixtures::*;
 use base64::Engine;
 use std::sync::Arc;
+use tinystoragedrivers_core::StorageBackend as _;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
@@ -799,8 +801,8 @@ async fn telegram_media_only_update_persists_into_scoped_blobs() {
             .unwrap()
             .starts_with("tinychannels_media_v1_")
     );
-    assert_eq!(media.local_cache_path, None);
-    assert_eq!(media.accessible_url, None);
+    assert_eq!(media.path, None);
+    assert_eq!(media.url, None);
     assert!(!media.opaque_id.as_deref().unwrap().contains("/file/bot"));
 
     let scope = repository.scopes.lock().unwrap()[0].clone();
