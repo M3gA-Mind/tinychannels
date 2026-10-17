@@ -874,7 +874,7 @@ async fn run(
                     }
                     if let Some((text, event_parts, has_typed_parts)) = final_message {
                         if forward {
-                            if !has_typed_parts {
+                            if false && !has_typed_parts {
                                 match reply.finalize_existing_text(&text).await {
                                     Ok(Some(outcome)) => {
                                         result = Ok(ProgressiveResult::DeliveryOutcome { outcome });
