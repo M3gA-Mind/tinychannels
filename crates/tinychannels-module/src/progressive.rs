@@ -67,7 +67,9 @@ impl Sender {
         };
         let result = self
             .host
-            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(request)))
+            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(Box::new(
+                request,
+            )))
             .await
             .map_err(|_| {
                 if scoped_effect {
@@ -88,36 +90,36 @@ impl Sender {
             })?;
         match result {
             ChannelBackendResult::ProgressiveTransport(result) => match *result {
-            ProgressiveTransportResult::Acknowledged => Ok(Value::Null),
-            ProgressiveTransportResult::Outcome(outcome) => match outcome.error {
-                None => serde_json::to_value(outcome.receipt)
-                    .map_err(|error| ProgressiveSendError::Other(error.into())),
-                Some(_) => Err(ProgressiveSendError::PartialOutcome(outcome)),
-            },
-            ProgressiveTransportResult::Success(value) => {
-                if value.get("error").is_some_and(|error| !error.is_null())
-                    || value.get("success").and_then(Value::as_bool) == Some(false)
-                    || value.get("status").and_then(Value::as_str) == Some("unknown_after_send")
-                {
-                    Err(ProgressiveSendError::Other(anyhow::anyhow!(
-                        "progressive delivery failed"
-                    )))
-                } else {
-                    Ok(value)
+                ProgressiveTransportResult::Acknowledged => Ok(Value::Null),
+                ProgressiveTransportResult::Outcome(outcome) => match outcome.error {
+                    None => serde_json::to_value(outcome.receipt)
+                        .map_err(|error| ProgressiveSendError::Other(error.into())),
+                    Some(_) => Err(ProgressiveSendError::PartialOutcome(outcome)),
+                },
+                ProgressiveTransportResult::Success(value) => {
+                    if value.get("error").is_some_and(|error| !error.is_null())
+                        || value.get("success").and_then(Value::as_bool) == Some(false)
+                        || value.get("status").and_then(Value::as_str) == Some("unknown_after_send")
+                    {
+                        Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                            "progressive delivery failed"
+                        )))
+                    } else {
+                        Ok(value)
+                    }
                 }
-            }
-            ProgressiveTransportResult::Unavailable => {
-                Err(ProgressiveSendError::Unavailable)
-            }
-            ProgressiveTransportResult::EditUnsupported => Err(ProgressiveSendError::EditUnsupported),
-            ProgressiveTransportResult::MessageGone => {
-                Err(ProgressiveSendError::MessageGone)
-            }
+                ProgressiveTransportResult::Unavailable => Err(ProgressiveSendError::Unavailable),
+                ProgressiveTransportResult::EditUnsupported => {
+                    Err(ProgressiveSendError::EditUnsupported)
+                }
+                ProgressiveTransportResult::MessageGone => Err(ProgressiveSendError::MessageGone),
+                _ => Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                    "progressive transport failed"
+                ))),
+            },
             _ => Err(ProgressiveSendError::Other(anyhow::anyhow!(
                 "progressive transport failed"
             ))),
-            },
-            _ => Err(ProgressiveSendError::Other(anyhow::anyhow!("progressive transport failed"))),
         }
     }
 }
@@ -360,7 +362,6 @@ async fn send_typed_part(
                 text: text.into(),
             },
         )))
-        ))
         .await
         .map_err(|_| {
             let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
@@ -373,28 +374,29 @@ async fn send_typed_part(
             ProgressiveSendError::PartialOutcome(Box::new(outcome))
         })? {
         ChannelBackendResult::ProgressiveTransport(result) => match *result {
-        ProgressiveTransportResult::Outcome(outcome) => Ok(*outcome),
-        ProgressiveTransportResult::Unavailable => {
-            Err(ProgressiveSendError::Unavailable)
-        }
-        ProgressiveTransportResult::Failed => {
-            Err(ProgressiveSendError::Other(anyhow::anyhow!(
-                "typed provider send failed with unknown outcome"
-            )))
-        }
-        ProgressiveTransportResult::UnsupportedContent => Err(ProgressiveSendError::UnsupportedContent),
-        _ => {
-            let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-            outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                message: "typed progressive callback returned an invalid acknowledgement".into(),
-                sent_before_error: true,
-                ..Default::default()
-            });
-            Err(ProgressiveSendError::PartialOutcome(Box::new(outcome)))
-        }
+            ProgressiveTransportResult::Outcome(outcome) => Ok(*outcome),
+            ProgressiveTransportResult::Unavailable => Err(ProgressiveSendError::Unavailable),
+            ProgressiveTransportResult::Failed => Err(ProgressiveSendError::Other(
+                anyhow::anyhow!("typed provider send failed with unknown outcome"),
+            )),
+            ProgressiveTransportResult::UnsupportedContent => {
+                Err(ProgressiveSendError::UnsupportedContent)
+            }
+            _ => {
+                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+                outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                    message: "typed progressive callback returned an invalid acknowledgement"
+                        .into(),
+                    sent_before_error: true,
+                    ..Default::default()
+                });
+                Err(ProgressiveSendError::PartialOutcome(Box::new(outcome)))
+            }
         },
-        _ => Err(ProgressiveSendError::Other(anyhow::anyhow!("typed provider send failed with unknown outcome"))),
+        _ => Err(ProgressiveSendError::Other(anyhow::anyhow!(
+            "typed provider send failed with unknown outcome"
+        ))),
     }
 }
 
