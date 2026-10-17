@@ -67,8 +67,6 @@ pub enum WebChannelEvent {
     /// Accepted by older clients; no current core emitter produces this event.
     ChatSegment { #[serde(flatten)] context: WebEventContext, #[serde(skip_serializing_if="Option::is_none")] message: Option<String>, #[serde(skip_serializing_if="Option::is_none")] full_response: Option<String>, #[serde(skip_serializing_if="Option::is_none")] segment_index: Option<u32>, #[serde(skip_serializing_if="Option::is_none")] segment_total: Option<u32> },
 }
-}
-
 /// Cost provenance copied as a wire enum to avoid depending on the harness.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
