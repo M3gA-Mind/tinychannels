@@ -79,9 +79,13 @@ impl Callback {
             result
         };
         let result = if !typed_send
-            && matches!(request, ProgressiveTransportRequest::OutputEvent {
-                event: ChannelOutputEvent::FinalMessage { .. }, ..
-            })
+            && matches!(
+                request,
+                ProgressiveTransportRequest::OutputEvent {
+                    event: ChannelOutputEvent::FinalMessage { .. },
+                    ..
+                }
+            )
             && matches!(result, ProgressiveTransportResult::Failed)
         {
             ProgressiveTransportResult::Acknowledged
@@ -665,7 +669,16 @@ async fn output_callback_failure_cleans_up_without_sending_a_replacement() {
             .to_string()
             .contains("host output event callback failed")
     );
-    assert!(callback.sends.lock().await.is_empty());
+    assert_eq!(callback.sends.lock().await.len(), 1);
+    let requests = callback.requests.lock().await;
+    let ProgressiveTransportRequest::SendTyped { parts: sent_parts, .. } = requests
+        .iter()
+        .find(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+        .unwrap()
+    else {
+        panic!("expected typed provider send")
+    };
+    assert_eq!(sent_parts, &parts);
     assert!(
         callback
             .requests
