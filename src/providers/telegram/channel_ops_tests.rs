@@ -89,6 +89,49 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
     assert!(uploads[0].contains("\"message_id\":42"));
 }
 
+#[tokio::test]
+async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() {
+    let server = mock_api().await;
+    mount_post(server.as_ref(), "sendVoice", ok_with(serde_json::json!({"message_id": 52}))).await;
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
+    let mut message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: None,
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            ..Default::default()
+        }),
+        reply_to_id: Some("42".into()),
+        thread_id: None,
+        idempotency_key: "turn-7".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("host-media-1".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                audio_base64: None,
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1000),
+            },
+        }],
+    };
+    message.parts.insert(0, tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Text { text: "recognized words".into(), markdown_dialect: None },
+    });
+
+    let result = channel.send_typed_with_receipt(&message).await;
+    assert!(result.is_ok(), "mixed transcript+voice must be supported: {result:?}");
+    let uploads = raw_bodies(&server, "sendVoice").await;
+    assert_eq!(uploads.len(), 1);
+    assert!(uploads[0].contains("recognized words"));
+    assert!(uploads[0].contains("reply_parameters"));
+    assert_eq!(result.unwrap().receipt.primary_platform_message_id.as_deref(), Some("52"));
+}
+
 /// Hang guard for loops that must terminate on their own.
 const GUARD: Duration = Duration::from_secs(20);
 
