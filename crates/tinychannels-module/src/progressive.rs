@@ -187,7 +187,7 @@ impl ProgressiveSender for Sender {
             let missing_receipt = outcome.receipt.platform_message_ids.is_empty()
                 && outcome.receipt.parts.is_empty()
                 && outcome.error.is_none();
-            merge_receipt(&mut aggregate.receipt, outcome.receipt, index == 0);
+            merge_receipt(&mut aggregate.receipt, outcome.receipt, index == 0, index);
             if outcome.error.is_some() {
                 aggregate.error = outcome.error;
                 break;
@@ -356,6 +356,7 @@ fn merge_receipt(
     aggregate: &mut tinychannels_bus::channel::MessageReceipt,
     next: tinychannels_bus::channel::MessageReceipt,
     first: bool,
+    segment_index: usize,
 ) {
     if first {
         *aggregate = next;
@@ -364,6 +365,20 @@ fn merge_receipt(
     aggregate
         .platform_message_ids
         .extend(next.platform_message_ids);
+    if next.parts.is_empty() && (next.edit_token.is_some() || next.delete_token.is_some()) {
+        for (offset, platform_message_id) in next.platform_message_ids.iter().enumerate() {
+            aggregate
+                .parts
+                .push(tinychannels_bus::channel::MessageReceiptPart {
+                    platform_message_id: platform_message_id.clone(),
+                    kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
+                    index: segment_index + offset,
+                    edit_token: next.edit_token.clone(),
+                    delete_token: next.delete_token.clone(),
+                    ..Default::default()
+                });
+        }
+    }
     aggregate.parts.extend(next.parts);
     if aggregate.primary_platform_message_id.is_none() {
         aggregate.primary_platform_message_id = next.primary_platform_message_id;

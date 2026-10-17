@@ -1016,7 +1016,11 @@ async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts
     };
     assert_eq!(outcome.receipt.platform_message_ids, ["seg-1", "seg-2"]);
     assert!(outcome.error.is_some());
-    assert_eq!(callback.sends.lock().await.len(), 2, "segment 3 must not be attempted");
+    assert_eq!(
+        callback.sends.lock().await.len(),
+        2,
+        "segment 3 must not be attempted"
+    );
     let typed: Vec<_> = callback
         .requests
         .lock()
