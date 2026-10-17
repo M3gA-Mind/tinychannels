@@ -95,29 +95,20 @@ impl TelegramChannel {
                 ..Default::default()
             },
             text: message.content.clone(),
-            parts: voice_note
-                .map_or_else(
-                    || {
-                        vec![tinychannels_bus::ContentPart::Text {
-                            text: message.content.clone(),
-                            markdown_dialect: None,
-                        }]
-                    },
-                    |voice_note| {
-                        let mut parts = Vec::new();
-                        if !message.content.trim().is_empty() {
-                            parts.push(tinychannels_bus::ContentPart::Text {
-                                text: message.content.clone(),
-                                markdown_dialect: None,
-                            });
-                        }
-                        parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
-                        parts
-                    },
-                )
-                .into_iter()
-                .chain(media_parts)
-                .collect(),
+            parts: {
+                let mut parts = Vec::new();
+                if !message.content.trim().is_empty() {
+                    parts.push(tinychannels_bus::ContentPart::Text {
+                        text: message.content.clone(),
+                        markdown_dialect: None,
+                    });
+                }
+                if let Some(voice_note) = voice_note {
+                    parts.push(tinychannels_bus::ContentPart::VoiceNote { voice_note });
+                }
+                parts.extend(media_parts);
+                parts
+            },
             raw: Some(serde_json::json!({"providerMessageId": provider_message_id})),
             ..Default::default()
         }
