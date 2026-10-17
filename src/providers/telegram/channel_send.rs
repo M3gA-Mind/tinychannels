@@ -46,9 +46,13 @@ impl TelegramChannel {
             form = form.text("message_thread_id", thread.to_owned());
         }
         if let Some(reply_to) = reply_to_id {
-            let message_id = reply_to.parse::<i64>()
+            let message_id = reply_to
+                .parse::<i64>()
                 .map_err(|_| anyhow::anyhow!("Telegram reply target is invalid"))?;
-            form = form.text("reply_parameters", serde_json::json!({"message_id": message_id}).to_string());
+            form = form.text(
+                "reply_parameters",
+                serde_json::json!({"message_id": message_id}).to_string(),
+            );
         }
         if let Some(caption) = caption {
             form = form.text("caption", caption.to_owned());

@@ -218,13 +218,28 @@ impl tinychannels::host::VoiceCodec for ModuleVoiceCodec {
             })
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        let info = self.0.probe_voice(tinyvoice_bus::codec::CodecInput {
-            audio_base64: result.audio_base64.clone(),
-        }).await.map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        let waveform = self.0.waveform_voice(tinyvoice_bus::codec::WaveformRequest {
-            audio_base64: result.audio_base64.clone(),
-            buckets: 64,
-        }).await.ok().map(|result| result.peaks.into_iter().map(|peak| f32::from(peak) / 255.0).collect());
+        let info = self
+            .0
+            .probe_voice(tinyvoice_bus::codec::CodecInput {
+                audio_base64: result.audio_base64.clone(),
+            })
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let waveform = self
+            .0
+            .waveform_voice(tinyvoice_bus::codec::WaveformRequest {
+                audio_base64: result.audio_base64.clone(),
+                buckets: 64,
+            })
+            .await
+            .ok()
+            .map(|result| {
+                result
+                    .peaks
+                    .into_iter()
+                    .map(|peak| f32::from(peak) / 255.0)
+                    .collect()
+            });
         Ok(tinychannels::host::VoiceCodecResult {
             audio_base64: result.audio_base64,
             duration_ms: Some(info.duration_ms),
@@ -412,7 +427,8 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         scope.configured_instance.clone_from(&self.1);
         scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
         scope.channel.account_id = Some(self.1.clone());
-        let result = self.0
+        let result = self
+            .0
             .read_voice_media(tinychannels_bus::HostReadVoiceMediaRequest {
                 scope,
                 opaque_id,

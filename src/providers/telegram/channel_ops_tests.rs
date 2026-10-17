@@ -9,8 +9,7 @@ struct VoiceReadFixture;
 
 #[test]
 fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() {
-    let without_store = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
-        .capabilities();
+    let without_store = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).capabilities();
     assert!(!without_store.voice_in.supported);
     assert!(!without_store.voice_out.supported);
     assert!(!without_store.voice_out.synthesis);
@@ -21,7 +20,10 @@ fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() 
     assert!(with_storage.voice_in.supported);
     assert!(with_storage.voice_out.supported);
     assert!(!with_storage.voice_out.synthesis);
-    assert_eq!(with_storage.voice_out.accepted_codecs, ["ogg_opus", "m4a_aac", "mp3"]);
+    assert_eq!(
+        with_storage.voice_out.accepted_codecs,
+        ["ogg_opus", "m4a_aac", "mp3"]
+    );
     assert_eq!(with_storage.voice_out.max_size_bytes, Some(8 * 1024 * 1024));
 
     let with_all_ports = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
@@ -116,7 +118,12 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
 #[tokio::test]
 async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() {
     let server = mock_api().await;
-    mount_post(&server, "sendVoice", ok_with(serde_json::json!({"message_id": 52}))).await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({"message_id": 52})),
+    )
+    .await;
     let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
     let mut message = tinychannels_bus::ChannelOutboundMessage {
         channel_id: "telegram".into(),
@@ -143,17 +150,33 @@ async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() 
             },
         }],
     };
-    message.parts.insert(0, tinychannels_bus::OutboundContentPart::Content {
-        part: tinychannels_bus::ContentPart::Text { text: "recognized words".into(), markdown_dialect: None },
-    });
+    message.parts.insert(
+        0,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "recognized words".into(),
+                markdown_dialect: None,
+            },
+        },
+    );
 
     let result = channel.send_typed_with_receipt(&message).await;
-    assert!(result.is_ok(), "mixed transcript+voice must be supported: {result:?}");
+    assert!(
+        result.is_ok(),
+        "mixed transcript+voice must be supported: {result:?}"
+    );
     let uploads = raw_bodies(&server, "sendVoice").await;
     assert_eq!(uploads.len(), 1);
     assert!(uploads[0].contains("recognized words"));
     assert!(uploads[0].contains("reply_parameters"));
-    assert_eq!(result.unwrap().receipt.primary_platform_message_id.as_deref(), Some("52"));
+    assert_eq!(
+        result
+            .unwrap()
+            .receipt
+            .primary_platform_message_id
+            .as_deref(),
+        Some("52")
+    );
 }
 
 /// Hang guard for loops that must terminate on their own.

@@ -125,7 +125,6 @@ impl TelegramChannel {
         self
     }
 
-
     /// Inject a persisted allowlist store so first-run bind/pairing promotions
     /// survive restarts. Without it, allowlisting is runtime-only.
     pub fn with_allowlist(mut self, allowlist: Arc<dyn crate::host::AllowlistStore>) -> Self {

@@ -217,7 +217,17 @@ impl ProgressiveSender for Sender {
         segment_index: u32,
     ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
     {
-        send_typed_part(self, channel, parts, text, context, sequence, segment_index, false).await
+        send_typed_part(
+            self,
+            channel,
+            parts,
+            text,
+            context,
+            sequence,
+            segment_index,
+            false,
+        )
+        .await
     }
 
     async fn send_final_parts_with_segment(
@@ -228,8 +238,19 @@ impl ProgressiveSender for Sender {
         context: Option<&ProgressiveOutputContext>,
         sequence: u64,
         segment_index: u32,
-    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
-        send_typed_part(self, channel, parts, text, context, sequence, segment_index, true).await
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
+    {
+        send_typed_part(
+            self,
+            channel,
+            parts,
+            text,
+            context,
+            sequence,
+            segment_index,
+            true,
+        )
+        .await
     }
 
     async fn edit(
@@ -354,17 +375,22 @@ async fn send_typed_part(
     let mut prepared_parts = parts.to_vec();
     let mut prepared_text = text.to_owned();
     if let Some(context) = context {
-        let synths = prepared_parts.iter().filter_map(|part| match part {
-            tinychannels_bus::OutboundContentPart::Voice {
-                voice: tinychannels_bus::OutboundVoice::Synthesize { text, voice },
-            } => Some((text.clone(), voice.clone())),
-            _ => None,
-        }).collect::<Vec<_>>();
+        let synths = prepared_parts
+            .iter()
+            .filter_map(|part| match part {
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Synthesize { text, voice },
+                } => Some((text.clone(), voice.clone())),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         if synths.len() > 1 {
             return Err(ProgressiveSendError::UnsupportedContent);
         }
         let explicit_synthesis = !synths.is_empty();
-        let (requested_text, requested_voice) = synths.into_iter().next()
+        let (requested_text, requested_voice) = synths
+            .into_iter()
+            .next()
             .unwrap_or_else(|| (prepared_text.clone(), None));
         if (final_phase || explicit_synthesis)
             && !requested_text.trim().is_empty()
@@ -376,26 +402,39 @@ async fn send_typed_part(
                 conversation: context.conversation.clone(),
                 turn_id: context.turn_id.clone(),
             };
-            let policy = sender.host.voice_reply_policy(
-                tinychannels_bus::HostVoiceReplyPolicyRequest { scope: scope.clone() },
-            ).await.ok();
-            let should_speak = policy.as_ref().is_some_and(|policy| {
-                match policy.mode {
-                    tinychannels_bus::HostVoiceReplyMode::Mirror => policy.inbound_has_voice,
-                    tinychannels_bus::HostVoiceReplyMode::Always => true,
-                    tinychannels_bus::HostVoiceReplyMode::Never => false,
-                    tinychannels_bus::HostVoiceReplyMode::SpeakReply => policy.explicitly_requested,
-                }
+            let policy = sender
+                .host
+                .voice_reply_policy(tinychannels_bus::HostVoiceReplyPolicyRequest {
+                    scope: scope.clone(),
+                })
+                .await
+                .ok();
+            let should_speak = policy.as_ref().is_some_and(|policy| match policy.mode {
+                tinychannels_bus::HostVoiceReplyMode::Mirror => policy.inbound_has_voice,
+                tinychannels_bus::HostVoiceReplyMode::Always => true,
+                tinychannels_bus::HostVoiceReplyMode::Never => false,
+                tinychannels_bus::HostVoiceReplyMode::SpeakReply => policy.explicitly_requested,
             });
-            let had_synthesis = prepared_parts.iter().any(|part| matches!(part, tinychannels_bus::OutboundContentPart::Voice {
-                voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
-            }));
-            prepared_parts.retain(|part| !matches!(part, tinychannels_bus::OutboundContentPart::Voice {
-                voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
-            }));
+            let had_synthesis = prepared_parts.iter().any(|part| {
+                matches!(
+                    part,
+                    tinychannels_bus::OutboundContentPart::Voice {
+                        voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
+                    }
+                )
+            });
+            prepared_parts.retain(|part| {
+                !matches!(
+                    part,
+                    tinychannels_bus::OutboundContentPart::Voice {
+                        voice: tinychannels_bus::OutboundVoice::Synthesize { .. }
+                    }
+                )
+            });
             if should_speak {
                 let instance = sender.channel.clone();
-                let synthesizer = crate::provider::ModuleSynthesizer(sender.host.clone(), instance.clone());
+                let synthesizer =
+                    crate::provider::ModuleSynthesizer(sender.host.clone(), instance.clone());
                 let codec = crate::provider::ModuleVoiceCodec(sender.host.clone());
                 let store = crate::provider::ModuleVoiceMediaStore(sender.host.clone(), instance);
                 match tinychannels::host::prepare_voice_reply(
@@ -408,7 +447,9 @@ async fn send_typed_part(
                     &sender.capabilities.voice_out.accepted_codecs,
                     sender.capabilities.voice_out.max_size_bytes,
                     sender.capabilities.voice_out.max_duration_ms,
-                ).await {
+                )
+                .await
+                {
                     Ok(prepared) => {
                         let note = prepared.note;
                         prepared_parts.push(tinychannels_bus::OutboundContentPart::Voice {
@@ -419,20 +460,30 @@ async fn send_typed_part(
                                 duration_ms: note.duration_ms,
                             },
                         });
-                        if let Some(url) = prepared.accessible_url.filter(|url| !url.trim().is_empty()) {
+                        if let Some(url) =
+                            prepared.accessible_url.filter(|url| !url.trim().is_empty())
+                        {
                             prepared_text.push_str("\n");
                             prepared_text.push_str(&url);
                         }
                     }
                     Err(error) => {
-                        let kind = if error.to_string().contains("limit") { "limit" } else { "unavailable" };
+                        let kind = if error.to_string().contains("limit") {
+                            "limit"
+                        } else {
+                            "unavailable"
+                        };
                         tracing::warn!(channel = %sender.channel, kind, "shared voice preparation unavailable");
-                        if prepared_text.trim().is_empty() { prepared_text = requested_text; }
+                        if prepared_text.trim().is_empty() {
+                            prepared_text = requested_text;
+                        }
                     }
                 }
             } else if had_synthesis {
                 // The model explicitly requested speech, but host policy denied it.
-                if prepared_text.trim().is_empty() { prepared_text = requested_text; }
+                if prepared_text.trim().is_empty() {
+                    prepared_text = requested_text;
+                }
             }
         }
     }

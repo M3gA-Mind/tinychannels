@@ -1,6 +1,9 @@
 //! Shared inbound voice enrichment and scoped reply-mode decisions.
 
-use super::{SpeechRequest, SpeechSynthesizer, Transcriber, TranscriptionRequest, VoiceCodec, VoiceCodecRequest, VoiceMediaRequest, VoiceMediaStore};
+use super::{
+    SpeechRequest, SpeechSynthesizer, Transcriber, TranscriptionRequest, VoiceCodec,
+    VoiceCodecRequest, VoiceMediaRequest, VoiceMediaStore,
+};
 use std::sync::Arc;
 use tinychannels_bus::{
     HostVoiceScope, VoiceNote, VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
@@ -141,7 +144,11 @@ pub async fn prepare_voice_reply(
             target: target.into(),
         })
         .await?;
-    let size_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &encoded.audio_base64)?.len() as u64;
+    let size_bytes = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        &encoded.audio_base64,
+    )?
+    .len() as u64;
     if max_size_bytes.is_some_and(|limit| size_bytes > limit) {
         anyhow::bail!("synthesized voice exceeds provider size limit");
     }
@@ -191,7 +198,10 @@ pub async fn prepare_voice_reply(
         push_to_talk: false,
         transcript: None,
     };
-    Ok(PreparedVoiceReply { note, accessible_url: stored.accessible_url })
+    Ok(PreparedVoiceReply {
+        note,
+        accessible_url: stored.accessible_url,
+    })
 }
 
 fn unavailable_transcript() -> VoiceTranscript {
