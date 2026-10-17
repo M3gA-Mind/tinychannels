@@ -1318,3 +1318,315 @@ async fn final_text_edit_reuses_draft_receipt_and_removes_all_ephemeral_messages
         ]
     );
 }
+
+#[tokio::test]
+async fn canonical_progress_events_update_visible_text_and_tool_status_without_sending_notices() {
+    let (sender, mut reply) = typed_turn(None);
+    let events = [
+        (
+            Event::ToolCallStarted {
+                call_id: "call".into(),
+                tool_name: "search".into(),
+                arguments: json!({"q": "test"}),
+                iteration: 1,
+                display_label: Some("Search".into()),
+                display_detail: None,
+            },
+            "🔧 Search…",
+        ),
+        (
+            Event::ToolProgress {
+                label: "fallback".into(),
+                message: Some("Reading".into()),
+            },
+            "🔧 Reading…",
+        ),
+        (
+            Event::ToolProgress {
+                label: "Searching".into(),
+                message: None,
+            },
+            "🔧 Searching…",
+        ),
+        (
+            Event::ToolCallProgress {
+                call_id: "call".into(),
+                message: "Fetching".into(),
+            },
+            "🔧 Fetching…",
+        ),
+        (
+            Event::ToolCallCompleted {
+                call_id: "call".into(),
+                tool_name: "search".into(),
+                success: false,
+                output_chars: 0,
+                output: String::new(),
+                arguments: None,
+                elapsed_ms: 2,
+                iteration: 1,
+                failure: None,
+                display_label: Some("Search".into()),
+                display_detail: None,
+                structured: None,
+            },
+            "🔧 Search ✗",
+        ),
+    ];
+    for (event, expected) in events {
+        let dispatch = reply.apply_output_event(&event, true).await.unwrap();
+        assert!(dispatch.outcomes.is_empty() && dispatch.unsupported.is_empty());
+        assert_eq!(reply.state.last_tool.as_deref(), Some(expected));
+    }
+    reply
+        .apply_output_event(
+            &Event::TextDelta {
+                text: "visible".into(),
+                iteration: Some(1),
+            },
+            true,
+        )
+        .await
+        .unwrap();
+    reply
+        .apply_output_event(
+            &Event::ThinkingDelta {
+                text: "reason".into(),
+                iteration: Some(1),
+            },
+            true,
+        )
+        .await
+        .unwrap();
+    reply
+        .apply_output_event(
+            &Event::ApprovalRequest {
+                id: "approval".into(),
+                prompt: "Run?".into(),
+                choices: vec![],
+            },
+            false,
+        )
+        .await
+        .unwrap();
+    reply
+        .apply_output_event(
+            &Event::Clarification {
+                prompt: "Which?".into(),
+            },
+            false,
+        )
+        .await
+        .unwrap();
+    assert_eq!(reply.state.content, "visible");
+    assert_eq!(reply.state.thinking_accumulator, "reason");
+    assert!(sender.sent.lock().unwrap().is_empty());
+    let empty = reply
+        .finalize_output_event(&Event::Cancellation { reason: None })
+        .await
+        .unwrap();
+    assert!(empty.outcomes.is_empty() && empty.unsupported.is_empty());
+}
+
+#[tokio::test]
+async fn approvals_and_voice_notes_are_delivered_as_ordered_typed_content() {
+    let (sender, mut reply) = typed_turn(None);
+    let voice = tinychannels_bus::VoiceNote {
+        media: tinychannels_bus::MediaReference {
+            kind: tinychannels_bus::MediaKind::Audio,
+            url: Some("https://example.test/voice".into()),
+            ..Default::default()
+        },
+        codec: Some("opus".into()),
+        duration_ms: Some(100),
+        transcript: Some(tinychannels_bus::VoiceTranscript {
+            text: "transcript".into(),
+            language: None,
+            state: tinychannels_bus::VoiceTranscriptState::Complete,
+            source: tinychannels_bus::VoiceTranscriptSource::Provider,
+        }),
+        ..Default::default()
+    };
+    for event in [
+        Event::ApprovalRequest {
+            id: "approval".into(),
+            prompt: "Run?".into(),
+            choices: vec!["yes".into(), "no".into()],
+        },
+        Event::ApprovalRequest {
+            id: "approval-2".into(),
+            prompt: "Continue?".into(),
+            choices: vec![],
+        },
+        Event::VoiceNote {
+            text: None,
+            voice: voice.clone(),
+        },
+        Event::VoiceNote {
+            text: Some("explicit".into()),
+            voice: voice.clone(),
+        },
+    ] {
+        let dispatch = reply.apply_output_event(&event, true).await.unwrap();
+        assert_eq!(dispatch.outcomes.len(), 1);
+        assert!(dispatch.failure.is_none());
+    }
+    let sent = sender.sent.lock().unwrap();
+    assert_eq!(sent[0].text, "Approval requested: Run?\nChoices: yes, no");
+    assert_eq!(sent[1].text, "Approval requested: Continue?");
+    for (index, expected) in [(2, "transcript"), (3, "explicit")] {
+        assert_eq!(sent[index].parts.len(), 2);
+        assert_eq!(
+            sent[index].parts[0],
+            OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: expected.into(),
+                    markdown_dialect: None
+                }
+            }
+        );
+        assert_eq!(
+            sent[index].parts[1],
+            OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: voice.media.clone(),
+                    codec: voice.codec.clone(),
+                    duration_ms: voice.duration_ms
+                },
+            }
+        );
+    }
+}
+
+#[tokio::test]
+async fn typed_notices_distinguish_unsupported_content_transport_failure_and_missing_receipts() {
+    let event = Event::Clarification {
+        prompt: "Which?".into(),
+    };
+    let (sender, mut reply) = typed_turn(None);
+    sender.outcomes.lock().unwrap().push_back(Err(other()));
+    assert!(matches!(
+        reply.apply_output_event(&event, true).await,
+        Err(ProgressiveSendError::Other(_))
+    ));
+    sender
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(Ok(ChannelSendOutcome::default()));
+    let dispatch = reply.apply_output_event(&event, true).await.unwrap();
+    assert!(
+        dispatch.outcomes[0]
+            .error
+            .as_ref()
+            .unwrap()
+            .sent_before_error
+    );
+    assert_eq!(
+        dispatch.failure,
+        Some(tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport)
+    );
+    sender
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(Err(ProgressiveSendError::UnsupportedContent));
+    let voice = Event::VoiceNote {
+        text: None,
+        voice: tinychannels_bus::VoiceNote::default(),
+    };
+    let unsupported = reply.apply_output_event(&voice, true).await.unwrap();
+    assert_eq!(unsupported.unsupported.len(), 1);
+    assert!(unsupported.failure.is_none());
+    sender.outcomes.lock().unwrap().push_back(Err(other()));
+    assert!(reply.apply_output_event(&voice, true).await.is_err());
+    sender.outcomes.lock().unwrap().push_back(Err(other()));
+    assert!(
+        reply
+            .apply_output_event(
+                &Event::Media {
+                    text: None,
+                    parts: vec![]
+                },
+                true
+            )
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn scoped_edit_latch_does_not_poison_an_independent_turn_or_follow_legacy_cache() {
+    mark_channel_edits_unsupported("scoped-isolation:legacy");
+    let sender = Arc::new(FakeSender::default());
+    let make = || {
+        ProgressiveReply::new_scoped(
+            sender.clone(),
+            "scoped-isolation:chat",
+            tinychannels_bus::ChannelCapabilities {
+                progressive_edits: true,
+                ..Default::default()
+            },
+            ProgressiveOutputContext {
+                turn_id: "isolated-turn".into(),
+                channel: tinychannels_bus::ChannelRef {
+                    id: "scoped-isolation".into(),
+                    account_id: None,
+                },
+                conversation: tinychannels_bus::ConversationRef::default(),
+            },
+        )
+    };
+    let mut first = make();
+    first.on_text_delta("first");
+    first.edit_tick().await;
+    FakeSender::script(&sender.edits, Outcome::Err(unsupported));
+    first.on_text_delta(" update");
+    first.edit_tick().await;
+    assert!(first.state.edit_disabled);
+    let mut second = make();
+    second.on_text_delta("second");
+    second.edit_tick().await;
+    second.on_text_delta(" update");
+    second.edit_tick().await;
+    assert!(!second.state.edit_disabled);
+    assert_eq!(
+        sender.calls().last(),
+        Some(&Call::Edit("m2".into(), "second update".into()))
+    );
+}
+
+#[tokio::test]
+async fn impossible_text_limit_and_unsupported_first_segment_never_send_a_replacement() {
+    let (sender, mut reply) = typed_turn(Some((1, tinychannels_bus::LengthUnit::Utf8Bytes)));
+    assert!(reply.send_parts(&[text_part("😀")], "😀").await.is_err());
+    assert!(sender.sent.lock().unwrap().is_empty());
+    let (sender, mut reply) = typed_turn(None);
+    sender
+        .outcomes
+        .lock()
+        .unwrap()
+        .push_back(Err(ProgressiveSendError::UnsupportedContent));
+    let dispatch = reply
+        .finalize_output_event(&Event::FinalMessage {
+            text: "fallback".into(),
+            parts: vec![text_part("authoritative")],
+            receipt: None,
+        })
+        .await
+        .unwrap();
+    assert_eq!(dispatch.unsupported, vec![text_part("authoritative")]);
+    assert!(sender.legacy.calls().is_empty());
+}
+
+#[tokio::test]
+async fn disabled_and_empty_draft_flushes_make_no_provider_calls() {
+    use super::draft::flush_streaming_edit;
+    let sender = FakeSender::default();
+    let mut state = StreamingState::default();
+    flush_streaming_edit(&sender, "empty", &mut state, false).await;
+    state.content = "text".into();
+    state.edit_disabled = true;
+    flush_streaming_edit(&sender, "empty", &mut state, false).await;
+    assert!(sender.calls().is_empty());
+}
