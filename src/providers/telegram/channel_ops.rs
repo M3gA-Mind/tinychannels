@@ -656,7 +656,7 @@ impl Channel for TelegramChannel {
                     &caption,
                     &chat_id,
                     thread,
-                    message.reply_to_id.as_deref().and_then(Self::parse_message_id),
+                    Self::parse_message_id(message.reply_to_id.as_deref()),
                 ).await {
                     Ok(text_ids) => {
                         for (index, text_id) in text_ids.into_iter().enumerate() {
@@ -664,7 +664,7 @@ impl Channel for TelegramChannel {
                             receipt.parts.push(tinychannels_bus::channel::MessageReceiptPart {
                                 platform_message_id: text_id.clone(),
                                 kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
-                                index: index as u32 + 1,
+                                index: index + 1,
                                 thread_id: conversation.topic_id.clone()
                                     .or(conversation.thread_id.clone()),
                                 reply_to_id: message.reply_to_id.clone(),
@@ -679,15 +679,15 @@ impl Channel for TelegramChannel {
                             });
                         }
                     }
-                    Err(error) => {
-                        let partial = error.downcast_ref::<super::channel_send::PartialTextSendError>();
+                    Err(send_error) => {
+                        let partial = send_error.downcast_ref::<super::channel_send::PartialTextSendError>();
                         if let Some(partial) = partial {
                             for (index, text_id) in partial.message_ids.iter().enumerate() {
                                 receipt.platform_message_ids.push(text_id.clone());
                                 receipt.parts.push(tinychannels_bus::channel::MessageReceiptPart {
                                     platform_message_id: text_id.clone(),
                                     kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
-                                    index: index as u32 + 1,
+                                    index: index + 1,
                                     thread_id: conversation.topic_id.clone()
                                         .or(conversation.thread_id.clone()),
                                     reply_to_id: message.reply_to_id.clone(),
