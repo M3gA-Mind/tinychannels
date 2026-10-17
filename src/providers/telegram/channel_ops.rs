@@ -2157,7 +2157,7 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
         self.send_v2_with_receipt(&message)
             .await
-            .map_err(|error| crate::channel::ChannelSendError {
+            .map_err(|_error| crate::channel::ChannelSendError {
                 kind: crate::channel::SendErrorKind::Unknown,
                 message: "Telegram send failed after dispatch".into(),
                 retryable: false,
@@ -2200,7 +2200,7 @@ impl crate::channel::ChannelReaction for TelegramChannel {
         }
         self.send_reaction_v2(conversation, provider_message_id, reaction, remove)
             .await
-            .map_err(|error| crate::channel::ChannelSendError {
+            .map_err(|_error| crate::channel::ChannelSendError {
                 kind: crate::channel::SendErrorKind::Unknown,
                 message: "Telegram reaction operation failed".into(),
                 retryable: false,
@@ -2218,7 +2218,7 @@ impl crate::channel::ChannelEdit for TelegramChannel {
     ) -> Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError> {
         self.edit_message_v2(receipt, &intent)
             .await
-            .map_err(|error| crate::channel::ChannelSendError {
+            .map_err(|_error| crate::channel::ChannelSendError {
                 kind: crate::channel::SendErrorKind::Unknown,
                 message: "Telegram edit operation failed".into(),
                 retryable: false,
@@ -2235,7 +2235,7 @@ impl crate::channel::ChannelDelete for TelegramChannel {
     ) -> Result<(), crate::channel::ChannelSendError> {
         self.delete_message_v2(receipt)
             .await
-            .map_err(|error| crate::channel::ChannelSendError {
+            .map_err(|_error| crate::channel::ChannelSendError {
                 kind: crate::channel::SendErrorKind::Unknown,
                 message: "Telegram delete operation failed".into(),
                 retryable: false,
@@ -2348,14 +2348,14 @@ impl crate::channel::ChannelStreamingDraft for TelegramChannel {
                 "message_id": parsed,
                 "text": rendered,
                 "parse_mode": "MarkdownV2"
-            })).send().await.map_err(|error| crate::channel::ChannelSendError {
+            })).send().await.map_err(|_error| crate::channel::ChannelSendError {
                 kind: crate::channel::SendErrorKind::Transient,
                 message: "Telegram draft edit transport failed".into(),
                 retryable: false,
                 sent_before_error: true,
                 ..Default::default()
             })?;
-            let body = response.json::<serde_json::Value>().await.map_err(|error| crate::channel::ChannelSendError {
+            let body = response.json::<serde_json::Value>().await.map_err(|_error| crate::channel::ChannelSendError {
                 kind: crate::channel::SendErrorKind::Transient,
                 message: "Telegram draft edit response failed".into(),
                 retryable: false,
@@ -2374,19 +2374,19 @@ impl crate::channel::ChannelStreamingDraft for TelegramChannel {
             return Ok(previous.clone());
         } else {
             let mut body = serde_json::json!({ "chat_id": chat_id, "text": rendered, "parse_mode": "MarkdownV2" });
-            if let Some(thread) = thread { body["message_thread_id"] = serde_json::Value::String(thread.to_owned()); }
+            if let Some(thread) = thread.as_deref() { body["message_thread_id"] = serde_json::Value::String(thread.to_owned()); }
             if let Some(reply) = intent.reply_to_id.as_deref() {
                 let parsed = reply.parse::<i64>().map_err(|_| crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::BadFormat, message: "Telegram reply ID must be numeric".into(), retryable: false, ..Default::default() })?;
                 body["reply_parameters"] = serde_json::json!({ "message_id": parsed });
             }
-            let response = self.http_client().post(self.api_url("sendMessage")).json(&body).send().await.map_err(|error| crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::Transient, message: "Telegram draft creation transport failed".into(), retryable: false, sent_before_error: true, ..Default::default() })?;
-            let body = response.json::<serde_json::Value>().await.map_err(|error| crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::Transient, message: "Telegram draft creation response failed".into(), retryable: false, sent_before_error: true, ..Default::default() })?;
+            let response = self.http_client().post(self.api_url("sendMessage")).json(&body).send().await.map_err(|_error| crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::Transient, message: "Telegram draft creation transport failed".into(), retryable: false, sent_before_error: true, ..Default::default() })?;
+            let body = response.json::<serde_json::Value>().await.map_err(|_error| crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::Transient, message: "Telegram draft creation response failed".into(), retryable: false, sent_before_error: true, ..Default::default() })?;
             if !body.get("ok").and_then(serde_json::Value::as_bool).unwrap_or(false) {
                 return Err(crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::Unknown, message: "Telegram draft creation failed".into(), retryable: false, sent_before_error: true, ..Default::default() });
             }
             body.get("result").and_then(|m| m.get("message_id")).and_then(serde_json::Value::as_i64).map(|id| id.to_string()).ok_or_else(|| crate::channel::ChannelSendError { kind: crate::channel::SendErrorKind::Unknown, message: "Telegram draft response omitted message ID".into(), retryable: false, sent_before_error: true, ..Default::default() })?
         };
-        let part = tinychannels_bus::channel::MessageReceiptPart { platform_message_id: message_id.clone(), kind: tinychannels_bus::channel::MessageReceiptPartKind::Text, thread_id: thread, reply_to_id: intent.reply_to_id.clone(), edit_token: Some(message_id.clone()), delete_token: Some(message_id.clone()), ..Default::default() };
+        let part = tinychannels_bus::channel::MessageReceiptPart { platform_message_id: message_id.clone(), kind: tinychannels_bus::channel::MessageReceiptPartKind::Text, thread_id: thread.clone(), reply_to_id: intent.reply_to_id.clone(), edit_token: Some(message_id.clone()), delete_token: Some(message_id.clone()), ..Default::default() };
         Ok(tinychannels_bus::channel::MessageReceipt {
             idempotency_key: Some(intent.idempotency_key),
             channel: intent.channel_ref.or_else(|| Some(tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None })),
@@ -2394,7 +2394,7 @@ impl crate::channel::ChannelStreamingDraft for TelegramChannel {
             primary_platform_message_id: Some(message_id.clone()),
             platform_message_ids: vec![message_id],
             parts: vec![part],
-            thread_id: thread,
+            thread_id: thread.clone(),
             reply_to_id: intent.reply_to_id,
             ..Default::default()
         })
