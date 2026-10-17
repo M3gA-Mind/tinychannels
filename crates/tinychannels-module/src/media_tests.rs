@@ -79,12 +79,15 @@ async fn reservations_and_metadata_are_bounded_before_retaining_media() {
     let mut oversized_metadata = oversized.clone();
     oversized_metadata.scope.conversation.thread_id =
         Some("x".repeat(tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES));
-    assert!(uploads.begin(oversized_metadata, 1).await.is_err());
+    assert!(uploads
+        .begin(oversized_metadata, "activation-a".into())
+        .await
+        .is_err());
     assert!(
         uploads
             .begin(
                 request(tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES + 1),
-                1,
+                "activation-a".into(),
             )
             .await
             .is_err()
@@ -210,18 +213,20 @@ async fn finalizing_upload_keeps_capacity_and_abort_cannot_race_persistence() {
             .await
             .is_err()
     );
-    let duplicate = {
-        let uploads = uploads.clone();
-        let repository = repository.clone();
-        tokio::spawn(async move {
-            uploads
-                .finish(MediaUploadFinish(handle), "activation-a".into(), repository)
-                .await
-        })
-    };
+    let duplicate = uploads.clone().finish(
+        MediaUploadFinish(handle),
+        "activation-a".into(),
+        repository.clone(),
+    );
+    tokio::pin!(duplicate);
+    tokio::select! {
+        biased;
+        result = &mut duplicate => panic!("duplicate finalize unexpectedly completed: {result:?}"),
+        _ = tokio::task::yield_now() => {},
+    }
     repository.release.notify_one();
     let first = finishing.await.unwrap().unwrap();
-    let second = duplicate.await.unwrap().unwrap();
+    let second = duplicate.await.unwrap();
     assert_eq!(first, second);
     assert_eq!(repository.calls.load(Ordering::SeqCst), 1);
 }
@@ -231,6 +236,10 @@ async fn cancelling_the_bus_waiter_does_not_cancel_or_duplicate_finalize() {
     let uploads = std::sync::Arc::new(MediaUploads::default());
     let repository = std::sync::Arc::new(BlockingPersistence::default());
     let handle = ready_upload(&uploads).await;
+    let second = uploads
+        .begin(request(1), "activation-a".into())
+        .await
+        .unwrap();
     let waiter = {
         let uploads = uploads.clone();
         let repository = repository.clone();
@@ -264,4 +273,13 @@ async fn cancelling_the_bus_waiter_does_not_cancel_or_duplicate_finalize() {
         Some("tinychannels_media_v1_saved")
     );
     assert_eq!(repository.calls.load(Ordering::SeqCst), 1);
+    assert!(uploads
+        .begin(request(1), "activation-a".into())
+        .await
+        .is_err());
+    uploads.abort(MediaUploadFinish(second)).await.unwrap();
+    uploads
+        .begin(request(1), "activation-a".into())
+        .await
+        .unwrap();
 }
