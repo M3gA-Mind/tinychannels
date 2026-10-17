@@ -41,18 +41,30 @@ impl Callback {
             return Err(Error::failed("unexpected callback"));
         };
         self.requests.lock().await.push(request.clone());
-        if let ProgressiveTransportRequest::Send { message, .. } = request {
-            self.sends.lock().await.push(message);
+        let typed_send = matches!(request, ProgressiveTransportRequest::SendTyped { .. });
+        if matches!(
+            request,
+            ProgressiveTransportRequest::Send { .. }
+                | ProgressiveTransportRequest::SendTyped { .. }
+        ) {
+            self.sends
+                .lock()
+                .await
+                .push(serde_json::to_value(&request).unwrap());
             if self.block {
                 self.entered.notify_one();
                 self.released.notified().await;
             }
         }
-        Ok(ChannelBackendResult::ProgressiveTransport(
-            self.result.lock().await.clone().unwrap_or_else(|| {
+        let configured = self.result.lock().await.clone();
+        let result = configured.unwrap_or_else(|| {
+            if typed_send {
+                ProgressiveTransportResult::Outcome(Default::default())
+            } else {
                 ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"}))
-            }),
-        ))
+            }
+        });
+        Ok(ChannelBackendResult::ProgressiveTransport(result))
     }
 }
 
