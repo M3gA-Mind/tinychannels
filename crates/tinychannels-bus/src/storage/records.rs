@@ -6,11 +6,11 @@
 //! bodies, one `*_ms` field per instant, no field that repeats the document id.
 //! These DTOs are the only place the two meet.
 
-use serde::{Deserialize, Serialize};
 use crate::channel::{ChannelOutboundIntent, DeliveryDurability, OutboundPayload};
 use crate::module_delivery::{
     DeliveryQueueEntry as QueuedDelivery, DeliveryRecoveryState, DeliveryTerminalResult,
 };
+use serde::{Deserialize, Serialize};
 
 /// A chat's binding to a host conversation thread. When it was last bound is
 /// the record's own `updated_ms` metadata, not a field here.

@@ -27,6 +27,13 @@ base64 = "0.23"
 async-trait = "0.1"
 anyhow = "1"
 tokio = { version = "1", default-features = false, features = ["sync"] }
+# Storage ports only (no driver, no I/O, no runtime beyond tokio io-util/time):
+# the `storage` module declares this owner's schema and v1 to v2 steps so a host
+# reads them from the contract instead of linking the implementation crate.
+tinystoragedrivers-core = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0", default-features = false }
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+tracing = "0.1"
 
 [dev-dependencies]
 toml = "1"
+tokio = { version = "1", default-features = false, features = ["rt", "macros"] }
