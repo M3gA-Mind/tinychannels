@@ -71,13 +71,21 @@ impl TelegramChannel {
         let body: serde_json::Value = response.json().await?;
         if !status.is_success() || body.get("ok").and_then(serde_json::Value::as_bool) != Some(true)
         {
-            anyhow::bail!("Telegram {method} returned an unsuccessful or unknown receipt");
+            anyhow::bail!(
+                "Telegram {} returned an unsuccessful or unknown receipt",
+                upload.method
+            );
         }
         body.get("result")
             .and_then(|result| result.get("message_id"))
             .and_then(serde_json::Value::as_i64)
             .map(|id| id.to_string())
-            .ok_or_else(|| anyhow::anyhow!("Telegram {method} response omitted message receipt"))
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Telegram {} response omitted message receipt",
+                    upload.method
+                )
+            })
     }
 
     pub(crate) fn parse_reaction_marker(content: &str) -> (String, Option<String>) {
