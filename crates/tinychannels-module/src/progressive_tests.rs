@@ -3850,6 +3850,114 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         inbound_has_voice: false,
         explicitly_requested: false,
     });
+    let audio_turn = ProgressiveOutputContext {
+        turn_id: "audio-file-fallback".into(),
+        ..context.clone()
+    };
+    let mut audio_caps = tinychannels_bus::ChannelCapabilities::default();
+    audio_caps.voice_out.synthesis = true;
+    audio_caps.content.parts = vec!["text".into(), "audio".into()];
+    audio_caps.content.audio.outbound = true;
+    audio_caps.content.audio.accepted_types = vec!["audio/ogg".into()];
+    audio_caps.content.audio.max_size_bytes = Some(8 * 1024 * 1024);
+    audio_caps.content.audio.max_duration_ms = Some(10_000);
+    let audio_sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(audio_turn.clone()),
+        capabilities: audio_caps.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut audio_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        audio_sender,
+        "telegram:bot-1",
+        audio_caps,
+        audio_turn,
+    );
+    audio_reply
+        .send_parts(
+            &[tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "spoken words".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            "spoken words",
+        )
+        .await
+        .expect("audio-file fallback is delivered");
+    let requests = callback.requests.lock().await;
+    let audio_request = requests.iter().rev().find_map(|request| match request {
+        ProgressiveTransportRequest::SendTyped {
+            turn_id: Some(turn_id),
+            parts,
+            ..
+        } if turn_id == "audio-file-fallback" => Some(parts),
+        _ => None,
+    }).expect("audio-file typed send");
+    assert!(audio_request.iter().any(|part| matches!(part,
+        tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Audio { media, codec: Some(codec), .. }
+        } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
+    )));
+    assert!(!audio_request.iter().any(|part| matches!(part,
+        tinychannels_bus::OutboundContentPart::Voice { .. }
+    )));
+    drop(requests);
+
+    let link_turn = ProgressiveOutputContext {
+        turn_id: "authorized-link-fallback".into(),
+        ..context.clone()
+    };
+    let mut link_caps = tinychannels_bus::ChannelCapabilities::default();
+    link_caps.voice_out.synthesis = true;
+    let link_sender = Arc::new(Sender {
+        host: host.clone(),
+        context: Some(link_turn.clone()),
+        capabilities: link_caps.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut link_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        link_sender,
+        "telegram:bot-1",
+        link_caps,
+        link_turn,
+    );
+    link_reply
+        .send_parts(
+            &[tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "spoken words".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            "spoken words",
+        )
+        .await
+        .expect("authorized-link fallback is delivered");
+    let requests = callback.requests.lock().await;
+    let link_request = requests.iter().rev().find_map(|request| match request {
+        ProgressiveTransportRequest::SendTyped {
+            turn_id: Some(turn_id),
+            parts,
+            text,
+            ..
+        } if turn_id == "authorized-link-fallback" => Some((parts, text)),
+        _ => None,
+    }).expect("text plus authorized link send");
+    assert!(!link_request.0.iter().any(|part| matches!(part,
+        tinychannels_bus::OutboundContentPart::Voice { .. }
+            | tinychannels_bus::OutboundContentPart::Content { part: tinychannels_bus::ContentPart::Audio { .. } }
+    )));
+    assert!(link_request.1.contains("https://media.example/authorized/voice"));
+    drop(requests);
+
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
     capabilities.voice_out.max_size_bytes = Some(1);
     let sender = Arc::new(Sender {
         host: host.clone(),
@@ -3886,7 +3994,9 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     assert!(!too_long_request.0.iter().any(|part| matches!(part,
         tinychannels_bus::OutboundContentPart::Voice { .. }
     )));
-    assert_eq!(too_long_request.1, "spoken words");
+    assert!(too_long_request
+        .1
+        .contains("Audio reply exceeded the channel size limit"));
     drop(requests);
 
     *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
