@@ -762,6 +762,236 @@ impl tinychannels::Channel for FailingChannel {
 
 struct EndedChannel(Arc<std::sync::atomic::AtomicUsize>);
 
+struct PartialReceiptChannel(Arc<std::sync::atomic::AtomicUsize>);
+
+struct SuccessfulReceiptChannel(Arc<std::sync::atomic::AtomicUsize>);
+
+struct AmbiguousNoIdChannel(Arc<std::sync::atomic::AtomicUsize>);
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for AmbiguousNoIdChannel {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn send_typed_with_receipt(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(tinychannels_bus::channel::ChannelSendOutcome {
+            receipt: Default::default(),
+            error: Some(tinychannels_bus::channel::ChannelSendError {
+                message: "accepted but response had no usable ID".into(),
+                sent_before_error: true,
+                retryable: false,
+                ..Default::default()
+            }),
+        })
+    }
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn required_durable_ambiguous_send_without_ids_is_not_retried() {
+    let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (channels, callbacks, _server) =
+        channels_with_store(Arc::new(AmbiguousNoIdChannel(sends.clone()))).await;
+    let intent = required_intent("ambiguous-no-id", "body");
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    let pending = callbacks.storage.snapshot().await;
+    let entry = pending
+        .get("scope-a")
+        .unwrap()
+        .pending
+        .get("ambiguous-no-id")
+        .unwrap();
+    assert_eq!(
+        entry.recovery_state,
+        Some(tinychannels_bus::DeliveryRecoveryState::UnknownAfterSend)
+    );
+    assert_eq!(
+        entry
+            .partial_receipt
+            .as_ref()
+            .unwrap()
+            .platform_message_ids
+            .len(),
+        0
+    );
+    drop(pending);
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent)
+            .await
+            .is_err()
+    );
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    channels.shutdown().await.unwrap();
+}
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for SuccessfulReceiptChannel {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn send_typed_with_receipt(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(tinychannels_bus::channel::ChannelSendOutcome {
+            receipt: tinychannels_bus::channel::MessageReceipt {
+                primary_platform_message_id: Some("actual-id-9".into()),
+                platform_message_ids: vec!["actual-id-9".into()],
+                edit_token: Some("telegram:edit:9".into()),
+                delete_token: Some("telegram:delete:9".into()),
+                ..Default::default()
+            },
+            error: None,
+        })
+    }
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn required_success_and_replay_return_same_actual_scoped_receipt_without_resending() {
+    let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (channels, _callbacks, _server) =
+        channels_with_store(Arc::new(SuccessfulReceiptChannel(sends.clone()))).await;
+    let intent = required_intent("receipt-replay", "receipt body");
+    let first = channels
+        .send_channel_intent("fixture".into(), intent.clone())
+        .await
+        .unwrap();
+    let second = channels
+        .send_channel_intent("fixture".into(), intent)
+        .await
+        .unwrap();
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    assert_eq!(first.message_id, second.message_id);
+    let receipt = first.receipt.unwrap();
+    assert_eq!(Some(receipt.clone()), second.receipt);
+    assert_eq!(receipt.platform_message_ids, ["actual-id-9"]);
+    assert_eq!(receipt.idempotency_key.as_deref(), Some("receipt-replay"));
+    assert_eq!(receipt.edit_token.as_deref(), Some("telegram:edit:9"));
+    assert_eq!(receipt.delete_token.as_deref(), Some("telegram:delete:9"));
+    assert_eq!(receipt.channel.as_ref().unwrap().id, "fixture");
+    assert_eq!(
+        receipt.channel.as_ref().unwrap().account_id.as_deref(),
+        Some("fixture")
+    );
+    assert_eq!(receipt.conversation.as_ref().unwrap().id, "room-1");
+    channels.shutdown().await.unwrap();
+}
+
+#[async_trait::async_trait]
+impl tinychannels::Channel for PartialReceiptChannel {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+
+    async fn send(&self, _message: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        _message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(tinychannels_bus::channel::ChannelSendOutcome {
+            receipt: tinychannels_bus::channel::MessageReceipt {
+                platform_message_ids: vec![
+                    "actual-provider-id-1".into(),
+                    "actual-provider-id-2".into(),
+                ],
+                ..Default::default()
+            },
+            error: Some(tinychannels_bus::channel::ChannelSendError {
+                message: "third part rejected".into(),
+                retryable: true,
+                ..Default::default()
+            }),
+        })
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn required_durable_partial_provider_send_persists_receipt_and_is_not_retried_blindly() {
+    let sends = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (channels, callbacks, _server) =
+        channels_with_store(Arc::new(PartialReceiptChannel(sends.clone()))).await;
+    let intent = required_intent("partial-required", "multipart body");
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent.clone())
+            .await
+            .is_err()
+    );
+    assert_eq!(sends.load(Ordering::SeqCst), 1);
+    let scopes = callbacks.storage.snapshot().await;
+    let queue = scopes.get("scope-a").unwrap();
+    let pending = queue
+        .pending
+        .get("partial-required")
+        .expect("partial send remains pending for reconciliation");
+    assert_eq!(
+        pending.recovery_state,
+        Some(tinychannels_bus::DeliveryRecoveryState::UnknownAfterSend)
+    );
+    let receipt = pending
+        .partial_receipt
+        .as_ref()
+        .expect("actual partial provider receipt is durable");
+    assert_eq!(
+        receipt.platform_message_ids,
+        ["actual-provider-id-1", "actual-provider-id-2"]
+    );
+    drop(scopes);
+
+    assert!(
+        channels
+            .send_channel_intent("fixture".into(), intent)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        sends.load(Ordering::SeqCst),
+        1,
+        "unknown partial sends must never be replayed as untouched sends"
+    );
+    channels.shutdown().await.unwrap();
+}
+
 #[async_trait::async_trait]
 impl tinychannels::Channel for EndedChannel {
     fn name(&self) -> &str {
@@ -1024,6 +1254,7 @@ async fn replayed_terminal_result_acknowledges_a_remaining_pending_record() {
             id: "terminal-cleanup".into(),
             intent_fingerprint: fingerprint,
             completed_at_unix_ms: now_unix_ms(),
+            receipt: None,
         })
         .await
         .unwrap();
@@ -1054,6 +1285,7 @@ async fn startup_recovery_acks_a_matching_terminal_result_without_resending() {
             id: "recovery-terminal".into(),
             intent_fingerprint: intent_fingerprint(&intent).unwrap(),
             completed_at_unix_ms: now_unix_ms(),
+            receipt: None,
         })
         .await
         .unwrap();
@@ -1091,6 +1323,7 @@ async fn startup_recovery_rejects_a_conflicting_terminal_result() {
             id: "recovery-conflict".into(),
             intent_fingerprint: "f".repeat(64),
             completed_at_unix_ms: now_unix_ms(),
+            receipt: None,
         })
         .await
         .unwrap();
@@ -1176,6 +1409,7 @@ async fn changed_intent_cannot_reuse_a_terminal_result_key() {
                 id: "result-conflict".into(),
                 intent_fingerprint: "a".repeat(64),
                 completed_at_unix_ms: now_unix_ms(),
+                receipt: None,
             },
         )
         .await;

@@ -98,6 +98,8 @@ pub mod methods {
 
 /// One constant per method name on [`HOST_BUS_NAME`].
 pub mod host_methods {
+    /// `DeliverEvent` — deliver one typed provider event to the host.
+    pub const DELIVER_EVENT: &str = "DeliverEvent";
     /// `DeliverInbound` — hand the host one authenticated v22 inbound envelope.
     pub const DELIVER_INBOUND: &str = "DeliverInbound";
     /// Complete one admitted v22 inbound envelope turn. Opt-in runtimes invoke
@@ -158,7 +160,7 @@ pub const METHODS: [&str; 37] = [
 ];
 
 /// All host-callback method names in declaration order.
-pub const HOST_METHODS: [&str; 7] = [
+pub const HOST_METHODS: [&str; 8] = [
     host_methods::DELIVER_INBOUND,
     host_methods::REPORT_STATUS,
     host_methods::PERSIST_ALLOWED_IDENTITY,
@@ -166,6 +168,7 @@ pub const HOST_METHODS: [&str; 7] = [
     host_methods::PUBLISH_EVENT,
     host_methods::DISPATCH_CONTROLLER_BACKEND,
     host_methods::PROCESS_INBOUND,
+    host_methods::DELIVER_EVENT,
 ];
 
 #[cfg(test)]

@@ -46,11 +46,11 @@ pub use capabilities::{
     MarkdownDialect, TextCapabilities, VoiceCapabilities, provider_id,
 };
 pub use channel::{
-    ButtonAction, ButtonStyle, ChannelInboundEnvelope, ChannelOutboundIntent,
-    ChannelOutboundMessage, ChannelRef, ContactMethod, ContentPart, ConversationKind,
-    ConversationRef, DeliveryDurability, MediaKind, MediaReference, OutboundContentPart,
-    OutboundPayload, OutboundVoice, SenderRef, VoiceNote, VoiceTranscript, VoiceTranscriptSource,
-    VoiceTranscriptState,
+    ButtonAction, ButtonStyle, ChannelEvent, ChannelEventKind, ChannelInboundEnvelope,
+    ChannelOutboundIntent, ChannelOutboundMessage, ChannelReaction, ChannelRef, ContactMethod,
+    ContentPart, ConversationKind, ConversationRef, DeliveryDurability, MediaKind, MediaReference,
+    OutboundContentPart, OutboundPayload, OutboundVoice, SenderRef, VoiceNote, VoiceTranscript,
+    VoiceTranscriptSource, VoiceTranscriptState,
 };
 pub use config::ChannelsConfig;
 pub use controllers::{ChannelAuthMode, ChannelDefinition};
@@ -71,7 +71,7 @@ pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH,
     deprecated,
     reason = "re-export the one-release v21 compatibility DTOs"
 )]
-pub use traits::{Channel, ChannelMessage, ChannelSendExt, SendMessage};
+pub use traits::{Channel, ChannelIngress, ChannelMessage, ChannelSendExt, SendMessage};
 pub use version::{CONTRACT_VERSION, is_compatible};
 
 #[cfg(test)]

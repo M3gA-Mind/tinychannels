@@ -56,6 +56,27 @@ compatibility.
 This source contract still requires a compatible published native module before
 a downstream host can claim released composition.
 
+Provider notifications use `ChannelEvent`, a versioned DTO with a `type`
+discriminator, stable event/source IDs, source time, `ChannelRef`, and the full
+optional `ConversationRef`. The module sends it through `ChannelsHost.DeliverEvent`
+in the same ordered callback queue as inbound messages. `PublishEvent` remains
+available for older, unrelated domain publications.
+
+Providers that support v22 ordered ingress submit `ChannelIngress` items through
+their `EventSink`: normalized inbound envelopes and typed events share one
+awaited path. Telegram uses this path for messages, edits and reactions, so a
+later edit/reaction cannot overtake its message. The legacy message-channel
+bridge remains for providers still migrating. Event message references retain
+the stable module message ID while `providerMessageId` preserves the source ID;
+Telegram topic IDs remain separate from chat IDs in `ConversationRef`.
+
+Typed send outcomes may carry multiple provider message IDs and per-part edit
+or delete tokens. Tokens are opaque operation inputs and are only populated
+when the provider's actual response returns the corresponding message IDs.
+Required delivery first persists the unknown-send state, then attaches any
+partial receipt in a follow-up save; both writes preserve the pre-I/O crash
+marker. Terminal receipts are included in idempotent replays.
+
 The controller vocabulary includes complete Discord guild, text-channel and
 permission DTOs. Provider APIs re-export these types at their existing paths;
 REST calls and permission calculations remain implementation behavior.

@@ -1675,8 +1675,7 @@ fn parse_update_reaction_returns_none_for_unlisted_actor() {
 }
 
 #[test]
-fn parse_update_reaction_returns_none_when_new_reaction_is_empty() {
-    // Removing a reaction (new_reaction is empty) should yield None.
+fn parse_update_reaction_identifies_removed_reactions() {
     let ch = TelegramChannel::new("token".into(), vec!["*".into()], false);
     let update = serde_json::json!({
         "update_id": 51,
@@ -1688,10 +1687,11 @@ fn parse_update_reaction_returns_none_when_new_reaction_is_empty() {
             "new_reaction": []
         }
     });
-    assert!(
-        ch.parse_update_reaction(&update).is_none(),
-        "reaction removal (empty new_reaction) must be ignored"
-    );
+    let parsed = ch
+        .parse_update_reaction(&update)
+        .expect("removal event is preserved");
+    assert!(!parsed.added);
+    assert_eq!(parsed.emoji, "👍");
 }
 
 #[test]

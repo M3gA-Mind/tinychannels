@@ -136,6 +136,8 @@ pub struct ChannelSendMessageResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub receipt: Option<MessageReceipt>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<crate::channel::ChannelSendError>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub raw: Option<Value>,
 }
 

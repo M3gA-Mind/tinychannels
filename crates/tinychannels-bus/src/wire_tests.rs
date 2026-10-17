@@ -52,6 +52,47 @@ fn host_capability_payloads_keep_typed_snake_case_wire() {
 }
 
 #[test]
+fn channel_events_round_trip_with_discriminator_source_and_full_address() {
+    let event = ChannelEvent {
+        version: 2,
+        event_id: "telegram:update:7".into(),
+        source_event_id: Some("7".into()),
+        source_timestamp: Some(1234),
+        channel: ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("bot".into()),
+        },
+        conversation: Some(ConversationRef {
+            kind: ConversationKind::Group,
+            id: "chat".into(),
+            scope_id: Some("scope".into()),
+            parent_id: Some("parent".into()),
+            thread_id: Some("thread".into()),
+            topic_id: Some("topic".into()),
+        }),
+        event: ChannelEventKind::ReactionRemoved {
+            message_id: "message".into(),
+            provider_message_id: Some("42".into()),
+            actor: SenderRef {
+                id: "actor".into(),
+                ..Default::default()
+            },
+            reaction: ChannelReaction {
+                value: "🔥".into(),
+                custom_emoji_id: Some("emoji-1".into()),
+            },
+        },
+    };
+    let wire = serde_json::to_value(&event).unwrap();
+    assert_eq!(wire["type"], "reaction_removed");
+    assert_eq!(wire["conversation"]["scopeId"], "scope");
+    assert_eq!(wire["conversation"]["parentId"], "parent");
+    assert_eq!(wire["conversation"]["topicId"], "topic");
+    assert_eq!(wire["conversation"]["threadId"], "thread");
+    assert_eq!(serde_json::from_value::<ChannelEvent>(wire).unwrap(), event);
+}
+
+#[test]
 fn http_proxy_policy_round_trips_without_changing_its_wire_fields() {
     let policy = HttpProxyPolicy {
         http_proxy: Some("http://proxy.invalid:8080".into()),

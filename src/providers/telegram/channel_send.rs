@@ -3,6 +3,21 @@
 
 use super::attachments::{TelegramAttachment, TelegramAttachmentKind, is_http_url};
 use super::channel_types::TelegramChannel;
+
+#[derive(Debug)]
+pub(crate) struct PartialTextSendError {
+    pub(crate) message_ids: Vec<String>,
+    pub(crate) sent_before_error: bool,
+    pub(crate) error: tinychannels_bus::channel::ChannelSendError,
+}
+
+impl std::fmt::Display for PartialTextSendError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.error.message)
+    }
+}
+
+impl std::error::Error for PartialTextSendError {}
 use super::text::split_message_for_telegram;
 use reqwest::multipart::{Form, Part};
 use std::path::Path;
@@ -88,19 +103,37 @@ impl TelegramChannel {
         success: bool,
     ) {
         if let Some(events) = &self.events {
-            events
-                .publish(
-                    "channel",
-                    "reaction_sent",
-                    serde_json::json!({
-                        "channel": "telegram",
-                        "target_message_id": format!("telegram_{chat_id}_{message_id}"),
-                        "emoji": emoji,
-                        "success": success,
-                    }),
-                )
-                .await
-                .ok();
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            let event = tinychannels_bus::ChannelEvent {
+                version: 2,
+                event_id: format!("telegram:outbound-reaction:{}", uuid::Uuid::new_v4()),
+                source_event_id: None,
+                source_timestamp: Some(timestamp),
+                channel: tinychannels_bus::ChannelRef {
+                    id: "telegram".into(),
+                    account_id: None,
+                },
+                conversation: Some(tinychannels_bus::ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Unknown,
+                    id: chat_id.to_owned(),
+                    ..Default::default()
+                }),
+                event: tinychannels_bus::ChannelEventKind::OutboundReaction {
+                    message_id: format!("telegram_{chat_id}_{message_id}"),
+                    provider_message_id: Some(message_id.to_string()),
+                    reaction: tinychannels_bus::ChannelReaction {
+                        value: emoji.trim().to_owned(),
+                        custom_emoji_id: None,
+                    },
+                    success,
+                },
+            };
+            if let Err(error) = events.publish_channel_event(event).await {
+                tracing::debug!(%error, "failed to deliver Telegram outbound reaction event");
+            }
         }
     }
 
@@ -111,7 +144,21 @@ impl TelegramChannel {
         thread_id: Option<&str>,
         reply_to_message_id: Option<i64>,
     ) -> anyhow::Result<()> {
+        self.send_text_chunks_with_ids(message, chat_id, thread_id, reply_to_message_id)
+            .await
+            .map(|_| ())
+    }
+
+    /// Send text and retain only message IDs returned by Telegram itself.
+    pub(crate) async fn send_text_chunks_with_ids(
+        &self,
+        message: &str,
+        chat_id: &str,
+        thread_id: Option<&str>,
+        reply_to_message_id: Option<i64>,
+    ) -> anyhow::Result<Vec<String>> {
         let chunks = split_message_for_telegram(message);
+        let mut message_ids = Vec::new();
 
         for (index, chunk) in chunks.iter().enumerate() {
             let text = if chunks.len() > 1 {
@@ -147,9 +194,29 @@ impl TelegramChannel {
                 .post(self.api_url("sendMessage"))
                 .json(&markdown_body)
                 .send()
-                .await?;
+                .await
+                .map_err(|error| {
+                    tracing::debug!("Telegram sendMessage transport failed");
+                    let definitely_not_sent = error.is_connect();
+                    partial_text_send_error(
+                        message_ids.clone(),
+                        "Telegram sendMessage request failed".into(),
+                        true,
+                        !definitely_not_sent,
+                    )
+                })?;
 
             if markdown_resp.status().is_success() {
+                let response = markdown_resp.json::<serde_json::Value>().await.ok();
+                let Some(id) = Self::telegram_result_message_id(response) else {
+                    return Err(partial_text_send_error(
+                        message_ids,
+                        "Telegram accepted send without a usable message ID".into(),
+                        false,
+                        true,
+                    ));
+                };
+                message_ids.push(id);
                 if index < chunks.len() - 1 {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
@@ -157,10 +224,21 @@ impl TelegramChannel {
             }
 
             let markdown_status = markdown_resp.status();
-            let markdown_err = markdown_resp.text().await.unwrap_or_default();
+            let markdown_body = markdown_resp.bytes().await.unwrap_or_default();
+            if !is_markdown_parse_rejection(markdown_status, &markdown_body) {
+                return Err(partial_text_send_error(
+                    message_ids,
+                    format!(
+                        "Telegram sendMessage rejected with HTTP {}",
+                        markdown_status.as_u16()
+                    ),
+                    markdown_status.is_server_error() || markdown_status.as_u16() == 429,
+                    markdown_status.is_server_error(),
+                ));
+            }
             tracing::warn!(
                 status = ?markdown_status,
-                "Telegram sendMessage with Markdown failed; retrying without parse_mode"
+                "Telegram rejected Markdown formatting; retrying once without parse_mode"
             );
 
             let mut plain_body = serde_json::json!({
@@ -182,26 +260,57 @@ impl TelegramChannel {
                 .post(self.api_url("sendMessage"))
                 .json(&plain_body)
                 .send()
-                .await?;
+                .await
+                .map_err(|error| {
+                    tracing::debug!("Telegram sendMessage fallback transport failed");
+                    let definitely_not_sent = error.is_connect();
+                    partial_text_send_error(
+                        message_ids.clone(),
+                        "Telegram sendMessage request failed".into(),
+                        true,
+                        !definitely_not_sent,
+                    )
+                })?;
 
             if !plain_resp.status().is_success() {
                 let plain_status = plain_resp.status();
-                let plain_err = plain_resp.text().await.unwrap_or_default();
-                anyhow::bail!(
-                    "Telegram sendMessage failed (markdown {}: {}; plain {}: {})",
-                    markdown_status,
-                    markdown_err,
-                    plain_status,
-                    plain_err
-                );
+                let _ = plain_resp.bytes().await;
+                return Err(partial_text_send_error(
+                    message_ids,
+                    format!(
+                        "Telegram sendMessage rejected with HTTP {}",
+                        plain_status.as_u16()
+                    ),
+                    plain_status.is_server_error() || plain_status.as_u16() == 429,
+                    plain_status.is_server_error(),
+                ));
             }
+
+            let response = plain_resp.json::<serde_json::Value>().await.ok();
+            let Some(id) = Self::telegram_result_message_id(response) else {
+                return Err(partial_text_send_error(
+                    message_ids,
+                    "Telegram accepted send without a usable message ID".into(),
+                    false,
+                    true,
+                ));
+            };
+            message_ids.push(id);
 
             if index < chunks.len() - 1 {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
 
-        Ok(())
+        Ok(message_ids)
+    }
+
+    fn telegram_result_message_id(response: Option<serde_json::Value>) -> Option<String> {
+        response?
+            .get("result")?
+            .get("message_id")?
+            .as_i64()
+            .map(|id| id.to_string())
     }
 
     async fn send_media_by_url(
@@ -698,6 +807,47 @@ impl TelegramChannel {
         self.send_media_by_url("sendVoice", "voice", chat_id, thread_id, url, caption)
             .await
     }
+}
+
+fn is_markdown_parse_rejection(status: reqwest::StatusCode, body: &[u8]) -> bool {
+    if status != reqwest::StatusCode::BAD_REQUEST {
+        return false;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    let Some(description) = value.get("description").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    let description = description.to_ascii_lowercase();
+    description.contains("can't parse entities")
+        || description.contains("can't find end of the entity")
+        || description.contains("entity beginning")
+}
+
+fn partial_text_send_error(
+    message_ids: Vec<String>,
+    message: String,
+    retryable: bool,
+    sent_before_error: bool,
+) -> anyhow::Error {
+    let sent_before_error = sent_before_error || !message_ids.is_empty();
+    anyhow::Error::new(PartialTextSendError {
+        sent_before_error,
+        error: tinychannels_bus::channel::ChannelSendError {
+            kind: if retryable {
+                tinychannels_bus::channel::SendErrorKind::Transient
+            } else {
+                tinychannels_bus::channel::SendErrorKind::Unknown
+            },
+            message,
+            retryable,
+            sent_before_error,
+            continuation_message_ids: message_ids.clone(),
+            ..Default::default()
+        },
+        message_ids,
+    })
 }
 
 #[cfg(test)]

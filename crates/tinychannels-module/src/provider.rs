@@ -140,27 +140,41 @@ impl std::fmt::Display for RunningSendError {
 
 /// Native hooks registered while the selected provider starts.
 #[derive(Default)]
-pub(crate) struct Hooks(StdMutex<Vec<ShutdownHook>>);
+pub(crate) struct Hooks {
+    hooks: StdMutex<Vec<ShutdownHook>>,
+    configured_instance: StdMutex<Option<String>>,
+}
 impl LifecycleRegistry for Hooks {
     fn register_shutdown(&self, _name: &str, hook: ShutdownHook) {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).push(hook);
+        self.hooks
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(hook);
     }
 }
 impl Hooks {
     pub(crate) fn host(
         self: &Arc<Self>,
         callbacks: HostChannels,
+        configured_instance: String,
     ) -> Arc<dyn tinychannels::host::ChannelHost> {
+        *self
+            .configured_instance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(configured_instance.clone());
         ChannelHostBuilder::new()
             .lifecycle(self.clone())
             .transcriber(Arc::new(ModuleTranscriber(callbacks.clone())))
-            .events(Arc::new(ModuleEvents(callbacks.clone())))
+            .events(Arc::new(ModuleEvents(
+                callbacks.clone(),
+                configured_instance,
+            )))
             .storage(Arc::new(ModuleStorage(callbacks.clone())))
             .allowlist(Arc::new(ModuleAllowlist(callbacks)))
             .build()
     }
     async fn drain(&self) {
-        let hooks = std::mem::take(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()));
+        let hooks = std::mem::take(&mut *self.hooks.lock().unwrap_or_else(|e| e.into_inner()));
         for hook in hooks {
             hook().await;
         }
@@ -221,7 +235,7 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
     }
 }
 
-struct ModuleEvents(HostChannels);
+pub(crate) struct ModuleEvents(pub(crate) HostChannels, pub(crate) String);
 
 #[async_trait::async_trait]
 impl tinychannels::host::EventSink for ModuleEvents {
@@ -239,6 +253,72 @@ impl tinychannels::host::EventSink for ModuleEvents {
             })
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
+
+    async fn publish_channel_event(
+        &self,
+        mut event: tinychannels_bus::ChannelEvent,
+    ) -> anyhow::Result<()> {
+        // The module start call is the authenticated source of instance scope;
+        // provider payloads cannot choose or spoof their account identity.
+        event.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        event.channel.account_id = Some(self.1.clone());
+        let kind = match &event.event {
+            tinychannels_bus::ChannelEventKind::Typing { .. } => "typing",
+            tinychannels_bus::ChannelEventKind::ReadReceipt { .. } => "read_receipt",
+            tinychannels_bus::ChannelEventKind::DeliveredReceipt { .. } => "delivered_receipt",
+            tinychannels_bus::ChannelEventKind::ReactionAdded { .. } => "reaction_added",
+            tinychannels_bus::ChannelEventKind::ReactionRemoved { .. } => "reaction_removed",
+            tinychannels_bus::ChannelEventKind::OutboundReaction { .. } => "outbound_reaction",
+            tinychannels_bus::ChannelEventKind::MessageUpdated { .. } => "message_updated",
+            tinychannels_bus::ChannelEventKind::MessageDeleted { .. } => "message_deleted",
+            tinychannels_bus::ChannelEventKind::Presence { .. } => "presence",
+            tinychannels_bus::ChannelEventKind::Lifecycle { .. } => "lifecycle",
+        };
+        event.event_id = format!("{}:{}:{kind}", self.1, event.event_id);
+        self.0
+            .deliver_event(event)
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))
+    }
+
+    async fn publish_ingress(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> anyhow::Result<bool> {
+        match ingress {
+            tinychannels_bus::ChannelIngress::Inbound(mut envelope) => {
+                envelope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+                envelope.channel.account_id = Some(self.1.clone());
+                self.0.deliver_inbound(&self.1, envelope).await;
+                Ok(true)
+            }
+            tinychannels_bus::ChannelIngress::Event(event) => {
+                self.publish_channel_event(event).await?;
+                Ok(true)
+            }
+        }
+    }
+
+    async fn publish_inbound(
+        &self,
+        message: tinychannels_bus::ChannelMessage,
+    ) -> anyhow::Result<bool> {
+        let mut envelope = tinychannels::inbound_envelope_from_legacy_message(&message);
+        if tinychannels_bus::provider_id(&self.1) == "telegram" {
+            if let Some((chat, topic)) = message.reply_target.split_once(':') {
+                envelope.conversation.id = chat.to_owned();
+                envelope.conversation.topic_id = Some(topic.to_owned());
+                envelope.conversation.thread_id = None;
+            }
+            let raw_message_id = message.id.strip_prefix("telegram_").and_then(|id| {
+                id.rsplit_once('_')
+                    .map(|(_, message_id)| message_id.to_owned())
+            });
+            envelope.raw = Some(serde_json::json!({"providerMessageId": raw_message_id}));
+        }
+        self.publish_ingress(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
     }
 }
 
@@ -317,6 +397,12 @@ impl Running {
         let task_finished = finished.clone();
         let listen_channel = channel.clone();
         let send_channel = channel.clone();
+        let configured_instance = hooks
+            .configured_instance
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .unwrap_or_else(|| listen_channel.name().to_owned());
         let worker_cancel = cancel.clone();
         let worker = tokio::spawn(async move {
             let name = listen_channel.name().to_owned();
@@ -357,9 +443,36 @@ impl Running {
                             .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
                             .map_err(|error| Error::failed(error.to_string())),
                         ProviderOperation::SendTyped(message) => send_channel
-                            .send_typed(&message)
+                            .send_typed_with_receipt(&message)
                             .await
-                            .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
+                            .map(|mut outcome| {
+                                outcome.receipt.idempotency_key =
+                                    Some(message.idempotency_key.clone());
+                                outcome.receipt.channel = Some(tinychannels_bus::ChannelRef {
+                                    id: tinychannels_bus::provider_id(&configured_instance)
+                                        .to_owned(),
+                                    account_id: Some(configured_instance.clone()),
+                                });
+                                if outcome.receipt.conversation.is_none() {
+                                    outcome.receipt.conversation =
+                                        Some(message.conversation_ref.clone().unwrap_or_else(
+                                            || tinychannels_bus::ConversationRef {
+                                                id: message.conversation_id.clone(),
+                                                ..Default::default()
+                                            },
+                                        ));
+                                }
+                                if outcome.receipt.thread_id.is_none() {
+                                    outcome.receipt.thread_id =
+                                        message.thread_id.clone().or_else(|| {
+                                            message
+                                                .conversation_ref
+                                                .as_ref()
+                                                .and_then(|r| r.thread_id.clone())
+                                        });
+                                }
+                                tinychannels_bus::ChannelInteractionResult::Sent(Box::new(outcome))
+                            })
                             .map_err(|error| Error::failed(error.to_string())),
                         ProviderOperation::Interaction(interaction) => {
                             dispatch_interaction(send_channel.clone(), interaction, &mut typing)
@@ -419,10 +532,13 @@ impl Running {
     pub(crate) async fn send_typed(
         &self,
         message: tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<(), RunningSendError> {
-        self.submit(ProviderOperation::SendTyped(message))
-            .await
-            .map(|_| ())
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, RunningSendError> {
+        match self.submit(ProviderOperation::SendTyped(message)).await? {
+            tinychannels_bus::ChannelInteractionResult::Sent(receipt) => Ok(*receipt),
+            _ => Err(RunningSendError::AfterDispatch(
+                "typed send returned no receipt".into(),
+            )),
+        }
     }
 
     pub(crate) async fn interact(

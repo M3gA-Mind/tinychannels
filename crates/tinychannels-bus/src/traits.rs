@@ -1,3 +1,4 @@
+use crate::channel::ChannelInboundEnvelope;
 use serde::{Deserialize, Serialize};
 
 /// Legacy v21 message projection retained for one release during v22 migration.
@@ -35,6 +36,15 @@ pub struct ChannelMessage {
     /// before this field still decodes the message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sender_name: Option<String>,
+}
+
+/// One ordered provider ingress item. Providers submit messages and lifecycle
+/// events through the same sink when the module host supplies it.
+#[derive(Debug, Clone, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "kind", content = "item", rename_all = "snake_case")]
+pub enum ChannelIngress {
+    Inbound(ChannelInboundEnvelope),
+    Event(crate::ChannelEvent),
 }
 
 /// Legacy v21 text-only send projection retained for one release.
@@ -141,6 +151,17 @@ pub trait Channel: Send + Sync {
         message: &crate::channel::ChannelOutboundMessage,
     ) -> anyhow::Result<()> {
         self.send(&message.to_legacy_message()?).await
+    }
+
+    /// Send canonical content and return the provider receipt when the actual
+    /// provider response supplies message IDs. Legacy adapters remain usable;
+    /// they return an empty receipt rather than guessing an ID.
+    async fn send_typed_with_receipt(
+        &self,
+        message: &crate::channel::ChannelOutboundMessage,
+    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
+        self.send_typed(message).await?;
+        Ok(crate::channel::ChannelSendOutcome::default())
     }
 
     /// Legacy listener seam used by isolated test doubles.

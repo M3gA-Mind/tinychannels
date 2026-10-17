@@ -164,6 +164,25 @@ fn receipt_platform_ids_include_part_ids_without_an_aggregate_list() {
 }
 
 #[test]
+fn receipt_uses_provider_message_id_as_scoped_telegram_operation_tokens() {
+    let receipt = create_message_receipt_from_outbound_results(
+        vec![MessageReceiptSourceResult {
+            channel: Some("telegram".into()),
+            message_id: Some("42".into()),
+            ..Default::default()
+        }],
+        Some(MessageReceiptPartKind::Text),
+        None,
+        None,
+        123,
+    );
+    assert_eq!(receipt.parts[0].edit_token.as_deref(), Some("42"));
+    assert_eq!(receipt.parts[0].delete_token.as_deref(), Some("42"));
+    assert_eq!(receipt.edit_token.as_deref(), Some("42"));
+    assert_eq!(receipt.delete_token.as_deref(), Some("42"));
+}
+
+#[test]
 fn receipt_preserves_nested_receipts() {
     let nested = MessageReceipt {
         primary_platform_message_id: Some("platform-1".into()),

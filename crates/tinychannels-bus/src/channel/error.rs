@@ -25,6 +25,8 @@ pub struct ChannelSendError {
     pub kind: SendErrorKind,
     pub message: String,
     pub retryable: bool,
+    /// Provider I/O may have reached the remote service despite the error.
+    pub sent_before_error: bool,
     pub retry_after: Option<f64>,
     pub chat_level_not_found: bool,
     pub continuation_message_ids: Vec<String>,
@@ -37,6 +39,7 @@ impl Default for ChannelSendError {
             kind: SendErrorKind::Unknown,
             message: String::new(),
             retryable: false,
+            sent_before_error: false,
             retry_after: None,
             chat_level_not_found: false,
             continuation_message_ids: Vec::new(),

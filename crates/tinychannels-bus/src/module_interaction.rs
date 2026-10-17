@@ -73,10 +73,14 @@ pub struct ChannelInteractionInfoV2 {
 #[serde(tag = "result", content = "value", rename_all = "snake_case")]
 pub enum ChannelInteractionResult {
     Completed,
+    /// A typed provider send completed with its actual provider receipt.
+    Sent(Box<crate::channel::ChannelSendOutcome>),
     Draft(Option<String>),
     Info(Box<ChannelInteractionInfo>),
     InfoV2(Box<ChannelInteractionInfoV2>),
-    TypingRefresh { handle: String },
+    TypingRefresh {
+        handle: String,
+    },
 }
 
 #[cfg(test)]

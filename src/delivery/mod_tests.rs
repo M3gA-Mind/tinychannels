@@ -381,12 +381,12 @@ async fn reconciled_sent_unknown_delivery_is_acked() {
     enqueue_delivery(&store, entry).await.expect("enqueue");
 
     let handler = StaticHandler::with_reconciliation(UnknownSendReconciliation::Sent {
-        receipt: MessageReceipt {
+        receipt: Box::new(MessageReceipt {
             primary_platform_message_id: Some("platform-1".into()),
             platform_message_ids: vec!["platform-1".into()],
             sent_at: 2_000,
             ..Default::default()
-        },
+        }),
         message_id: Some("platform-1".into()),
     });
     let summary = recover_pending_deliveries(&store, &handler, 2_000)

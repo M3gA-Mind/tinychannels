@@ -163,7 +163,7 @@ impl Channels {
         }
 
         let hooks = Arc::new(Hooks::default());
-        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone());
+        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone(), name.clone());
         let built = build_channels(&config, &owner_host, http);
         let channel = built
             .into_iter()
@@ -215,6 +215,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 error: "delivery payload could not be encoded".into(),
                 sent_before_error: false,
                 permanent: Some(true),
+                receipt: None,
             });
         };
         let running = self.running.lock().await;
@@ -227,31 +228,49 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 error: "delivery target is unavailable".into(),
                 sent_before_error: false,
                 permanent: None,
+                receipt: None,
             });
         };
         drop(running);
 
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&entry.intent);
-        if let Err(error) = provider.send_typed(message).await {
+        let outcome = match provider.send_typed(message).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return Err(DeliveryAttemptFailure {
+                    error: "provider send failed".into(),
+                    sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
+                    permanent: None,
+                    receipt: None,
+                });
+            }
+        };
+        if let Some(error) = outcome.error {
             return Err(DeliveryAttemptFailure {
-                error: "provider send failed".into(),
-                sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
-                permanent: None,
+                error: error.message,
+                sent_before_error: error.sent_before_error
+                    || !outcome.receipt.platform_message_ids.is_empty(),
+                permanent: Some(!error.retryable),
+                receipt: Some(outcome.receipt),
             });
         }
         let result = tinychannels_bus::DeliveryTerminalResult {
             id: entry.id.clone(),
             intent_fingerprint,
             completed_at_unix_ms: now_unix_ms(),
+            receipt: Some(outcome.receipt.clone()),
         };
         if self.store.save_result(result).await.is_err() {
             return Err(DeliveryAttemptFailure {
                 error: "terminal delivery result could not be persisted".into(),
                 sent_before_error: true,
                 permanent: None,
+                receipt: Some(outcome.receipt),
             });
         }
-        Ok(DeliveryAttemptSuccess::default())
+        Ok(DeliveryAttemptSuccess {
+            receipt: Some(outcome.receipt),
+        })
     }
 
     async fn reconcile_unknown_send(
@@ -270,7 +289,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
             ));
         }
         Ok(Some(UnknownSendReconciliation::Sent {
-            receipt: tinychannels::channel::MessageReceipt::default(),
+            receipt: Box::new(result.receipt.unwrap_or_default()),
             message_id: None,
         }))
     }
@@ -833,7 +852,7 @@ impl Channels {
                     message: format!("channel {name} is not running"),
                 })?
         };
-        entry
+        let outcome = entry
             .send_typed(tinychannels_bus::ChannelOutboundMessage::from_intent(
                 &intent,
             ))
@@ -842,7 +861,15 @@ impl Channels {
                 name: SEND_FAILED_ERROR.to_owned(),
                 message: error.to_string(),
             })?;
-        Ok(ChannelSendMessageResult::default())
+        let has_provider_receipt = outcome.receipt.primary_platform_message_id.is_some()
+            || !outcome.receipt.platform_message_ids.is_empty()
+            || !outcome.receipt.parts.is_empty();
+        Ok(ChannelSendMessageResult {
+            message_id: outcome.receipt.primary_platform_message_id.clone(),
+            receipt: has_provider_receipt.then_some(outcome.receipt),
+            error: outcome.error,
+            raw: None,
+        })
     }
 
     async fn send_required_intent(
@@ -887,7 +914,7 @@ impl Channels {
                     .await
                     .map_err(delivery_store_error)?;
             }
-            return Ok(ChannelSendMessageResult::default());
+            return Ok(required_delivery_result(result.receipt));
         }
         if let Some(failed) = store.load_failed(&id).await.map_err(delivery_store_error)? {
             return if failed.intent == intent {
@@ -941,7 +968,7 @@ impl Channels {
                     .await
                     .map_err(delivery_store_error)?;
             }
-            return Ok(ChannelSendMessageResult::default());
+            return Ok(required_delivery_result(result.receipt));
         }
         let still_pending = store
             .load_pending(&id)
@@ -959,7 +986,12 @@ impl Channels {
                 "required delivery remains pending or failed",
             ));
         }
-        Ok(ChannelSendMessageResult::default())
+        let result = store
+            .load_result(&id)
+            .await
+            .map_err(delivery_store_error)?
+            .ok_or_else(|| BusError::failed("required delivery result was not persisted"))?;
+        Ok(required_delivery_result(result.receipt))
     }
 
     /// Send SMTP mail without requiring an active IMAP listener.
@@ -1257,6 +1289,18 @@ fn intent_fingerprint(intent: &ChannelOutboundIntent) -> Result<String, serde_js
     use sha2::Digest as _;
     let encoded = serde_json::to_vec(intent)?;
     Ok(hex::encode(sha2::Sha256::digest(encoded)))
+}
+
+fn required_delivery_result(
+    receipt: Option<tinychannels_bus::channel::MessageReceipt>,
+) -> ChannelSendMessageResult {
+    let receipt = receipt.unwrap_or_default();
+    ChannelSendMessageResult {
+        message_id: receipt.primary_platform_message_id.clone(),
+        receipt: Some(receipt),
+        error: None,
+        raw: None,
+    }
 }
 
 fn now_unix_ms() -> u64 {
