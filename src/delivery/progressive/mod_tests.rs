@@ -1487,7 +1487,8 @@ async fn approvals_and_voice_notes_are_delivered_as_ordered_typed_content() {
                 voice: tinychannels_bus::OutboundVoice::Media {
                     media: voice.media.clone(),
                     codec: voice.codec.clone(),
-                    duration_ms: voice.duration_ms
+                    duration_ms: voice.duration_ms,
+                    audio_base64: None,
                 },
             }
         );

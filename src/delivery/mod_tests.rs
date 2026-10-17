@@ -633,6 +633,7 @@ fn payload_shape_maps_to_expected_durable_capability() {
                     },
                     codec: None,
                     duration_ms: None,
+                    audio_base64: None,
                 },
             },
             Media,
