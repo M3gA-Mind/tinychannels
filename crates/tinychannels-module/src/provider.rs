@@ -268,7 +268,7 @@ impl tinychannels::host::StorageProvider for ModuleStorage {
     }
 }
 
-struct ModuleMediaRepository(HostChannels, String);
+pub(crate) struct ModuleMediaRepository(HostChannels, String);
 
 impl ModuleMediaRepository {
     async fn scoped_store(&self) -> anyhow::Result<tinychannels::host::ScopedMediaStore> {
@@ -279,6 +279,13 @@ impl ModuleMediaRepository {
             Arc::clone(storage.documents()),
             Arc::clone(storage.blobs()),
         ))
+    }
+
+    pub(crate) async fn store_public_media(
+        &self,
+        request: tinychannels::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        <Self as tinychannels::host::MediaRepository>::store_media(self, request).await
     }
 }
 

@@ -19,6 +19,7 @@ pub mod module_control;
 pub mod module_controller;
 pub mod module_delivery;
 pub mod module_email;
+pub mod module_media;
 #[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_inbound;
 #[allow(deprecated, reason = "v21 module DTOs remain for one release")]
@@ -72,6 +73,9 @@ pub use module_delivery::{DeliveryQueueEntry, DeliveryRecoveryState, DeliveryTer
 pub use module_email::{
     EmailAttachment, EmailAttachmentUpload, EmailSendRequest, EmailUploadBegin, EmailUploadChunk,
     EmailUploadHandle,
+};
+pub use module_media::{
+    MediaUploadBegin, MediaUploadChunk, MediaUploadFinish, MediaUploadHandle, MediaUploadResult,
 };
 pub use names::{BUS_NAME, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH, methods};
 #[allow(
