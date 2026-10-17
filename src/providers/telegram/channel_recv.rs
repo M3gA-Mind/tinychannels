@@ -26,36 +26,36 @@ pub(crate) struct TelegramDownloadedMedia {
     content_type: Option<String>,
 }
 
+struct TelegramMediaAttachment {
+    kind: tinychannels_bus::MediaKind,
+    file_id: String,
+    unique_id: Option<String>,
+    file_name: Option<String>,
+    mime_hint: Option<String>,
+    duration_ms: Option<u64>,
+    field: &'static str,
+}
+
 impl TelegramChannel {
-    fn update_media_attachment(
-        update: &serde_json::Value,
-    ) -> Option<(
-        tinychannels_bus::MediaKind,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<u64>,
-        &'static str,
-    )> {
+    fn update_media_attachment(update: &serde_json::Value) -> Option<TelegramMediaAttachment> {
         let message = update
             .get("message")
             .or_else(|| update.get("edited_message"))?;
         if let Some(photo) = message.get("photo").and_then(serde_json::Value::as_array) {
             let photo = photo.last()?;
             let file_id = photo.get("file_id")?.as_str()?.to_owned();
-            return Some((
-                tinychannels_bus::MediaKind::Image,
+            return Some(TelegramMediaAttachment {
+                kind: tinychannels_bus::MediaKind::Image,
                 file_id,
-                photo
+                unique_id: photo
                     .get("file_unique_id")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned),
-                None,
-                None,
-                None,
-                "photo",
-            ));
+                file_name: None,
+                mime_hint: None,
+                duration_ms: None,
+                field: "photo",
+            });
         }
         for (field, kind) in [
             ("document", tinychannels_bus::MediaKind::Document),
@@ -72,27 +72,27 @@ impl TelegramChannel {
             else {
                 continue;
             };
-            return Some((
+            return Some(TelegramMediaAttachment {
                 kind,
-                file_id.to_owned(),
-                attachment
+                file_id: file_id.to_owned(),
+                unique_id: attachment
                     .get("file_unique_id")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned),
-                attachment
+                file_name: attachment
                     .get("file_name")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned),
-                attachment
+                mime_hint: attachment
                     .get("mime_type")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned),
-                attachment
+                duration_ms: attachment
                     .get("duration")
                     .and_then(serde_json::Value::as_u64)
                     .map(|seconds| seconds.saturating_mul(1000)),
                 field,
-            ));
+            });
         }
         None
     }
@@ -102,8 +102,15 @@ impl TelegramChannel {
         update: &serde_json::Value,
         message: &ChannelMessage,
     ) -> anyhow::Result<Vec<tinychannels_bus::ContentPart>> {
-        let Some((kind, file_id, unique_id, file_name, mime_hint, duration_ms, field)) =
-            Self::update_media_attachment(update)
+        let Some(TelegramMediaAttachment {
+            kind,
+            file_id,
+            unique_id,
+            file_name,
+            mime_hint,
+            duration_ms,
+            field,
+        }) = Self::update_media_attachment(update)
         else {
             return Ok(Vec::new());
         };

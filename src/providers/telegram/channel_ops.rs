@@ -10,6 +10,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::time::Duration;
 
 impl TelegramChannel {
+    #[cfg(test)]
     pub(crate) fn inbound_envelope_from_update(
         update: &serde_json::Value,
         message: &ChannelMessage,

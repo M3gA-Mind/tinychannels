@@ -801,7 +801,7 @@ async fn telegram_media_only_update_persists_into_scoped_blobs() {
             .unwrap()
             .starts_with("tinychannels_media_v1_")
     );
-    assert_eq!(envelope.media.as_slice(), [media.clone()]);
+    assert_eq!(envelope.media.as_slice(), std::slice::from_ref(media));
     assert_eq!(media.path, None);
     assert_eq!(media.url, None);
     assert!(!media.opaque_id.as_deref().unwrap().contains("/file/bot"));
