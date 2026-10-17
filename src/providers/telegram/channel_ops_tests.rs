@@ -245,6 +245,22 @@ fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
     assert!(on.actions.supported.contains(&"draft-update".into()));
 }
 
+#[test]
+fn telegram_advertises_typed_media_only_with_scoped_storage() {
+    let unavailable = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false).capabilities();
+    assert!(!unavailable.content.image.outbound);
+    assert!(!unavailable.content.file.inbound);
+
+    let configured = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false)
+        .with_media_repository(Arc::new(TypedMediaReadFixture))
+        .capabilities();
+    assert!(configured.content.image.inbound && configured.content.image.outbound);
+    assert!(configured.content.video.inbound && configured.content.video.outbound);
+    assert!(configured.content.audio.inbound && configured.content.audio.outbound);
+    assert!(configured.content.file.inbound && configured.content.file.outbound);
+    assert!(configured.content.sticker.inbound && configured.content.sticker.outbound);
+}
+
 #[async_trait::async_trait]
 impl crate::host::VoiceMediaStore for VoiceReadFixture {
     async fn store_voice(
