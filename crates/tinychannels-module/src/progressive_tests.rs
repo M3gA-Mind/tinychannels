@@ -802,11 +802,16 @@ async fn unsupported_rich_final_returns_the_unflattened_parts() {
     let handle = open(&replies).await;
     *callback.result.lock().await = Some(ProgressiveTransportResult::Failed);
     let parts = vec![tinychannels_bus::OutboundContentPart::Voice {
-        voice: tinychannels_bus::OutboundVoice {
-            url: "https://media.invalid/voice.ogg".into(),
-            mime_type: Some("audio/ogg".into()),
+        voice: tinychannels_bus::OutboundVoice::Media {
+            media: tinychannels_bus::MediaReference {
+                url: Some("https://media.invalid/voice.ogg".into()),
+                content_type: Some("audio/ogg".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                duration_ms: Some(1200),
+                ..Default::default()
+            },
+            codec: None,
             duration_ms: Some(1200),
-            transcript: None,
         },
     }];
     let result = replies
