@@ -252,45 +252,18 @@ impl ProgressiveReply {
         parts: &[tinychannels_bus::OutboundContentPart],
         text: &str,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, super::ProgressiveSendError> {
-        let text_only = parts.iter().all(|part| {
-            matches!(
-                part,
-                tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Text { .. }
-                }
-            )
-        });
-        let segments = match self.text_limit.filter(|_| text_only) {
-            Some((limit, unit)) => split_text_by_limit(text, limit, unit)?,
-            None => vec![text.to_owned()],
+        let segments = match self.text_limit {
+            Some((limit, unit)) => segment_text_parts(parts, text, limit, unit)?,
+            None => vec![(parts.to_vec(), text.to_owned())],
         };
-        let dialect = parts.iter().find_map(|part| match part {
-            tinychannels_bus::OutboundContentPart::Content {
-                part:
-                    tinychannels_bus::ContentPart::Text {
-                        markdown_dialect, ..
-                    },
-            } => markdown_dialect.clone(),
-            _ => None,
-        });
         let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-        for (index, segment) in segments.iter().enumerate() {
-            let segment_parts = if text_only && segments.len() > 1 {
-                vec![tinychannels_bus::OutboundContentPart::Content {
-                    part: tinychannels_bus::ContentPart::Text {
-                        text: segment.clone(),
-                        markdown_dialect: dialect.clone(),
-                    },
-                }]
-            } else {
-                parts.to_vec()
-            };
+        for (index, (segment_parts, segment_text)) in segments.iter().enumerate() {
             let next = match self
                 .sender
                 .send_parts_with_segment(
                     &self.channel,
-                    &segment_parts,
-                    segment,
+                    segment_parts,
+                    segment_text,
                     self.output_context.as_ref(),
                     self.output_sequence,
                     index as u32,
