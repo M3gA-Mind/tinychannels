@@ -43,6 +43,12 @@ struct FailDeleteOnce {
 }
 
 #[derive(Debug)]
+struct PartialPutAndDeleteOnce {
+    inner: Arc<dyn BlobStore>,
+    failed_delete: std::sync::atomic::AtomicBool,
+}
+
+#[derive(Debug)]
 struct PausedFirstPut {
     inner: Arc<dyn BlobStore>,
     entered: tokio::sync::Notify,
@@ -111,6 +117,60 @@ impl BlobStore for FailDeleteOnce {
     async fn delete(&self, key: &str) -> StorageResult<bool> {
         if !self.failed.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return Err(StorageError::backend("injected blob deletion failure"));
+        }
+        self.inner.delete(key).await
+    }
+
+    async fn list(&self, prefix: &str) -> StorageResult<Vec<BlobMeta>> {
+        self.inner.list(prefix).await
+    }
+}
+
+#[async_trait::async_trait]
+impl BlobStore for PartialPutAndDeleteOnce {
+    async fn put(
+        &self,
+        key: &str,
+        bytes: Vec<u8>,
+        content_type: Option<&str>,
+    ) -> StorageResult<BlobMeta> {
+        self.inner.put(key, bytes, content_type).await
+    }
+
+    async fn put_stream(
+        &self,
+        key: &str,
+        reader: BlobReader,
+        len: u64,
+        content_type: Option<&str>,
+    ) -> StorageResult<BlobMeta> {
+        // Model a backend that committed bytes before reporting a transport
+        // failure. The metadata tombstone must retain enough information for
+        // restart cleanup even when the immediate delete also fails.
+        self.inner
+            .put_stream(key, reader, len, content_type)
+            .await?;
+        Err(StorageError::backend("injected post-write failure"))
+    }
+
+    async fn get(&self, key: &str) -> StorageResult<Option<Blob>> {
+        self.inner.get(key).await
+    }
+
+    async fn get_range(&self, key: &str, range: Range<u64>) -> StorageResult<Option<Vec<u8>>> {
+        self.inner.get_range(key, range).await
+    }
+
+    async fn head(&self, key: &str) -> StorageResult<Option<BlobMeta>> {
+        self.inner.head(key).await
+    }
+
+    async fn delete(&self, key: &str) -> StorageResult<bool> {
+        if !self
+            .failed_delete
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(StorageError::backend("injected cleanup failure"));
         }
         self.inner.delete(key).await
     }
@@ -509,6 +569,68 @@ async fn failed_blob_cleanup_can_be_retried_after_reopening_the_store() {
             .read(media_scope(), &opaque_id, 1024)
             .await
             .is_err()
+    );
+}
+
+#[tokio::test]
+async fn partially_committed_failed_upload_is_cleaned_after_restart() {
+    let backend = MemoryStorage::new();
+    let storage = backend
+        .for_scope(&Scope::new("module:tinychannels@test").unwrap())
+        .unwrap();
+    let failing_blobs = Arc::new(PartialPutAndDeleteOnce {
+        inner: Arc::clone(storage.blobs()),
+        failed_delete: std::sync::atomic::AtomicBool::new(false),
+    });
+    let writer = ScopedMediaStore::new(Arc::clone(storage.documents()), failing_blobs.clone());
+
+    assert!(
+        writer
+            .store(media_request(valid_png(), None, Some("partial-commit")))
+            .await
+            .is_err()
+    );
+    let pending = storage.blobs().list(MEDIA_KEY_PREFIX).await.unwrap();
+    assert_eq!(pending.len(), 1, "the injected delete failure leaves bytes");
+    let opaque_id = pending[0]
+        .key
+        .strip_prefix(MEDIA_KEY_PREFIX)
+        .unwrap()
+        .split('/')
+        .next()
+        .unwrap()
+        .to_owned();
+    let record = storage
+        .documents()
+        .get(MEDIA_COLLECTION, &opaque_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(record.doc["state"], "deleting");
+
+    let reopened = ScopedMediaStore::new(Arc::clone(storage.documents()), failing_blobs);
+    assert_eq!(
+        reopened
+            .cleanup_pending(media_scope(), 10, 0)
+            .await
+            .unwrap(),
+        1
+    );
+    assert!(
+        storage
+            .blobs()
+            .list(MEDIA_KEY_PREFIX)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        storage
+            .documents()
+            .get(MEDIA_COLLECTION, &opaque_id)
+            .await
+            .unwrap()
+            .is_none()
     );
 }
 
