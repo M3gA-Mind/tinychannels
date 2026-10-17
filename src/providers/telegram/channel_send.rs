@@ -173,25 +173,6 @@ impl TelegramChannel {
             })
     }
 
-    pub(crate) fn parse_reaction_marker(content: &str) -> (String, Option<String>) {
-        // Marker format at the start of the message: [REACTION:😀] or [REACTION:😀|12345]
-        // The marker may be followed by a text reply: [REACTION:👍] Great point!
-        // Returns (remaining_text, Some(marker_inner)) or (original, None).
-        let trimmed = content.trim();
-        let Some(rest) = trimmed.strip_prefix("[REACTION:") else {
-            return (content.to_string(), None);
-        };
-        let Some(close_pos) = rest.find(']') else {
-            return (content.to_string(), None);
-        };
-        let inner = rest[..close_pos].trim();
-        if inner.is_empty() {
-            return (String::new(), None);
-        }
-        let remaining = rest[close_pos + 1..].trim().to_string();
-        (remaining, Some(inner.to_string()))
-    }
-
     pub(crate) async fn send_message_reaction(
         &self,
         chat_id: &str,

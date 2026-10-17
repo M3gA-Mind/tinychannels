@@ -1,6 +1,5 @@
 //! Telegram channel — `Channel` trait implementation: send, listen, draft streaming, typing.
 
-use super::attachments::{parse_attachment_markers, parse_path_only_attachment};
 use super::channel_types::{TelegramChannel, TelegramTypingTask};
 use super::text::{TELEGRAM_MAX_MESSAGE_LENGTH, markdown_v2_text, strip_tool_call_tags};
 use crate::config::StreamMode;
@@ -577,59 +576,7 @@ impl Channel for TelegramChannel {
             None => (message.recipient.as_str(), None),
         };
 
-        let (reactionless_content, reaction_marker) = Self::parse_reaction_marker(&content);
-        if let Some(reaction_marker) = reaction_marker.as_deref() {
-            let (emoji, explicit_target_id) = match reaction_marker.split_once('|') {
-                Some((emoji, target)) => (emoji.trim(), Self::parse_message_id(Some(target))),
-                None => (reaction_marker.trim(), None),
-            };
-            let target_message_id = explicit_target_id.or(parent_message_id);
-            if let Some(target_id) = target_message_id {
-                let _ = self
-                    .send_message_reaction(chat_id, target_id, emoji)
-                    .await?;
-                tracing::debug!(
-                    chat_id,
-                    target_id,
-                    emoji,
-                    has_reply = !reactionless_content.is_empty(),
-                    "[telegram] reaction sent; continuing to send reply text if present"
-                );
-            } else {
-                tracing::warn!(
-                    recipient = message.recipient,
-                    marker = reaction_marker,
-                    "[telegram] reaction marker ignored: missing target message id"
-                );
-            }
-            // If no text follows the reaction marker, we are done.
-            if reactionless_content.trim().is_empty() {
-                return Ok(());
-            }
-        }
-
-        let (text_without_markers, attachments) = parse_attachment_markers(&reactionless_content);
-
-        if !attachments.is_empty() {
-            if !text_without_markers.is_empty() {
-                self.send_text_chunks(&text_without_markers, chat_id, thread_id, parent_message_id)
-                    .await?;
-            }
-
-            for attachment in &attachments {
-                self.send_attachment(chat_id, thread_id, attachment).await?;
-            }
-
-            return Ok(());
-        }
-
-        if let Some(attachment) = parse_path_only_attachment(&reactionless_content) {
-            self.send_attachment(chat_id, thread_id, &attachment)
-                .await?;
-            return Ok(());
-        }
-
-        self.send_text_chunks(&reactionless_content, chat_id, thread_id, parent_message_id)
+        self.send_text_chunks(&content, chat_id, thread_id, parent_message_id)
             .await
     }
 
