@@ -83,6 +83,11 @@ impl ChannelAdapter for LocalChannelAdapter {
                 }
             },
             OutboundPayload::Files { .. } => self.capabilities.content.file.outbound,
+            OutboundPayload::Poll { .. } => self.capabilities.content.poll.outbound,
+            OutboundPayload::PresentationBlocks { .. } => {
+                self.capabilities.content.presentation.outbound
+            }
+            OutboundPayload::NativeChannelData { .. } => self.capabilities.content.native.outbound,
             OutboundPayload::Parts { parts } => parts.iter().all(|part| match part {
                 tinychannels_bus::OutboundContentPart::Voice { voice } => match voice {
                     tinychannels_bus::OutboundVoice::Media { .. } => {
@@ -135,7 +140,6 @@ impl ChannelAdapter for LocalChannelAdapter {
                         }
                 },
             }),
-            _ => false,
         };
         if !supported {
             return Err(ChannelSendError {
@@ -146,7 +150,8 @@ impl ChannelAdapter for LocalChannelAdapter {
                 ..Default::default()
             });
         }
-        let mut outcome = self.outbound.send(intent.clone()).await.map(|mut receipt| {
+        let mut outcome = match self.outbound.send(intent.clone()).await {
+            Ok(mut receipt) => {
             receipt.idempotency_key.get_or_insert(intent.idempotency_key);
             receipt.channel.get_or_insert_with(|| {
                 tinychannels_bus::ChannelRef {
@@ -167,7 +172,20 @@ impl ChannelAdapter for LocalChannelAdapter {
                 receipt,
                 error: None,
             }
-        })?;
+            }
+            Err(mut error) => {
+                let uncertain = error.kind == SendErrorKind::Unknown
+                    || error.sent_before_error
+                    || !error.continuation_message_ids.is_empty()
+                    || error.partial_overflow.is_some();
+                if uncertain {
+                    error.sent_before_error = true;
+                    error.retryable = false;
+                    error.unsupported = false;
+                }
+                return Err(error);
+            }
+        };
         let expected_channel = tinychannels_bus::ChannelRef {
             id: self.descriptor.id.clone(),
             account_id: self.descriptor.account_id.clone(),

@@ -91,6 +91,65 @@ async fn local_adapter_delegates_outbound_delivery() {
         sink.ids.lock().expect("ids lock").as_slice(),
         ["turn-1:text"]
     );
+    assert_eq!(
+        outcome.receipt.channel,
+        Some(tinychannels_bus::ChannelRef {
+            id: "local".into(),
+            account_id: Some("host".into()),
+        })
+    );
+    assert_eq!(
+        outcome.receipt.conversation.as_ref().map(|reference| reference.id.as_str()),
+        Some("chat-1")
+    );
+}
+
+#[tokio::test]
+async fn local_adapter_rejects_foreign_scope_before_dispatch() {
+    let sink = Arc::new(RecordingOutboundSink::default());
+    let adapter = local_adapter(sink.clone());
+    let error = adapter
+        .send(ChannelOutboundIntent {
+            idempotency_key: "wrong-account".into(),
+            channel_id: "local".into(),
+            conversation_id: "chat-1".into(),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "local".into(),
+                account_id: Some("foreign".into()),
+            }),
+            conversation_ref: None,
+            reply_to_id: None,
+            thread_id: None,
+            turn_id: None,
+            durability: DeliveryDurability::BestEffort,
+            payload: OutboundPayload::Text { text: "nope".into() },
+        })
+        .await
+        .expect_err("foreign account is rejected");
+    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Forbidden);
+    assert!(sink.ids.lock().expect("ids lock").is_empty());
+
+    let error = adapter
+        .send(ChannelOutboundIntent {
+            idempotency_key: "wrong-conversation".into(),
+            channel_id: "local".into(),
+            conversation_id: "chat-1".into(),
+            channel_ref: None,
+            conversation_ref: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Group,
+                id: "different-chat".into(),
+                ..Default::default()
+            }),
+            reply_to_id: None,
+            thread_id: None,
+            turn_id: None,
+            durability: DeliveryDurability::BestEffort,
+            payload: OutboundPayload::Text { text: "nope".into() },
+        })
+        .await
+        .expect_err("conflicting conversation address is rejected");
+    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Forbidden);
+    assert!(sink.ids.lock().expect("ids lock").is_empty());
 }
 
 #[tokio::test]
