@@ -2931,7 +2931,7 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
             .append_media_upload_chunk(MediaUploadChunk {
                 handle: handle.clone(),
                 sequence: 0,
-                bytes,
+                bytes: bytes.clone(),
             })
             .await
             .unwrap(),
@@ -2951,17 +2951,47 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
     read_scope.configured_instance = "fixture".into();
     read_scope.channel.id = "fixture".into();
     read_scope.channel.account_id = Some("fixture:media-v1:test".into());
-    let read = service
+    let read_request = MediaReadBegin {
+        instance: "fixture".into(),
+        scope: read_scope.clone(),
+        media: result.clone(),
+        max_bytes: bytes_len(&result),
+    };
+    assert!(service
         .begin_media_read(MediaReadBegin {
-            instance: "fixture".into(),
-            scope: read_scope.clone(),
-            media: result.clone(),
-            max_bytes: bytes_len(&result),
+            instance: "missing".into(),
+            ..read_request.clone()
         })
+        .await
+        .is_err());
+    service.provider_activations.lock().await.insert(
+        "fixture-no-identity".into(),
+        super::ProviderActivation {
+            generation: "activation-no-identity".into(),
+            media_account_scope: None,
+        },
+    );
+    let running_fixture = service.running.lock().await["fixture"].clone();
+    service
+        .running
+        .lock()
+        .await
+        .insert("fixture-no-identity".into(), running_fixture);
+    assert!(service
+        .begin_media_read(MediaReadBegin {
+            instance: "fixture-no-identity".into(),
+            ..read_request.clone()
+        })
+        .await
+        .is_err());
+    let read = service
+        .begin_media_read(read_request.clone())
         .await
         .unwrap();
     assert_eq!(read.byte_count, bytes_len(&result) as usize);
     assert_eq!(read.media.opaque_id, result.opaque_id);
+    assert_eq!(read.content_type, "image/png");
+    assert_eq!(read.file_name.as_deref(), Some("image.png"));
     let first = service
         .read_media_chunk(MediaReadChunk {
             handle: read.handle.clone(),
@@ -2970,7 +3000,7 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         .await
         .unwrap();
     assert!(first.done);
-    assert_eq!(first.bytes.len(), read.byte_count);
+    assert_eq!(first.bytes, bytes);
     assert_eq!(
         service
             .read_media_chunk(MediaReadChunk {
@@ -3020,7 +3050,7 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         .await
         .is_err());
     assert!(service
-        .abort_media_read(MediaReadFinish(replaced_read.handle))
+        .abort_media_read(MediaReadFinish(replaced_read.handle.clone()))
         .await
         .is_err());
     assert!(service.finish_media_upload(finish).await.is_err());
@@ -3037,6 +3067,18 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
             .await
             .is_err()
     );
+    assert!(service.begin_media_read(read_request).await.is_err());
+    assert!(service
+        .read_media_chunk(MediaReadChunk {
+            handle: replaced_read.handle.clone(),
+            sequence: 0,
+        })
+        .await
+        .is_err());
+    assert!(service
+        .abort_media_read(MediaReadFinish(replaced_read.handle))
+        .await
+        .is_err());
     service.shutdown().await.unwrap();
 }
 
