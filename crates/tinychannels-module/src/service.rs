@@ -777,6 +777,8 @@ impl Channels {
                 .is_some_and(|current| Arc::ptr_eq(current, &entry))
             {
                 running.remove(&name);
+                self.provider_activations.lock().await.remove(&name);
+                self.media_reads.invalidate_instance(&name).await;
             }
             result?;
         }
@@ -1119,7 +1121,7 @@ impl Channels {
     #[tinybus(confidential)]
     async fn begin_media_read(
         &self,
-        mut request: tinychannels_bus::MediaReadBegin,
+        request: tinychannels_bus::MediaReadBegin,
     ) -> BusResult<tinychannels_bus::MediaReadInfo> {
         if self.terminal.load(Ordering::SeqCst) {
             return Err(BusError::failed("module is shutting down"));
@@ -1138,7 +1140,7 @@ impl Channels {
         if encoded.len() > tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES {
             return Err(BusError::failed("media resolution request exceeds its limit"));
         }
-        let reservation = self.media_reads.reserve()?;
+        let reservation = self.media_reads.reserve().await?;
         let repository = crate::provider::ModuleMediaRepository(
             self.host.clone(),
             request.instance.clone(),

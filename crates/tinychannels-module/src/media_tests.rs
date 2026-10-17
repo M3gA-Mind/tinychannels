@@ -36,13 +36,13 @@ fn request() -> tinychannels_bus::MediaReadBegin {
 #[tokio::test]
 async fn media_reads_reserve_capacity_before_resolution_and_release_it_on_cancel() {
     let reads = MediaReads::default();
-    let first = reads.reserve().unwrap();
-    let second = reads.reserve().unwrap();
-    assert!(reads.reserve().is_err());
+    let first = reads.reserve().await.unwrap();
+    let second = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
     drop(first);
-    let third = reads.reserve().unwrap();
+    let third = reads.reserve().await.unwrap();
     drop((second, third));
-    assert!(reads.reserve().is_ok());
+    assert!(reads.reserve().await.is_ok());
 }
 
 #[tokio::test]
@@ -52,7 +52,7 @@ async fn media_reads_return_bounded_ordered_retryable_chunks_and_release_bytes()
     let bytes = vec![0x5a; tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES + 7];
     begin.max_bytes = bytes.len() as u64;
     let info = reads
-        .complete(begin, "activation".into(), stored(bytes.clone()), reads.reserve().unwrap())
+        .complete(begin, "activation".into(), stored(bytes.clone()), reads.reserve().await.unwrap())
         .await
         .unwrap();
     assert_eq!(info.byte_count, bytes.len());
@@ -81,13 +81,13 @@ async fn media_reads_return_bounded_ordered_retryable_chunks_and_release_bytes()
         .unwrap();
     assert_eq!(last.bytes, bytes[tinychannels_bus::module_media::MEDIA_READ_CHUNK_BYTES..]);
     assert!(last.done);
-    let held = reads.reserve().unwrap();
-    assert!(reads.reserve().is_err());
+    let held = reads.reserve().await.unwrap();
+    assert!(reads.reserve().await.is_err());
     reads
         .abort(tinychannels_bus::MediaReadFinish(info.handle))
         .await
         .unwrap();
-    assert!(reads.reserve().is_ok());
+    assert!(reads.reserve().await.is_ok());
     drop(held);
 }
 
@@ -97,10 +97,47 @@ async fn media_reads_reject_claimed_size_mismatch_without_retaining_the_slot() {
     let mut wrong = stored(vec![1, 2, 3]);
     wrong.media.size_bytes = Some(4);
     assert!(reads
-        .complete(request(), "activation".into(), wrong, reads.reserve().unwrap())
+        .complete(request(), "activation".into(), wrong, reads.reserve().await.unwrap())
         .await
         .is_err());
-    assert!(reads.reserve().is_ok());
+    assert!(reads.reserve().await.is_ok());
+}
+
+#[tokio::test]
+async fn expired_read_leases_release_capacity_without_being_touched() {
+    let reads = MediaReads::default();
+    for handle in ["expired-a", "expired-b"] {
+        let permit = reads.capacity.clone().try_acquire_owned().unwrap();
+        reads.state.lock().await.reads.insert(
+            handle.into(),
+            Read {
+                instance: "telegram".into(),
+                activation: "old".into(),
+                expires: Instant::now() - Duration::from_secs(1),
+                bytes: vec![1],
+                next_sequence: 0,
+                last_chunk: None,
+                _permit: permit,
+            },
+        );
+    }
+    assert!(reads.reserve().await.is_ok());
+    assert!(reads.reserve().await.is_ok());
+}
+
+#[tokio::test]
+async fn oversized_resolved_metadata_drops_the_reserved_capacity() {
+    let reads = MediaReads::default();
+    let mut media = stored(vec![1, 2, 3]);
+    media.file_name = Some("x".repeat(
+        tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES + 1,
+    ));
+    assert!(reads
+        .complete(request(), "activation".into(), media, reads.reserve().await.unwrap())
+        .await
+        .is_err());
+    assert!(reads.reserve().await.is_ok());
+    assert!(reads.reserve().await.is_ok());
 }
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::Notify;

@@ -98,7 +98,8 @@ pub struct MediaReadChunk {
     pub sequence: u32,
 }
 
-/// A bounded confidential chunk. `done` marks removal of the temporary read.
+/// A bounded confidential chunk. `done` marks EOF; callers should abort the
+/// handle after consuming the final chunk or let its short lease expire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct MediaReadChunkResult {

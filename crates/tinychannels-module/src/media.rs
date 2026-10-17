@@ -60,7 +60,8 @@ impl Default for MediaReads {
 pub(crate) struct MediaReadReservation(OwnedSemaphorePermit);
 
 impl MediaReads {
-    pub(crate) fn reserve(&self) -> Result<MediaReadReservation> {
+    pub(crate) async fn reserve(&self) -> Result<MediaReadReservation> {
+        Self::prune(&mut self.state.lock().await);
         self.capacity
             .clone()
             .try_acquire_owned()
@@ -103,6 +104,11 @@ impl MediaReads {
             byte_count: bytes,
             chunk_count: chunk_count as u32,
         };
+        let info_bytes = serde_json::to_vec(&info)
+            .map_err(|_| Error::failed("resolved media metadata is invalid"))?;
+        if info_bytes.len() > tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES {
+            return Err(Error::failed("resolved media metadata exceeds its limit"));
+        }
         state.reads.insert(
             handle,
             Read {
@@ -170,6 +176,14 @@ impl MediaReads {
         self.state.lock().await.reads.remove(&request.0.0)
             .map(|_| ())
             .ok_or_else(|| Error::failed("media read is unknown or expired"))
+    }
+
+    pub(crate) async fn invalidate_instance(&self, instance: &str) {
+        self.state
+            .lock()
+            .await
+            .reads
+            .retain(|_, read| read.instance != instance);
     }
 
     fn prune(state: &mut ReadState) {

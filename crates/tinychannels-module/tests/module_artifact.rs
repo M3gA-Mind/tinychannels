@@ -1678,6 +1678,18 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         )
         .await
         .unwrap();
+    let pre_restart_read: tinychannels_bus::MediaReadInfo = runtime_proxy
+        .call_confidential(
+            "BeginMediaRead",
+            MediaReadBegin {
+                instance: "telegram".into(),
+                scope: scope.clone(),
+                media: reference.clone(),
+                max_bytes: 1024,
+            },
+        )
+        .await
+        .unwrap();
     let requests = telegram_api.received_requests().await.unwrap();
     let upload = requests
         .iter()
@@ -1737,6 +1749,46 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
                 .is_err()
         );
     }
+    assert!(runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadChunkResult>(
+            "ReadMediaChunk",
+            MediaReadChunk {
+                handle: pre_restart_read.handle.clone(),
+                sequence: 0,
+            },
+        )
+        .await
+        .is_err());
+    let after_restart_read: tinychannels_bus::MediaReadInfo = runtime_proxy
+        .call_confidential(
+            "BeginMediaRead",
+            MediaReadBegin {
+                instance: "telegram".into(),
+                scope: scope.clone(),
+                media: reference.clone(),
+                max_bytes: 1024,
+            },
+        )
+        .await
+        .unwrap();
+    let after_restart_bytes: tinychannels_bus::MediaReadChunkResult = runtime_proxy
+        .call_confidential(
+            "ReadMediaChunk",
+            MediaReadChunk {
+                handle: after_restart_read.handle.clone(),
+                sequence: 0,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_restart_bytes.bytes, png_for_wire_check);
+    runtime_proxy
+        .call_confidential::<()>(
+            "AbortMediaRead",
+            MediaReadFinish(after_restart_read.handle),
+        )
+        .await
+        .unwrap();
     let after_restart = runtime_proxy
         .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
             "SendChannelIntent",
