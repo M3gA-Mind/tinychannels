@@ -887,14 +887,6 @@ async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
         topic_id: Some("topic-77".into()),
         ..Default::default()
     });
-    message.conversation_ref = Some(tinychannels_bus::ConversationRef {
-        id: "-10042".into(),
-        scope_id: Some("scope-42".into()),
-        parent_id: Some("parent-42".into()),
-        thread_id: Some("77".into()),
-        topic_id: Some("topic-77".into()),
-        ..Default::default()
-    });
     message.parts = vec![
         tinychannels_bus::OutboundContentPart::Content {
             part: tinychannels_bus::ContentPart::Text {
@@ -987,6 +979,8 @@ async fn typed_media_failure_after_text_keeps_real_partial_ids_and_forbids_retry
     message.turn_id = Some("turn-42".into());
     message.conversation_ref = Some(tinychannels_bus::ConversationRef {
         id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
         thread_id: Some("77".into()),
         topic_id: Some("topic-77".into()),
         ..Default::default()
@@ -1035,6 +1029,8 @@ async fn configured_local_adapter_accepts_and_delivers_typed_telegram_media() {
     };
     let conversation = tinychannels_bus::ConversationRef {
         id: "-10042".into(),
+        scope_id: Some("scope-42".into()),
+        parent_id: Some("parent-42".into()),
         thread_id: Some("77".into()),
         topic_id: Some("topic-77".into()),
         ..Default::default()

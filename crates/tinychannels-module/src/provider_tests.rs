@@ -1295,6 +1295,8 @@ async fn configured_running_telegram_adapter_uploads_media_from_host_storage() {
     let conversation = ConversationRef {
         kind: ConversationKind::Group,
         id: "-10099".into(),
+        scope_id: Some("scope-99".into()),
+        parent_id: Some("parent-99".into()),
         thread_id: Some("31".into()),
         topic_id: Some("topic-31".into()),
         ..Default::default()
