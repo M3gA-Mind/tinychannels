@@ -202,6 +202,33 @@ pub trait Channel: Send + Sync {
         Ok(())
     }
 
+    /// Send one native reaction through the provider's ordered operation path.
+    async fn send_reaction(
+        &self,
+        _conversation_id: &str,
+        _message_id: &str,
+        _reaction: &str,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("provider does not support native reactions")
+    }
+
+    /// Edit a previously sent message using its provider receipt.
+    async fn edit_message(
+        &self,
+        _receipt: &tinychannels_bus::channel::MessageReceipt,
+        _intent: &tinychannels_bus::channel::ChannelOutboundIntent,
+    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
+        anyhow::bail!("provider does not support message editing")
+    }
+
+    /// Delete a previously sent message using its provider receipt.
+    async fn delete_message(
+        &self,
+        _receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("provider does not support message deletion")
+    }
+
     /// Convert and send one message using the owning provider's idempotency
     /// contract. Module-backed implementations override this to perform
     /// `PrepareOutboundIntent` and `SendChannelIntent` through TinyBus.
