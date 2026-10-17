@@ -548,7 +548,7 @@ impl HostChannels {
         )?;
         tokio::time::timeout(
             HOST_VOICE_CALLBACK_TIMEOUT,
-            proxy.call(tinyvoice_bus::names::methods::WAVEFORM, (request,)),
+            proxy.call(tinyvoice_bus::names::methods::CODEC_WAVEFORM, (request,)),
         )
         .await
         .map_err(|_| Error::failed("TinyVoice waveform call timed out"))?
