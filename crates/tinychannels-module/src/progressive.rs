@@ -37,6 +37,11 @@ struct Sender {
     send_sequence: std::sync::atomic::AtomicU64,
 }
 
+struct ProgressiveTarget {
+    channel: String,
+    media_account_scope: Option<String>,
+}
+
 impl Sender {
     async fn invoke(
         &self,
@@ -1077,9 +1082,11 @@ impl Replies {
         let terminal_feed = Arc::new(Mutex::new(None));
         let worker = tokio::spawn(run(
             host,
-            channel,
+            ProgressiveTarget {
+                channel,
+                media_account_scope,
+            },
             capabilities,
-            media_account_scope,
             context,
             lifetime,
             terminal_feed.clone(),
@@ -1259,14 +1266,17 @@ async fn abort_entry(entry: Arc<Entry>) -> Result<()> {
 
 async fn run(
     host: HostChannels,
-    channel: String,
+    target: ProgressiveTarget,
     capabilities: tinychannels_bus::ChannelCapabilities,
-    media_account_scope: Option<String>,
     context: Option<ProgressiveOutputContext>,
     lifetime: Duration,
     terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
     mut inbox: mpsc::Receiver<Command>,
 ) {
+    let ProgressiveTarget {
+        channel,
+        media_account_scope,
+    } = target;
     let mut reply = if let Some(context) = context {
         ProgressiveReply::new_scoped(
             Arc::new(Sender {
