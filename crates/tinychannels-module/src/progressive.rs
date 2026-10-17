@@ -910,7 +910,7 @@ async fn run(
                         let _ = response.send(result);
                         break;
                     }
-                    if let Some(final_event @ ChannelOutputEvent::FinalMessage { text, .. }) = final_message {
+                    if let Some(ref final_event @ ChannelOutputEvent::FinalMessage { text, .. }) = final_message {
                         let (mut prior_outcomes, mut prior_unsupported) =
                             delivery_facts(&result);
                         if forward {

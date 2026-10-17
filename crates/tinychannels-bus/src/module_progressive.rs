@@ -103,9 +103,11 @@ pub enum ChannelOutputEvent {
         display_label: Option<String>,
         display_detail: Option<String>,
         worker_thread_id: Option<String>,
+        worktree_path: Option<String>,
         changed_files: Vec<String>,
         dirty_status: Option<bool>,
         stop: Option<TurnStopSummary>,
+        extended_policy: Option<bool>,
     },
     ModelUsage {
         model: String,

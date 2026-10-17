@@ -62,7 +62,7 @@ The TinyAgents `AgentProgress` source variants map as follows:
 | `ToolCallStarted` | `ToolCallStarted`, preserving call ID, name, arguments, iteration, label, and detail. |
 | `ToolCallProgress` | `ToolCallProgress`, preserving call ID and status message. |
 | `ToolCallCompleted` | `ToolCallCompleted`, preserving call ID, status, lengths, elapsed time, iteration, allowed arguments/output, labels, and structured result. |
-| `SubagentSpawned`, `SubagentCompleted`, `SubagentFailed`, `SubagentAwaitingUser`, `SubagentIterationStarted` | `Subagent`, preserving agent/task identity, state, iteration, and user-facing question or summary. Do not forward trace-only prompt/output or filesystem details. |
+| `SubagentSpawned`, `SubagentCompleted`, `SubagentFailed`, `SubagentAwaitingUser`, `SubagentIterationStarted` | `Subagent`, preserving agent/task identity, state, iteration, and user-facing question or summary. Preserve capped child output and authorized worktree path/changed-file/dirty-status facts used by the UI; preserve `extended_policy` for child iteration rendering. Prompt/input capture remains excluded. |
 | `SubagentToolCallStarted`, `SubagentToolCallCompleted` | `Subagent` with nested call identity and allowed tool facts; preserve task and call IDs. |
 | `SubagentTextDelta`, `SubagentThinkingDelta` | `Subagent` with task identity and the corresponding delta, subject to the same text/reasoning policy as parent output. |
 | `TurnCostUpdated` | `Usage`, preserving cumulative model and token/cost totals. |
@@ -72,6 +72,7 @@ The TinyAgents `AgentProgress` source variants map as follows:
 
 This table is the conformance checklist for the OpenHuman adapter. Fields
 marked as allowed are still subject to OpenHuman's current capture gates and
-must be bounded before rendering. This crate does not claim that the host
-adapter has migrated; that integration and its exhaustive-match tests belong
-to OpenHuman #7967.
+must be bounded before rendering. `checkpoint_path` remains a host ledger and
+resume side effect; #7967 must retain it natively without projecting it to the
+generic UI event. This crate does not claim that the host adapter has migrated;
+that integration and its exhaustive-match tests belong to OpenHuman #7967.
