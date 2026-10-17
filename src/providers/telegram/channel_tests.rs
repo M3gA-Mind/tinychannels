@@ -444,38 +444,126 @@ fn infer_attachment_kind_from_target_detects_document_extension() {
 #[test]
 fn attachment_kind_and_mime_inference_cover_supported_download_extensions() {
     for (path, kind, mime) in [
-        ("photo.PNG?download=1", TelegramAttachmentKind::Image, Some("image/png")),
-        ("photo.jpeg#preview", TelegramAttachmentKind::Image, Some("image/jpeg")),
-        ("photo.gif", TelegramAttachmentKind::Image, Some("image/gif")),
-        ("photo.webp", TelegramAttachmentKind::Image, Some("image/webp")),
-        ("movie.mp4", TelegramAttachmentKind::Video, Some("video/mp4")),
-        ("movie.mov", TelegramAttachmentKind::Video, Some("video/quicktime")),
+        (
+            "photo.PNG?download=1",
+            TelegramAttachmentKind::Image,
+            Some("image/png"),
+        ),
+        (
+            "photo.jpeg#preview",
+            TelegramAttachmentKind::Image,
+            Some("image/jpeg"),
+        ),
+        (
+            "photo.gif",
+            TelegramAttachmentKind::Image,
+            Some("image/gif"),
+        ),
+        (
+            "photo.webp",
+            TelegramAttachmentKind::Image,
+            Some("image/webp"),
+        ),
+        (
+            "movie.mp4",
+            TelegramAttachmentKind::Video,
+            Some("video/mp4"),
+        ),
+        (
+            "movie.mov",
+            TelegramAttachmentKind::Video,
+            Some("video/quicktime"),
+        ),
         ("movie.mkv", TelegramAttachmentKind::Video, None),
         ("movie.avi", TelegramAttachmentKind::Video, None),
-        ("movie.webm", TelegramAttachmentKind::Video, Some("video/webm")),
-        ("sound.mp3", TelegramAttachmentKind::Audio, Some("audio/mpeg")),
-        ("sound.m4a", TelegramAttachmentKind::Audio, Some("audio/mp4")),
-        ("sound.wav", TelegramAttachmentKind::Audio, Some("audio/wav")),
+        (
+            "movie.webm",
+            TelegramAttachmentKind::Video,
+            Some("video/webm"),
+        ),
+        (
+            "sound.mp3",
+            TelegramAttachmentKind::Audio,
+            Some("audio/mpeg"),
+        ),
+        (
+            "sound.m4a",
+            TelegramAttachmentKind::Audio,
+            Some("audio/mp4"),
+        ),
+        (
+            "sound.wav",
+            TelegramAttachmentKind::Audio,
+            Some("audio/wav"),
+        ),
         ("sound.flac", TelegramAttachmentKind::Audio, None),
-        ("voice.ogg", TelegramAttachmentKind::Voice, Some("audio/ogg")),
-        ("voice.oga", TelegramAttachmentKind::Voice, Some("audio/ogg")),
-        ("voice.opus", TelegramAttachmentKind::Voice, Some("audio/ogg")),
-        ("spec.pdf", TelegramAttachmentKind::Document, Some("application/pdf")),
-        ("notes.txt", TelegramAttachmentKind::Document, Some("text/plain")),
-        ("notes.md", TelegramAttachmentKind::Document, Some("text/plain")),
-        ("data.csv", TelegramAttachmentKind::Document, Some("text/csv")),
-        ("data.json", TelegramAttachmentKind::Document, Some("application/json")),
-        ("archive.zip", TelegramAttachmentKind::Document, Some("application/zip")),
+        (
+            "voice.ogg",
+            TelegramAttachmentKind::Voice,
+            Some("audio/ogg"),
+        ),
+        (
+            "voice.oga",
+            TelegramAttachmentKind::Voice,
+            Some("audio/ogg"),
+        ),
+        (
+            "voice.opus",
+            TelegramAttachmentKind::Voice,
+            Some("audio/ogg"),
+        ),
+        (
+            "spec.pdf",
+            TelegramAttachmentKind::Document,
+            Some("application/pdf"),
+        ),
+        (
+            "notes.txt",
+            TelegramAttachmentKind::Document,
+            Some("text/plain"),
+        ),
+        (
+            "notes.md",
+            TelegramAttachmentKind::Document,
+            Some("text/plain"),
+        ),
+        (
+            "data.csv",
+            TelegramAttachmentKind::Document,
+            Some("text/csv"),
+        ),
+        (
+            "data.json",
+            TelegramAttachmentKind::Document,
+            Some("application/json"),
+        ),
+        (
+            "archive.zip",
+            TelegramAttachmentKind::Document,
+            Some("application/zip"),
+        ),
         ("archive.tar", TelegramAttachmentKind::Document, None),
         ("archive.gz", TelegramAttachmentKind::Document, None),
         ("document.doc", TelegramAttachmentKind::Document, None),
-        ("document.docx", TelegramAttachmentKind::Document, Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")),
+        (
+            "document.docx",
+            TelegramAttachmentKind::Document,
+            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        ),
         ("sheet.xls", TelegramAttachmentKind::Document, None),
-        ("sheet.xlsx", TelegramAttachmentKind::Document, Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")),
+        (
+            "sheet.xlsx",
+            TelegramAttachmentKind::Document,
+            Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ),
         ("slides.ppt", TelegramAttachmentKind::Document, None),
         ("slides.pptx", TelegramAttachmentKind::Document, None),
     ] {
-        assert_eq!(infer_attachment_kind_from_target(path), Some(kind), "{path}");
+        assert_eq!(
+            infer_attachment_kind_from_target(path),
+            Some(kind),
+            "{path}"
+        );
         assert_eq!(infer_attachment_mime(path), mime, "{path}");
     }
     assert_eq!(infer_attachment_kind_from_target("unknown.bin"), None);
