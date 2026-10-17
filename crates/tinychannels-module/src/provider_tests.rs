@@ -560,7 +560,7 @@ async fn host_adapters_propagate_callback_failures() {
             .await
             .is_err()
     );
-    let transcriber = ModuleTranscriber(host.clone());
+    let transcriber = ModuleTranscriber(host.clone(), "fixture".into());
     assert_eq!(transcriber.name(), "module-host");
     assert!(
         transcriber
