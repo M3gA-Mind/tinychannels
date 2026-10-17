@@ -4675,7 +4675,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         configured_instance: "telegram:bot-1".into(),
         channel: tinychannels_bus::ChannelRef {
             id: "telegram".into(),
-            account_id: Some("telegram:bot-1".into()),
+            account_id: Some("telegram:media-v1:fixture".into()),
         },
         conversation: context.conversation.clone(),
         turn_id: "stub-codec-turn".into(),
