@@ -70,6 +70,7 @@ impl ChannelAdapter for LocalChannelAdapter {
         &self,
         intent: ChannelOutboundIntent,
     ) -> Result<crate::channel::ChannelSendOutcome, ChannelSendError> {
+        validate_scope(&self.descriptor, &intent)?;
         let supported = match &intent.payload {
             OutboundPayload::Text { .. } => self.capabilities.content.text.outbound,
             OutboundPayload::Media { .. } => self.capabilities.content.image.outbound,
@@ -92,7 +93,7 @@ impl ChannelAdapter for LocalChannelAdapter {
                             && self.capabilities.voice_out.synthesis
                     }
                 },
-                tinychannels_bus::OutboundContentPart::Content { part } => match part {
+                    tinychannels_bus::OutboundContentPart::Content { part } => match part {
                     tinychannels_bus::ContentPart::Text { .. } => {
                         self.capabilities.content.text.outbound
                     }
@@ -108,7 +109,30 @@ impl ChannelAdapter for LocalChannelAdapter {
                     tinychannels_bus::ContentPart::File { .. } => {
                         self.capabilities.content.file.outbound
                     }
-                    _ => false,
+                        tinychannels_bus::ContentPart::Sticker { .. } => {
+                            self.capabilities.content.sticker.outbound
+                        }
+                        tinychannels_bus::ContentPart::Location { .. } => {
+                            self.capabilities.content.location.outbound
+                        }
+                        tinychannels_bus::ContentPart::Contact { .. } => {
+                            self.capabilities.content.contact.outbound
+                        }
+                        tinychannels_bus::ContentPart::Buttons { .. } => {
+                            self.capabilities.content.buttons.outbound
+                        }
+                        tinychannels_bus::ContentPart::Poll { .. } => {
+                            self.capabilities.content.poll.outbound
+                        }
+                        tinychannels_bus::ContentPart::Presentation { .. } => {
+                            self.capabilities.content.presentation.outbound
+                        }
+                        tinychannels_bus::ContentPart::Native { .. } => {
+                            self.capabilities.content.native.outbound
+                        }
+                        tinychannels_bus::ContentPart::VoiceNote { .. } => {
+                            self.capabilities.voice_out.supported
+                        }
                 },
             }),
             _ => false,
@@ -122,7 +146,7 @@ impl ChannelAdapter for LocalChannelAdapter {
                 ..Default::default()
             });
         }
-        self.outbound.send(intent.clone()).await.map(|mut receipt| {
+        let mut outcome = self.outbound.send(intent.clone()).await.map(|mut receipt| {
             receipt.idempotency_key.get_or_insert(intent.idempotency_key);
             receipt.channel.get_or_insert_with(|| {
                 tinychannels_bus::ChannelRef {
@@ -143,7 +167,30 @@ impl ChannelAdapter for LocalChannelAdapter {
                 receipt,
                 error: None,
             }
-        })
+        })?;
+        let expected_channel = tinychannels_bus::ChannelRef {
+            id: self.descriptor.id.clone(),
+            account_id: self.descriptor.account_id.clone(),
+        };
+        let expected_conversation = intent.conversation_ref.clone().unwrap_or_else(|| {
+            tinychannels_bus::ConversationRef {
+                id: intent.conversation_id.clone(),
+                thread_id: intent.thread_id.clone(),
+                ..Default::default()
+            }
+        });
+        if outcome.receipt.channel.as_ref() != Some(&expected_channel)
+            || outcome.receipt.conversation.as_ref() != Some(&expected_conversation)
+        {
+            outcome.error = Some(ChannelSendError {
+                kind: SendErrorKind::Unknown,
+                message: "provider receipt scope does not match configured delivery".into(),
+                sent_before_error: true,
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        Ok(outcome)
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError> {
@@ -157,4 +204,32 @@ impl ChannelAdapter for LocalChannelAdapter {
             ..Default::default()
         })
     }
+}
+
+fn validate_scope(
+    descriptor: &ChannelDescriptor,
+    intent: &ChannelOutboundIntent,
+) -> Result<(), ChannelSendError> {
+    let expected_channel = tinychannels_bus::provider_id(&descriptor.id);
+    if tinychannels_bus::provider_id(&intent.channel_id) != expected_channel
+        || intent.channel_ref.as_ref().is_some_and(|reference| {
+            reference.id != expected_channel
+                || reference.account_id != descriptor.account_id
+        })
+        || intent.conversation_id.trim().is_empty()
+        || intent.conversation_ref.as_ref().is_some_and(|conversation| {
+            conversation.id != intent.conversation_id
+                || (intent.thread_id.is_some()
+                    && conversation.thread_id.is_some()
+                    && conversation.thread_id != intent.thread_id)
+        })
+    {
+        return Err(ChannelSendError {
+            kind: SendErrorKind::Forbidden,
+            message: "channel or conversation address does not match configured adapter".into(),
+            retryable: false,
+            ..Default::default()
+        });
+    }
+    Ok(())
 }
