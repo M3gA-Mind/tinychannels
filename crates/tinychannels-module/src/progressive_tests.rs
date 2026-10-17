@@ -1707,7 +1707,7 @@ async fn typed_callback_error_after_acceptance_is_unknown_and_stops_batch() {
     replies.shutdown().await.unwrap();
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn thinking_multipart_receipt_drives_per_part_token_cleanup() {
     let (replies, callback) = fixture(false).await;
     *callback.send_result.lock().await = Some(ProgressiveTransportResult::Success(
@@ -1741,6 +1741,9 @@ async fn thinking_multipart_receipt_drives_per_part_token_cleanup() {
         })
         .await
         .unwrap();
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
     tokio::time::advance(Duration::from_secs(1)).await;
     for _ in 0..5 {
         tokio::task::yield_now().await;
@@ -1844,6 +1847,9 @@ async fn filler_multipart_receipt_drives_per_part_token_cleanup() {
         capabilities,
     )
     .await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
     tokio::time::advance(Duration::from_secs(13)).await;
     for _ in 0..5 {
         tokio::task::yield_now().await;
