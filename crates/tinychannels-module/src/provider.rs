@@ -471,7 +471,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         let projection = match self
             .0
             .store_voice_media(tinychannels_bus::HostStoreVoiceMediaRequest {
-                scope: projection_scope,
+                scope: projection_scope.clone(),
                 direction: request.direction,
                 audio_base64: request.audio_base64,
                 mime_type: media.content_type.clone().unwrap_or_default(),
