@@ -436,13 +436,6 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
             })
             .await
             .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        let decoded = base64::Engine::decode(
-            &base64::engine::general_purpose::STANDARD,
-            &result.audio_base64,
-        )?;
-        if decoded.len() > 8 * 1024 * 1024 {
-            anyhow::bail!("resolved voice media exceeds provider upload limit");
-        }
         Ok(result)
     }
 }

@@ -471,8 +471,20 @@ impl HostChannels {
         &self,
         request: tinychannels_bus::HostReadVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
-        self.voice_callback(host_methods::READ_VOICE_MEDIA, request)
-            .await
+        let maximum = usize::try_from(request.max_bytes)
+            .map_err(|_| Error::failed("voice media byte limit is invalid"))?;
+        let result = self
+            .voice_callback(host_methods::READ_VOICE_MEDIA, request)
+            .await?;
+        let decoded = base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            &result.audio_base64,
+        )
+        .map_err(|_| Error::failed("host returned invalid base64 voice media"))?;
+        if decoded.len() > maximum {
+            return Err(Error::failed("host returned voice media above requested limit"));
+        }
+        Ok(result)
     }
 
     /// Resolve host-authoritative voice policy for the active scoped turn.
