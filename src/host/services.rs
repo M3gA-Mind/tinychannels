@@ -124,6 +124,7 @@ pub struct SpeechRequest {
 pub struct SpeechResult {
     pub audio_base64: String,
     pub mime_type: String,
+    pub duration_ms: Option<u64>,
     /// Provider-specific viseme timeline (mascot lip-sync); opaque JSON.
     pub visemes: Option<serde_json::Value>,
 }

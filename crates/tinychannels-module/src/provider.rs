@@ -338,6 +338,7 @@ impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
         Ok(tinychannels::host::SpeechResult {
             audio_base64: result.audio_base64,
             mime_type: result.mime_type,
+            duration_ms: result.duration_ms,
             visemes: None,
         })
     }

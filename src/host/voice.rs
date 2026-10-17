@@ -88,6 +88,13 @@ pub fn should_synthesize_reply(
     }
 }
 
+/// Prepared outbound media and a host-authorized public fallback link.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreparedVoiceReply {
+    pub note: VoiceNote,
+    pub accessible_url: Option<String>,
+}
+
 /// Run the shared text-to-speech, TinyVoice codec, and host persistence path
 /// for one explicitly selected voice reply. Providers only resolve the final
 /// opaque media reference and perform their native upload.
@@ -98,7 +105,10 @@ pub async fn prepare_voice_reply(
     synthesizer: &dyn SpeechSynthesizer,
     codec: &dyn VoiceCodec,
     store: &dyn VoiceMediaStore,
-) -> anyhow::Result<VoiceNote> {
+    accepted_codecs: &[String],
+    max_size_bytes: Option<u64>,
+    max_duration_ms: Option<u64>,
+) -> anyhow::Result<PreparedVoiceReply> {
     if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
         anyhow::bail!("voice synthesis requires conversation and turn identity");
     }
@@ -120,20 +130,38 @@ pub async fn prepare_voice_reply(
         "audio/mpeg" => "mp3",
         _ => anyhow::bail!("synthesizer returned an unsupported audio format"),
     };
+    let target = ["ogg_opus", "m4a_aac", "mp3", "wav_pcm16"]
+        .into_iter()
+        .find(|codec| accepted_codecs.iter().any(|accepted| accepted == codec))
+        .ok_or_else(|| anyhow::anyhow!("provider advertises no supported voice codec"))?;
     let encoded = codec
         .transcode(VoiceCodecRequest {
             audio_base64: synthesized.audio_base64,
             from: from.into(),
-            target: "ogg_opus".into(),
+            target: target.into(),
         })
         .await?;
+    let size_bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &encoded.audio_base64)?.len() as u64;
+    if max_size_bytes.is_some_and(|limit| size_bytes > limit) {
+        anyhow::bail!("synthesized voice exceeds provider size limit");
+    }
+    if max_duration_ms.is_some_and(|limit| synthesized.duration_ms.is_some_and(|duration| duration > limit)) {
+        anyhow::bail!("synthesized voice exceeds provider duration limit");
+    }
+    let (mime_type, file_name) = match target {
+        "ogg_opus" => ("audio/ogg", "voice.ogg"),
+        "m4a_aac" => ("audio/mp4", "voice.m4a"),
+        "mp3" => ("audio/mpeg", "voice.mp3"),
+        "wav_pcm16" => ("audio/wav", "voice.wav"),
+        _ => unreachable!(),
+    };
     let stored = store
         .store_voice(VoiceMediaRequest {
             audio_base64: encoded.audio_base64,
-            mime_type: "audio/ogg".into(),
-            codec: Some("ogg_opus".into()),
-            duration_ms: None,
-            file_name: Some("voice.ogg".into()),
+            mime_type: mime_type.into(),
+            codec: Some(target.into()),
+            duration_ms: synthesized.duration_ms,
+            file_name: Some(file_name.into()),
             direction: tinychannels_bus::HostVoiceMediaDirection::Outbound,
             scope,
         })
@@ -150,16 +178,19 @@ pub async fn prepare_voice_reply(
     media.path = None;
     media.local_cache_path = None;
     media.kind = tinychannels_bus::MediaKind::Audio;
-    media.content_type = Some("audio/ogg".into());
-    media.codec = Some("ogg_opus".into());
-    Ok(VoiceNote {
+    media.content_type = Some(mime_type.into());
+    media.codec = Some(target.into());
+    media.duration_ms = synthesized.duration_ms;
+    media.size_bytes = Some(size_bytes);
+    let note = VoiceNote {
         media,
-        codec: Some("ogg_opus".into()),
-        duration_ms: None,
+        codec: Some(target.into()),
+        duration_ms: synthesized.duration_ms,
         waveform: None,
         push_to_talk: false,
         transcript: None,
-    })
+    };
+    Ok(PreparedVoiceReply { note, accessible_url: stored.accessible_url })
 }
 
 fn unavailable_transcript() -> VoiceTranscript {
