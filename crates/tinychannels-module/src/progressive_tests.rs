@@ -158,9 +158,7 @@ impl StubTinyVoiceCodec {
         request: tinyvoice_bus::codec::CodecInput,
     ) -> tinybus::Result<tinyvoice_bus::codec::CodecInfo> {
         Ok(tinyvoice_bus::codec::CodecInfo {
-            codec: if request.audio_base64.starts_with(
-                &base64::engine::general_purpose::STANDARD.encode(b"OggS"),
-            ) {
+            codec: if request.audio_base64.starts_with("T2dnUw") {
                 tinyvoice_bus::codec::AudioCodec::OggOpus
             } else {
                 tinyvoice_bus::codec::AudioCodec::WavPcm16
@@ -219,13 +217,13 @@ impl Callback {
         request: tinychannels_bus::HostStoreVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         self.voice_store_calls.fetch_add(1, Ordering::SeqCst);
-        let media = request.media_reference.unwrap_or_else(|| {
-            tinychannels_bus::MediaReference {
+        let media = request
+            .media_reference
+            .unwrap_or_else(|| tinychannels_bus::MediaReference {
                 opaque_id: Some("durable-host-voice".into()),
                 kind: tinychannels_bus::MediaKind::Audio,
                 ..Default::default()
-            }
-        });
+            });
         if media
             .opaque_id
             .as_deref()
@@ -5023,4 +5021,10 @@ fn progressive_test_wav() -> Vec<u8> {
         wav.extend_from_slice(&sample.to_le_bytes());
     }
     wav
+}
+
+fn progressive_test_ogg() -> Vec<u8> {
+    // This unit stub validates the container/MIME handoff. Actual Opus decoding
+    // and encoding are exercised against the compiled TinyVoice artifact.
+    b"OggS\0\x02\0\0\0\0\0\0\0\0fixture".to_vec()
 }
