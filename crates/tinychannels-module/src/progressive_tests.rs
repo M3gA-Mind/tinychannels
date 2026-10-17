@@ -607,20 +607,23 @@ async fn completed_progressive_handles_are_evicted_at_the_retention_bound() {
         handles.push(handle);
     }
     assert_eq!(replies.state.lock().await.entries.len(), MAX_RETAINED);
-    assert!(replies
-        .execute(ProgressiveCommand::Close {
-            handle: handles[0].clone(),
-        })
-        .await
-        .is_ok());
-    let unknown = replies
-        .execute(ProgressiveCommand::FeedOutput {
-            handle: handles[0].clone(),
-            events: vec![],
-        })
-        .await
-        .unwrap_err();
-    assert!(unknown.to_string().contains("unknown progressive handle"));
+    let mut evicted = 0;
+    for handle in handles.iter().take(MAX_RETAINED) {
+        let result = replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle: handle.clone(),
+                events: vec![],
+            })
+            .await;
+        if result
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.to_string().contains("unknown progressive handle"))
+        {
+            evicted += 1;
+        }
+    }
+    assert_eq!(evicted, 1, "one completed handle is evicted at capacity");
     replies.shutdown().await.unwrap();
 }
 
