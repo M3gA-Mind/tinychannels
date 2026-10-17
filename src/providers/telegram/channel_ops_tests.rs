@@ -1195,71 +1195,133 @@ async fn structured_payloads_reject_invalid_bot_api_values_before_http() {
     let part = |part| tinychannels_bus::OutboundContentPart::Content { part };
     let invalid = vec![
         part(ContentPart::Location {
-            latitude: 91.0, longitude: 0.0, label: None, address: None,
-            accuracy_meters: None, live_until_unix_ms: None,
+            latitude: 91.0,
+            longitude: 0.0,
+            label: None,
+            address: None,
+            accuracy_meters: None,
+            live_until_unix_ms: None,
         }),
         part(ContentPart::Location {
-            latitude: 1.0, longitude: 0.0, label: Some("venue".into()), address: None,
-            accuracy_meters: None, live_until_unix_ms: None,
+            latitude: 1.0,
+            longitude: 0.0,
+            label: Some("venue".into()),
+            address: None,
+            accuracy_meters: None,
+            live_until_unix_ms: None,
         }),
         part(ContentPart::Location {
-            latitude: 1.0, longitude: 0.0, label: None, address: None,
-            accuracy_meters: Some(1501.0), live_until_unix_ms: None,
+            latitude: 1.0,
+            longitude: 0.0,
+            label: None,
+            address: None,
+            accuracy_meters: Some(1501.0),
+            live_until_unix_ms: None,
         }),
         part(ContentPart::Location {
-            latitude: 1.0, longitude: 0.0, label: None, address: None,
-            accuracy_meters: None, live_until_unix_ms: Some(0),
+            latitude: 1.0,
+            longitude: 0.0,
+            label: None,
+            address: None,
+            accuracy_meters: None,
+            live_until_unix_ms: Some(0),
         }),
         part(ContentPart::Contact {
-            display_name: "No phone".into(), phone_numbers: vec![], emails: vec![], organization: None,
+            display_name: "No phone".into(),
+            phone_numbers: vec![],
+            emails: vec![],
+            organization: None,
         }),
         part(ContentPart::Contact {
             display_name: "Ada".into(),
-            phone_numbers: vec![ContactMethod { value: "1".repeat(257), label: None }],
-            emails: vec![], organization: None,
+            phone_numbers: vec![ContactMethod {
+                value: "1".repeat(257),
+                label: None,
+            }],
+            emails: vec![],
+            organization: None,
         }),
         part(ContentPart::Contact {
             display_name: "Ada".into(),
-            phone_numbers: vec![ContactMethod { value: "+1".into(), label: Some("CELL\\nINJECT".into()) }],
-            emails: vec![], organization: Some("x".repeat(2100)),
+            phone_numbers: vec![ContactMethod {
+                value: "+1".into(),
+                label: Some("CELL\\nINJECT".into()),
+            }],
+            emails: vec![],
+            organization: Some("x".repeat(2100)),
         }),
-        part(ContentPart::Buttons { rows: vec![vec![ButtonAction {
-            id: "action".into(), label: "Disabled".into(), style: None, disabled: true,
-        }]] }),
-        part(ContentPart::Buttons { rows: vec![vec![ButtonAction {
-            id: "action".into(), label: "Styled".into(), style: Some("primary".into()), disabled: false,
-        }]] }),
-        part(ContentPart::Buttons { rows: vec![vec![ButtonAction {
-            id: "x".repeat(65), label: "Too long".into(), style: None, disabled: false,
-        }]] }),
+        part(ContentPart::Buttons {
+            rows: vec![vec![ButtonAction {
+                id: "action".into(),
+                label: "Disabled".into(),
+                style: None,
+                disabled: true,
+            }]],
+        }),
+        part(ContentPart::Buttons {
+            rows: vec![vec![ButtonAction {
+                id: "action".into(),
+                label: "Styled".into(),
+                style: Some(tinychannels_bus::ButtonStyle::Primary),
+                disabled: false,
+            }]],
+        }),
+        part(ContentPart::Buttons {
+            rows: vec![vec![ButtonAction {
+                id: "x".repeat(65),
+                label: "Too long".into(),
+                style: None,
+                disabled: false,
+            }]],
+        }),
         part(ContentPart::Buttons { rows: vec![] }),
         part(ContentPart::Poll {
-            question: "".into(), options: vec!["A".into(), "B".into()], multiple_choice: false,
-            closes_at_unix_ms: None, provider_poll_id: None,
+            question: "".into(),
+            options: vec!["A".into(), "B".into()],
+            multiple_choice: false,
+            closes_at_unix_ms: None,
+            provider_poll_id: None,
         }),
         part(ContentPart::Poll {
-            question: "Question".into(), options: vec!["A".into()], multiple_choice: false,
-            closes_at_unix_ms: None, provider_poll_id: None,
+            question: "Question".into(),
+            options: vec!["A".into()],
+            multiple_choice: false,
+            closes_at_unix_ms: None,
+            provider_poll_id: None,
         }),
         part(ContentPart::Poll {
-            question: "Question".into(), options: vec!["A".into(), "B".into()], multiple_choice: false,
-            closes_at_unix_ms: Some(0), provider_poll_id: None,
+            question: "Question".into(),
+            options: vec!["A".into(), "B".into()],
+            multiple_choice: false,
+            closes_at_unix_ms: Some(0),
+            provider_poll_id: None,
         }),
-        part(ContentPart::Presentation { blocks: serde_json::json!({}) }),
-        part(ContentPart::Native { provider: "other".into(), payload: serde_json::json!({"x":1}) }),
+        part(ContentPart::Presentation {
+            blocks: serde_json::json!({}),
+        }),
+        part(ContentPart::Native {
+            provider: "other".into(),
+            data: serde_json::json!({"x":1}),
+        }),
     ];
 
     for (index, structured) in invalid.into_iter().enumerate() {
-        let parts = if matches!(structured, tinychannels_bus::OutboundContentPart::Content {
-            part: ContentPart::Buttons { .. }
-        }) {
+        let parts = if matches!(
+            structured,
+            tinychannels_bus::OutboundContentPart::Content {
+                part: ContentPart::Buttons { .. }
+            }
+        ) {
             vec![text(), structured]
         } else {
             vec![structured]
         };
         let message = typed_parts(&format!("invalid-{index}"), parts);
         let result = crate::channel::ChannelTypedSend::send_typed(&channel, &message).await;
-        assert!(result.is_err(), "invalid structured case {index} was accepted");
+        assert!(
+            result.is_err(),
+            "invalid structured case {index} was accepted"
+        );
     }
     assert!(server.received_requests().await.unwrap().is_empty());
 }
