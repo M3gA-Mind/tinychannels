@@ -1003,12 +1003,14 @@ pub(crate) struct Running {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AdapterMode {
     LegacyBacked,
+    TelegramNativeV2,
 }
 
 pub(crate) struct ConfiguredAdapterHandle {
     pub(crate) configured_instance: String,
     pub(crate) mode: AdapterMode,
     adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
+    telegram_native: Option<Arc<TelegramNativeAdapter>>,
 }
 
 impl ConfiguredAdapterHandle {
@@ -1040,8 +1042,33 @@ impl ConfiguredAdapterHandle {
         tinychannels::channel::ChannelSendOutcome,
         tinychannels::channel::ChannelSendError,
     > {
-        debug_assert_eq!(self.mode, AdapterMode::LegacyBacked);
         self.adapter.send(intent).await
+    }
+
+    pub(crate) fn reactions(&self) -> Option<&dyn tinychannels::channel::ChannelReaction> {
+        self.telegram_native
+            .as_deref()
+            .map(|adapter| adapter as &dyn tinychannels::channel::ChannelReaction)
+    }
+
+    pub(crate) fn edits(&self) -> Option<&dyn tinychannels::channel::ChannelEdit> {
+        self.telegram_native
+            .as_deref()
+            .map(|adapter| adapter as &dyn tinychannels::channel::ChannelEdit)
+    }
+
+    pub(crate) fn deletes(&self) -> Option<&dyn tinychannels::channel::ChannelDelete> {
+        self.telegram_native
+            .as_deref()
+            .map(|adapter| adapter as &dyn tinychannels::channel::ChannelDelete)
+    }
+
+    pub(crate) fn streaming_drafts(
+        &self,
+    ) -> Option<&dyn tinychannels::channel::ChannelStreamingDraft> {
+        self.telegram_native
+            .as_deref()
+            .map(|adapter| adapter as &dyn tinychannels::channel::ChannelStreamingDraft)
     }
 }
 
@@ -1055,13 +1082,30 @@ impl ConfiguredAdapterFactory {
             configured_instance,
             mode: AdapterMode::LegacyBacked,
             adapter,
+            telegram_native: None,
+        }
+    }
+
+    pub(crate) fn telegram(running: Arc<Running>) -> ConfiguredAdapterHandle {
+        let configured_instance = running.configured_instance.clone();
+        let native = Arc::new(TelegramNativeAdapter { running });
+        let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = native.clone();
+        ConfiguredAdapterHandle {
+            configured_instance,
+            mode: AdapterMode::TelegramNativeV2,
+            adapter,
+            telegram_native: Some(native),
         }
     }
 }
 
 impl Running {
     pub(crate) fn adapter_handle(self: &Arc<Self>) -> ConfiguredAdapterHandle {
-        ConfiguredAdapterFactory::legacy(self.clone())
+        if self.channel.name() == "telegram" {
+            ConfiguredAdapterFactory::telegram(self.clone())
+        } else {
+            ConfiguredAdapterFactory::legacy(self.clone())
+        }
     }
 
     pub(crate) fn start(
