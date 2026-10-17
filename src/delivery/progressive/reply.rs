@@ -62,7 +62,7 @@ impl ProgressiveReply {
     ) -> Self {
         let mut reply = Self::new(sender, channel, capabilities);
         reply.output_context = Some(context);
-        reply.use_global_edit_latch = true;
+        reply.use_global_edit_latch = false;
         reply
     }
 
