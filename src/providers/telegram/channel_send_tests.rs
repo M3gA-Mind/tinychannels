@@ -5,6 +5,14 @@ use std::sync::Arc;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
+const UPLOAD_METHODS: [&str; 5] = [
+    "sendDocument",
+    "sendPhoto",
+    "sendVideo",
+    "sendAudio",
+    "sendVoice",
+];
+
 #[tokio::test]
 async fn send_message_reaction_skips_blank_emoji_without_network() {
     let server = mock_api().await;
@@ -287,7 +295,7 @@ async fn send_text_chunks_fails_when_markdown_fallback_is_rejected() {
 #[tokio::test]
 async fn file_uploads_include_thread_and_caption_fields() {
     let server = mock_api().await;
-    for (_, api_method, _) in ALL_KINDS {
+    for api_method in UPLOAD_METHODS {
         mount_post(&server, api_method, ok()).await;
     }
     let ch = channel_for(&server, &["*"]);
@@ -336,7 +344,7 @@ async fn file_uploads_include_thread_and_caption_fields() {
 #[tokio::test]
 async fn file_uploads_surface_api_rejection_text() {
     let server = mock_api().await;
-    for (_, api_method, _) in ALL_KINDS {
+    for api_method in UPLOAD_METHODS {
         mount_post(
             &server,
             api_method,
@@ -387,7 +395,7 @@ async fn send_by_url_includes_caption_and_surfaces_rejections() {
         .with_priority(1)
         .mount(&server)
         .await;
-    for (_, api_method, _) in ALL_KINDS {
+    for api_method in UPLOAD_METHODS {
         mount_post(&server, api_method, ok()).await;
     }
     let ch = channel_for(&server, &["*"]);
