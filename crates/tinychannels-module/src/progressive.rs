@@ -464,6 +464,54 @@ async fn send_typed_part(
                     crate::provider::ModuleSynthesizer(sender.host.clone(), instance.clone());
                 let codec = crate::provider::ModuleVoiceCodec(sender.host.clone());
                 let store = crate::provider::ModuleVoiceMediaStore(sender.host.clone(), instance);
+                let native_voice = sender.capabilities.voice_out.supported
+                    && !sender.capabilities.voice_out.accepted_codecs.is_empty();
+                let audio_codecs = sender
+                    .capabilities
+                    .content
+                    .audio
+                    .accepted_types
+                    .iter()
+                    .filter_map(|mime| match mime.as_str() {
+                        "audio/ogg" | "audio/opus" => Some("ogg_opus".to_owned()),
+                        "audio/mp4" => Some("m4a_aac".to_owned()),
+                        "audio/mpeg" => Some("mp3".to_owned()),
+                        "audio/wav" | "audio/wave" => Some("wav_pcm16".to_owned()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                let audio_file = !native_voice
+                    && sender.capabilities.content.audio.outbound
+                    && sender
+                        .capabilities
+                        .content
+                        .parts
+                        .iter()
+                        .any(|part| part == "audio")
+                    && !audio_codecs.is_empty();
+                // A link fallback is host-owned media and does not advertise
+                // provider codec support. Store one bounded WAV in that case.
+                let link_codec = ["wav_pcm16".to_owned()];
+                let accepted_codecs = if native_voice {
+                    &sender.capabilities.voice_out.accepted_codecs
+                } else if audio_file {
+                    &audio_codecs
+                } else {
+                    &link_codec
+                };
+                let (max_size_bytes, max_duration_ms) = if native_voice {
+                    (
+                        sender.capabilities.voice_out.max_size_bytes,
+                        sender.capabilities.voice_out.max_duration_ms,
+                    )
+                } else if audio_file {
+                    (
+                        sender.capabilities.content.audio.max_size_bytes,
+                        sender.capabilities.content.audio.max_duration_ms,
+                    )
+                } else {
+                    (Some(8 * 1024 * 1024), Some(5 * 60 * 1000))
+                };
                 match tinychannels::host::prepare_voice_reply(
                     scope,
                     requested_text.clone(),
@@ -471,32 +519,57 @@ async fn send_typed_part(
                     &synthesizer,
                     &codec,
                     &store,
-                    &sender.capabilities.voice_out.accepted_codecs,
-                    sender.capabilities.voice_out.max_size_bytes,
-                    sender.capabilities.voice_out.max_duration_ms,
+                    accepted_codecs,
+                    max_size_bytes,
+                    max_duration_ms,
                 )
                 .await
                 {
                     Ok(prepared) => {
                         let note = prepared.note;
-                        prepared_parts.push(tinychannels_bus::OutboundContentPart::Voice {
-                            voice: tinychannels_bus::OutboundVoice::Media {
-                                media: note.media,
-                                audio_base64: None,
-                                codec: note.codec,
-                                duration_ms: note.duration_ms,
-                            },
-                        });
-                        if let Some(url) =
-                            prepared.accessible_url.filter(|url| !url.trim().is_empty())
+                        if native_voice {
+                            prepared_parts.push(tinychannels_bus::OutboundContentPart::Voice {
+                                voice: tinychannels_bus::OutboundVoice::Media {
+                                    media: note.media,
+                                    audio_base64: None,
+                                    codec: note.codec,
+                                    duration_ms: note.duration_ms,
+                                },
+                            });
+                        } else if audio_file {
+                            prepared_parts.push(tinychannels_bus::OutboundContentPart::Content {
+                                part: tinychannels_bus::ContentPart::Audio {
+                                    media: note.media,
+                                    codec: note.codec,
+                                    duration_ms: note.duration_ms,
+                                    title: None,
+                                    transcript: Some(requested_text.clone()),
+                                },
+                            });
+                        } else if let Some(url) = prepared
+                            .accessible_url
+                            .filter(|url| !url.trim().is_empty())
                         {
                             prepared_text.push_str("\n");
                             prepared_text.push_str(&url);
+                        } else {
+                            prepared_text.push_str(
+                                "\n\nAudio could not be attached; here is the text response.",
+                            );
                         }
                     }
                     Err(error) => {
-                        let kind = if error.to_string().contains("limit") {
-                            "limit"
+                        let detail = error.to_string();
+                        let kind = if detail.contains("duration limit") {
+                            prepared_text.push_str(
+                                "\n\nAudio reply was too long to send; here is the text response.",
+                            );
+                            "duration_limit"
+                        } else if detail.contains("size limit") {
+                            prepared_text.push_str(
+                                "\n\nAudio reply exceeded the channel size limit; here is the text response.",
+                            );
+                            "size_limit"
                         } else {
                             "unavailable"
                         };
