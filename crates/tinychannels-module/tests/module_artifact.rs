@@ -1422,6 +1422,159 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
             .count();
         assert_eq!(after, before, "out-of-scope media must not reach Telegram");
     }
+    let invalid_body = b"not a png".to_vec();
+    let invalid_begin = MediaUploadBegin {
+        instance: "telegram".into(),
+        scope: scope.clone(),
+        kind: MediaKind::Image,
+        content_type: "image/png".into(),
+        file_name: Some("invalid.png".into()),
+        duration_ms: None,
+        codec: None,
+        byte_count: invalid_body.len(),
+    };
+    let invalid_handle: MediaUploadHandle = runtime_proxy
+        .call_confidential("BeginMediaUpload", invalid_begin)
+        .await
+        .unwrap();
+    runtime_proxy
+        .call_confidential::<u32>(
+            "AppendMediaUploadChunk",
+            MediaUploadChunk {
+                handle: invalid_handle.clone(),
+                sequence: 0,
+                bytes: invalid_body,
+            },
+        )
+        .await
+        .unwrap();
+    let invalid_finish = MediaUploadFinish(invalid_handle);
+    assert!(
+        runtime_proxy
+            .call_confidential::<MediaUploadResult>("FinishMediaUpload", invalid_finish.clone())
+            .await
+            .is_err()
+    );
+    runtime_proxy
+        .call_confidential::<()>("AbortMediaUpload", invalid_finish.clone())
+        .await
+        .unwrap();
+    assert!(
+        runtime_proxy
+            .call_confidential::<MediaUploadResult>("FinishMediaUpload", invalid_finish)
+            .await
+            .is_err()
+    );
+    let invalid_mime: MediaUploadHandle = runtime_proxy
+        .call_confidential(
+            "BeginMediaUpload",
+            MediaUploadBegin {
+                instance: "telegram".into(),
+                scope: scope.clone(),
+                kind: MediaKind::Image,
+                content_type: "image/svg+xml".into(),
+                file_name: Some("unsupported.svg".into()),
+                duration_ms: None,
+                codec: None,
+                byte_count: png_for_wire_check.len(),
+            },
+        )
+        .await
+        .unwrap();
+    runtime_proxy
+        .call_confidential::<u32>(
+            "AppendMediaUploadChunk",
+            MediaUploadChunk {
+                handle: invalid_mime.clone(),
+                sequence: 0,
+                bytes: png_for_wire_check.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let invalid_mime_finish = MediaUploadFinish(invalid_mime);
+    assert!(
+        runtime_proxy
+            .call_confidential::<MediaUploadResult>(
+                "FinishMediaUpload",
+                invalid_mime_finish.clone(),
+            )
+            .await
+            .is_err()
+    );
+    runtime_proxy
+        .call_confidential::<()>("AbortMediaUpload", invalid_mime_finish.clone())
+        .await
+        .unwrap();
+    assert!(
+        runtime_proxy
+            .call_confidential::<MediaUploadResult>("FinishMediaUpload", invalid_mime_finish)
+            .await
+            .is_err()
+    );
+    let before_invalid_send = telegram_api
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path().ends_with("/sendPhoto"))
+        .count();
+    let invalid_send = ChannelOutboundIntent {
+        idempotency_key: "invalid-media-no-reference".into(),
+        channel_id: "telegram".into(),
+        conversation_id: "42".into(),
+        channel_ref: Some(ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram".into()),
+        }),
+        conversation_ref: send.conversation_ref.clone(),
+        thread_id: send.thread_id.clone(),
+        turn_id: send.turn_id.clone(),
+        payload: OutboundPayload::Parts {
+            parts: vec![OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image {
+                    media: Default::default(),
+                    caption: None,
+                    alt_text: None,
+                },
+            }],
+        },
+        ..Default::default()
+    };
+    assert!(
+        runtime_proxy
+            .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                "SendChannelIntent",
+                ("telegram", invalid_send),
+            )
+            .await
+            .is_err()
+    );
+    let after_invalid_send = telegram_api
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path().ends_with("/sendPhoto"))
+        .count();
+    assert_eq!(after_invalid_send, before_invalid_send);
+
+    let abandoned_handle: MediaUploadHandle = runtime_proxy
+        .call_confidential(
+            "BeginMediaUpload",
+            MediaUploadBegin {
+                instance: "telegram".into(),
+                scope: scope.clone(),
+                kind: MediaKind::Document,
+                content_type: "application/pdf".into(),
+                file_name: Some("abandoned.pdf".into()),
+                duration_ms: None,
+                codec: None,
+                byte_count: 5,
+            },
+        )
+        .await
+        .unwrap();
     let requests = telegram_api.received_requests().await.unwrap();
     let upload = requests
         .iter()
@@ -1443,16 +1596,61 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .call_confidential::<()>("StopChannel", "telegram")
         .await
         .unwrap();
-    other_runtime_proxy
-        .call_confidential::<()>("StopChannel", "telegram")
+    runtime_proxy
+        .call_confidential::<()>(
+            "StartChannelConfigured",
+            (
+                "telegram",
+                config,
+                tinychannels_bus::HttpProxyPolicy::default(),
+            ),
+        )
         .await
         .unwrap();
     assert!(
         runtime_proxy
-            .call_confidential::<MediaUploadResult>("FinishMediaUpload", finish)
+            .call_confidential::<u32>(
+                "AppendMediaUploadChunk",
+                MediaUploadChunk {
+                    handle: abandoned_handle.clone(),
+                    sequence: 0,
+                    bytes: b"%PDF-".to_vec(),
+                },
+            )
             .await
             .is_err()
     );
+    for stale in [finish, MediaUploadFinish(abandoned_handle)] {
+        assert!(
+            runtime_proxy
+                .call_confidential::<MediaUploadResult>("FinishMediaUpload", stale.clone())
+                .await
+                .is_err()
+        );
+        assert!(
+            runtime_proxy
+                .call_confidential::<()>("AbortMediaUpload", stale)
+                .await
+                .is_err()
+        );
+    }
+    let after_restart = runtime_proxy
+        .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+            "SendChannelIntent",
+            ("telegram", send),
+        )
+        .await
+        .unwrap();
+    assert_eq!(after_restart.message_id.as_deref(), Some("91"));
+    assert!(after_restart.error.is_none());
+    runtime_proxy
+        .call_confidential::<()>("StopChannel", "telegram")
+        .await
+        .unwrap();
+    other_runtime_proxy
+        .call_confidential::<()>("StopChannel", "telegram")
+        .await
+        .unwrap();
     module_proxy
         .call_confidential::<()>("StopRuntime", reservation.handle)
         .await
