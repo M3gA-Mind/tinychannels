@@ -1,0 +1,4281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WebChannelEvent",
+  "description": "The tagged, strongly typed web event contract.\n\nOptional fields are omitted to preserve the deployed struct's wire shape.\nThe `chat_error` variant intentionally remains able to represent the legacy\n`error_type: \"cancelled\"` payload during the compatibility window.",
+  "oneOf": [
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "citations": true,
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "chat_done"
+        },
+        "full_response": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/OutboundContentPart"
+          }
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "timing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebTurnTimingPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebTurnUsagePayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "chat_interim"
+        },
+        "full_response": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "chat_suggestions"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "suggestions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ChatSuggestion"
+          }
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id",
+        "suggestions"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "copy_key": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "copy_params": true,
+        "error_fallback_available": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "error_provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_retry_after_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "error_retryable": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "error_source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event": {
+          "type": "string",
+          "const": "chat_error"
+        },
+        "guardrail": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebGuardrailPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "cancel_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "chat_cancelled"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "superseded_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "delta": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delta_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event": {
+          "type": "string",
+          "const": "text_delta"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "delta": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delta_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event": {
+          "type": "string",
+          "const": "thinking_delta"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "delta": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delta_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event": {
+          "type": "string",
+          "const": "tool_args_delta"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "inference_start"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "inference_heartbeat"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "iteration_start"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "args": true,
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "tool_call"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_display_detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_display_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "tool_progress"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "args": true,
+        "client_id": {
+          "type": "string"
+        },
+        "elapsed_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "event": {
+          "type": "string",
+          "const": "tool_result"
+        },
+        "failure": true,
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "structured": true,
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_display_detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_display_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "turn_cost"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebTurnUsagePayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "subagent_spawned"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subagent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebSubagentProgressDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "subagent_completed"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subagent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebSubagentProgressDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "subagent_failed"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subagent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebSubagentProgressDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "subagent_awaiting_user"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subagent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebSubagentProgressDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "subagent_iteration_start"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subagent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebSubagentProgressDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "args": true,
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "subagent_tool_call"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subagent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebSubagentProgressDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_display_detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_display_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "args": true,
+        "client_id": {
+          "type": "string"
+        },
+        "elapsed_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "event": {
+          "type": "string",
+          "const": "subagent_tool_result"
+        },
+        "failure": true,
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "structured": true,
+        "subagent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebSubagentProgressDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_display_detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_display_label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "delta": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delta_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event": {
+          "type": "string",
+          "const": "subagent_text_delta"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subagent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebSubagentProgressDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "delta": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "delta_kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event": {
+          "type": "string",
+          "const": "subagent_thinking_delta"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "round": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "skill_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "subagent": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebSubagentProgressDetail"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "args": true,
+        "client_id": {
+          "type": "string"
+        },
+        "detached": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "event": {
+          "type": "string",
+          "const": "approval_request"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "cancel_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "approval_decided"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "args": true,
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "plan_review_request"
+        },
+        "expires_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "cancel_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "plan_review_decided"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "queue_item_queued"
+        },
+        "queue_item": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebQueueItemPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "queue_item_delivered"
+        },
+        "queue_item": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebQueueItemPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "queue_item_removed"
+        },
+        "queue_item": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/WebQueueItemPayload"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "thread_goal_updated"
+        },
+        "goal": true,
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "thread_goal_cleared"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "thread_todos_changed"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "todos": true,
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "run_mode_changed"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "args": true,
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "artifact_ready"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "args": true,
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "artifact_failed"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "args": true,
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "artifact_pending"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "tool_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "args": true,
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "memory_activity"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "args": true,
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "external_transfer_pending"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "proactive_message"
+        },
+        "full_response": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/OutboundContentPart"
+          }
+        },
+        "persisted_message_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "voice_speak"
+        },
+        "full_response": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "error_source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "event": {
+          "type": "string",
+          "const": "user_error"
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Accepted by older clients; no current core emitter produces this event.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "chat_message"
+        },
+        "full_response": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/OutboundContentPart"
+          }
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    },
+    {
+      "description": "Accepted by older clients; no current core emitter produces this event.",
+      "type": "object",
+      "properties": {
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "chat_segment"
+        },
+        "full_response": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parts": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/OutboundContentPart"
+          }
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "segment_index": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "segment_total": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id"
+      ]
+    }
+  ],
+  "$defs": {
+    "ButtonAction": {
+      "description": "One provider-neutral action button in an ordered content row.",
+      "type": "object",
+      "properties": {
+        "disabled": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "style": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ButtonStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "disabled"
+      ]
+    },
+    "ButtonStyle": {
+      "description": "Visual button emphasis; it does not change action authority.",
+      "type": "string",
+      "enum": [
+        "primary",
+        "secondary",
+        "danger"
+      ]
+    },
+    "ChatSuggestion": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "prompt"
+      ]
+    },
+    "ContactMethod": {
+      "description": "One typed phone number or email address on a contact card.",
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "value"
+      ]
+    },
+    "ContentPart": {
+      "description": "Provider-neutral ordered inbound content.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "text"
+            },
+            "markdownDialect": {
+              "description": "Formatting dialect; formatting remains text, never HTML authority.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "altText": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "caption": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "image"
+            },
+            "media": {
+              "$ref": "#/$defs/MediaReference"
+            }
+          },
+          "required": [
+            "kind",
+            "media"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "caption": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "video"
+            },
+            "media": {
+              "$ref": "#/$defs/MediaReference"
+            },
+            "thumbnail": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/MediaReference"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "media"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "codec": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "audio"
+            },
+            "media": {
+              "$ref": "#/$defs/MediaReference"
+            },
+            "title": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "transcript": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "media"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "caption": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fileName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "file"
+            },
+            "media": {
+              "$ref": "#/$defs/MediaReference"
+            }
+          },
+          "required": [
+            "kind",
+            "media"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "voice_note"
+            },
+            "voiceNote": {
+              "$ref": "#/$defs/VoiceNote"
+            }
+          },
+          "required": [
+            "kind",
+            "voiceNote"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "altText": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "emoji": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "sticker"
+            },
+            "media": {
+              "$ref": "#/$defs/MediaReference"
+            },
+            "packId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "stickerId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "media"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "accuracyMeters": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "format": "double"
+            },
+            "address": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": "string",
+              "const": "location"
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "latitude": {
+              "type": "number",
+              "format": "double"
+            },
+            "liveUntilUnixMs": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "longitude": {
+              "type": "number",
+              "format": "double"
+            }
+          },
+          "required": [
+            "kind",
+            "latitude",
+            "longitude"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "displayName": {
+              "type": "string"
+            },
+            "emails": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ContactMethod"
+              }
+            },
+            "kind": {
+              "type": "string",
+              "const": "contact"
+            },
+            "organization": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "phoneNumbers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ContactMethod"
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "displayName",
+            "phoneNumbers",
+            "emails"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "buttons"
+            },
+            "rows": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ButtonAction"
+                }
+              }
+            }
+          },
+          "required": [
+            "kind",
+            "rows"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "closesAtUnixMs": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "poll"
+            },
+            "multipleChoice": {
+              "type": "boolean"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "providerPollId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "question": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "question",
+            "options",
+            "multipleChoice"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "blocks": true,
+            "kind": {
+              "type": "string",
+              "const": "presentation"
+            }
+          },
+          "required": [
+            "kind",
+            "blocks"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "data": true,
+            "kind": {
+              "type": "string",
+              "const": "native"
+            },
+            "provider": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "provider",
+            "data"
+          ]
+        }
+      ]
+    },
+    "MediaKind": {
+      "description": "Provider-neutral media kind.",
+      "type": "string",
+      "enum": [
+        "image",
+        "video",
+        "audio",
+        "document",
+        "unknown"
+      ]
+    },
+    "MediaReference": {
+      "description": "One inbound media reference, preserving provider attachment order.",
+      "type": "object",
+      "properties": {
+        "codec": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "contentType": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "durationMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "fileName": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "height": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
+        },
+        "kind": {
+          "$ref": "#/$defs/MediaKind",
+          "default": "unknown"
+        },
+        "localCachePath": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "platformMessageId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "sizeBytes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "transcribed": {
+          "type": "boolean",
+          "default": false
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "width": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "default": null,
+          "minimum": 0
+        }
+      }
+    },
+    "OutboundContentPart": {
+      "description": "Typed outbound parts accepted by migrated provider adapters.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "content"
+            },
+            "part": {
+              "$ref": "#/$defs/ContentPart"
+            }
+          },
+          "required": [
+            "kind",
+            "part"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "voice"
+            },
+            "voice": {
+              "$ref": "#/$defs/OutboundVoice"
+            }
+          },
+          "required": [
+            "kind",
+            "voice"
+          ]
+        }
+      ]
+    },
+    "OutboundVoice": {
+      "description": "Explicit outbound voice operation. Synthesis is opt-in and keeps its text.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "codec": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "durationMs": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "kind": {
+              "type": "string",
+              "const": "media"
+            },
+            "media": {
+              "$ref": "#/$defs/MediaReference"
+            }
+          },
+          "required": [
+            "kind",
+            "media"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "synthesize"
+            },
+            "text": {
+              "type": "string"
+            },
+            "voice": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ]
+        }
+      ]
+    },
+    "VoiceNote": {
+      "description": "Audio message metadata and optional transcript enrichment.",
+      "type": "object",
+      "properties": {
+        "codec": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "durationMs": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "default": null,
+          "minimum": 0
+        },
+        "media": {
+          "$ref": "#/$defs/MediaReference",
+          "default": {
+            "codec": null,
+            "contentType": null,
+            "durationMs": null,
+            "fileName": null,
+            "height": null,
+            "kind": "unknown",
+            "localCachePath": null,
+            "path": null,
+            "platformMessageId": null,
+            "sizeBytes": null,
+            "transcribed": false,
+            "url": null,
+            "width": null
+          }
+        },
+        "pushToTalk": {
+          "type": "boolean",
+          "default": false
+        },
+        "transcript": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/VoiceTranscript"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "waveform": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "default": null,
+          "items": {
+            "type": "number",
+            "format": "float"
+          }
+        }
+      }
+    },
+    "VoiceTranscript": {
+      "description": "Transcript enrichment attached to a voice note without replacing its audio.",
+      "type": "object",
+      "properties": {
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source": {
+          "$ref": "#/$defs/VoiceTranscriptSource"
+        },
+        "state": {
+          "$ref": "#/$defs/VoiceTranscriptState"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "state",
+        "source"
+      ]
+    },
+    "VoiceTranscriptSource": {
+      "description": "Origin of voice transcript enrichment.",
+      "type": "string",
+      "enum": [
+        "provider",
+        "host_stt"
+      ]
+    },
+    "VoiceTranscriptState": {
+      "description": "Whether a voice transcript is still being produced or is final.",
+      "type": "string",
+      "enum": [
+        "pending",
+        "complete",
+        "unavailable"
+      ]
+    },
+    "WebCostSource": {
+      "description": "Cost provenance copied as a wire enum to avoid depending on the harness.",
+      "type": "string",
+      "enum": [
+        "charged",
+        "estimated",
+        "unknown"
+      ]
+    },
+    "WebGuardrailPayload": {
+      "type": "object",
+      "properties": {
+        "reasons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WebGuardrailReason"
+          }
+        },
+        "score": {
+          "type": "number",
+          "format": "double"
+        },
+        "verdict": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "verdict",
+        "score"
+      ]
+    },
+    "WebGuardrailReason": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code",
+        "message"
+      ]
+    },
+    "WebQueueItemPayload": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "lane": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "text_preview": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "WebSubagentProgressDetail": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "cached_input_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "changed_files": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "child_iteration": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "child_max_iterations": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "dedicated_thread": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "dirty_status": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "elapsed_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "input_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "iterations": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "output_chars": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "parent_call_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "prompt_chars": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worker_thread_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worktree_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "WebSubagentUsagePayload": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "task_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "task_id",
+        "agent_id",
+        "input_tokens",
+        "output_tokens"
+      ]
+    },
+    "WebTurnTimingPayload": {
+      "type": "object",
+      "properties": {
+        "first_token_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "first_tool_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tokens_per_second": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "total_ms": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "WebTurnUsagePayload": {
+      "type": "object",
+      "properties": {
+        "cached_input_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "context_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "default": 0,
+          "minimum": 0
+        },
+        "context_window": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "cost_source": {
+          "$ref": "#/$defs/WebCostSource",
+          "default": "charged"
+        },
+        "cost_usd": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "input_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "subagents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/WebSubagentUsagePayload"
+          }
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "cached_input_tokens",
+        "context_window"
+      ]
+    }
+  }
+}
