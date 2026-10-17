@@ -1174,14 +1174,22 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
     );
 
     let mut unsupported = scoped_typed_media_message("stored-photo-1");
-    unsupported
-        .parts
-        .push(tinychannels_bus::OutboundContentPart::Voice {
-            voice: tinychannels_bus::OutboundVoice::Synthesize {
-                text: "not prepared".into(),
-                voice: None,
-            },
-        });
+    for voice_id in ["voice-a", "voice-b"] {
+        unsupported
+            .parts
+            .push(tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some(voice_id.into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    audio_base64: None,
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: Some(1_000),
+                },
+            });
+    }
     assert!(
         channel
             .send_typed_with_receipt(&unsupported)
