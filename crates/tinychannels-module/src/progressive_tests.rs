@@ -1,8 +1,8 @@
 use super::*;
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
-use tokio::sync::Notify;
 use tinychannels_bus::module_progressive::SubagentOutput;
+use tokio::sync::Notify;
 
 struct ConfiguredChannel(&'static str);
 struct ConfiguredChannelWithCapabilities {

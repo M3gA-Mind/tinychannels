@@ -368,7 +368,8 @@ async fn send_typed_part(
             let outcome = tinychannels_bus::channel::ChannelSendOutcome {
                 error: Some(tinychannels_bus::channel::ChannelSendError {
                     kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                    message: "typed progressive callback failed after an unknown side effect".into(),
+                    message: "typed progressive callback failed after an unknown side effect"
+                        .into(),
                     sent_before_error: true,
                     ..Default::default()
                 }),
@@ -1006,7 +1007,7 @@ async fn run(
                             Err(_) => ProgressiveOutputDispatch::default(),
                         };
                         if forward {
-                            match reply.finalize_output_event(&final_event).await {
+                            match reply.finalize_output_event(final_event).await {
                                 Ok(final_dispatch) => {
                                     dispatch.absorb(final_dispatch);
                                 }
@@ -1017,7 +1018,7 @@ async fn run(
                             }
                             result = Ok(dispatch.into_result());
                         } else {
-                            reply.finalize(&text).await;
+                            reply.finalize(text).await;
                             result = Ok(ProgressiveResult::Closed);
                         }
                         record_terminal(&terminal_feed, fingerprint, &result).await;
@@ -1056,7 +1057,7 @@ async fn record_terminal(
     };
     let mut memo = terminal_feed.lock().await;
     if let Some(memo) = memo.as_mut().filter(|memo| memo.fingerprint == fingerprint) {
-        let result = result.clone().map_err(ToString::to_string);
+        let result = result.clone().map_err(|error| error.to_string());
         memo.result = Some(result.clone());
         memo.notify.send_replace(Some(result));
     }
