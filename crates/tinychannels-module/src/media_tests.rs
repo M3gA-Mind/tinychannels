@@ -79,10 +79,12 @@ async fn reservations_and_metadata_are_bounded_before_retaining_media() {
     let mut oversized_metadata = oversized.clone();
     oversized_metadata.scope.conversation.thread_id =
         Some("x".repeat(tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES));
-    assert!(uploads
-        .begin(oversized_metadata, "activation-a".into())
-        .await
-        .is_err());
+    assert!(
+        uploads
+            .begin(oversized_metadata, "activation-a".into())
+            .await
+            .is_err()
+    );
     assert!(
         uploads
             .begin(
@@ -139,6 +141,7 @@ struct BlockingPersistence {
     entered: Notify,
     release: Notify,
     calls: AtomicUsize,
+    dedupe_keys: std::sync::Mutex<Vec<Option<String>>>,
 }
 
 #[async_trait::async_trait]
@@ -153,6 +156,10 @@ impl MediaPersistence for BlockingPersistence {
         );
         assert_eq!(request.metadata.scope.turn_id, "turn");
         self.calls.fetch_add(1, Ordering::SeqCst);
+        self.dedupe_keys
+            .lock()
+            .unwrap()
+            .push(request.metadata.dedupe_key.clone());
         self.entered.notify_one();
         self.release.notified().await;
         Ok(tinychannels_bus::MediaReference {
@@ -274,13 +281,89 @@ async fn cancelling_the_bus_waiter_does_not_cancel_or_duplicate_finalize() {
         Some("tinychannels_media_v1_saved")
     );
     assert_eq!(repository.calls.load(Ordering::SeqCst), 1);
-    assert!(uploads
-        .begin(request(1), "activation-a".into())
-        .await
-        .is_err());
+    assert!(
+        uploads
+            .begin(request(1), "activation-a".into())
+            .await
+            .is_err()
+    );
     uploads.abort(MediaUploadFinish(second)).await.unwrap();
     uploads
         .begin(request(1), "activation-a".into())
         .await
         .unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn stalled_storage_times_out_and_retry_reuses_the_same_dedupe_key() {
+    let uploads = std::sync::Arc::new(MediaUploads::default());
+    let repository = std::sync::Arc::new(BlockingPersistence::default());
+    let handle = ready_upload(&uploads).await;
+    let finishing = {
+        let uploads = uploads.clone();
+        let repository = repository.clone();
+        let handle = handle.clone();
+        tokio::spawn(async move {
+            uploads
+                .finish(MediaUploadFinish(handle), "activation-a".into(), repository)
+                .await
+        })
+    };
+    repository.entered.notified().await;
+    tokio::time::advance(UPLOAD_LIFETIME + Duration::from_millis(1)).await;
+    assert!(finishing.await.unwrap().is_err());
+    assert_eq!(uploads.state.lock().await.uploads.len(), 1);
+    repository.release.notify_one();
+    let media = uploads
+        .clone()
+        .finish(
+            MediaUploadFinish(handle),
+            "activation-a".into(),
+            repository.clone(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        media.opaque_id.as_deref(),
+        Some("tinychannels_media_v1_saved")
+    );
+    let keys = repository.dedupe_keys.lock().unwrap();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0], keys[1]);
+}
+
+struct PanickingPersistence;
+
+#[async_trait::async_trait]
+impl MediaPersistence for PanickingPersistence {
+    async fn store_public_media(
+        &self,
+        _request: tinychannels::host::MediaStoreRequest,
+    ) -> Result<MediaUploadResult> {
+        panic!("fixture panic during media persistence");
+    }
+}
+
+#[tokio::test]
+async fn panicking_storage_releases_the_reservation_without_ready_media() {
+    let uploads = std::sync::Arc::new(MediaUploads::default());
+    let handle = ready_upload(&uploads).await;
+    assert!(
+        uploads
+            .clone()
+            .finish(
+                MediaUploadFinish(handle.clone()),
+                "activation-a".into(),
+                std::sync::Arc::new(PanickingPersistence),
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        uploads
+            .abort(MediaUploadFinish(handle.clone()))
+            .await
+            .is_ok()
+    );
+    assert_eq!(uploads.state.lock().await.uploads.len(), 0);
 }
