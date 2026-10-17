@@ -208,10 +208,12 @@ async fn finalizing_upload_keeps_capacity_and_abort_cannot_race_persistence() {
         })
     };
     repository.entered.notified().await;
-    uploads
-        .begin(request(1), "activation-a".into())
-        .await
-        .expect("finalization must release its reservation");
+    assert!(
+        uploads
+            .begin(request(1), "activation-a".into())
+            .await
+            .is_err()
+    );
     assert!(
         uploads
             .abort(MediaUploadFinish(handle.clone()))
@@ -279,12 +281,10 @@ async fn cancelling_the_bus_waiter_does_not_cancel_or_duplicate_finalize() {
         Some("tinychannels_media_v1_saved")
     );
     assert_eq!(repository.calls.load(Ordering::SeqCst), 1);
-    assert!(
-        uploads
-            .begin(request(1), "activation-a".into())
-            .await
-            .is_err()
-    );
+    uploads
+        .begin(request(1), "activation-a".into())
+        .await
+        .expect("finalization must release its reservation");
     uploads.abort(MediaUploadFinish(second)).await.unwrap();
     uploads
         .begin(request(1), "activation-a".into())
