@@ -123,6 +123,8 @@ pub struct WireObservation {
     pub operation: String,
     pub channel: ChannelRef,
     pub conversation: ConversationRef,
+    pub reply_to_id: Option<String>,
+    pub thread_id: Option<String>,
     pub payload_kinds: Vec<String>,
     pub platform_message_ids: Vec<String>,
     pub request: serde_json::Value,
@@ -133,6 +135,8 @@ pub struct WireObservation {
 pub struct ExpectedScope {
     pub channel: ChannelRef,
     pub conversation: ConversationRef,
+    pub reply_to_id: Option<String>,
+    pub thread_id: Option<String>,
 }
 
 /// Provider-specific bridge to a real configured adapter and its mock server.
@@ -268,6 +272,16 @@ pub async fn check_feature(
             "{feature:?} wire payload omitted {expected_payload}"
         ));
     }
+    if feature == ConformanceFeature::ReplyAddressing
+        && observation.reply_to_id != expected.reply_to_id
+    {
+        return Err("reply addressing differs from the configured target".into());
+    }
+    if feature == ConformanceFeature::ThreadAddressing
+        && observation.thread_id != expected.thread_id
+    {
+        return Err("thread addressing differs from the configured target".into());
+    }
     if feature == ConformanceFeature::VoiceIn
         && !(observation.payload_kinds.iter().any(|kind| kind == "audio")
             && observation
@@ -345,6 +359,10 @@ pub fn intent_scope(intent: &ChannelOutboundIntent) -> Option<ExpectedScope> {
     Some(ExpectedScope {
         channel: intent.channel_ref.clone()?,
         conversation: intent.conversation_ref.clone()?,
+        reply_to_id: intent.reply_to_id.clone(),
+        thread_id: intent.thread_id.clone().or_else(|| {
+            intent.conversation_ref.as_ref().and_then(|conversation| conversation.thread_id.clone().or_else(|| conversation.topic_id.clone()))
+        }),
     })
 }
 
