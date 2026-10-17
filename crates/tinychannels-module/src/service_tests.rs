@@ -245,10 +245,12 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
     let host = HostChannels::new(connection.clone());
     let (sent, mut received) = tokio::sync::mpsc::channel(8);
     let channel = Arc::new(CaptureTypedChannel(sent));
+    let hooks = Arc::new(Hooks::default());
+    let _provider_host = hooks.host(host.clone(), "fixture:account-a".into());
     let mut running = HashMap::new();
     running.insert(
         "fixture".to_owned(),
-        Running::start(channel, Arc::new(Hooks::default()), host.clone()),
+        Running::start(channel, hooks, host.clone()),
     );
     let channels = Channels {
         progressive: Arc::new(crate::progressive::Replies::new(
