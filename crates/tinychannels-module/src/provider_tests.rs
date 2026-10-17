@@ -413,6 +413,7 @@ struct RunningTelegramConformance {
     request_cursor: std::sync::Mutex<usize>,
     response_cursor: std::sync::Mutex<usize>,
     response_ids: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    message_contexts: Arc<std::sync::Mutex<std::collections::HashMap<String, (ConversationRef, Option<String>)>>>,
 }
 
 #[async_trait::async_trait]
@@ -617,10 +618,15 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 Ok(None)
             }
             Feature::Reactions => {
+                let sent = self.adapter.send(intent.clone()).await?;
+                let provider_message_id = sent.receipt.primary_platform_message_id.clone()
+                    .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
+                *self.request_cursor.lock().unwrap() = self.server.received_requests().await.unwrap_or_default().len();
+                *self.response_cursor.lock().unwrap() = self.response_ids.lock().unwrap().len();
                 self.running.interact(tinychannels_bus::ChannelInteraction::SendReaction {
                     channel: self.scope.channel.clone(),
                     conversation: self.scope.conversation.clone(),
-                    provider_message_id: "5".into(),
+                    provider_message_id,
                     reaction: tinychannels_bus::channel::ChannelReaction { value: "👍".into(), custom_emoji_id: None },
                     remove: false,
                 }).await.map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
@@ -630,6 +636,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 let sent = if feature == Feature::StreamingDraft { None } else { Some(self.adapter.send(intent.clone()).await?) };
                 let receipt = sent.as_ref().map(|outcome| outcome.receipt.clone());
                 *self.request_cursor.lock().unwrap() = self.server.received_requests().await.unwrap_or_default().len();
+                *self.response_cursor.lock().unwrap() = self.response_ids.lock().unwrap().len();
                 match feature {
                     Feature::Edit => {
                         let receipt = receipt.expect("edit fixture primed a provider message");
@@ -648,13 +655,16 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                         let created = self.running.interact(tinychannels_bus::ChannelInteraction::UpsertDraft { previous: None, intent: intent.clone() }).await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                         let tinychannels_bus::ChannelInteractionResult::Sent(created) = created else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
-                        let updated_intent = tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "updated draft".into() }, ..intent.clone() };
+                        let updated_intent = tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "draft update".into() }, ..intent.clone() };
                         let updated = self.running.interact(tinychannels_bus::ChannelInteraction::UpsertDraft { previous: Some(created.receipt), intent: updated_intent.clone() }).await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                         let tinychannels_bus::ChannelInteractionResult::Sent(updated) = updated else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
-                        let finalized = self.running.interact(tinychannels_bus::ChannelInteraction::EditMessage { receipt: updated.receipt.clone(), intent: tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "final draft".into() }, ..updated_intent } }).await
+                        let finalized = self.running.interact(tinychannels_bus::ChannelInteraction::EditMessage { receipt: updated.receipt.clone(), intent: tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "draft final".into() }, ..updated_intent } }).await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                        self.running.interact(tinychannels_bus::ChannelInteraction::DeleteMessage { receipt: updated.receipt }).await
+                        let canceled = self.running.interact(tinychannels_bus::ChannelInteraction::UpsertDraft { previous: None, intent: tinychannels_bus::ChannelOutboundIntent { payload: tinychannels_bus::OutboundPayload::Text { text: "draft cancel pending".into() }, ..intent.clone() } }).await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        let tinychannels_bus::ChannelInteractionResult::Sent(canceled) = canceled else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
+                        self.running.interact(tinychannels_bus::ChannelInteraction::DeleteMessage { receipt: canceled.receipt }).await
                             .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                         let tinychannels_bus::ChannelInteractionResult::Sent(outcome) = finalized else { return Err(tinychannels_bus::channel::ChannelSendError::default()); };
                         Ok(Some(*outcome))
@@ -1931,7 +1941,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         .await;
     let updates_sent = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let updates_sent_once = updates_sent.clone();
-    Mock::given(method("GET"))
+    Mock::given(method("POST"))
         .and(path("/bottest-token/getUpdates"))
         .respond_with(move |_request: &wiremock::Request| {
             let result = if updates_sent_once.swap(true, Ordering::SeqCst) {
