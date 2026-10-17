@@ -532,6 +532,28 @@ impl HostChannels {
         .map_err(|_| Error::failed("TinyVoice codec probe timed out"))?
     }
 
+    /// Extract a bounded normalized waveform through TinyVoice.
+    pub async fn waveform_voice(
+        &self,
+        request: tinyvoice_bus::codec::WaveformRequest,
+    ) -> Result<tinyvoice_bus::codec::WaveformResult> {
+        const LIMIT: usize = 12 * 1024 * 1024;
+        if serde_json::to_vec(&request).map_or(true, |bytes| bytes.len() > LIMIT) {
+            return Err(Error::failed("voice waveform request exceeds byte limit"));
+        }
+        let proxy = self.connection.proxy(
+            tinyvoice_bus::BUS_NAME,
+            tinyvoice_bus::OBJECT_PATH,
+            tinyvoice_bus::BUS_NAME,
+        )?;
+        tokio::time::timeout(
+            HOST_VOICE_CALLBACK_TIMEOUT,
+            proxy.call(tinyvoice_bus::names::methods::WAVEFORM, (request,)),
+        )
+        .await
+        .map_err(|_| Error::failed("TinyVoice waveform call timed out"))?
+    }
+
     /// Invoke one bounded host-owned credential, persistence, or managed API
     /// capability required by the module's controller adapter.
     pub async fn dispatch_controller_backend(
