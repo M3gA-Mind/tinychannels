@@ -1395,6 +1395,7 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
             cancel,
             worker: Mutex::new(None),
             finished: Arc::new(AtomicBool::new(false)),
+            native_ports: None,
         });
         let waiter = tokio::spawn({
             let running = running.clone();
@@ -1436,6 +1437,7 @@ async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
+        native_ports: None,
     });
     let adapter = running.adapter_handle();
     let error = adapter
@@ -1469,6 +1471,7 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
+        native_ports: None,
     });
     let adapter = running.adapter_handle();
     let task = tokio::spawn(async move {
@@ -1536,6 +1539,7 @@ async fn send_configured_outcome(
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
+        native_ports: None,
     });
     let adapter = running.adapter_handle();
     let task = tokio::spawn(async move {
@@ -1669,7 +1673,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     assert_eq!(descriptor.id, "telegram");
     assert_eq!(descriptor.account_id.as_deref(), Some("telegram:account-a"));
     assert_eq!(descriptor.metadata.get("adapterMode").map(String::as_str), Some("native-v2"));
-    assert_eq!(handle.mode, AdapterMode::TelegramNativeV2);
+    assert_eq!(fixture.adapter.mode, AdapterMode::TelegramNativeV2);
     check_feature(&fixture, ConformanceFeature::Text)
         .await
         .unwrap();
