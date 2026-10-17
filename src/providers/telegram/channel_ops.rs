@@ -853,7 +853,16 @@ Ensure only one `openhuman` process is using this bot token."
                         continue;
                     };
 
-                    let voice_note = self.pending_voice_notes.lock().remove(&msg.id);
+                    let voice_note = match self.voice_note_for_ingress(update, &msg).await {
+                        Ok(note) => note,
+                        Err(error) if Self::parse_update_voice_attachment(update).is_some() => {
+                            tracing::warn!(
+                                "Telegram voice could not be durably persisted: {error}"
+                            );
+                            None
+                        }
+                        Err(error) => return Err(error),
+                    };
                     let ingress = Self::inbound_envelope_from_update(update, &msg, voice_note);
                     let delivered_by_event_sink = if let Some(events) = &self.events {
                         match events

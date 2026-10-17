@@ -715,8 +715,10 @@ impl TelegramChannel {
                         file_unique_id = voice.file_unique_id.as_deref().unwrap_or("unknown"),
                         "[telegram:voice] inbound voice transcription returned empty text"
                     );
-                    self.send_voice_transcription_failure(&ctx).await;
-                    return None;
+                    return Some(self.channel_message_from_context(
+                        ctx,
+                        caption.unwrap_or_default().to_owned(),
+                    ));
                 }
 
                 let mention_only_group = self.mention_only && Self::is_group_message(message);
@@ -743,8 +745,7 @@ impl TelegramChannel {
                     %error,
                     "[telegram:voice] inbound voice transcription failed"
                 );
-                self.send_voice_transcription_failure(&ctx).await;
-                None
+                Some(self.channel_message_from_context(ctx, caption.unwrap_or_default().to_owned()))
             }
         }
     }
@@ -823,7 +824,7 @@ impl TelegramChannel {
                             _ => tinychannels_bus::ConversationKind::Unknown,
                         },
                         id: chat_id,
-                        thread_id: Some(message_id.clone()),
+                    thread_id: None,
                         topic_id,
                         ..Default::default()
                     },
