@@ -2346,6 +2346,66 @@ async fn progressive_reply_is_opened_owned_and_closed_inside_the_module() {
 }
 
 #[tokio::test]
+async fn execute_progressive_bus_member_runs_the_shared_engine() {
+    use tinychannels_bus::module_progressive::{ProgressiveCommand, ProgressiveResult};
+
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(connection.clone());
+    let service = Channels::new(host, None);
+    let (sent, _received) = tokio::sync::mpsc::channel(1);
+    service.running.lock().await.insert(
+        "fixture".into(),
+        Running::start(
+            Arc::new(CaptureChannel(sent)),
+            Arc::new(Hooks::default()),
+            service.host.clone(),
+        ),
+    );
+    connection
+        .serve_at(tinychannels_bus::OBJECT_PATH.try_into().unwrap(), service)
+        .await
+        .unwrap();
+    connection
+        .request_name(tinychannels_bus::BUS_NAME)
+        .await
+        .unwrap();
+    let client = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let proxy = client
+        .proxy(
+            tinychannels_bus::BUS_NAME,
+            tinychannels_bus::OBJECT_PATH,
+            tinychannels_bus::BUS_NAME,
+        )
+        .unwrap();
+    let opened: ProgressiveResult = proxy
+        .call_confidential(
+            "ExecuteProgressive",
+            (ProgressiveCommand::Open {
+                channel: "fixture".into(),
+            },),
+        )
+        .await
+        .unwrap();
+    let ProgressiveResult::Opened { handle } = opened else {
+        panic!("bus member did not open a shared progressive turn")
+    };
+    let closed: ProgressiveResult = proxy
+        .call_confidential(
+            "ExecuteProgressive",
+            (ProgressiveCommand::Close { handle },),
+        )
+        .await
+        .unwrap();
+    assert_eq!(closed, ProgressiveResult::Closed);
+}
+
+#[tokio::test]
 async fn remote_help_is_parsed_and_rendered_inside_the_module() {
     use tinychannels_bus::module_remote::{RemoteOperation, RemoteRoute};
     let service = inbound_preparation_service().await;
