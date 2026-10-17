@@ -124,6 +124,7 @@ struct Callback {
     rpc_error_after_send: Arc<Mutex<bool>>,
     unexpected_typed_response: Arc<Mutex<bool>>,
     block: bool,
+    block_synthesis: Arc<AtomicBool>,
     entered: Arc<Notify>,
     released: Arc<Notify>,
     voice_policy: Arc<Mutex<Option<tinychannels_bus::HostVoiceReplyPolicy>>>,
@@ -151,6 +152,10 @@ impl Callback {
         _request: tinychannels_bus::HostSpeechSynthesisRequest,
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
         self.synthesis_calls.fetch_add(1, Ordering::SeqCst);
+        if self.block_synthesis.load(Ordering::SeqCst) {
+            self.entered.notify_one();
+            self.released.notified().await;
+        }
         Ok(tinychannels_bus::HostSpeechSynthesisResult {
             audio_base64: base64::engine::general_purpose::STANDARD.encode(progressive_test_wav()),
             mime_type: "audio/wav".into(),
@@ -2332,6 +2337,53 @@ async fn scoped_output_survives_more_than_two_hundred_seconds_until_host_lease()
             if outcome.receipt.platform_message_ids == ["fixture-message"]
     ));
     assert_eq!(callback.sends.lock().await.len(), 1);
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test(start_paused = true)]
+async fn scoped_voice_finalization_obeys_turn_lease_while_synthesis_is_blocked() {
+    let (replies, callback) = fixture(false).await;
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    callback.block_synthesis.store(true, Ordering::SeqCst);
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.voice_out.supported = true;
+    capabilities.voice_out.synthesis = true;
+    capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
+    let handle = open_scoped_provider(
+        &replies,
+        "discord",
+        "discord:voice-lease",
+        "blocked-voice-turn",
+        capabilities,
+    )
+    .await;
+    // Give the output a short lease after opening, then keep the host synthesis
+    // callback pending so the finalization path must observe expiry itself.
+    let feed_replies = replies.clone();
+    let feed = tokio::spawn(async move {
+        feed_replies.execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "spoken words".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        }).await
+    });
+    callback.entered.notified().await;
+    tokio::time::advance(Duration::from_secs(2)).await;
+    for _ in 0..10 { tokio::task::yield_now().await; }
+    assert!(feed.is_finished(), "expired finalization must stop waiting on host synthesis");
+    let result = feed.await.expect("feed task joins");
+    assert!(result.is_err(), "expired voice turn must not report successful delivery");
+    assert!(callback.requests.lock().await.iter().all(|request| !matches!(
+        request, ProgressiveTransportRequest::SendTyped { .. }
+    )), "a late synthesis result must not reach provider transport");
+    callback.released.notify_one();
     replies.shutdown().await.unwrap();
 }
 
