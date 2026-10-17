@@ -1,7 +1,6 @@
 //! Harness-facing channel turn and output event types.
 
-use crate::channel::{ChannelInboundEnvelope, MediaReference};
-use serde_json::Value;
+use crate::channel::ChannelInboundEnvelope;
 
 /// Turn admission verdict.
 #[derive(
@@ -66,39 +65,4 @@ pub struct HarnessLifecycleEvent {
     pub message: Option<String>,
 }
 
-/// Output emitted by the harness for channel delivery.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize, schemars::JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum ChannelOutputEvent {
-    TextDelta {
-        text: String,
-    },
-    FinalMessage {
-        text: String,
-    },
-    ToolProgress {
-        label: String,
-        message: Option<String>,
-    },
-    ApprovalRequest {
-        id: String,
-        prompt: String,
-        choices: Vec<String>,
-    },
-    Clarification {
-        prompt: String,
-    },
-    Media {
-        text: Option<String>,
-        media: Vec<MediaReference>,
-    },
-    Cancellation {
-        reason: Option<String>,
-    },
-    Lifecycle {
-        event: HarnessLifecycleEvent,
-    },
-    Native {
-        data: Value,
-    },
-}
+pub use tinychannels_bus::module_progressive::ChannelOutputEvent;

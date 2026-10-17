@@ -62,6 +62,11 @@ pub mod routes;
 pub mod runtime;
 pub mod storage;
 
+pub use delivery::progressive::{
+    ProgressiveOutputContext, ProgressiveOutputDispatch, ProgressiveReply, ProgressiveSendError,
+    ProgressiveSender,
+};
+
 pub use backend::{ChannelBackend, ChannelManager};
 pub use factory::{ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels};
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
