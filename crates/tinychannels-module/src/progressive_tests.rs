@@ -504,6 +504,7 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
         Arc::new(Sender {
             host: replies.host.clone(),
             context: None,
+            send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:fixture",
         tinychannels_bus::ChannelCapabilities::unknown(),
@@ -738,7 +739,7 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
         })
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("shutting down"));
+    assert!(result.to_string().contains("shutting down"));
 }
 
 #[tokio::test]
@@ -799,6 +800,7 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
         Arc::new(Sender {
             host: replies.host.clone(),
             context: None,
+            send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:fixture",
         tinychannels_bus::ChannelCapabilities::unknown(),
@@ -841,6 +843,7 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
     let sender = Sender {
         host: replies.host.clone(),
         context: None,
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     sender
         .edit("discord:room", "message-id", "updated")
@@ -864,6 +867,7 @@ async fn transport_failures_preserve_recovery_classification() {
     let sender = Sender {
         host: replies.host.clone(),
         context: None,
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     for result in [
         ProgressiveTransportResult::Unavailable,
@@ -1628,10 +1632,8 @@ async fn callback_error_after_accepting_draft_is_not_retried_or_resent() {
             .as_ref()
             .is_some_and(|error| error.sent_before_error)
     }));
-    let sends = callback
-        .requests
-        .lock()
-        .await
+    let requests = callback.requests.lock().await;
+    let sends = requests
         .iter()
         .filter_map(|request| match request {
             ProgressiveTransportRequest::Send {
