@@ -551,6 +551,17 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
             .await
             .is_err()
     );
+    assert_eq!(
+        callback
+            .voice_requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| request["kind"] == "read")
+            .count(),
+        0,
+        "foreign namespaced media must fail before legacy callback fallback"
+    );
     let legacy_id = "f47ac10b-58cc-4372-a567-0e02b2c3d479";
     assert!(
         provider_host
