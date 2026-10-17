@@ -74,7 +74,9 @@ impl ChannelAdapter for LocalChannelAdapter {
             OutboundPayload::Text { .. } => self.capabilities.content.text.outbound,
             OutboundPayload::Media { .. } => self.capabilities.content.image.outbound,
             OutboundPayload::Voice { voice } => match voice {
-                tinychannels_bus::OutboundVoice::Media { .. } => self.capabilities.voice_out.supported,
+                tinychannels_bus::OutboundVoice::Media { .. } => {
+                    self.capabilities.voice_out.supported
+                }
                 tinychannels_bus::OutboundVoice::Synthesize { .. } => {
                     self.capabilities.voice_out.supported && self.capabilities.voice_out.synthesis
                 }
@@ -82,11 +84,14 @@ impl ChannelAdapter for LocalChannelAdapter {
             OutboundPayload::Files { .. } => self.capabilities.content.file.outbound,
             OutboundPayload::Parts { parts } => parts.iter().all(|part| match part {
                 tinychannels_bus::OutboundContentPart::Voice { voice } => match voice {
-                    tinychannels_bus::OutboundVoice::Media { .. } => self.capabilities.voice_out.supported,
-                    tinychannels_bus::OutboundVoice::Synthesize { .. } => {
-                        self.capabilities.voice_out.supported && self.capabilities.voice_out.synthesis
+                    tinychannels_bus::OutboundVoice::Media { .. } => {
+                        self.capabilities.voice_out.supported
                     }
-                }
+                    tinychannels_bus::OutboundVoice::Synthesize { .. } => {
+                        self.capabilities.voice_out.supported
+                            && self.capabilities.voice_out.synthesis
+                    }
+                },
                 tinychannels_bus::OutboundContentPart::Content { part } => match part {
                     tinychannels_bus::ContentPart::Text { .. } => {
                         self.capabilities.content.text.outbound
