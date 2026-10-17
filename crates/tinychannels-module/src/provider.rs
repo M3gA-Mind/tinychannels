@@ -355,7 +355,11 @@ pub(crate) fn configured_media_account_scope(
         }
         "lark" => {
             let c = config.lark.as_ref()?;
-            vec![c.app_id.as_str(), c.app_secret.as_str()]
+            vec![
+                c.app_id.as_str(),
+                c.app_secret.as_str(),
+                if c.use_feishu { "feishu" } else { "lark" },
+            ]
         }
         "dingtalk" => {
             let c = config.dingtalk.as_ref()?;
@@ -369,6 +373,8 @@ pub(crate) fn configured_media_account_scope(
             let c = config.yuanbao.as_ref()?;
             vec![
                 c.api_domain.as_str(),
+                c.env.as_str(),
+                c.route_env.as_str(),
                 c.app_key.as_str(),
                 c.app_secret.as_str(),
             ]

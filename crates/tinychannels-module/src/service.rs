@@ -1064,6 +1064,11 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let activation = self.media_activation(&request.instance).await?;
+        if activation.media_account_scope.is_none() {
+            return Err(BusError::failed(
+                "configured account has no stable media identity",
+            ));
+        }
         self.media_uploads
             .begin(request, activation.generation)
             .await
@@ -1142,6 +1147,11 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let activation = self.media_activation(&request.instance).await?;
+        if activation.media_account_scope.is_none() {
+            return Err(BusError::failed(
+                "configured account has no stable media identity",
+            ));
+        }
         if request.scope.conversation.id.trim().is_empty()
             || request.scope.turn_id.trim().is_empty()
             || request.media.opaque_id.as_deref().is_none_or(str::is_empty)
