@@ -14,9 +14,6 @@ mod channel_send;
 mod channel_types;
 mod text;
 
-#[cfg(test)]
-#[path = "text_tests.rs"]
-mod text_tests;
 
 pub use channel_types::TelegramChannel;
 
@@ -30,10 +27,6 @@ pub use crate::remote::{
     build_remote_help_response, build_status_response, format_session_line,
     parse_remote_command as parse_telegram_remote_command,
 };
-
-#[cfg(any(test, debug_assertions))]
-#[path = "mod_test_support_tests.rs"]
-pub mod test_support;
 
 #[cfg(test)]
 #[path = "fixtures_tests.rs"]

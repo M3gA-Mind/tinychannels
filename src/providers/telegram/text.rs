@@ -157,3 +157,7 @@ pub(crate) fn strip_tool_call_tags(message: &str) -> String {
 
     result.trim().to_string()
 }
+
+#[cfg(test)]
+#[path = "text_tests.rs"]
+mod tests;
