@@ -9,8 +9,7 @@
 use super::{
     AllowlistStore, ApprovalGate, ChannelHost, ConversationStore, EventSink, LifecycleRegistry,
     Memory, ReactionGate, RunLedger, SpeechSynthesizer, StorageProvider, Transcriber,
-    VoiceMediaStore,
-    TurnDispatcher,
+    TurnDispatcher, VoiceMediaStore,
 };
 use std::sync::Arc;
 

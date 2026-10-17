@@ -2824,6 +2824,7 @@ dependencies = [
  "tinystoragedrivers-busproxy",
  "tinystoragedrivers-client",
  "tinystoragedrivers-core",
+ "tinyvoice-bus",
  "tokio",
  "tokio-tungstenite 0.30.0",
  "tracing",
@@ -2941,6 +2942,16 @@ name = "tinyvec"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
+
+[[package]]
+name = "tinyvoice-bus"
+version = "0.1.4"
+source = "git+https://github.com/tinyhumansai/tinyvoice?rev=7a8e3ac5b31a11e9c061541b336c666ee10fa190#7a8e3ac5b31a11e9c061541b336c666ee10fa190"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+]
 
 [[package]]
 name = "tokio"

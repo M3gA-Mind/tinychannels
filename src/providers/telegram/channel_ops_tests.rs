@@ -315,7 +315,10 @@ fn voice_ingress_keeps_audio_part_beside_provider_transcript() {
     assert_eq!(voice_note.media.content_type.as_deref(), Some("audio/ogg"));
     assert_eq!(voice_note.duration_ms, Some(3_000));
     assert_eq!(
-        voice_note.transcript.as_ref().map(|transcript| transcript.text.as_str()),
+        voice_note
+            .transcript
+            .as_ref()
+            .map(|transcript| transcript.text.as_str()),
         Some("recognized words")
     );
     assert_eq!(

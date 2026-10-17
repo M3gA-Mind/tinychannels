@@ -401,8 +401,7 @@ impl HostChannels {
         Request: serde::Serialize + Send + 'static,
         Response: serde::de::DeserializeOwned + serde::Serialize + Send + 'static,
     {
-        if serde_json::to_vec(&request)
-            .map_or(true, |bytes| bytes.len() > MAX_VOICE_CALLBACK_BYTES)
+        if serde_json::to_vec(&request).map_or(true, |bytes| bytes.len() > MAX_VOICE_CALLBACK_BYTES)
         {
             return Err(Error::failed("voice callback request exceeds byte limit"));
         }
@@ -444,7 +443,8 @@ impl HostChannels {
         &self,
         request: tinychannels_bus::HostVoiceTranscriptionRequest,
     ) -> Result<HostTranscriptionResult> {
-        self.voice_callback(host_methods::TRANSCRIBE_VOICE, request).await
+        self.voice_callback(host_methods::TRANSCRIBE_VOICE, request)
+            .await
     }
 
     /// Request scoped speech synthesis from the host.
@@ -452,7 +452,8 @@ impl HostChannels {
         &self,
         request: tinychannels_bus::HostSpeechSynthesisRequest,
     ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
-        self.voice_callback(host_methods::SYNTHESIZE_SPEECH, request).await
+        self.voice_callback(host_methods::SYNTHESIZE_SPEECH, request)
+            .await
     }
 
     /// Persist audio through the host and receive its opaque durable reference.
@@ -460,7 +461,8 @@ impl HostChannels {
         &self,
         request: tinychannels_bus::HostStoreVoiceMediaRequest,
     ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
-        self.voice_callback(host_methods::STORE_VOICE_MEDIA, request).await
+        self.voice_callback(host_methods::STORE_VOICE_MEDIA, request)
+            .await
     }
 
     /// Invoke one bounded host-owned credential, persistence, or managed API

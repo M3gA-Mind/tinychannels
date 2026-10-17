@@ -469,10 +469,7 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         })
         .await
         .unwrap();
-    assert_eq!(
-        stored.media.opaque_id.as_deref(),
-        Some("voice-1")
-    );
+    assert_eq!(stored.media.opaque_id.as_deref(), Some("voice-1"));
     assert_eq!(
         stored.accessible_url.as_deref(),
         Some("https://media.example.test/authorized/voice-1")
@@ -504,10 +501,7 @@ async fn module_host_exposes_scoped_voice_callbacks_and_event_capabilities() {
         .unwrap();
     assert_eq!(
         callback.events.lock().await.as_slice(),
-        [
-            "transcription:complete",
-            "event:channel:reaction_sent"
-        ]
+        ["transcription:complete", "event:channel:reaction_sent"]
     );
     host.shutdown().await.unwrap();
 }
