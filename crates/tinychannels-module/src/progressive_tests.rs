@@ -4,6 +4,33 @@ use tinybus::transport::memory::MemoryBus;
 use tokio::sync::Notify;
 
 struct ConfiguredChannel(&'static str);
+struct ConfiguredChannelWithCapabilities {
+    name: &'static str,
+    capabilities: tinychannels_bus::ChannelCapabilities,
+}
+
+#[async_trait::async_trait]
+#[allow(
+    deprecated,
+    reason = "test fake implements the required v21 compatibility methods"
+)]
+impl tinychannels::Channel for ConfiguredChannelWithCapabilities {
+    fn name(&self) -> &str {
+        self.name
+    }
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.capabilities.clone()
+    }
+    async fn send(&self, _message: &tinychannels::SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<tinychannels::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+}
 
 #[async_trait::async_trait]
 #[allow(
@@ -830,6 +857,63 @@ async fn typed_final_delivery_returns_partial_receipt_without_retrying() {
     let sends = callback.sends.lock().await;
     assert_eq!(sends.len(), 1, "partial sends must not be retried");
     assert_eq!(sends[0]["text"], "caption");
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn no_edit_channel_sends_final_text_in_configured_segments() {
+    let (replies, callback) = fixture(false).await;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.text.text_limit = Some(4);
+    let channel = Arc::new(ConfiguredChannelWithCapabilities {
+        name: "discord",
+        capabilities,
+    });
+    let mut configured = HashMap::new();
+    configured.insert(
+        "discord:segmented".to_owned(),
+        Running::start(
+            channel,
+            Arc::new(crate::provider::Hooks::default()),
+            replies.host.clone(),
+        ),
+    );
+    let replies = Replies::new(replies.host.clone(), Arc::new(Mutex::new(configured)));
+    let handle = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:segmented".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Direct,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "segmented-turn".into(),
+        })
+        .await
+        .unwrap();
+    let ProgressiveResult::Opened { handle } = handle else {
+        panic!("expected opened output")
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "abcdefghij".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    let sends = callback.sends.lock().await;
+    assert_eq!(
+        sends.iter().map(|send| send["text"].as_str().unwrap()).collect::<Vec<_>>(),
+        ["abcd", "efgh", "ij"]
+    );
+    assert!(matches!(result, ProgressiveResult::DeliveryOutcome { .. }));
     replies.shutdown().await.unwrap();
 }
 
