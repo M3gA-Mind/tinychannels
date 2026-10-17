@@ -64,8 +64,14 @@ impl ChannelAdapter for LocalChannelAdapter {
     async fn send(
         &self,
         intent: ChannelOutboundIntent,
-    ) -> Result<MessageReceipt, ChannelSendError> {
-        self.outbound.send(intent).await
+    ) -> Result<crate::channel::ChannelSendOutcome, ChannelSendError> {
+        self.outbound
+            .send(intent)
+            .await
+            .map(|receipt| crate::channel::ChannelSendOutcome {
+                receipt,
+                error: None,
+            })
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError> {
