@@ -1,6 +1,168 @@
 use super::*;
 use base64::Engine as _;
 use sha2::Digest as _;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use tinybus::broker::Broker;
+use tinybus::transport::memory::MemoryBus;
+use tinychannels_bus::{ChannelInboundEnvelope, ContentPart, ConversationKind, ConversationRef};
+
+#[derive(Clone, Default)]
+struct IngressVoiceCallback {
+    read_requests: Arc<Mutex<Vec<tinychannels_bus::HostReadVoiceMediaRequest>>>,
+    stt_requests: Arc<Mutex<Vec<tinychannels_bus::HostVoiceTranscriptionRequest>>>,
+    inbound: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    stt_calls: Arc<AtomicUsize>,
+}
+
+#[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
+impl IngressVoiceCallback {
+    async fn read_voice_media(
+        &self,
+        request: tinychannels_bus::HostReadVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        self.read_requests.lock().await.push(request);
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+            mime_type: "audio/ogg".into(),
+            file_name: Some("voice.oga".into()),
+        })
+    }
+
+    async fn transcribe_voice(
+        &self,
+        request: tinychannels_bus::HostVoiceTranscriptionRequest,
+    ) -> Result<tinychannels_bus::HostTranscriptionResult> {
+        self.stt_calls.fetch_add(1, Ordering::SeqCst);
+        self.stt_requests.lock().await.push(request);
+        Err(tinybus::Error::failed("fixture STT unavailable"))
+    }
+
+    async fn deliver_inbound(&self, channel: String, message: serde_json::Value) -> Result<()> {
+        self.inbound.lock().await.push((channel, message));
+        Ok(())
+    }
+}
+
+async fn ingress_fixture() -> (HostChannels, IngressVoiceCallback) {
+    let bus = MemoryBus::new();
+    Broker::new().spawn(bus.clone());
+    let server = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let callback = IngressVoiceCallback::default();
+    server
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            callback.clone(),
+        )
+        .await
+        .unwrap();
+    server.request_name(tinychannels_bus::HOST_BUS_NAME).await.unwrap();
+    let client = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    (HostChannels::new(client), callback)
+}
+
+fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> ChannelInboundEnvelope {
+    ChannelInboundEnvelope {
+        channel: tinychannels_bus::ChannelRef {
+            id: "forged-provider".into(),
+            account_id: Some("forged-account".into()),
+        },
+        message_id: "message-voice-13".into(),
+        conversation: ConversationRef {
+            kind: ConversationKind::Thread,
+            id: "chat-43".into(),
+            topic_id: Some("topic-9".into()),
+            ..Default::default()
+        },
+        parts: vec![ContentPart::VoiceNote {
+            voice_note: tinychannels_bus::VoiceNote {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("opaque-voice".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    content_type: Some("audio/ogg".into()),
+                    ..Default::default()
+                },
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1400),
+                waveform: Some(vec![0.1, 0.6, 1.0]),
+                transcript,
+                ..Default::default()
+            },
+        }],
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
+    let (host, callback) = ingress_fixture().await;
+    let events = ModuleEvents(host.clone(), "telegram:bot-a".into());
+    assert!(events
+        .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(None)))
+        .await
+        .unwrap());
+    host.flush().await.unwrap();
+
+    let read = callback.read_requests.lock().await;
+    assert_eq!(read.len(), 1);
+    assert_eq!(read[0].max_bytes, 8 * 1024 * 1024);
+    assert_eq!(read[0].opaque_id, "opaque-voice");
+    let stt = callback.stt_requests.lock().await;
+    assert_eq!(stt.len(), 1);
+    assert_eq!(stt[0].scope.configured_instance, "telegram:bot-a");
+    assert_eq!(stt[0].scope.channel.id, "telegram");
+    assert_eq!(stt[0].scope.channel.account_id.as_deref(), Some("telegram:bot-a"));
+    assert_eq!(stt[0].scope.conversation.id, "chat-43");
+    assert_eq!(stt[0].scope.conversation.topic_id.as_deref(), Some("topic-9"));
+    assert_eq!(stt[0].scope.turn_id, "message-voice-13");
+    drop(stt);
+    drop(read);
+
+    let inbound = callback.inbound.lock().await;
+    assert_eq!(inbound.len(), 1);
+    assert_eq!(inbound[0].0, "telegram:bot-a");
+    let note = &inbound[0].1["parts"][0]["voiceNote"];
+    assert_eq!(note["media"]["opaqueId"], "opaque-voice");
+    assert_eq!(note["codec"], "ogg_opus");
+    assert_eq!(note["durationMs"], 1400);
+    assert_eq!(note["waveform"], serde_json::json!([0.1, 0.6, 1.0]));
+    assert_eq!(note["transcript"]["state"], "unavailable");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn completed_provider_transcript_skips_media_read_and_host_stt() {
+    let (host, callback) = ingress_fixture().await;
+    let events = ModuleEvents(host.clone(), "telegram:bot-a".into());
+    let provider_transcript = tinychannels_bus::VoiceTranscript {
+        text: "provider words".into(),
+        language: Some("en".into()),
+        state: tinychannels_bus::VoiceTranscriptState::Complete,
+        source: tinychannels_bus::VoiceTranscriptSource::Provider,
+    };
+    events
+        .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(Some(
+            provider_transcript,
+        ))))
+        .await
+        .unwrap();
+    host.flush().await.unwrap();
+    assert!(callback.read_requests.lock().await.is_empty());
+    assert_eq!(callback.stt_calls.load(Ordering::SeqCst), 0);
+    let inbound = callback.inbound.lock().await;
+    assert_eq!(
+        inbound[0].1["parts"][0]["voiceNote"]["transcript"]["text"],
+        "provider words"
+    );
+    assert_eq!(
+        inbound[0].1["parts"][0]["voiceNote"]["media"]["opaqueId"],
+        "opaque-voice"
+    );
+    host.shutdown().await.unwrap();
+}
 
 #[tokio::test]
 #[ignore = "requires the separately built TinyVoice module; run with TINYVOICE_MODULE_ARTIFACT"]

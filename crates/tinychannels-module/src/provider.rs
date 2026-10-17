@@ -506,6 +506,15 @@ impl tinychannels::host::EventSink for ModuleEvents {
                     let tinychannels_bus::ContentPart::VoiceNote { voice_note } = part else {
                         continue;
                     };
+                    if voice_note.transcript.as_ref().is_some_and(|transcript| {
+                        transcript.state == tinychannels_bus::VoiceTranscriptState::Complete
+                            && !transcript.text.trim().is_empty()
+                    }) {
+                        // Completed provider/host transcripts are already
+                        // authoritative. Avoid reading and retranscribing the
+                        // media during replay.
+                        continue;
+                    }
                     let scope = tinychannels_bus::HostVoiceScope {
                         configured_instance: self.1.clone(),
                         channel: envelope.channel.clone(),
