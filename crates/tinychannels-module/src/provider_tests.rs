@@ -1079,3 +1079,55 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
     assert!(error.sent_before_error);
     assert!(!error.retryable);
 }
+
+#[tokio::test]
+async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance() {
+    use tinychannels_conformance::{ConformanceFeature, ExpectedScope, check_feature};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": { "message_id": 321 }
+        })))
+        .mount(&server)
+        .await;
+    let channel = Arc::new(
+        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
+            .with_api_base_for_test(server.uri()),
+    );
+    let instance = "telegram:account-a".to_owned();
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), instance.clone());
+    let running = Running::start_outbound(channel, hooks, host);
+    let handle = running.adapter_handle();
+    let fixture = RunningTelegramConformance {
+        adapter: handle,
+        server,
+        scope: ExpectedScope {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some(instance),
+            },
+            conversation: ConversationRef {
+                kind: ConversationKind::Dm,
+                id: "100".into(),
+                ..Default::default()
+            },
+        },
+        observed: Mutex::new(Vec::new()),
+        request_cursor: Mutex::new(0),
+    };
+    check_feature(&fixture, ConformanceFeature::Text).await.unwrap();
+    let observation = fixture.observations().pop().unwrap();
+    assert_eq!(observation.request["chat_id"], "100");
+    assert_eq!(observation.request["text"], "module-kit");
+    assert_eq!(observation.platform_message_ids, ["321"]);
+    check_feature(&fixture, ConformanceFeature::Image).await.unwrap();
+    assert!(fixture.observations().is_empty());
+    running.stop().await.unwrap();
+}
