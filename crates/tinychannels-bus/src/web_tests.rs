@@ -23,6 +23,10 @@ fn assert_historical_fixture_round_trips(fixture: &str) {
     assert_eq!(serde_json::to_value(event).unwrap(), historical);
 }
 
+fn normalize_line_endings(contents: &str) -> String {
+    contents.replace("\r\n", "\n")
+}
+
 #[test]
 fn deployed_web_event_goldens_keep_their_serialized_shapes() {
     for fixture in [
@@ -236,9 +240,10 @@ fn web_events_keep_ordered_typed_media_and_voice_parts() {
 fn schema_export_is_deterministic_and_contains_every_variant() {
     let schema = web_event_schema_json().unwrap();
     assert_eq!(schema, web_event_schema_json().unwrap());
-    // Model a Windows checkout, where Git expands the checked-in LF file to CRLF.
-    let windows_checkout = WEB_SCHEMA.replace('\n', "\r\n");
-    assert_eq!(schema, windows_checkout.trim_end());
+    // Normalize only CRLF so schema-content changes still fail on every platform.
+    assert_eq!(schema, normalize_line_endings(WEB_SCHEMA).trim_end());
+    let windows_checkout = WEB_SCHEMA.replace("\r\n", "\n").replace('\n', "\r\n");
+    assert_eq!(schema, normalize_line_endings(&windows_checkout).trim_end());
     let schema: serde_json::Value = serde_json::from_str(&schema).unwrap();
     let schema_text = schema.to_string();
     for event in HISTORICAL_EVENT_NAMES {
