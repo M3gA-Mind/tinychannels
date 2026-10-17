@@ -7,9 +7,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(default)]
 pub struct HostTranscriptionRequest {
-    /// Authenticated channel, conversation, and turn context. The module fills
-    /// `configured_instance` from the runtime that owns this callback.
-    pub scope: HostVoiceScope,
     /// Base64-encoded audio bytes.
     pub audio_base64: String,
     /// MIME hint such as `audio/ogg` or `audio/mp4`.
@@ -17,6 +14,18 @@ pub struct HostTranscriptionRequest {
     /// Original filename hint.
     pub file_name: Option<String>,
     /// BCP-47 language hint; `None` requests automatic detection.
+    pub language: Option<String>,
+}
+
+/// Scoped STT callback used by the shared voice pipeline. The module fills the
+/// configured instance from its runtime instead of accepting it from a caller.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(default, rename_all = "camelCase")]
+pub struct HostVoiceTranscriptionRequest {
+    pub scope: HostVoiceScope,
+    pub audio_base64: String,
+    pub mime_type: Option<String>,
+    pub file_name: Option<String>,
     pub language: Option<String>,
 }
 
