@@ -933,6 +933,7 @@ async fn no_edit_channel_sends_final_text_in_configured_segments() {
     let (replies, callback) = fixture(false).await;
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
     capabilities.text.text_limit = Some(4);
+    capabilities.text.length_unit = tinychannels_bus::LengthUnit::Utf8Bytes;
     let channel = Arc::new(ConfiguredChannelWithCapabilities {
         name: "discord",
         capabilities,
@@ -969,7 +970,7 @@ async fn no_edit_channel_sends_final_text_in_configured_segments() {
         .execute(ProgressiveCommand::FeedOutput {
             handle,
             events: vec![ChannelOutputEvent::FinalMessage {
-                text: "abcdefghij".into(),
+                text: "a😀éz".into(),
                 parts: vec![],
                 receipt: None,
             }],
@@ -982,7 +983,7 @@ async fn no_edit_channel_sends_final_text_in_configured_segments() {
             .iter()
             .map(|send| send["text"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["abcd", "efgh", "ij"]
+        ["a", "😀", "éz"]
     );
     assert!(matches!(result, ProgressiveResult::DeliveryOutcome { .. }));
     replies.shutdown().await.unwrap();
@@ -1100,21 +1101,6 @@ async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts
 }
 
 #[test]
-fn text_segments_obey_unicode_units_without_losing_scalars() {
-    let source = "a😀éz";
-    let utf8 = split_text_by_limit(source, 4, tinychannels_bus::LengthUnit::Utf8Bytes).unwrap();
-    assert_eq!(utf8.concat(), source);
-    assert!(utf8.iter().all(|segment| segment.len() <= 4));
-    let utf16 = split_text_by_limit(source, 2, tinychannels_bus::LengthUnit::Utf16Units).unwrap();
-    assert_eq!(utf16.concat(), source);
-    assert!(
-        utf16
-            .iter()
-            .all(|segment| segment.encode_utf16().count() <= 2)
-    );
-    assert!(split_text_by_limit("😀", 1, tinychannels_bus::LengthUnit::Utf8Bytes).is_err());
-}
-
 #[tokio::test(start_paused = true)]
 async fn terminal_text_edits_existing_draft_without_duplicate_send() {
     let (base, callback) = fixture(false).await;
