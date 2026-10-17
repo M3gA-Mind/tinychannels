@@ -619,7 +619,7 @@ async fn send_typed_part(
                     prepared_text = requested_text;
                 }
             }
-            if prepared_text != text {
+            if should_speak && prepared_text != text {
                 let suffix = prepared_text.strip_prefix(text).unwrap_or(&prepared_text);
                 if let Some(text_part) =
                     prepared_parts.iter_mut().rev().find_map(|part| match part {
