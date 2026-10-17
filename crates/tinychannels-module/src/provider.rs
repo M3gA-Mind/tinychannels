@@ -597,11 +597,10 @@ impl tinychannels::host::Transcriber for ModuleTranscriber {
 
     async fn transcribe_scoped(
         &self,
-        mut scope: tinychannels_bus::HostVoiceScope,
+        scope: tinychannels_bus::HostVoiceScope,
         request: tinychannels::host::TranscriptionRequest,
     ) -> anyhow::Result<tinychannels::host::TranscriptionResult> {
         validate_voice_scope(&scope)?;
-        bind_configured_media_scope(&mut scope, &self.1, self.2.as_deref())?;
         let result = self
             .0
             .transcribe_voice(tinychannels_bus::HostVoiceTranscriptionRequest {
@@ -638,11 +637,10 @@ impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
 
     async fn synthesize_scoped(
         &self,
-        mut scope: tinychannels_bus::HostVoiceScope,
+        scope: tinychannels_bus::HostVoiceScope,
         request: tinychannels::host::SpeechRequest,
     ) -> anyhow::Result<tinychannels::host::SpeechResult> {
         validate_voice_scope(&scope)?;
-        bind_configured_media_scope(&mut scope, &self.1, self.2.as_deref())?;
         let result = self
             .0
             .synthesize_speech(tinychannels_bus::HostSpeechSynthesisRequest {
@@ -672,11 +670,12 @@ pub(crate) struct ModuleVoiceMediaStore(
 impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
     async fn store_voice(
         &self,
-        mut request: tinychannels::host::VoiceMediaRequest,
+        request: tinychannels::host::VoiceMediaRequest,
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
         validate_voice_scope(&request.scope)?;
-        bind_configured_media_scope(&mut request.scope, &self.1, self.2.as_deref())?;
         let projection_scope = request.scope.clone();
+        let mut storage_scope = request.scope;
+        bind_configured_media_scope(&mut storage_scope, &self.1, self.2.as_deref())?;
         use base64::Engine;
         let audio = base64::engine::general_purpose::STANDARD
             .decode(request.audio_base64.as_bytes())
@@ -694,7 +693,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         let media = media_store
             .store(tinychannels::host::MediaStoreRequest {
                 metadata: tinychannels::host::MediaMetadata {
-                    scope: request.scope,
+                    scope: storage_scope.clone(),
                     kind: tinychannels_bus::MediaKind::Audio,
                     content_type: request.mime_type,
                     file_name: request.file_name,
@@ -727,7 +726,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
                 // `delete` leaves its durable cleanup tombstone if the blob backend is transiently down.
                 let _ = media_store
                     .delete(
-                        projection_scope,
+                        storage_scope,
                         media.opaque_id.as_deref().unwrap_or_default(),
                     )
                     .await;
@@ -756,7 +755,9 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         if opaque_id.trim().is_empty() {
             anyhow::bail!("voice media reference is empty");
         }
-        bind_configured_media_scope(&mut scope, &self.1, self.2.as_deref())?;
+        if opaque_id.starts_with("tinychannels_media_v1_") {
+            bind_configured_media_scope(&mut scope, &self.1, self.2.as_deref())?;
+        }
         read_scoped_voice_media(&self.0, scope, opaque_id, 8 * 1024 * 1024).await
     }
 }
@@ -878,12 +879,18 @@ impl tinychannels::host::EventSink for ModuleEvents {
                         conversation: envelope.conversation.clone(),
                         turn_id: envelope.message_id.clone(),
                     };
-                    let mut scope = scope;
-                    bind_configured_media_scope(&mut scope, &self.1, self.2.as_deref())?;
                     let request = if let Some(opaque_id) = voice_note.media.opaque_id.clone() {
+                        let mut storage_scope = scope.clone();
+                        if opaque_id.starts_with("tinychannels_media_v1_") {
+                            bind_configured_media_scope(
+                                &mut storage_scope,
+                                &self.1,
+                                self.2.as_deref(),
+                            )?;
+                        }
                         match read_scoped_voice_media(
                             &self.0,
-                            scope.clone(),
+                            storage_scope,
                             opaque_id,
                             8 * 1024 * 1024,
                         )
