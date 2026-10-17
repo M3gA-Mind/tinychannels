@@ -756,6 +756,11 @@ impl TelegramChannel {
             .and_then(serde_json::Value::as_str)
             .is_some()
             || message.get("voice").is_some()
+            || message.get("photo").is_some()
+            || message.get("document").is_some()
+            || message.get("video").is_some()
+            || message.get("audio").is_some()
+            || message.get("sticker").is_some()
     }
 
     pub(crate) fn parse_update_message(
@@ -797,6 +802,11 @@ impl TelegramChannel {
             .and_then(serde_json::Value::as_str)
             .is_some();
         let has_voice = message.and_then(|message| message.get("voice")).is_some();
+        let has_media = message.is_some_and(|message| {
+            ["photo", "document", "video", "audio", "sticker"]
+                .iter()
+                .any(|field| message.get(field).is_some())
+        });
 
         tracing::debug!(
             update_id = ?update_id,
@@ -833,6 +843,10 @@ impl TelegramChannel {
             );
         }
 
+        if has_media {
+            return self.parse_update_media_message_for_pipeline(update);
+        }
+
         let msg = self.parse_update_voice_message_for_pipeline(update);
         tracing::debug!(
             update_id = ?update_id,
@@ -842,6 +856,22 @@ impl TelegramChannel {
             "[telegram:voice] parse update result"
         );
         msg
+    }
+
+    fn parse_update_media_message_for_pipeline(
+        &self,
+        update: &serde_json::Value,
+    ) -> Option<ChannelMessage> {
+        let message = update
+            .get("message")
+            .or_else(|| update.get("edited_message"))?;
+        Self::update_media_attachment(update)?;
+        let caption = message.get("caption").and_then(serde_json::Value::as_str);
+        let ctx = self.parse_incoming_message_context(message, caption)?;
+        if self.mention_only && Self::is_group_message(message) && ctx.mention_text.is_none() {
+            return None;
+        }
+        Some(self.channel_message_from_context(ctx, caption.unwrap_or_default().to_owned()))
     }
 
     fn parse_update_voice_message_for_pipeline(
