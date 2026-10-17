@@ -256,14 +256,14 @@ impl MediaReads {
         let running = Arc::clone(&self.expiry_janitor_running);
         tokio::spawn(async move {
             loop {
-                let Some(state) = state.upgrade() else {
-                    running.store(false, Ordering::SeqCst);
-                    return;
-                };
                 let next_expiry = {
-                    let mut state = state.lock().await;
-                    Self::prune(&mut state);
-                    let next_expiry = state.reads.values().map(|read| read.expires).min();
+                    let Some(state) = state.upgrade() else {
+                        running.store(false, Ordering::SeqCst);
+                        return;
+                    };
+                    let mut guard = state.lock().await;
+                    Self::prune(&mut guard);
+                    let next_expiry = guard.reads.values().map(|read| read.expires).min();
                     if next_expiry.is_none() {
                         running.store(false, Ordering::SeqCst);
                     }
