@@ -388,7 +388,11 @@ async fn uncertain_initial_draft_stops_retries_and_preserves_possible_delivery()
     reply.edit_tick().await;
     reply.on_text_delta("b");
     reply.edit_tick().await;
-    assert_eq!(sender.calls().len(), 1, "uncertain initial send is not retried");
+    assert_eq!(
+        sender.calls().len(),
+        1,
+        "uncertain initial send is not retried"
+    );
     assert!(reply.state().edit_disabled);
     assert!(reply.state().draft_sent);
     assert!(reply.state().delivery_uncertain);
