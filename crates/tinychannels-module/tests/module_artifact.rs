@@ -181,16 +181,14 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
             provided.version.interface.as_str() == "ai.tinyhumans.tinychannels.Channels"
         })
         .unwrap();
-    let mut members: Vec<_> = interface.methods.iter().map(ToString::to_string).collect();
-    let mut contract: Vec<_> = tinychannels_bus::METHODS
+    let members: Vec<_> = interface.methods.iter().map(ToString::to_string).collect();
+    let contract: Vec<_> = tinychannels_bus::METHODS
         .iter()
         .map(|method| method.to_string())
         .collect();
-    members.sort();
-    contract.sort();
     assert_eq!(
         members, contract,
-        "compiled artifact must match the bus contract"
+        "compiled artifact must preserve the bus registry membership and declaration order"
     );
 
     // Delivery records live in the host's storage, which the module reaches over

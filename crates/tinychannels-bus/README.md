@@ -3,14 +3,21 @@
 Serialized channel vocabulary, configuration/schema declarations, interface
 names, relay frames and structured errors. Normal dependencies are Serde,
 JSON/schema/error derivation, and Base64 used only by the existing
-`PassthroughForward.body` custom serializer (`bodyB64`). This crate has no
-provider callbacks, scheduler, crypto, entropy, stateful locks, transport,
+`PassthroughForward.body` custom serializer (`bodyB64`). It carries only wire
+DTOs, names, constants, and errors. Provider traits and history helpers live in
+`tinychannels-runtime`; this crate has no async runtime, async-trait macro,
+`anyhow`, callbacks, scheduler, crypto, entropy, stateful locks, transport,
 session derivation or delivery algorithms.
 
 DTOs are defined once here. `tinychannels-runtime` and `tinychannels` re-export
 these same Rust types. Hosts should name wire values through this crate and
 execute behavior through the compiled module. The root library compatibility
 facade is for existing implementation consumers, not a host dependency shortcut.
+
+The method constants, public `METHODS` array, and compiled module export list
+come from one registry in `names.rs`; host callbacks keep their own opposite
+direction registry. The artifact test compares the compiled manifest with the
+registry including declaration order.
 
 `python3 scripts/check-bus-purity.py --offline` audits independent default and
 all-feature normal/build dependency closures and rejects runtime source seams.

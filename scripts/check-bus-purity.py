@@ -13,6 +13,7 @@ ALLOWED = {
     'proc-macro2', 'quote', 'syn', 'unicode-ident', 'itoa', 'memchr', 'zmij',
     'serde_derive_internals', 'dyn-clone', 'ref-cast', 'ref-cast-impl', 'base64',
 }
+FORBIDDEN_DEPS = {'anyhow', 'async-trait', 'tokio'}
 FORBIDDEN = ('async fn ', 'async_trait', 'tokio::', 'std::sync', 'std::thread',
              'std::fs', 'std::env', 'std::time', 'parking_lot::', 'sha2::', 'hmac::',
              'rand::', 'uuid::', 'fn build_session_key', 'fn classify_send_error',
@@ -53,6 +54,9 @@ for mode in ('default', 'all'):
             if any(kind['kind'] != 'dev' for kind in edge['dep_kinds']):
                 pending.append(edge['pkg'])
     unsafe = sorted({packages[p] for p in seen} - ALLOWED)
+    unsafe_runtime = sorted({packages[p] for p in seen} & FORBIDDEN_DEPS)
+    if unsafe_runtime:
+        raise SystemExit(f'{mode}: runtime dependencies in contract closure: {unsafe_runtime}')
     if unsafe:
         raise SystemExit(f'{mode}: unsafe contract dependencies: {unsafe}')
     print(f'{mode}: pure contract closure ({len(seen)} packages)')
