@@ -72,7 +72,7 @@ fn legacy_feed_retains_the_v1_event_wire_shape() {
 
 #[test]
 fn subagent_output_dto_preserves_authorized_worktree_and_iteration_facts() {
-    let event = ChannelOutputEvent::Subagent {
+    let event = ChannelOutputEvent::Subagent(Box::new(SubagentOutput {
         agent_id: "agent-2".into(),
         task_id: "task-9".into(),
         state: "completed".into(),
@@ -102,7 +102,7 @@ fn subagent_output_dto_preserves_authorized_worktree_and_iteration_facts() {
         dirty_status: Some(true),
         stop: None,
         extended_policy: Some(true),
-    };
+    }));
     let encoded = serde_json::to_value(&event).unwrap();
     let decoded: ChannelOutputEvent = serde_json::from_value(encoded.clone()).unwrap();
     assert_eq!(decoded, event);
@@ -133,6 +133,7 @@ impl Callback {
         let ChannelBackendRequest::ProgressiveTransport(request) = request else {
             return Err(Error::failed("unexpected callback"));
         };
+        let request = *request;
         self.requests.lock().await.push(request.clone());
         let typed_send = matches!(request, ProgressiveTransportRequest::SendTyped { .. });
         match &request {
@@ -171,7 +172,7 @@ impl Callback {
             if typed_send {
                 let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
                 outcome.receipt.platform_message_ids = vec!["fixture-message".into()];
-                ProgressiveTransportResult::Outcome(outcome)
+                ProgressiveTransportResult::Outcome(Box::new(outcome))
             } else if matches!(request, ProgressiveTransportRequest::OutputEvent { .. }) {
                 ProgressiveTransportResult::Acknowledged
             } else {
@@ -186,7 +187,7 @@ impl Callback {
                 ));
             }
         }
-        Ok(ChannelBackendResult::ProgressiveTransport(result))
+        Ok(ChannelBackendResult::ProgressiveTransport(Box::new(result)))
     }
 }
 
@@ -1002,7 +1003,9 @@ async fn typed_final_delivery_returns_partial_receipt_without_retrying() {
         continuation_message_ids: vec![],
         ..Default::default()
     });
-    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Outcome(outcome.clone()));
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Outcome(Box::new(
+        outcome.clone(),
+    )));
     let result = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle,
@@ -1111,7 +1114,7 @@ async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts
         .send_queue
         .lock()
         .await
-        .push_back(ProgressiveTransportResult::Outcome(
+        .push_back(ProgressiveTransportResult::Outcome(Box::new(
             tinychannels_bus::channel::ChannelSendOutcome {
                 receipt: tinychannels_bus::channel::MessageReceipt {
                     platform_message_ids: vec!["seg-1".into()],
@@ -1119,12 +1122,12 @@ async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts
                 },
                 error: None,
             },
-        ));
+        )));
     callback
         .send_queue
         .lock()
         .await
-        .push_back(ProgressiveTransportResult::Outcome(
+        .push_back(ProgressiveTransportResult::Outcome(Box::new(
             tinychannels_bus::channel::ChannelSendOutcome {
                 receipt: tinychannels_bus::channel::MessageReceipt {
                     platform_message_ids: vec!["seg-2".into()],
@@ -1138,7 +1141,7 @@ async fn segmented_partial_send_retains_prior_receipts_and_stops_remaining_parts
                     ..Default::default()
                 }),
             },
-        ));
+        )));
     let replies = Replies::new(base.host.clone(), Arc::new(Mutex::new(configured)));
     let opened = replies
         .execute(ProgressiveCommand::OpenOutput {
@@ -1355,7 +1358,8 @@ async fn failed_terminal_edit_retains_the_existing_draft_receipt() {
         sent_before_error: true,
         ..Default::default()
     });
-    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Outcome(edit_error));
+    *callback.send_result.lock().await =
+        Some(ProgressiveTransportResult::Outcome(Box::new(edit_error)));
     let result = replies
         .execute(ProgressiveCommand::FeedOutput {
             handle,
@@ -1397,7 +1401,7 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
         ),
     );
     let replies = Replies::new(base.host.clone(), configured);
-    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(
+    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(Box::new(
         tinychannels_bus::channel::ChannelSendOutcome {
             receipt: tinychannels_bus::channel::MessageReceipt {
                 platform_message_ids: vec!["media-part-1".into()],
@@ -1410,7 +1414,7 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
                 ..Default::default()
             }),
         },
-    )]
+    ))]
     .into();
     let ProgressiveResult::Opened { handle } = replies
         .execute(ProgressiveCommand::OpenOutput {
@@ -1472,9 +1476,9 @@ async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
 #[tokio::test]
 async fn media_without_receipt_is_unknown_and_stops_terminal_batch() {
     let (base, callback) = fixture(false).await;
-    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(
+    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(Box::new(
         tinychannels_bus::channel::ChannelSendOutcome::default(),
-    )]
+    ))]
     .into();
     let configured = Arc::new(Mutex::new(HashMap::new()));
     configured.lock().await.insert(
@@ -1585,7 +1589,7 @@ async fn cancellation_retains_prior_media_receipt() {
     ));
     assert_eq!(callback.sends.lock().await.len(), 1);
 
-    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(
+    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(Box::new(
         tinychannels_bus::channel::ChannelSendOutcome {
             receipt: tinychannels_bus::channel::MessageReceipt {
                 platform_message_ids: vec!["partial-before-cancel".into()],
@@ -1598,7 +1602,7 @@ async fn cancellation_retains_prior_media_receipt() {
                 ..Default::default()
             }),
         },
-    )]
+    ))]
     .into();
     let ProgressiveResult::Opened { handle } = replies
         .execute(ProgressiveCommand::OpenOutput {
@@ -1981,7 +1985,7 @@ async fn later_provider_rpc_failure_retains_prior_receipt_and_stops_terminal_bat
     let mut accepted = tinychannels_bus::channel::ChannelSendOutcome::default();
     accepted.receipt.platform_message_ids = vec!["first-media".into()];
     *callback.send_queue.lock().await = [
-        ProgressiveTransportResult::Outcome(accepted),
+        ProgressiveTransportResult::Outcome(Box::new(accepted)),
         ProgressiveTransportResult::Failed,
     ]
     .into();
@@ -2047,7 +2051,8 @@ async fn later_observation_failure_retains_prior_receipt_and_stops_terminal_batc
     .await;
     let mut accepted = tinychannels_bus::channel::ChannelSendOutcome::default();
     accepted.receipt.platform_message_ids = vec!["observed-media".into()];
-    *callback.send_queue.lock().await = [ProgressiveTransportResult::Outcome(accepted)].into();
+    *callback.send_queue.lock().await =
+        [ProgressiveTransportResult::Outcome(Box::new(accepted))].into();
     *callback.output_queue.lock().await = [
         ProgressiveTransportResult::Acknowledged,
         ProgressiveTransportResult::Failed,
