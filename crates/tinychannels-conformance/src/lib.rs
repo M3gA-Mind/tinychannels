@@ -21,12 +21,21 @@ pub enum ConformanceFeature {
     Video,
     Audio,
     File,
+    Sticker,
+    Location,
+    Contact,
+    Buttons,
+    Poll,
+    Presentation,
+    NativeData,
     VoiceIn,
     VoiceOut,
+    VoiceSynthesis,
     ReplyAddressing,
     ThreadAddressing,
     Typing,
     Reactions,
+    InboundReactions,
     Edit,
     Delete,
     ReadReceipts,
@@ -34,18 +43,27 @@ pub enum ConformanceFeature {
 }
 
 impl ConformanceFeature {
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 24] = [
         Self::Text,
         Self::Image,
         Self::Video,
         Self::Audio,
         Self::File,
+        Self::Sticker,
+        Self::Location,
+        Self::Contact,
+        Self::Buttons,
+        Self::Poll,
+        Self::Presentation,
+        Self::NativeData,
         Self::VoiceIn,
         Self::VoiceOut,
+        Self::VoiceSynthesis,
         Self::ReplyAddressing,
         Self::ThreadAddressing,
         Self::Typing,
         Self::Reactions,
+        Self::InboundReactions,
         Self::Edit,
         Self::Delete,
         Self::ReadReceipts,
@@ -66,12 +84,21 @@ impl ConformanceFeature {
             Self::Video => capabilities.content.video.outbound,
             Self::Audio => capabilities.content.audio.outbound,
             Self::File => capabilities.content.file.outbound,
-            Self::VoiceIn => capabilities.voice_in.supported,
+            Self::Sticker => capabilities.content.sticker.outbound,
+            Self::Location => capabilities.content.location.outbound,
+            Self::Contact => capabilities.content.contact.outbound,
+            Self::Buttons => capabilities.content.buttons.outbound,
+            Self::Poll => capabilities.content.poll.outbound,
+            Self::Presentation => capabilities.content.presentation.outbound,
+            Self::NativeData => capabilities.content.native.outbound,
+            Self::VoiceIn => capabilities.voice_in.supported && !capabilities.voice_in.transcript_sources.is_empty(),
             Self::VoiceOut => capabilities.voice_out.supported,
+            Self::VoiceSynthesis => capabilities.voice_out.synthesis,
             Self::ReplyAddressing => capabilities.addressing.reply_to_id,
             Self::ThreadAddressing => capabilities.addressing.thread_id,
             Self::Typing => action("typing"),
             Self::Reactions => capabilities.reactions,
+            Self::InboundReactions => capabilities.events.supported.iter().any(|event| event == "reaction"),
             Self::Edit => action("edit"),
             Self::Delete => action("delete") || action("unsend"),
             Self::ReadReceipts => capabilities
@@ -89,6 +116,7 @@ impl ConformanceFeature {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WireObservation {
     pub feature: ConformanceFeature,
+    pub operation: String,
     pub channel: ChannelRef,
     pub conversation: ConversationRef,
     pub payload_kinds: Vec<String>,
@@ -133,10 +161,12 @@ pub async fn check_feature(
     if !declared {
         let explicitly_unsupported = match &result {
             Err(error) => error.kind == SendErrorKind::Unsupported && !error.retryable,
-            Ok(Some(outcome)) => outcome
-                .error
-                .as_ref()
-                .is_some_and(|error| error.kind == SendErrorKind::Unsupported && !error.retryable),
+            Ok(Some(outcome)) => outcome.error.as_ref().is_some_and(|error| {
+                error.kind == SendErrorKind::Unsupported
+                    && !error.retryable
+                    && outcome.receipt.platform_message_ids.is_empty()
+                    && outcome.receipt.parts.is_empty()
+            }),
             Ok(None) => false,
         };
         if !explicitly_unsupported {
@@ -169,18 +199,28 @@ pub async fn check_feature(
             "declared {feature:?} produced no matching wire observation"
         ));
     };
-    let Some(outcome) = outcome else {
-        return Err(format!("declared {feature:?} returned no receipt"));
-    };
-    let receipt = &outcome.receipt;
-    if receipt.channel.as_ref() != Some(&expected.channel)
-        || receipt.conversation.as_ref() != Some(&expected.conversation)
-        || receipt.platform_message_ids.is_empty()
-        || receipt.parts.is_empty()
-    {
-        return Err(format!(
-            "declared {feature:?} returned an incomplete or mis-scoped receipt"
-        ));
+    let requires_receipt = matches!(feature,
+        ConformanceFeature::Text | ConformanceFeature::Image | ConformanceFeature::Video
+        | ConformanceFeature::Audio | ConformanceFeature::File | ConformanceFeature::Sticker
+        | ConformanceFeature::Location | ConformanceFeature::Contact | ConformanceFeature::Buttons
+        | ConformanceFeature::Poll | ConformanceFeature::Presentation | ConformanceFeature::NativeData
+        | ConformanceFeature::VoiceOut | ConformanceFeature::VoiceSynthesis | ConformanceFeature::Edit
+        | ConformanceFeature::Delete | ConformanceFeature::StreamingDraft);
+    let receipt = outcome.as_ref().map(|outcome| &outcome.receipt);
+    if requires_receipt {
+        let Some(receipt) = receipt else {
+            return Err(format!("declared {feature:?} returned no receipt"));
+        };
+        if receipt.channel.as_ref() != Some(&expected.channel)
+            || receipt.conversation.as_ref() != Some(&expected.conversation)
+            || receipt.platform_message_ids.is_empty()
+            || receipt.parts.is_empty()
+        {
+            return Err(format!("declared {feature:?} returned an incomplete or mis-scoped receipt"));
+        }
+    }
+    if observation.operation != feature.operation() {
+        return Err(format!("declared {feature:?} observed operation {}", observation.operation));
     }
     let expected_payload = feature.payload_kind();
     if let Some(expected_payload) = expected_payload
@@ -193,7 +233,9 @@ pub async fn check_feature(
             "{feature:?} wire payload omitted {expected_payload}"
         ));
     }
-    if observation.platform_message_ids != receipt.platform_message_ids {
+    if let Some(receipt) = receipt
+        && observation.platform_message_ids != receipt.platform_message_ids
+    {
         return Err(format!(
             "{feature:?} receipt IDs differ from the mock response"
         ));
@@ -209,8 +251,29 @@ impl ConformanceFeature {
             Self::Video => Some("video"),
             Self::Audio => Some("audio"),
             Self::File => Some("file"),
+            Self::Sticker => Some("sticker"),
+            Self::Location => Some("location"),
+            Self::Contact => Some("contact"),
+            Self::Buttons => Some("buttons"),
+            Self::Poll => Some("poll"),
+            Self::Presentation => Some("presentation"),
+            Self::NativeData => Some("native"),
             Self::VoiceOut => Some("voice"),
+            Self::VoiceSynthesis => Some("voice"),
             _ => None,
+        }
+    }
+
+    fn operation(self) -> &'static str {
+        match self {
+            Self::Typing => "typing",
+            Self::Reactions => "reaction_send",
+            Self::InboundReactions => "reaction_receive",
+            Self::Edit => "edit",
+            Self::Delete => "delete",
+            Self::ReadReceipts => "read_receipt",
+            Self::StreamingDraft => "draft_update",
+            _ => "send",
         }
     }
 }
