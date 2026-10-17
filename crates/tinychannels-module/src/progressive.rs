@@ -9,8 +9,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::delivery::progressive::{
-    EDIT_FLUSH_INTERVAL, FILLER_INTERVAL, ProgressiveReply, ProgressiveSendError,
-    ProgressiveOutputContext, ProgressiveSender, TYPING_REFRESH_INTERVAL,
+    EDIT_FLUSH_INTERVAL, FILLER_INTERVAL, ProgressiveOutputContext, ProgressiveReply,
+    ProgressiveSendError, ProgressiveSender, TYPING_REFRESH_INTERVAL,
 };
 use tinychannels_bus::module_progressive::{
     ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
@@ -121,7 +121,10 @@ impl ProgressiveSender for Sender {
             channel: channel.into(),
             turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
             channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self.context.as_ref().map(|context| context.conversation.clone()),
+            conversation: self
+                .context
+                .as_ref()
+                .map(|context| context.conversation.clone()),
             message,
         })
         .await
@@ -136,7 +139,10 @@ impl ProgressiveSender for Sender {
             channel: channel.into(),
             turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
             channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self.context.as_ref().map(|context| context.conversation.clone()),
+            conversation: self
+                .context
+                .as_ref()
+                .map(|context| context.conversation.clone()),
             message_id: message_id.into(),
             text: text.into(),
         })
@@ -152,7 +158,10 @@ impl ProgressiveSender for Sender {
             channel: channel.into(),
             turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
             channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self.context.as_ref().map(|context| context.conversation.clone()),
+            conversation: self
+                .context
+                .as_ref()
+                .map(|context| context.conversation.clone()),
             message_id: message_id.into(),
         })
         .await
@@ -163,7 +172,10 @@ impl ProgressiveSender for Sender {
             channel: channel.into(),
             turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
             channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self.context.as_ref().map(|context| context.conversation.clone()),
+            conversation: self
+                .context
+                .as_ref()
+                .map(|context| context.conversation.clone()),
         })
         .await
         .map(drop)
@@ -218,9 +230,11 @@ impl Replies {
         }
         match request {
             ProgressiveCommand::Open { channel } => self.open(channel).await,
-            ProgressiveCommand::OpenOutput { channel, conversation, turn_id } => {
-                self.open_output(channel, conversation, turn_id).await
-            }
+            ProgressiveCommand::OpenOutput {
+                channel,
+                conversation,
+                turn_id,
+            } => self.open_output(channel, conversation, turn_id).await,
             ProgressiveCommand::Feed { handle, events } => {
                 let events = events.into_iter().map(compat_event).collect();
                 self.feed(handle, events, false).await
@@ -294,17 +308,25 @@ impl Replies {
         conversation: tinychannels_bus::ConversationRef,
         turn_id: String,
     ) -> Result<ProgressiveResult> {
-        if channel.id.is_empty() || conversation.id.is_empty() || turn_id.is_empty()
-            || channel.id.len() > 4096 || conversation.id.len() > 4096 || turn_id.len() > 256
+        if channel.id.is_empty()
+            || conversation.id.is_empty()
+            || turn_id.is_empty()
+            || channel.id.len() > 4096
+            || conversation.id.len() > 4096
+            || turn_id.len() > 256
         {
             return Err(Error::failed("invalid scoped progressive target"));
         }
         let route = format!("{}:{}", channel.id, conversation.id);
-        self.open_inner(route, Some(ProgressiveOutputContext {
-            turn_id,
-            channel,
-            conversation,
-        })).await
+        self.open_inner(
+            route,
+            Some(ProgressiveOutputContext {
+                turn_id,
+                channel,
+                conversation,
+            }),
+        )
+        .await
     }
 
     async fn open_inner(
@@ -324,7 +346,9 @@ impl Replies {
                 .as_deref()
                 .unwrap_or(&context.channel.id);
             if tinychannels_bus::provider_id(configured_instance) != context.channel.id {
-                return Err(Error::failed("scoped channel identity does not match its configured account"));
+                return Err(Error::failed(
+                    "scoped channel identity does not match its configured account",
+                ));
             }
             running
                 .get(configured_instance)
@@ -514,9 +538,24 @@ async fn run(
     mut inbox: mpsc::Receiver<Command>,
 ) {
     let mut reply = if let Some(context) = context {
-        ProgressiveReply::new_scoped(Arc::new(Sender { host, context: Some(context.clone()) }), channel, capabilities, context)
+        ProgressiveReply::new_scoped(
+            Arc::new(Sender {
+                host,
+                context: Some(context.clone()),
+            }),
+            channel,
+            capabilities,
+            context,
+        )
     } else {
-        ProgressiveReply::new(Arc::new(Sender { host, context: None }), channel, capabilities)
+        ProgressiveReply::new(
+            Arc::new(Sender {
+                host,
+                context: None,
+            }),
+            channel,
+            capabilities,
+        )
     };
     let mut edits = tokio::time::interval(EDIT_FLUSH_INTERVAL);
     let mut typing = tokio::time::interval(TYPING_REFRESH_INTERVAL);

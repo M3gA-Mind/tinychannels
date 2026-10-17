@@ -187,6 +187,14 @@ fn extract_message_id_handles_every_backend_shape() {
     );
     assert_eq!(extract_message_id(&json!({"id": true})), None);
     assert_eq!(extract_message_id(&json!({})), None);
+    assert_eq!(
+        extract_message_id(&json!({"platformMessageIds": ["receipt-1", "receipt-2"]})).as_deref(),
+        Some("receipt-1")
+    );
+    assert_eq!(
+        extract_message_id(&json!({"parts": [{"platformMessageId": "part-1"}]})).as_deref(),
+        Some("part-1")
+    );
 }
 
 #[test]

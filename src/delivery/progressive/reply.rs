@@ -75,7 +75,12 @@ impl ProgressiveReply {
     ) -> Result<(), super::ProgressiveSendError> {
         self.output_sequence = self.output_sequence.saturating_add(1);
         self.sender
-            .output_event(&self.channel, self.output_context.as_ref(), self.output_sequence, event)
+            .output_event(
+                &self.channel,
+                self.output_context.as_ref(),
+                self.output_sequence,
+                event,
+            )
             .await
     }
 
