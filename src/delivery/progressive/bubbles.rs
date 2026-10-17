@@ -30,12 +30,11 @@ pub(super) async fn send_typing_indicator(
             state.failures = 0;
         }
         Err(ProgressiveSendError::Unavailable) => {}
-        Err(err) => {
+        Err(_err) => {
             state.failures += 1;
             tracing::debug!(
-                "[channel-inbound][typing] indicator failed channel='{}' err={} (failures={}/{})",
+                "[channel-inbound][typing] indicator failed channel='{}' (failures={}/{})",
                 channel,
-                err,
                 state.failures,
                 MAX_TYPING_FAILURES,
             );
@@ -112,20 +111,18 @@ pub(super) async fn flush_thinking_message(
                 );
                 state.forget_thinking();
             }
-            Err(err @ ProgressiveSendError::Other(_)) => {
+            Err(ProgressiveSendError::Other(_)) => {
                 tracing::debug!(
-                    "[channel-inbound][thinking] edit failed channel='{}' msg_id={} err={}",
+                    "[channel-inbound][thinking] edit failed channel='{}' msg_id={}",
                     channel,
                     msg_id,
-                    err,
                 );
             }
-            Err(err @ ProgressiveSendError::PartialOutcome(_)) => {
+            Err(ProgressiveSendError::PartialOutcome(_)) => {
                 tracing::error!(
-                    "[channel-inbound][thinking] edit returned an uncertain outcome; retaining bubble id channel='{}' msg_id={} err={}",
+                    "[channel-inbound][thinking] edit returned an uncertain outcome; retaining bubble id channel='{}' msg_id={}",
                     channel,
                     msg_id,
-                    err
                 );
                 state.latch_thinking_edits_unsupported();
             }
@@ -148,19 +145,19 @@ pub(super) async fn flush_thinking_message(
                 state.thinking_message_id = Some(id);
             } else {
                 tracing::warn!(
-                    "[channel-inbound][thinking] thinking msg sent but response lacked id — disabling further thinking flushes (message won't be deletable) channel='{}' resp={}",
+                    "[channel-inbound][thinking] thinking msg sent but response lacked id — disabling further thinking flushes (message won't be deletable) channel='{}' receipt_parts={} response_fields={}",
                     channel,
-                    resp,
+                    extract_message_receipt(&resp).as_ref().map_or(0, |receipt| receipt.parts.len()),
+                    resp.as_object().map_or(0, serde_json::Map::len),
                 );
                 state.thinking_edit_disabled = true;
             }
         }
         Err(ProgressiveSendError::Unavailable) => {}
-        Err(err) => {
+        Err(_err) => {
             tracing::warn!(
-                "[channel-inbound][thinking] failed to send thinking msg channel='{}' err={} — disabling further thinking flushes",
+                "[channel-inbound][thinking] failed to send thinking msg channel='{}' — disabling further thinking flushes",
                 channel,
-                err,
             );
             state.thinking_edit_disabled = true;
         }
@@ -204,19 +201,19 @@ pub(super) async fn send_filler_message(
                 state.filler_message_ids.push(id);
             } else {
                 tracing::warn!(
-                    "[channel-inbound][filler] sent but response lacked id — cannot clean up on finalize channel='{}' resp={}",
+                    "[channel-inbound][filler] sent but response lacked id — cannot clean up on finalize channel='{}' receipt_parts={} response_fields={}",
                     channel,
-                    resp,
+                    extract_message_receipt(&resp).as_ref().map_or(0, |receipt| receipt.parts.len()),
+                    resp.as_object().map_or(0, serde_json::Map::len),
                 );
             }
         }
         Err(ProgressiveSendError::Unavailable) => {}
-        Err(err) => {
+        Err(_err) => {
             state.filler_failures = state.filler_failures.saturating_add(1);
             tracing::warn!(
-                "[channel-inbound][filler] send failed channel='{}' err={} (failures={}/{})",
+                "[channel-inbound][filler] send failed channel='{}' (failures={}/{})",
                 channel,
-                err,
                 state.filler_failures,
                 MAX_FILLER_FAILURES,
             );
