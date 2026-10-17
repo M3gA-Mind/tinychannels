@@ -5,6 +5,86 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+struct VoiceReadFixture;
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for VoiceReadFixture {
+    async fn store_voice(
+        &self,
+        _request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        unreachable!()
+    }
+
+    async fn read_voice(
+        &self,
+        scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        assert_eq!(scope.conversation.id, "100");
+        assert_eq!(scope.turn_id, "turn-7");
+        assert_eq!(opaque_id, "host-media-1");
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: "AQIDBA==".into(),
+            mime_type: "audio/ogg".into(),
+            file_name: Some("reply.ogg".into()),
+        })
+    }
+}
+
+#[tokio::test]
+async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({
+            "message_id": 51
+        })),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: None,
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        idempotency_key: "turn-7".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("host-media-1".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                audio_base64: None,
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(1000),
+            },
+        }],
+    };
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("51")
+    );
+    assert_eq!(
+        outcome.receipt.parts[0].kind,
+        tinychannels_bus::channel::MessageReceiptPartKind::Voice
+    );
+    let uploads = raw_bodies(&server, "sendVoice").await;
+    assert_eq!(uploads.len(), 1);
+    assert!(String::from_utf8_lossy(&uploads[0]).contains("AQIDBA"));
+}
+
 /// Hang guard for loops that must terminate on their own.
 const GUARD: Duration = Duration::from_secs(20);
 
