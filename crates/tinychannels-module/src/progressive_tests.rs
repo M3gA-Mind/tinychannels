@@ -47,7 +47,10 @@ impl Callback {
                 self.sends.lock().await.push(message.clone());
             }
             ProgressiveTransportRequest::SendTyped { text, parts, .. } => {
-                self.sends.lock().await.push(serde_json::json!({"text": text, "parts": parts}));
+                self.sends
+                    .lock()
+                    .await
+                    .push(serde_json::json!({"text": text, "parts": parts}));
             }
             _ => {}
         }
@@ -687,5 +690,43 @@ async fn canonical_final_and_cancellation_events_end_the_worker() {
             .await
             .unwrap();
     }
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_final_delivery_returns_partial_receipt_without_retrying() {
+    let (replies, callback) = fixture(false).await;
+    let handle = open(&replies).await;
+    let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+    outcome.receipt.platform_message_ids = vec!["accepted-part-1".into()];
+    outcome.error = Some(tinychannels_bus::ChannelSendError {
+        kind: tinychannels_bus::SendErrorKind::Transient,
+        message: "second part failed".into(),
+        retryable: true,
+        sent_before_error: true,
+        continuation_message_ids: vec![],
+        ..Default::default()
+    });
+    *callback.result.lock().await = Some(ProgressiveTransportResult::Outcome(outcome.clone()));
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "caption".into(),
+                parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: "caption".into(),
+                        markdown_dialect: None,
+                    },
+                }],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    assert_eq!(result, ProgressiveResult::DeliveryOutcome { outcome });
+    let sends = callback.sends.lock().await;
+    assert_eq!(sends.len(), 1, "partial sends must not be retried");
+    assert_eq!(sends[0]["text"], "caption");
     replies.shutdown().await.unwrap();
 }
