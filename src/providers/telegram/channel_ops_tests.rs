@@ -2558,7 +2558,7 @@ async fn legacy_reaction_marker_is_plain_text_not_a_telegram_operation() {
     mount_post(&server, "sendMessage", ok()).await;
     let ch = channel_for(&server, &["*"]);
 
-    ch.send(&SendMessage::new("[REACTION:🔥] hello", "100"))
+    Channel::send(&ch, &SendMessage::new("[REACTION:🔥] hello", "100"))
         .await
         .unwrap();
 
@@ -2730,7 +2730,7 @@ async fn send_bare_existing_path_uploads_it_as_attachment() {
     let file = dir.path().join("report.pdf");
     std::fs::write(&file, b"%PDF").unwrap();
 
-    ch.send(&SendMessage::new(file.to_str().unwrap(), "100"))
+    Channel::send(&ch, &SendMessage::new(file.to_str().unwrap(), "100"))
         .await
         .unwrap();
 
