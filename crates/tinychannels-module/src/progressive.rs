@@ -318,8 +318,16 @@ impl Replies {
         let provider_id = tinychannels_bus::provider_id(&channel);
         let running = self.running.lock().await;
         let capabilities = if let Some(context) = context.as_ref() {
+            let configured_instance = context
+                .channel
+                .account_id
+                .as_deref()
+                .unwrap_or(&context.channel.id);
+            if tinychannels_bus::provider_id(configured_instance) != context.channel.id {
+                return Err(Error::failed("scoped channel identity does not match its configured account"));
+            }
             running
-                .get(&context.channel.id)
+                .get(configured_instance)
                 .ok_or_else(|| Error::failed("scoped channel instance is not configured"))?
                 .channel
                 .capabilities()

@@ -126,6 +126,21 @@ pub struct TypingState {
 /// the last one returns the id as a JSON number, not a string, so
 /// `as_str()` alone misses it (#600).
 pub fn extract_message_id(resp: &serde_json::Value) -> Option<String> {
+    if let Some(id) = resp
+        .get("platformMessageIds")
+        .and_then(serde_json::Value::as_array)
+        .and_then(|ids| ids.first())
+        .and_then(receipt_id_value)
+        .or_else(|| {
+            resp.get("parts")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|parts| parts.first())
+                .and_then(|part| part.get("platformMessageId"))
+                .and_then(receipt_id_value)
+        })
+    {
+        return Some(id);
+    }
     let candidate = resp
         .get("id")
         .or_else(|| resp.get("messageId"))
@@ -141,6 +156,15 @@ pub fn extract_message_id(resp: &serde_json::Value) -> Option<String> {
         return Some(n.to_string());
     }
     None
+}
+
+fn receipt_id_value(value: &serde_json::Value) -> Option<String> {
+    value.as_str().map(str::to_owned).or_else(|| {
+        value
+            .as_u64()
+            .map(|number| number.to_string())
+            .or_else(|| value.as_i64().map(|number| number.to_string()))
+    })
 }
 
 /// Pull the most recent `MAX_FILLER_CHARS` Unicode scalars out of the
