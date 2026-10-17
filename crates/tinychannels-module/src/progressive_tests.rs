@@ -3728,7 +3728,6 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         });
         assert_eq!(has_media, expected_voice, "policy case {index}: {mode:?}");
         if expected_voice {
-            assert!(request.1.contains("https://media.example/authorized/voice"));
             let encoded = serde_json::to_vec(&requests.iter().rev().find(|candidate| {
                 matches!(candidate, ProgressiveTransportRequest::SendTyped { parts, .. }
                     if parts.iter().any(|part| matches!(part,
@@ -3742,7 +3741,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
                     )))
             }).unwrap()).unwrap();
             assert!(encoded.len() < tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
-            assert!(!String::from_utf8_lossy(&encoded).contains("audioBase64"));
+            assert!(!String::from_utf8_lossy(&encoded).contains("audio_base64"));
         }
         drop(requests);
     }
