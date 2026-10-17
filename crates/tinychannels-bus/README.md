@@ -105,8 +105,8 @@ belong to their dependent epic leaves.
 `src/fixtures/web/` contains hand-authored historical compatibility fixtures,
 not captured runtime transcripts. Their shapes were derived from the deployed
 host at OpenHuman base `ba83482245`, including constructors in
-`crates/openhuman-core/src/channels/web_chat/presentation.rs`,
-`crates/openhuman-core/src/channels/web_chat/ops.rs`,
+`crates/openhuman-core/src/web_chat/presentation.rs`,
+`crates/openhuman-core/src/web_chat/ops/`,
 `crates/openhuman-core/src/channels/proactive.rs`,
 `crates/openhuman-core/src/flows/ops/streaming.rs`,
 `crates/openhuman-core/src/cron/scheduler/`,
