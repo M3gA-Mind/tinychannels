@@ -35,5 +35,5 @@ fn markdown_v2_preserves_escapes_in_code_and_is_linear_on_unmatched_controls() {
     assert_eq!(markdown_v2_text(r"`a\\b`"), r"`a\\b`");
     assert_eq!(markdown_v2_text(r"`a\`b`"), r"`a\`b`");
     let malformed = format!("{}{}", "\\".repeat(32_000), "[".repeat(32_000));
-    assert_eq!(markdown_v2_text(&malformed).len(), malformed.len() * 2);
+    assert_eq!(markdown_v2_text(&malformed).len(), malformed.len() + 32_000);
 }
