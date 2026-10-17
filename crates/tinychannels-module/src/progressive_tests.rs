@@ -289,11 +289,21 @@ async fn open_scoped(
     turn_id: &str,
     capabilities: tinychannels_bus::ChannelCapabilities,
 ) -> String {
+    open_scoped_provider(replies, "discord", account, turn_id, capabilities).await
+}
+
+async fn open_scoped_provider(
+    replies: &Replies,
+    provider: &'static str,
+    account: &str,
+    turn_id: &str,
+    capabilities: tinychannels_bus::ChannelCapabilities,
+) -> String {
     replies.running.lock().await.insert(
         account.to_owned(),
         Running::start(
             Arc::new(ConfiguredChannelWithCapabilities {
-                name: "discord",
+                name: provider,
                 capabilities,
             }),
             Arc::new(crate::provider::Hooks::default()),
@@ -303,7 +313,7 @@ async fn open_scoped(
     let ProgressiveResult::Opened { handle } = replies
         .execute(ProgressiveCommand::OpenOutput {
             channel: tinychannels_bus::ChannelRef {
-                id: "discord".into(),
+                id: provider.into(),
                 account_id: Some(account.to_owned()),
             },
             conversation: tinychannels_bus::ConversationRef {
@@ -3627,6 +3637,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
     let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
     capabilities.voice_out.supported = true;
     capabilities.voice_out.synthesis = true;
+    capabilities.progressive_edits = true;
     capabilities.voice_out.accepted_codecs = vec!["ogg_opus".into()];
     capabilities.voice_out.max_size_bytes = Some(8 * 1024 * 1024);
     capabilities.voice_out.max_duration_ms = Some(2_000);
@@ -3720,6 +3731,76 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             assert!(request.1.contains("https://media.example/authorized/voice"));
         }
         drop(requests);
+    }
+
+    // Exercise the real progressive worker sequence that previously bypassed
+    // final voice policy: a text delta creates/updates a draft, then the
+    // canonical final event has no explicit typed parts. Each mode gets a
+    // distinct turn so delivery idempotency keys cannot alias.
+    for (turn_id, mode, inbound) in [
+        ("draft-mirror", tinychannels_bus::HostVoiceReplyMode::Mirror, true),
+        ("draft-always", tinychannels_bus::HostVoiceReplyMode::Always, false),
+    ] {
+        *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+            mode,
+            inbound_has_voice: inbound,
+            explicitly_requested: false,
+        });
+        let replies = Replies::new(host.clone(), Arc::new(Mutex::new(HashMap::new())));
+        let handle = open_scoped_provider(
+            &replies,
+            "telegram",
+            "telegram:bot-1",
+            turn_id,
+            capabilities.clone(),
+        )
+        .await;
+        let draft = replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle: handle.clone(),
+                events: vec![ChannelOutputEvent::TextDelta {
+                    text: "spoken ".into(),
+                    iteration: None,
+                }],
+            })
+            .await
+            .expect("text delta reaches progressive worker");
+        assert!(matches!(draft, ProgressiveResult::Updated));
+        let before = callback.requests.lock().await.len();
+        let final_result = replies
+            .execute(ProgressiveCommand::FeedOutput {
+                handle,
+                events: vec![ChannelOutputEvent::FinalMessage {
+                    text: "spoken words".into(),
+                    parts: vec![],
+                    receipt: None,
+                }],
+            })
+            .await
+            .expect("final message completes progressive turn");
+        assert!(matches!(final_result, ProgressiveResult::DeliveryOutcome { .. }));
+        let requests = callback.requests.lock().await;
+        let terminal = &requests[before..];
+        let voice_sends = terminal
+            .iter()
+            .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { parts, .. }
+                if parts.iter().any(|part| matches!(part,
+                    tinychannels_bus::OutboundContentPart::Voice {
+                        voice: tinychannels_bus::OutboundVoice::Media { media, .. }
+                    } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                ))
+            ))
+            .count();
+        assert_eq!(voice_sends, 1, "{mode:?} final must send one native voice part");
+        assert!(terminal.iter().any(|request| matches!(request,
+            ProgressiveTransportRequest::OutputEvent { event, .. }
+                if matches!(event, tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta { .. })
+        )), "the worker must first create/update the progressive text draft");
+        assert!(terminal.iter().any(|request| matches!(request,
+            ProgressiveTransportRequest::Delete { .. }
+        )), "the existing progressive draft must be cleaned up after final voice delivery");
+        drop(requests);
+        replies.shutdown().await.expect("close scoped worker");
     }
 
     *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
