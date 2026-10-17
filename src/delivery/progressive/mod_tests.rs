@@ -660,13 +660,12 @@ async fn draft_uncertain_edit_retains_authority_and_never_posts_a_replacement() 
 
 #[tokio::test]
 async fn thinking_partial_edit_keeps_bubble_for_cleanup_and_stops_editing() {
-    use super::bubbles::flush_thinking_message;
-
-    let sender = FakeSender::default();
-    let mut state = StreamingState {
+    let (sender, mut reply) = turn("telegram:thinking-partial");
+    reply.state = StreamingState {
         thinking_accumulator: "current thought".into(),
         thinking_message_id: Some("thinking-1".into()),
         thinking_message_ids: vec!["thinking-1".into(), "thinking-2".into()],
+        thinking_dirty: true,
         ..Default::default()
     };
     FakeSender::script(&sender.edits, Outcome::Err(|| {
@@ -675,12 +674,13 @@ async fn thinking_partial_edit_keeps_bubble_for_cleanup_and_stops_editing() {
         ))
     }));
 
-    flush_thinking_message(&sender, "telegram:thinking", &mut state, false).await;
-    flush_thinking_message(&sender, "telegram:thinking", &mut state, false).await;
+    reply.edit_tick().await;
+    reply.state.thinking_dirty = true;
+    reply.edit_tick().await;
 
-    assert!(state.thinking_edit_disabled);
-    assert_eq!(state.thinking_message_id.as_deref(), Some("thinking-1"));
-    assert_eq!(state.thinking_message_ids, ["thinking-1", "thinking-2"]);
+    assert!(reply.state.thinking_edit_disabled);
+    assert_eq!(reply.state.thinking_message_id.as_deref(), Some("thinking-1"));
+    assert_eq!(reply.state.thinking_message_ids, ["thinking-1", "thinking-2"]);
     assert_eq!(sender.calls().len(), 1);
 }
 
