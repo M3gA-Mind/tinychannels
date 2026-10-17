@@ -1,8 +1,7 @@
 //! Adapter traits for direct providers, relay connectors, and host bridges.
 
 use crate::channel::{
-    ChannelDescriptor, ChannelInboundEnvelope, ChannelOutboundIntent, ChannelSendError,
-    MessageReceipt,
+    ChannelDescriptor, ChannelOutboundIntent, ChannelSendError, MessageReceipt,
 };
 use crate::controllers::ChannelAccountSnapshot;
 use async_trait::async_trait;
@@ -13,7 +12,10 @@ pub use tinychannels_bus::channel::adapter::*;
 /// Sink used by adapters to deliver normalized inbound envelopes.
 #[async_trait]
 pub trait ChannelInboundSink: Send + Sync {
-    async fn push(&self, envelope: ChannelInboundEnvelope) -> Result<(), ChannelSendError>;
+    /// Publish an ordered ingress item. Messages and lifecycle events share
+    /// this one seam so providers cannot reorder events through side queues.
+    async fn push(&self, ingress: tinychannels_bus::ChannelIngress)
+    -> Result<(), ChannelSendError>;
 }
 
 /// Base channel adapter contract.
