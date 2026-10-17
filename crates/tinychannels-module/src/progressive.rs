@@ -1240,61 +1240,70 @@ async fn run(
         tokio::select! {
             command = inbox.recv() => match command {
                 Some(Command::Feed(events, forward, fingerprint, response)) => {
-                    let cancellation = events
-                        .iter()
-                        .any(|event| matches!(event, ChannelOutputEvent::Cancellation { .. }));
-                    let final_message = events.iter().find_map(|event| {
-                        matches!(event, ChannelOutputEvent::FinalMessage { .. })
-                            .then(|| event.clone())
-                    });
-                    let mut result = apply(&mut reply, events, forward).await;
-                    let failed = result.is_err();
-                    if failed {
-                        reply.abort().await;
-                        record_terminal(&terminal_feed, fingerprint, &result).await;
-                        let _ = response.send(result);
-                        break;
-                    }
-                    if cancellation {
-                        reply.abort().await;
-                        if matches!(result, Ok(ProgressiveResult::Updated)) {
-                            result = Ok(ProgressiveResult::Closed);
-                        }
-                        record_terminal(&terminal_feed, fingerprint, &result).await;
-                        let _ = response.send(result);
-                        break;
-                    }
-                    if delivery_has_failure(&result) {
-                        reply.abort().await;
-                        record_terminal(&terminal_feed, fingerprint, &result).await;
-                        let _ = response.send(result);
-                        break;
-                    }
-                    if let Some(ref final_event @ ChannelOutputEvent::FinalMessage { ref text, .. }) = final_message {
-                        let mut dispatch = match &result {
-                            Ok(result) => ProgressiveOutputDispatch::from_result(result),
-                            Err(_) => ProgressiveOutputDispatch::default(),
-                        };
-                        if forward {
-                            match reply.finalize_output_event(final_event).await {
-                                Ok(final_dispatch) => {
-                                    dispatch.absorb(final_dispatch);
-                                }
-                                Err(error) => {
-                                    reply.abort().await;
-                                    absorb_progressive_error(&mut dispatch, error);
-                                }
+                    let processing = async {
+                        let cancellation = events
+                            .iter()
+                            .any(|event| matches!(event, ChannelOutputEvent::Cancellation { .. }));
+                        let final_message = events.iter().find_map(|event| {
+                            matches!(event, ChannelOutputEvent::FinalMessage { .. })
+                                .then(|| event.clone())
+                        });
+                        let mut result = apply(&mut reply, events, forward).await;
+                        let mut terminal = false;
+                        if result.is_err() {
+                            reply.abort().await;
+                            terminal = true;
+                        } else if cancellation {
+                            reply.abort().await;
+                            if matches!(result, Ok(ProgressiveResult::Updated)) {
+                                result = Ok(ProgressiveResult::Closed);
                             }
-                            result = Ok(dispatch.into_result());
-                        } else {
-                            reply.finalize(text).await;
-                            result = Ok(ProgressiveResult::Closed);
+                            terminal = true;
+                        } else if delivery_has_failure(&result) {
+                            reply.abort().await;
+                            terminal = true;
+                        } else if let Some(
+                            ref final_event @ ChannelOutputEvent::FinalMessage { ref text, .. },
+                        ) = final_message
+                        {
+                            let mut dispatch = match &result {
+                                Ok(result) => ProgressiveOutputDispatch::from_result(result),
+                                Err(_) => ProgressiveOutputDispatch::default(),
+                            };
+                            if forward {
+                                match reply.finalize_output_event(final_event).await {
+                                    Ok(final_dispatch) => dispatch.absorb(final_dispatch),
+                                    Err(error) => {
+                                        reply.abort().await;
+                                        absorb_progressive_error(&mut dispatch, error);
+                                    }
+                                }
+                                result = Ok(dispatch.into_result());
+                            } else {
+                                reply.finalize(text).await;
+                                result = Ok(ProgressiveResult::Closed);
+                            }
+                            terminal = true;
                         }
-                        record_terminal(&terminal_feed, fingerprint, &result).await;
-                        let _ = response.send(result);
-                        break;
+                        (result, terminal)
+                    };
+                    tokio::select! {
+                        (result, terminal) = processing => {
+                            if terminal {
+                                record_terminal(&terminal_feed, fingerprint, &result).await;
+                                let _ = response.send(result);
+                                break;
+                            }
+                            let _ = response.send(result);
+                        }
+                        _ = &mut expiry => {
+                            reply.abort().await;
+                            let result = Err(Error::failed("progressive reply lease expired"));
+                            record_terminal(&terminal_feed, fingerprint, &result).await;
+                            let _ = response.send(result);
+                            break;
+                        }
                     }
-                    let _ = response.send(result);
                 }
                 Some(Command::Finish(text, response)) => {
                     reply.finalize(&text).await;
