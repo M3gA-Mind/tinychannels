@@ -69,13 +69,12 @@ pub(super) async fn flush_streaming_edit(
                 );
                 state.forget_draft();
             }
-            Err(err @ ProgressiveSendError::Other(_)) => {
+            Err(ProgressiveSendError::Other(_)) => {
                 state.edit_failures += 1;
                 tracing::warn!(
-                    "[channel-inbound][stream] edit failed channel='{}' msg_id={} err={} (failures={}/{})",
+                    "[channel-inbound][stream] edit failed channel='{}' msg_id={} (failures={}/{})",
                     channel,
                     message_id,
-                    err,
                     state.edit_failures,
                     MAX_EDIT_FAILURES,
                 );
@@ -87,12 +86,11 @@ pub(super) async fn flush_streaming_edit(
                     state.edit_disabled = true;
                 }
             }
-            Err(err @ ProgressiveSendError::PartialOutcome(_)) => {
+            Err(ProgressiveSendError::PartialOutcome(_)) => {
                 tracing::error!(
-                    "[channel-inbound][stream] edit returned an uncertain outcome; retaining draft id and disabling edits channel='{}' msg_id={} err={}",
+                    "[channel-inbound][stream] edit returned an uncertain outcome; retaining draft id and disabling edits channel='{}' msg_id={}",
                     channel,
                     message_id,
-                    err
                 );
                 state.latch_draft_edits_unsupported();
             }
@@ -164,14 +162,13 @@ pub(super) async fn flush_streaming_edit(
             state.message_ids = ids;
             state.message_receipt = Some(receipt);
         }
-        Err(err) => {
+        Err(_err) => {
             state.draft_sent = true;
             state.delivery_uncertain = true;
             state.edit_disabled = true;
             tracing::warn!(
-                "[channel-inbound][stream] initial send outcome is uncertain channel='{}' err={}",
+                "[channel-inbound][stream] initial send outcome is uncertain channel='{}'",
                 channel,
-                err,
             );
         }
     }

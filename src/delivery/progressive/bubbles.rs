@@ -2,7 +2,10 @@
 //! bubble and rotating "still working" fillers.
 
 use super::latch::{channel_edits_unsupported, mark_channel_edits_unsupported};
-use super::state::{StreamingState, TypingState, extract_message_id, latest_thinking_snippet};
+use super::state::{
+    StreamingState, TypingState, extract_message_id, extract_message_receipt,
+    latest_thinking_snippet,
+};
 use super::{
     MAX_FILLER_FAILURES, MAX_THINKING_DISPLAY_CHARS, MAX_TYPING_FAILURES, ProgressiveSendError,
     ProgressiveSender, STATIC_FILLERS,
@@ -147,7 +150,9 @@ pub(super) async fn flush_thinking_message(
                 tracing::warn!(
                     "[channel-inbound][thinking] thinking msg sent but response lacked id — disabling further thinking flushes (message won't be deletable) channel='{}' receipt_parts={} response_fields={}",
                     channel,
-                    extract_message_receipt(&resp).as_ref().map_or(0, |receipt| receipt.parts.len()),
+                    extract_message_receipt(&resp)
+                        .as_ref()
+                        .map_or(0, |receipt| receipt.parts.len()),
                     resp.as_object().map_or(0, serde_json::Map::len),
                 );
                 state.thinking_edit_disabled = true;
@@ -203,7 +208,9 @@ pub(super) async fn send_filler_message(
                 tracing::warn!(
                     "[channel-inbound][filler] sent but response lacked id — cannot clean up on finalize channel='{}' receipt_parts={} response_fields={}",
                     channel,
-                    extract_message_receipt(&resp).as_ref().map_or(0, |receipt| receipt.parts.len()),
+                    extract_message_receipt(&resp)
+                        .as_ref()
+                        .map_or(0, |receipt| receipt.parts.len()),
                     resp.as_object().map_or(0, serde_json::Map::len),
                 );
             }

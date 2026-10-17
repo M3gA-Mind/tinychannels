@@ -65,12 +65,11 @@ pub(super) async fn delete_channel_message_with_receipt(
                 message_id,
             );
         }
-        Err(err) => {
+        Err(_err) => {
             tracing::warn!(
-                "[channel-inbound] failed to delete ephemeral msg channel='{}' msg_id={} err={}",
+                "[channel-inbound] failed to delete ephemeral msg channel='{}' msg_id={}",
                 channel,
                 message_id,
-                err,
             );
         }
     }
@@ -151,21 +150,19 @@ pub(super) async fn finalize_channel_reply(
                     }
                     replace_draft(sender, channel, &message_id, final_text).await;
                 }
-                Err(err @ ProgressiveSendError::Other(_)) => {
+                Err(ProgressiveSendError::Other(_)) => {
                     tracing::warn!(
-                        "[channel-inbound] final edit failed channel='{}' msg_id={} err={} — deleting orphan draft and sending fresh atomic reply so user still sees the canonical response",
+                        "[channel-inbound] final edit failed channel='{}' msg_id={} — deleting orphan draft and sending fresh atomic reply so user still sees the canonical response",
                         channel,
                         message_id,
-                        err,
                     );
                     replace_draft(sender, channel, &message_id, final_text).await;
                 }
-                Err(err @ ProgressiveSendError::PartialOutcome(_)) => {
+                Err(ProgressiveSendError::PartialOutcome(_)) => {
                     tracing::error!(
-                        "[channel-inbound] final edit returned a partial or uncertain receipt; skipping replacement to avoid duplicate delivery channel='{}' msg_id={} err={}",
+                        "[channel-inbound] final edit returned a partial or uncertain receipt; skipping replacement to avoid duplicate delivery channel='{}' msg_id={}",
                         channel,
-                        message_id,
-                        err
+                        message_id
                     );
                 }
                 Err(ProgressiveSendError::UnsupportedContent) => {
