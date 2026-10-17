@@ -921,6 +921,18 @@ async fn no_edit_channel_sends_final_text_in_configured_segments() {
     replies.shutdown().await.unwrap();
 }
 
+#[test]
+fn text_segments_obey_unicode_units_without_losing_scalars() {
+    let source = "a😀éz";
+    let utf8 = split_text_by_limit(source, 4, tinychannels_bus::LengthUnit::Utf8Bytes).unwrap();
+    assert_eq!(utf8.concat(), source);
+    assert!(utf8.iter().all(|segment| segment.len() <= 4));
+    let utf16 = split_text_by_limit(source, 2, tinychannels_bus::LengthUnit::Utf16Units).unwrap();
+    assert_eq!(utf16.concat(), source);
+    assert!(utf16.iter().all(|segment| segment.encode_utf16().count() <= 2));
+    assert!(split_text_by_limit("😀", 1, tinychannels_bus::LengthUnit::Utf8Bytes).is_err());
+}
+
 #[tokio::test(start_paused = true)]
 async fn configured_progressive_channel_posts_and_edits_one_draft() {
     let (base, callback) = fixture(false).await;

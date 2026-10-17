@@ -23,6 +23,7 @@ pub struct ProgressiveReply {
     typing: TypingState,
     output_context: Option<ProgressiveOutputContext>,
     output_sequence: u64,
+    use_global_edit_latch: bool,
 }
 
 impl ProgressiveReply {
@@ -48,6 +49,7 @@ impl ProgressiveReply {
             typing: TypingState::default(),
             output_context: None,
             output_sequence: 0,
+            use_global_edit_latch: true,
         }
     }
 
@@ -60,6 +62,7 @@ impl ProgressiveReply {
     ) -> Self {
         let mut reply = Self::new(sender, channel, capabilities);
         reply.output_context = Some(context);
+        reply.use_global_edit_latch = false;
         reply
     }
 
@@ -121,10 +124,10 @@ impl ProgressiveReply {
         }
         let sender = Arc::clone(&self.sender);
         if self.state.thinking_dirty && !self.state.thinking_edit_disabled {
-            flush_thinking_message(sender.as_ref(), &self.channel, &mut self.state).await;
+            flush_thinking_message(sender.as_ref(), &self.channel, &mut self.state, self.use_global_edit_latch).await;
         }
         if self.state.dirty && !self.state.edit_disabled {
-            flush_streaming_edit(sender.as_ref(), &self.channel, &mut self.state).await;
+            flush_streaming_edit(sender.as_ref(), &self.channel, &mut self.state, self.use_global_edit_latch).await;
         }
     }
 
@@ -146,7 +149,7 @@ impl ProgressiveReply {
     /// Deliver the canonical reply and remove every ephemeral bubble.
     pub async fn finalize(&mut self, final_text: &str) {
         let sender = Arc::clone(&self.sender);
-        finalize_channel_reply(sender.as_ref(), &self.channel, &mut self.state, final_text).await;
+        finalize_channel_reply(sender.as_ref(), &self.channel, &mut self.state, final_text, self.use_global_edit_latch).await;
     }
 
     /// Close local drafts without sending another message after an ambiguous
