@@ -159,12 +159,18 @@ impl IngressVoiceCallback {
     }
 }
 
-async fn ingress_fixture() -> (HostChannels, IngressVoiceCallback, tinybus::Connection) {
+async fn ingress_fixture() -> (
+    HostChannels,
+    IngressVoiceCallback,
+    tinybus::Connection,
+    crate::storage_fixture::StorageHost,
+) {
     let bus = MemoryBus::new();
     Broker::new().spawn(bus.clone());
     let server = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
+    let storage = crate::storage_fixture::StorageHost::serve(&server, "scope-a").await;
     let callback = IngressVoiceCallback::default();
     server
         .serve_at(
@@ -180,7 +186,7 @@ async fn ingress_fixture() -> (HostChannels, IngressVoiceCallback, tinybus::Conn
     let client = tinybus::Connection::connect(bus.connect().await.unwrap())
         .await
         .unwrap();
-    (HostChannels::new(client), callback, server)
+    (HostChannels::new(client), callback, server, storage)
 }
 
 fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> ChannelInboundEnvelope {
@@ -219,7 +225,7 @@ fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> Chann
 
 #[tokio::test]
 async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
-    let (host, callback, _server) = ingress_fixture().await;
+    let (host, callback, _server, _storage) = ingress_fixture().await;
     let events = ModuleEvents(host.clone(), "telegram:bot-a".into());
     assert!(
         events
@@ -276,7 +282,7 @@ async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
 
 #[tokio::test]
 async fn completed_provider_transcript_skips_media_read_and_host_stt() {
-    let (host, callback, _server) = ingress_fixture().await;
+    let (host, callback, _server, _storage) = ingress_fixture().await;
     let events = ModuleEvents(host.clone(), "telegram:bot-a".into());
     let provider_transcript = tinychannels_bus::VoiceTranscript {
         text: "provider words".into(),
@@ -1224,7 +1230,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     );
     let instance = "telegram:account-a".to_owned();
     let hooks = Arc::new(Hooks::default());
-    let (host, _callbacks, _server_connection) = ingress_fixture().await;
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone());
     let running = Running::start_outbound(channel, hooks, host);
     let handle = running.adapter_handle();
@@ -1264,5 +1270,126 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         .await
         .unwrap();
     assert!(fixture.observations().is_empty());
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_running_telegram_adapter_uploads_media_from_host_storage() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendPhoto"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": { "message_id": 908 }
+        })))
+        .mount(&server)
+        .await;
+    let (host, _callbacks, _bus_server, _storage) = ingress_fixture().await;
+    let instance = "telegram:media-account".to_owned();
+    let hooks = Arc::new(Hooks::default());
+    let provider_host = hooks.host(host.clone(), instance.clone());
+    let repository = provider_host.media_repository().unwrap();
+    let conversation = ConversationRef {
+        kind: ConversationKind::Group,
+        id: "-10099".into(),
+        thread_id: Some("31".into()),
+        topic_id: Some("topic-31".into()),
+        ..Default::default()
+    };
+    let scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: instance.clone(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some(instance.clone()),
+        },
+        conversation: conversation.clone(),
+        turn_id: "turn-908".into(),
+    };
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
+        .unwrap();
+    let media = repository
+        .store_media(tinychannels::host::MediaStoreRequest {
+            metadata: tinychannels::host::MediaMetadata {
+                scope,
+                kind: tinychannels_bus::MediaKind::Image,
+                content_type: "image/png".into(),
+                file_name: Some("host-owned.png".into()),
+                duration_ms: None,
+                codec: None,
+                voice_direction: None,
+                dedupe_key: None,
+                max_bytes: 20 * 1024 * 1024,
+            },
+            bytes: bytes.clone(),
+        })
+        .await
+        .unwrap();
+    let channel = Arc::new(
+        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
+            .with_api_base_for_test(server.uri())
+            .with_media_repository(repository.clone()),
+    );
+    let running = Running::start_outbound(channel, hooks, host);
+    let adapter = running.adapter_handle();
+    let result = adapter
+        .send(tinychannels_bus::ChannelOutboundIntent {
+            idempotency_key: "media-upload-908".into(),
+            channel_id: "telegram".into(),
+            conversation_id: conversation.id.clone(),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some(instance.clone()),
+            }),
+            conversation_ref: Some(conversation.clone()),
+            reply_to_id: Some("19".into()),
+            thread_id: Some("31".into()),
+            turn_id: Some("turn-908".into()),
+            payload: tinychannels_bus::OutboundPayload::Parts {
+                parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Image {
+                        media: media.clone(),
+                        caption: Some("module path".into()),
+                        alt_text: None,
+                    },
+                }],
+            },
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.receipt.platform_message_ids, ["908"]);
+    assert!(result.error.is_none());
+    let stored = repository
+        .read_media(
+            tinychannels_bus::HostVoiceScope {
+                configured_instance: instance,
+                channel: tinychannels_bus::ChannelRef {
+                    id: "telegram".into(),
+                    account_id: Some("telegram:media-account".into()),
+                },
+                conversation,
+                turn_id: "turn-908".into(),
+            },
+            media.opaque_id.unwrap(),
+            20 * 1024 * 1024,
+        )
+        .await
+        .unwrap();
+    assert_eq!(stored.bytes, bytes);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let body = String::from_utf8_lossy(&requests[0].body);
+    assert!(body.contains("name=\"chat_id\"\r\n\r\n-10099"));
+    assert!(body.contains("name=\"message_thread_id\"\r\n\r\n31"));
+    assert!(body.contains("name=\"reply_parameters\"\r\n\r\n{\"message_id\":19}"));
+    assert!(body.contains("host-owned.png"));
+    assert!(requests[0]
+        .body
+        .windows(bytes.len())
+        .any(|window| window == bytes));
     running.stop().await.unwrap();
 }
