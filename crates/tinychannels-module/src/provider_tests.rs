@@ -410,7 +410,7 @@ struct RunningTelegramConformance {
     callbacks: IngressVoiceCallback,
     observed: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
     request_cursor: std::sync::Mutex<usize>,
-    response_ids: Arc<Mutex<Vec<(String, String)>>>,
+    response_ids: Arc<std::sync::Mutex<Vec<(String, String)>>>,
 }
 
 #[async_trait::async_trait]
@@ -479,7 +479,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             Feature::VoiceOut => tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Media { media: media(), audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: Some(1000) } },
             Feature::VoiceSynthesis => tinychannels_bus::OutboundPayload::Voice { voice: tinychannels_bus::OutboundVoice::Synthesize { text: "speak this".into(), voice: None } },
             Feature::ReadReceipts => return Err(tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Unsupported,
+                kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
                 message: "Telegram Bot API has no read-receipt operation".into(),
                 unsupported: true,
                 ..Default::default()
@@ -488,7 +488,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                 data: serde_json::json!({"kind":"opaque-provider-data"}),
             },
             _ => return Err(tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Unsupported,
+                kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
                 message: format!("{feature:?} fixture operation has not been invoked"),
                 unsupported: true,
                 ..Default::default()
@@ -1771,7 +1771,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let server = MockServer::start().await;
-    let response_ids = Arc::new(Mutex::new(Vec::new()));
+    let response_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
     let response_ids_for_mock = response_ids.clone();
     let next_id = Arc::new(AtomicUsize::new(320));
     let next_id_for_mock = next_id.clone();
