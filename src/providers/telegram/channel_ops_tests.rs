@@ -1131,61 +1131,75 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
 
     let mut no_conversation = scoped_typed_media_message("stored-photo-1");
     no_conversation.conversation_ref.as_mut().unwrap().id = "  ".into();
-    assert!(channel
-        .send_typed_with_receipt(&no_conversation)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("conversation identity"));
+    assert!(
+        channel
+            .send_typed_with_receipt(&no_conversation)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("conversation identity")
+    );
 
     let mut no_account = scoped_typed_media_message("stored-photo-1");
     no_account.channel_ref.as_mut().unwrap().account_id = None;
-    assert!(channel
-        .send_typed_with_receipt(&no_account)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("configured account"));
+    assert!(
+        channel
+            .send_typed_with_receipt(&no_account)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("configured account")
+    );
 
     let mut no_turn = scoped_typed_media_message("stored-photo-1");
     no_turn.turn_id = None;
-    assert!(channel
-        .send_typed_with_receipt(&no_turn)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("originating turn"));
+    assert!(
+        channel
+            .send_typed_with_receipt(&no_turn)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("originating turn")
+    );
 
     let mut no_reply = scoped_typed_media_message("stored-photo-1");
     no_reply.reply_to_id = Some("not-a-platform-id".into());
-    assert!(channel
-        .send_typed_with_receipt(&no_reply)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("reply_to_id"));
+    assert!(
+        channel
+            .send_typed_with_receipt(&no_reply)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("reply_to_id")
+    );
 
     let mut unsupported = scoped_typed_media_message("stored-photo-1");
-    unsupported.parts = vec![tinychannels_bus::OutboundContentPart::Voice {
-        voice: tinychannels_bus::OutboundVoice::Synthesize {
-            text: "not prepared".into(),
-            voice: None,
-        },
-    }];
-    assert!(channel
-        .send_typed_with_receipt(&unsupported)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("does not support this content combination"));
+    unsupported
+        .parts
+        .push(tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Synthesize {
+                text: "not prepared".into(),
+                voice: None,
+            },
+        });
+    assert!(
+        channel
+            .send_typed_with_receipt(&unsupported)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("does not support this content combination")
+    );
 
     let zero_dimensions = scoped_typed_media_message("zero-dimension-photo");
-    assert!(channel
-        .send_typed_with_receipt(&zero_dimensions)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("dimensions exceed provider limits"));
+    assert!(
+        channel
+            .send_typed_with_receipt(&zero_dimensions)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("dimensions exceed provider limits")
+    );
 
     let mut sticker = scoped_typed_media_message("stored-photo-1");
     sticker.parts = vec![tinychannels_bus::OutboundContentPart::Content {
@@ -1201,12 +1215,14 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             alt_text: None,
         },
     }];
-    assert!(channel
-        .send_typed_with_receipt(&sticker)
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("sticker upload is not enabled"));
+    assert!(
+        channel
+            .send_typed_with_receipt(&sticker)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("sticker upload is not enabled")
+    );
 
     assert!(server.received_requests().await.unwrap().is_empty());
 }
