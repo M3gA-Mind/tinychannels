@@ -1178,6 +1178,17 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         )
         .await
         .unwrap();
+    runtime_proxy
+        .call_confidential::<()>(
+            "StartChannelConfigured",
+            (
+                "telegram:foreign",
+                config.clone(),
+                tinychannels_bus::HttpProxyPolicy::default(),
+            ),
+        )
+        .await
+        .unwrap();
     other_runtime_proxy
         .call_confidential::<()>(
             "StartChannelConfigured",
@@ -1315,6 +1326,19 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .call_confidential::<tinychannels_bus::MediaReadInfo>("BeginMediaRead", foreign_account)
         .await
         .is_err());
+    let configured_foreign_account = runtime_proxy
+        .call_confidential::<tinychannels_bus::MediaReadInfo>(
+            "BeginMediaRead",
+            MediaReadBegin {
+                instance: "telegram:foreign".into(),
+                scope: scope.clone(),
+                media: reference.clone(),
+                max_bytes: 1024,
+            },
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(configured_foreign_account.wire_name(), tinybus::Error::FAILED);
     let mut unknown_media = read_request.clone();
     unknown_media.media.opaque_id = Some("tinychannels_media_v1_unknown".into());
     assert!(runtime_proxy
@@ -1388,6 +1412,7 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     // path below uses the independently returned opaque image reference.
     let mut pdf = vec![b'x'; MEDIA_UPLOAD_CHUNK_BYTES + 17];
     pdf[..5].copy_from_slice(b"%PDF-");
+    let pdf_expected = pdf.clone();
     let pdf_begin = MediaUploadBegin {
         instance: "telegram".into(),
         scope: scope.clone(),
@@ -1434,6 +1459,67 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         pdf_reference.size_bytes,
         Some((MEDIA_UPLOAD_CHUNK_BYTES + 17) as u64)
     );
+    let pdf_read: tinychannels_bus::MediaReadInfo = runtime_proxy
+        .call_confidential(
+            "BeginMediaRead",
+            MediaReadBegin {
+                instance: "telegram".into(),
+                scope: scope.clone(),
+                media: pdf_reference,
+                max_bytes: MEDIA_UPLOAD_CHUNK_BYTES as u64 + 17,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(pdf_read.chunk_count, 2);
+    let first_pdf_chunk_request = MediaReadChunk {
+        handle: pdf_read.handle.clone(),
+        sequence: 0,
+    };
+    let first_pdf_chunk: tinychannels_bus::MediaReadChunkResult = runtime_proxy
+        .call_confidential("ReadMediaChunk", first_pdf_chunk_request.clone())
+        .await
+        .unwrap();
+    assert_eq!(first_pdf_chunk.bytes, pdf_expected[..MEDIA_UPLOAD_CHUNK_BYTES]);
+    assert!(!first_pdf_chunk.done);
+    assert_eq!(
+        runtime_proxy
+            .call_confidential::<tinychannels_bus::MediaReadChunkResult>(
+                "ReadMediaChunk",
+                first_pdf_chunk_request,
+            )
+            .await
+            .unwrap(),
+        first_pdf_chunk
+    );
+    let last_pdf_chunk_request = MediaReadChunk {
+        handle: pdf_read.handle.clone(),
+        sequence: 1,
+    };
+    let last_pdf_chunk: tinychannels_bus::MediaReadChunkResult = runtime_proxy
+        .call_confidential("ReadMediaChunk", last_pdf_chunk_request.clone())
+        .await
+        .unwrap();
+    assert_eq!(last_pdf_chunk.bytes, pdf_expected[MEDIA_UPLOAD_CHUNK_BYTES..]);
+    assert!(last_pdf_chunk.done);
+    assert_eq!(
+        runtime_proxy
+            .call_confidential::<tinychannels_bus::MediaReadChunkResult>(
+                "ReadMediaChunk",
+                last_pdf_chunk_request,
+            )
+            .await
+            .unwrap(),
+        last_pdf_chunk,
+        "the final confidential reply must be retryable"
+    );
+    runtime_proxy
+        .call_confidential::<()>(
+            "AbortMediaRead",
+            MediaReadFinish(pdf_read.handle),
+        )
+        .await
+        .unwrap();
 
     let send = ChannelOutboundIntent {
         idempotency_key: "media-wire-send".into(),
@@ -1709,6 +1795,10 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
 
     runtime_proxy
         .call_confidential::<()>("StopChannel", "telegram")
+        .await
+        .unwrap();
+    runtime_proxy
+        .call_confidential::<()>("StopChannel", "telegram:foreign")
         .await
         .unwrap();
     runtime_proxy
