@@ -237,7 +237,7 @@ pub enum ProgressiveCommand {
 }
 
 /// Completion of one bounded command.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "result", rename_all = "snake_case")]
 pub enum ProgressiveResult {
     Opened { handle: String },

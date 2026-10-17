@@ -123,6 +123,41 @@ impl ProgressiveSender for Sender {
         })
         .await
     }
+    async fn send_parts(
+        &self,
+        channel: &str,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+        context: Option<&ProgressiveOutputContext>,
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
+    {
+        match self
+            .0
+            .dispatch_controller_backend(ChannelBackendRequest::ProgressiveTransport(
+                ProgressiveTransportRequest::SendTyped {
+                    channel: channel.into(),
+                    turn_id: context.map(|context| context.turn_id.clone()),
+                    channel_ref: context.map(|context| context.channel.clone()),
+                    conversation: context.map(|context| context.conversation.clone()),
+                    parts: parts.to_vec(),
+                    text: text.into(),
+                },
+            ))
+            .await
+            .map_err(|_| ProgressiveSendError::Unavailable)?
+        {
+            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Outcome(
+                outcome,
+            )) => Ok(outcome),
+            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Unavailable) => {
+                Err(ProgressiveSendError::Unavailable)
+            }
+            ChannelBackendResult::ProgressiveTransport(ProgressiveTransportResult::Failed) => {
+                Err(ProgressiveSendError::UnsupportedContent)
+            }
+            _ => Err(ProgressiveSendError::UnsupportedContent),
+        }
+    }
     async fn edit(
         &self,
         channel: &str,

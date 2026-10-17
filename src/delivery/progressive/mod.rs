@@ -83,6 +83,8 @@ pub enum ProgressiveSendError {
     /// The message is gone provider-side. Its id is worthless.
     #[error("message not found")]
     MessageGone,
+    #[error("channel does not support typed progressive content delivery")]
+    UnsupportedContent,
     /// Provider reports a partial or uncertain send with normalized receipt
     /// facts; callers must not retry or flatten this into an ordinary error.
     #[error("progressive send returned a partial or uncertain receipt")]
@@ -115,6 +117,18 @@ pub trait ProgressiveSender: Send + Sync {
     /// Post a new message. Returns the backend's raw response; the message id
     /// is read from it with [`extract_message_id`].
     async fn send(&self, channel: &str, text: &str) -> Result<Value, ProgressiveSendError>;
+
+    /// Deliver ordered provider content and preserve the complete normalized
+    /// send outcome. Legacy transports refuse rich content by default.
+    async fn send_parts(
+        &self,
+        _channel: &str,
+        _parts: &[tinychannels_bus::OutboundContentPart],
+        _text: &str,
+        _context: Option<&ProgressiveOutputContext>,
+    ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
+        Err(ProgressiveSendError::UnsupportedContent)
+    }
 
     /// Replace the text of a posted message.
     async fn edit(
