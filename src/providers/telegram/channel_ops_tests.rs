@@ -6,6 +6,7 @@ use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 struct VoiceReadFixture;
+struct LargeVoiceReadFixture;
 
 #[test]
 fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() {
@@ -77,6 +78,84 @@ impl crate::host::VoiceMediaStore for VoiceReadFixture {
             file_name: Some("reply.ogg".into()),
         })
     }
+}
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for LargeVoiceReadFixture {
+    async fn store_voice(
+        &self,
+        _request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        unreachable!()
+    }
+
+    async fn read_voice(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        assert_eq!(opaque_id, "large-opaque-voice");
+        let bytes = vec![0x5a_u8; 129 * 1024];
+        assert!(bytes.len() > tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: BASE64.encode(bytes),
+            mime_type: "audio/ogg".into(),
+            file_name: Some("large-reply.ogg".into()),
+        })
+    }
+}
+
+#[tokio::test]
+async fn telegram_resolves_and_uploads_voice_larger_than_inline_intent_limit() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendVoice",
+        ok_with(serde_json::json!({"message_id": 53})),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"])
+        .with_voice_media_store(Arc::new(LargeVoiceReadFixture));
+    let message = tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: None,
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "100".into(),
+            topic_id: Some("77".into()),
+            ..Default::default()
+        }),
+        reply_to_id: Some("42".into()),
+        thread_id: None,
+        idempotency_key: "large-voice-turn".into(),
+        parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media {
+                media: tinychannels_bus::MediaReference {
+                    opaque_id: Some("large-opaque-voice".into()),
+                    kind: tinychannels_bus::MediaKind::Audio,
+                    ..Default::default()
+                },
+                audio_base64: None,
+                codec: Some("ogg_opus".into()),
+                duration_ms: Some(2_000),
+            },
+        }],
+    };
+    let inline = serde_json::to_vec(&message).unwrap();
+    assert!(inline.len() < tinychannels_bus::module_relay::RELAY_FRAME_BYTES);
+    assert!(!String::from_utf8_lossy(&inline).contains("audio_base64"));
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("53")
+    );
+    let uploads = raw_bodies(&server, "sendVoice").await;
+    assert_eq!(uploads.len(), 1);
+    assert!(uploads[0].contains("large-reply.ogg"));
+    assert!(uploads[0].contains(&"Z".repeat(129 * 1024)));
+    assert!(uploads[0].contains("reply_parameters"));
 }
 
 #[tokio::test]
