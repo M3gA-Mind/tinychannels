@@ -2957,15 +2957,17 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         media: result.clone(),
         max_bytes: bytes_len(&result),
     };
-    assert!(service
-        .begin_media_read(MediaReadBegin {
-            instance: "missing".into(),
-            ..read_request.clone()
-        })
-        .await
-        .expect_err("inactive provider cannot resolve media")
-        .to_string()
-        .contains("not running"));
+    assert!(
+        service
+            .begin_media_read(MediaReadBegin {
+                instance: "missing".into(),
+                ..read_request.clone()
+            })
+            .await
+            .expect_err("inactive provider cannot resolve media")
+            .to_string()
+            .contains("not running")
+    );
     service.provider_activations.lock().await.insert(
         "fixture-no-identity".into(),
         super::ProviderActivation {
@@ -2979,24 +2981,28 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         .lock()
         .await
         .insert("fixture-no-identity".into(), running_fixture);
-    assert!(service
-        .begin_media_read(MediaReadBegin {
-            instance: "fixture-no-identity".into(),
-            ..read_request.clone()
-        })
-        .await
-        .expect_err("provider without stable identity fails closed")
-        .to_string()
-        .contains("no stable media identity"));
-    assert!(service
-        .begin_media_read(MediaReadBegin {
-            max_bytes: 0,
-            ..read_request.clone()
-        })
-        .await
-        .expect_err("zero-byte bound is invalid")
-        .to_string()
-        .contains("request is invalid"));
+    assert!(
+        service
+            .begin_media_read(MediaReadBegin {
+                instance: "fixture-no-identity".into(),
+                ..read_request.clone()
+            })
+            .await
+            .expect_err("provider without stable identity fails closed")
+            .to_string()
+            .contains("no stable media identity")
+    );
+    assert!(
+        service
+            .begin_media_read(MediaReadBegin {
+                max_bytes: 0,
+                ..read_request.clone()
+            })
+            .await
+            .expect_err("zero-byte bound is invalid")
+            .to_string()
+            .contains("request is invalid")
+    );
     let read = service
         .begin_media_read(read_request.clone())
         .await
@@ -3030,13 +3036,15 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         .await
         .unwrap();
     assert!(service.media_reads.binding(&aborted_handle).await.is_err());
-    assert!(service
-        .read_media_chunk(MediaReadChunk {
-            handle: aborted_handle,
-            sequence: 0,
-        })
-        .await
-        .is_err());
+    assert!(
+        service
+            .read_media_chunk(MediaReadChunk {
+                handle: aborted_handle,
+                sequence: 0,
+            })
+            .await
+            .is_err()
+    );
 
     let replaced_read = service
         .begin_media_read(MediaReadBegin {
@@ -3055,17 +3063,21 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
             media_account_scope: Some("fixture:media-v1:test".into()),
         },
     );
-    assert!(service
-        .read_media_chunk(MediaReadChunk {
-            handle: replaced_read.handle.clone(),
-            sequence: 0,
-        })
-        .await
-        .is_err());
-    assert!(service
-        .abort_media_read(MediaReadFinish(replaced_read.handle.clone()))
-        .await
-        .is_err());
+    assert!(
+        service
+            .read_media_chunk(MediaReadChunk {
+                handle: replaced_read.handle.clone(),
+                sequence: 0,
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .abort_media_read(MediaReadFinish(replaced_read.handle.clone()))
+            .await
+            .is_err()
+    );
     assert!(service.finish_media_upload(finish).await.is_err());
     let terminal_read = service
         .begin_media_read(MediaReadBegin {
@@ -3089,32 +3101,40 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
             .await
             .is_err()
     );
-    assert!(service
-        .begin_media_read(read_request)
-        .await
-        .expect_err("terminal module refuses begin")
-        .to_string()
-        .contains("shutting down"));
-    assert!(service
-        .read_media_chunk(MediaReadChunk {
-            handle: terminal_read.handle.clone(),
-            sequence: 0,
-        })
-        .await
-        .expect_err("terminal module refuses chunks")
-        .to_string()
-        .contains("shutting down"));
-    assert!(service
-        .abort_media_read(MediaReadFinish(terminal_read.handle))
-        .await
-        .expect_err("terminal module refuses abort")
-        .to_string()
-        .contains("shutting down"));
+    assert!(
+        service
+            .begin_media_read(read_request)
+            .await
+            .expect_err("terminal module refuses begin")
+            .to_string()
+            .contains("shutting down")
+    );
+    assert!(
+        service
+            .read_media_chunk(MediaReadChunk {
+                handle: terminal_read.handle.clone(),
+                sequence: 0,
+            })
+            .await
+            .expect_err("terminal module refuses chunks")
+            .to_string()
+            .contains("shutting down")
+    );
+    assert!(
+        service
+            .abort_media_read(MediaReadFinish(terminal_read.handle))
+            .await
+            .expect_err("terminal module refuses abort")
+            .to_string()
+            .contains("shutting down")
+    );
     service.shutdown().await.unwrap();
 }
 
 fn bytes_len(reference: &tinychannels_bus::MediaReference) -> u64 {
-    reference.size_bytes.expect("stored media includes byte count")
+    reference
+        .size_bytes
+        .expect("stored media includes byte count")
 }
 
 fn request_media_fixture() -> tinychannels_bus::MediaUploadBegin {
