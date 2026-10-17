@@ -10,7 +10,8 @@ pub const MEDIA_UPLOAD_CHUNK_BYTES: usize = 512 * 1024;
 /// Maximum serialized begin metadata retained for one upload reservation.
 pub const MEDIA_UPLOAD_BEGIN_MAX_BYTES: usize = 64 * 1024;
 /// Maximum chunk count for one media object.
-pub const MEDIA_UPLOAD_MAX_CHUNKS: usize = MEDIA_UPLOAD_MAX_BYTES.div_ceil(MEDIA_UPLOAD_CHUNK_BYTES);
+pub const MEDIA_UPLOAD_MAX_CHUNKS: usize =
+    MEDIA_UPLOAD_MAX_BYTES.div_ceil(MEDIA_UPLOAD_CHUNK_BYTES);
 /// Maximum simultaneously buffered media uploads in one runtime.
 pub const MEDIA_UPLOAD_CAPACITY: usize = 2;
 

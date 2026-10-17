@@ -1063,7 +1063,9 @@ impl Channels {
         }
         let (instance, activation) = self.media_uploads.binding_handle(&chunk.handle).await?;
         if self.media_activation(&instance).await? != activation {
-            return Err(BusError::failed("media upload belongs to another provider activation"));
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
         }
         self.media_uploads.append(chunk).await
     }
@@ -1079,7 +1081,9 @@ impl Channels {
         }
         let (instance, activation) = self.media_uploads.binding(&request).await?;
         if self.media_activation(&instance).await? != activation {
-            return Err(BusError::failed("media upload belongs to another provider activation"));
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
         }
         let repository = Arc::new(crate::provider::ModuleMediaRepository(
             self.host.clone(),

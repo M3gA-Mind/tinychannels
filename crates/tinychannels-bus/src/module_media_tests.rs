@@ -48,7 +48,8 @@ fn media_upload_begin_preserves_full_conversation_and_turn_facts() {
         codec: None,
         byte_count: 1,
     };
-    let decoded: MediaUploadBegin = serde_json::from_slice(&serde_json::to_vec(&begin).unwrap()).unwrap();
+    let decoded: MediaUploadBegin =
+        serde_json::from_slice(&serde_json::to_vec(&begin).unwrap()).unwrap();
     assert_eq!(decoded.scope.conversation, begin.scope.conversation);
     assert_eq!(decoded.scope.turn_id, "turn");
 }

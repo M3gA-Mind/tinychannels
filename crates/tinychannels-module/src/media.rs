@@ -1,11 +1,11 @@
 //! Bounded, runtime-local host-to-module media uploads.
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::{collections::HashMap, time::Duration};
 use tinybus::{Error, Result};
 use tinychannels_bus::{
     MediaUploadBegin, MediaUploadChunk, MediaUploadFinish, MediaUploadHandle, MediaUploadResult,
 };
 use tokio::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
@@ -166,12 +166,15 @@ impl MediaUploads {
             return Err(Error::failed("media chunk sequence exceeds its limit"));
         }
         let expected_len = if sequence + 1 == upload.chunks.len() {
-            upload.request.byte_count - sequence * tinychannels_bus::module_media::MEDIA_UPLOAD_CHUNK_BYTES
+            upload.request.byte_count
+                - sequence * tinychannels_bus::module_media::MEDIA_UPLOAD_CHUNK_BYTES
         } else {
             tinychannels_bus::module_media::MEDIA_UPLOAD_CHUNK_BYTES
         };
         if chunk.bytes.len() != expected_len {
-            return Err(Error::failed("media chunk size does not match its sequence"));
+            return Err(Error::failed(
+                "media chunk size does not match its sequence",
+            ));
         }
         if sequence < upload.next_sequence {
             if upload.chunks[sequence].as_ref() == Some(&chunk.bytes) {
@@ -197,7 +200,9 @@ impl MediaUploads {
         Self::prune(&mut state);
         if let Some(entry) = state.terminal.get(&request.0.0) {
             if entry.activation != activation {
-                return Err(Error::failed("media upload belongs to another provider activation"));
+                return Err(Error::failed(
+                    "media upload belongs to another provider activation",
+                ));
             }
             return match &entry.value {
                 Terminal::Finished(media) => Ok(media.clone()),
@@ -208,7 +213,9 @@ impl MediaUploads {
             return Err(Error::failed("media upload is unknown or expired"));
         };
         if upload.activation != activation {
-            return Err(Error::failed("media upload belongs to another provider activation"));
+            return Err(Error::failed(
+                "media upload belongs to another provider activation",
+            ));
         }
         if upload.finalizing.load(Ordering::SeqCst) {
             let changed = upload.changed.clone();
@@ -327,9 +334,7 @@ impl MediaUploads {
         let now = Instant::now();
         state
             .uploads
-            .retain(|_, upload| {
-                upload.finalizing.load(Ordering::SeqCst) || upload.expires > now
-            });
+            .retain(|_, upload| upload.finalizing.load(Ordering::SeqCst) || upload.expires > now);
         state.terminal.retain(|_, entry| entry.expires > now);
     }
 

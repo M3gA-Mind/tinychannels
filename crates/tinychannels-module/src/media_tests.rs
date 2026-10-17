@@ -33,15 +33,20 @@ fn request(byte_count: usize) -> MediaUploadBegin {
 #[tokio::test]
 async fn chunks_are_ordered_bounded_idempotent_and_abort_replays() {
     let uploads = std::sync::Arc::new(MediaUploads::default());
-    let handle = uploads.begin(request(3), "activation-a".into()).await.unwrap();
-    assert!(uploads
-        .append(MediaUploadChunk {
-            handle: handle.clone(),
-            sequence: 1,
-            bytes: vec![3],
-        })
+    let handle = uploads
+        .begin(request(3), "activation-a".into())
         .await
-        .is_err());
+        .unwrap();
+    assert!(
+        uploads
+            .append(MediaUploadChunk {
+                handle: handle.clone(),
+                sequence: 1,
+                bytes: vec![3],
+            })
+            .await
+            .is_err()
+    );
     let chunk = MediaUploadChunk {
         handle: handle.clone(),
         sequence: 0,
@@ -52,18 +57,19 @@ async fn chunks_are_ordered_bounded_idempotent_and_abort_replays() {
     let mut conflict = chunk;
     conflict.bytes[0] = 9;
     assert!(uploads.append(conflict).await.is_err());
-    assert!(uploads
-        .abort(MediaUploadFinish(handle.clone()))
-        .await
-        .is_ok());
-    assert!(uploads
-        .abort(MediaUploadFinish(handle.clone()))
-        .await
-        .is_ok());
-    assert!(uploads
-        .binding_handle(&handle)
-        .await
-        .is_err());
+    assert!(
+        uploads
+            .abort(MediaUploadFinish(handle.clone()))
+            .await
+            .is_ok()
+    );
+    assert!(
+        uploads
+            .abort(MediaUploadFinish(handle.clone()))
+            .await
+            .is_ok()
+    );
+    assert!(uploads.binding_handle(&handle).await.is_err());
 }
 
 #[tokio::test]
@@ -71,35 +77,58 @@ async fn reservations_and_metadata_are_bounded_before_retaining_media() {
     let uploads = std::sync::Arc::new(MediaUploads::default());
     let oversized = request(1);
     let mut oversized_metadata = oversized.clone();
-    oversized_metadata.scope.conversation.thread_id = Some(
-        "x".repeat(tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES),
-    );
+    oversized_metadata.scope.conversation.thread_id =
+        Some("x".repeat(tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES));
     assert!(uploads.begin(oversized_metadata, 1).await.is_err());
-    assert!(uploads
-        .begin(
-            request(tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES + 1),
-            1,
-        )
+    assert!(
+        uploads
+            .begin(
+                request(tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES + 1),
+                1,
+            )
+            .await
+            .is_err()
+    );
+    uploads
+        .begin(oversized, "activation-a".into())
         .await
-        .is_err());
-    uploads.begin(oversized, "activation-a".into()).await.unwrap();
-    uploads.begin(request(1), "activation-a".into()).await.unwrap();
-    assert!(uploads.begin(request(1), 1).await.is_err());
+        .unwrap();
+    uploads
+        .begin(request(1), "activation-a".into())
+        .await
+        .unwrap();
+    assert!(
+        uploads
+            .begin(request(1), "activation-a".into())
+            .await
+            .is_err()
+    );
     assert_eq!(uploads.state.lock().await.uploads.len(), 2);
 }
 
 #[tokio::test(start_paused = true)]
 async fn expired_reservations_are_rejected_and_release_their_capacity() {
     let uploads = std::sync::Arc::new(MediaUploads::default());
-    let handle = uploads.begin(request(1), "activation-a".into()).await.unwrap();
+    let handle = uploads
+        .begin(request(1), "activation-a".into())
+        .await
+        .unwrap();
     tokio::time::advance(UPLOAD_LIFETIME + Duration::from_millis(1)).await;
     assert!(uploads.binding_handle(&handle).await.is_err());
-    assert!(uploads.append(MediaUploadChunk {
-        handle,
-        sequence: 0,
-        bytes: vec![0],
-    }).await.is_err());
-    uploads.begin(request(1), "activation-a".into()).await.unwrap();
+    assert!(
+        uploads
+            .append(MediaUploadChunk {
+                handle,
+                sequence: 0,
+                bytes: vec![0],
+            })
+            .await
+            .is_err()
+    );
+    uploads
+        .begin(request(1), "activation-a".into())
+        .await
+        .unwrap();
 }
 
 #[derive(Default)]
@@ -115,7 +144,10 @@ impl MediaPersistence for BlockingPersistence {
         &self,
         request: tinychannels::host::MediaStoreRequest,
     ) -> Result<MediaUploadResult> {
-        assert_eq!(request.metadata.scope.conversation.thread_id.as_deref(), Some("thread"));
+        assert_eq!(
+            request.metadata.scope.conversation.thread_id.as_deref(),
+            Some("thread")
+        );
         assert_eq!(request.metadata.scope.turn_id, "turn");
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.entered.notify_one();
@@ -166,8 +198,18 @@ async fn finalizing_upload_keeps_capacity_and_abort_cannot_race_persistence() {
         })
     };
     repository.entered.notified().await;
-    assert!(uploads.begin(request(1), "activation-a".into()).await.is_err());
-    assert!(uploads.abort(MediaUploadFinish(handle.clone())).await.is_err());
+    assert!(
+        uploads
+            .begin(request(1), "activation-a".into())
+            .await
+            .is_err()
+    );
+    assert!(
+        uploads
+            .abort(MediaUploadFinish(handle.clone()))
+            .await
+            .is_err()
+    );
     let duplicate = {
         let uploads = uploads.clone();
         let repository = repository.clone();
@@ -202,7 +244,12 @@ async fn cancelling_the_bus_waiter_does_not_cancel_or_duplicate_finalize() {
     repository.entered.notified().await;
     waiter.abort();
     assert!(waiter.await.unwrap_err().is_cancelled());
-    assert!(uploads.begin(request(1), "activation-a".into()).await.is_err());
+    assert!(
+        uploads
+            .begin(request(1), "activation-a".into())
+            .await
+            .is_err()
+    );
     repository.release.notify_one();
     let replay = uploads
         .finish(
@@ -212,6 +259,9 @@ async fn cancelling_the_bus_waiter_does_not_cancel_or_duplicate_finalize() {
         )
         .await
         .unwrap();
-    assert_eq!(replay.opaque_id.as_deref(), Some("tinychannels_media_v1_saved"));
+    assert_eq!(
+        replay.opaque_id.as_deref(),
+        Some("tinychannels_media_v1_saved")
+    );
     assert_eq!(repository.calls.load(Ordering::SeqCst), 1);
 }

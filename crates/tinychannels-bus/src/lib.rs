@@ -19,11 +19,11 @@ pub mod module_control;
 pub mod module_controller;
 pub mod module_delivery;
 pub mod module_email;
-pub mod module_media;
 #[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_inbound;
 #[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_interaction;
+pub mod module_media;
 pub mod module_progressive;
 pub mod module_relay;
 #[allow(deprecated, reason = "v21 module DTOs remain for one release")]
