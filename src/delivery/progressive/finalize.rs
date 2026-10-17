@@ -212,7 +212,9 @@ pub(super) async fn abort_channel_reply(
         let message_ids = std::mem::take(&mut state.message_ids);
         let receipt = state.message_receipt.take();
         for message_id in message_ids {
-            let part_receipt = receipt.as_ref().map(|receipt| receipt_for_part(receipt, &message_id));
+            let part_receipt = receipt
+                .as_ref()
+                .map(|receipt| receipt_for_part(receipt, &message_id));
             delete_channel_message_with_receipt(
                 sender,
                 channel,
@@ -231,13 +233,15 @@ pub(super) async fn abort_channel_reply(
     }
 }
 
-fn receipt_for_part(
+pub(super) fn receipt_for_part(
     receipt: &tinychannels_bus::channel::MessageReceipt,
     message_id: &str,
 ) -> tinychannels_bus::channel::MessageReceipt {
     let mut part_receipt = receipt.clone();
     part_receipt.primary_platform_message_id = Some(message_id.to_owned());
     part_receipt.platform_message_ids = vec![message_id.to_owned()];
-    part_receipt.parts.retain(|part| part.platform_message_id == message_id);
+    part_receipt
+        .parts
+        .retain(|part| part.platform_message_id == message_id);
     part_receipt
 }

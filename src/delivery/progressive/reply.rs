@@ -283,17 +283,31 @@ impl ProgressiveReply {
         if !self.progressive_ui {
             return Ok(None);
         }
-        match self
-            .sender
-            .edit(&self.channel, &message_id, final_text)
-            .await
-        {
+        let edit = match self.state.message_receipt.as_ref() {
+            Some(receipt) => {
+                self.sender
+                    .edit_with_receipt(&self.channel, receipt, final_text)
+                    .await
+            }
+            None => {
+                self.sender
+                    .edit(&self.channel, &message_id, final_text)
+                    .await
+            }
+        };
+        match edit {
             Ok(()) => {
                 for id in message_ids.iter().skip(1) {
-                    super::finalize::delete_channel_message(
+                    let part_receipt = self
+                        .state
+                        .message_receipt
+                        .as_ref()
+                        .map(|receipt| super::finalize::receipt_for_part(receipt, id));
+                    super::finalize::delete_channel_message_with_receipt(
                         self.sender.as_ref(),
                         &self.channel,
                         id,
+                        part_receipt.as_ref(),
                     )
                     .await;
                 }
@@ -317,8 +331,14 @@ impl ProgressiveReply {
                 self.state.dirty = false;
                 self.state.message_ids = vec![message_id.clone()];
                 let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-                outcome.receipt.primary_platform_message_id = Some(message_id.clone());
-                outcome.receipt.platform_message_ids.push(message_id);
+                outcome.receipt = self.state.message_receipt.clone().unwrap_or_default();
+                if outcome.receipt.primary_platform_message_id.is_none() {
+                    outcome.receipt.primary_platform_message_id = Some(message_id.clone());
+                }
+                if outcome.receipt.platform_message_ids.is_empty() {
+                    outcome.receipt.platform_message_ids.push(message_id);
+                }
+                self.state.message_receipt = Some(outcome.receipt.clone());
                 Ok(Some(outcome))
             }
             Err(error) => {

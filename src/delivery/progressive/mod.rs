@@ -175,7 +175,9 @@ pub trait ProgressiveSender: Send + Sync {
         let message_id = receipt
             .primary_platform_message_id
             .as_deref()
-            .ok_or_else(|| ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID")))?;
+            .ok_or_else(|| {
+                ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID"))
+            })?;
         self.edit(channel, message_id, text).await
     }
 
@@ -191,7 +193,9 @@ pub trait ProgressiveSender: Send + Sync {
         let message_id = receipt
             .primary_platform_message_id
             .as_deref()
-            .ok_or_else(|| ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID")))?;
+            .ok_or_else(|| {
+                ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID"))
+            })?;
         self.delete(channel, message_id).await
     }
 

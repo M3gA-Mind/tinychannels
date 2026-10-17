@@ -198,14 +198,20 @@ impl ProgressiveSender for Sender {
         receipt: &tinychannels_bus::channel::MessageReceipt,
         text: &str,
     ) -> std::result::Result<(), ProgressiveSendError> {
-        let message_id = receipt.primary_platform_message_id.as_deref().ok_or_else(|| {
-            ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID"))
-        })?;
+        let message_id = receipt
+            .primary_platform_message_id
+            .as_deref()
+            .ok_or_else(|| {
+                ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID"))
+            })?;
         self.invoke(ProgressiveTransportRequest::Edit {
             channel: channel.into(),
             turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
             channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self.context.as_ref().map(|context| context.conversation.clone()),
+            conversation: self
+                .context
+                .as_ref()
+                .map(|context| context.conversation.clone()),
             message_id: message_id.into(),
             receipt: Some(receipt.clone()),
             text: text.into(),
@@ -219,14 +225,20 @@ impl ProgressiveSender for Sender {
         channel: &str,
         receipt: &tinychannels_bus::channel::MessageReceipt,
     ) -> std::result::Result<(), ProgressiveSendError> {
-        let message_id = receipt.primary_platform_message_id.as_deref().ok_or_else(|| {
-            ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID"))
-        })?;
+        let message_id = receipt
+            .primary_platform_message_id
+            .as_deref()
+            .ok_or_else(|| {
+                ProgressiveSendError::Other(anyhow::anyhow!("receipt has no primary message ID"))
+            })?;
         self.invoke(ProgressiveTransportRequest::Delete {
             channel: channel.into(),
             turn_id: self.context.as_ref().map(|context| context.turn_id.clone()),
             channel_ref: self.context.as_ref().map(|context| context.channel.clone()),
-            conversation: self.context.as_ref().map(|context| context.conversation.clone()),
+            conversation: self
+                .context
+                .as_ref()
+                .map(|context| context.conversation.clone()),
             message_id: message_id.into(),
             receipt: Some(receipt.clone()),
         })
