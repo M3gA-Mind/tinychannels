@@ -83,6 +83,35 @@ pub(crate) async fn dispatch(
                 .finalize_draft(&recipient, &message_id, &text, thread_ts.as_deref())
                 .await
         }
+        Op::SendReaction {
+            conversation_id,
+            message_id,
+            reaction,
+        } => {
+            return provider
+                .send_reaction(&conversation_id, &message_id, &reaction)
+                .await
+                .map(|()| ChannelInteractionResult::Completed)
+                .map_err(|_| tinybus::Error::failed("provider reaction failed"));
+        }
+        Op::EditMessage { receipt, intent } => {
+            return provider
+                .edit_message(&receipt, &intent)
+                .await
+                .map(|receipt| {
+                    ChannelInteractionResult::Sent(Box::new(
+                        tinychannels_bus::channel::ChannelSendOutcome { receipt, error: None },
+                    ))
+                })
+                .map_err(|_| tinybus::Error::failed("provider message edit failed"));
+        }
+        Op::DeleteMessage { receipt } => {
+            return provider
+                .delete_message(&receipt)
+                .await
+                .map(|()| ChannelInteractionResult::Completed)
+                .map_err(|_| tinybus::Error::failed("provider message deletion failed"));
+        }
     };
     result
         .map(|()| ChannelInteractionResult::Completed)
