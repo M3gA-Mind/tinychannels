@@ -663,9 +663,11 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
         })
         .await
         .unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("terminal progressive event must be unique and last"));
+    assert!(
+        error
+            .to_string()
+            .contains("terminal progressive event must be unique and last")
+    );
 
     let error = replies
         .execute(ProgressiveCommand::FeedOutput {
@@ -676,7 +678,11 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
         })
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("progressive request exceeds its limit"));
+    assert!(
+        error
+            .to_string()
+            .contains("progressive request exceeds its limit")
+    );
     assert!(callback.requests.lock().await.is_empty());
 
     let error = replies
@@ -686,7 +692,11 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
         })
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("progressive content exceeds its limit"));
+    assert!(
+        error
+            .to_string()
+            .contains("progressive content exceeds its limit")
+    );
 
     let legacy_feed: ProgressiveCommand = serde_json::from_value(serde_json::json!({
         "operation": "feed",
@@ -715,15 +725,21 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
     assert_eq!(sends[0]["text"], "legacy final");
     drop(sends);
     let requests = callback.requests.lock().await;
-    assert!(requests
-        .iter()
-        .all(|request| !matches!(request, ProgressiveTransportRequest::OutputEvent { .. })));
-    assert!(requests
-        .iter()
-        .all(|request| !matches!(request, ProgressiveTransportRequest::SendTyped { .. })));
-    assert!(requests
-        .iter()
-        .any(|request| matches!(request, ProgressiveTransportRequest::Send { .. })));
+    assert!(
+        requests
+            .iter()
+            .all(|request| !matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| !matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, ProgressiveTransportRequest::Send { .. }))
+    );
     drop(requests);
     replies.shutdown().await.unwrap();
 }
@@ -732,9 +748,7 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
 async fn progressive_open_and_handle_errors_are_closed_after_shutdown() {
     let (replies, _) = fixture(false).await;
     let invalid = replies
-        .execute(ProgressiveCommand::Open {
-            channel: "".into(),
-        })
+        .execute(ProgressiveCommand::Open { channel: "".into() })
         .await
         .unwrap_err();
     assert!(invalid.to_string().contains("invalid progressive target"));
@@ -755,9 +769,11 @@ async fn progressive_open_and_handle_errors_are_closed_after_shutdown() {
         })
         .await
         .unwrap_err();
-    assert!(stopped
-        .to_string()
-        .contains("progressive replies are shutting down"));
+    assert!(
+        stopped
+            .to_string()
+            .contains("progressive replies are shutting down")
+    );
 }
 
 #[tokio::test]
@@ -1030,8 +1046,11 @@ async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity(
 #[tokio::test]
 async fn scoped_open_rejects_missing_identity_invalid_leases_and_unconfigured_accounts() {
     let (replies, _) = fixture(false).await;
-    let scoped = |channel_id: &str, account_id: Option<&str>, conversation_id: &str,
-                  turn_id: &str, lifetime_ms| ProgressiveCommand::OpenOutput {
+    let scoped = |channel_id: &str,
+                  account_id: Option<&str>,
+                  conversation_id: &str,
+                  turn_id: &str,
+                  lifetime_ms| ProgressiveCommand::OpenOutput {
         channel: tinychannels_bus::ChannelRef {
             id: channel_id.into(),
             account_id: account_id.map(str::to_owned),
@@ -1046,11 +1065,26 @@ async fn scoped_open_rejects_missing_identity_invalid_leases_and_unconfigured_ac
     };
 
     for (request, expected) in [
-        (scoped("", Some("discord:one"), "room", "turn", 1), "invalid scoped"),
-        (scoped("discord", Some("discord:one"), "", "turn", 1), "invalid scoped"),
-        (scoped("discord", Some("discord:one"), "room", "", 1), "invalid scoped"),
-        (scoped("discord", Some("discord:one"), "room", "turn", 0), "invalid scoped"),
-        (scoped("discord", Some("discord:missing"), "room", "turn", 10), "not configured"),
+        (
+            scoped("", Some("discord:one"), "room", "turn", 1),
+            "invalid scoped",
+        ),
+        (
+            scoped("discord", Some("discord:one"), "", "turn", 1),
+            "invalid scoped",
+        ),
+        (
+            scoped("discord", Some("discord:one"), "room", "", 1),
+            "invalid scoped",
+        ),
+        (
+            scoped("discord", Some("discord:one"), "room", "turn", 0),
+            "invalid scoped",
+        ),
+        (
+            scoped("discord", Some("discord:missing"), "room", "turn", 10),
+            "not configured",
+        ),
     ] {
         let error = replies.execute(request).await.unwrap_err();
         assert!(error.to_string().contains(expected), "{error}");
@@ -2857,16 +2891,14 @@ async fn module_outcome_receipts_keep_all_draft_edit_and_close_tokens() {
         }),
         primary_platform_message_id: Some("draft-a".into()),
         platform_message_ids: vec!["draft-a".into()],
-        parts: vec![
-            tinychannels_bus::channel::MessageReceiptPart {
-                platform_message_id: "draft-a".into(),
-                kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
-                index: 0,
-                edit_token: Some("edit-a".into()),
-                delete_token: Some("delete-a".into()),
-                ..Default::default()
-            },
-        ],
+        parts: vec![tinychannels_bus::channel::MessageReceiptPart {
+            platform_message_id: "draft-a".into(),
+            kind: tinychannels_bus::channel::MessageReceiptPartKind::Text,
+            index: 0,
+            edit_token: Some("edit-a".into()),
+            delete_token: Some("delete-a".into()),
+            ..Default::default()
+        }],
         thread_id: Some("thread-7".into()),
         reply_to_id: Some("reply-1".into()),
         ..Default::default()
@@ -2946,7 +2978,11 @@ async fn module_outcome_receipts_keep_all_draft_edit_and_close_tokens() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(deletes.len(), 2, "draft and thinking bubbles are deleted on close");
+    assert_eq!(
+        deletes.len(),
+        2,
+        "draft and thinking bubbles are deleted on close"
+    );
     assert!(deletes.iter().all(|actual| *actual == &receipt));
     replies.shutdown().await.unwrap();
 }
@@ -3315,7 +3351,10 @@ async fn unsupported_and_successful_media_facts_survive_later_provider_failure()
         .iter()
         .filter(|request| matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
         .count();
-    assert_eq!(sent, 3, "the failed send is not repeated or followed by final");
+    assert_eq!(
+        sent, 3,
+        "the failed send is not repeated or followed by final"
+    );
     replies.shutdown().await.unwrap();
 }
 
@@ -3429,9 +3468,8 @@ async fn typed_callback_acknowledgement_and_unavailability_keep_distinct_failure
         let ProgressiveResult::DeliveryBatch {
             outcomes,
             unsupported,
-            failure: Some(
-                tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport,
-            ),
+            failure:
+                Some(tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport),
         } = result
         else {
             panic!("typed callback failures must remain visible in the batch result")
@@ -3476,7 +3514,10 @@ async fn typed_provider_callback_with_wrong_result_family_is_unknown_not_success
     };
     assert_eq!(outcomes.len(), 1);
     let error = outcomes[0].error.as_ref().expect("unknown delivery result");
-    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Unknown);
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Unknown
+    );
     assert!(error.sent_before_error);
     replies.shutdown().await.unwrap();
 }
