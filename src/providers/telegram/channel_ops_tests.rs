@@ -75,8 +75,9 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             },
             _ => {
                 return Err(tinychannels_bus::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::Unsupported,
+                    kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
                     message: "fixture does not implement this operation".into(),
+                    unsupported: true,
                     ..Default::default()
                 });
             }
