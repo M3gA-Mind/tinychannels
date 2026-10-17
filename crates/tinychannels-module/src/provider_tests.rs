@@ -472,6 +472,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             ..Default::default()
         };
         let result = self.adapter.send(intent).await;
+        eprintln!("configured conformance result for {feature:?}: {result:?}");
         let requests = self.server.received_requests().await.unwrap_or_default();
         let mut cursor = self.request_cursor.lock().unwrap();
         for request in requests.iter().skip(*cursor) {
