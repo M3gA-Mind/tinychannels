@@ -36,11 +36,13 @@
 //! ignores the `host` on its [`ProviderContext`].
 
 mod dispatch;
+mod media;
 mod noop;
 mod services;
 mod voice;
 
 pub use dispatch::{DispatchOptions, DispatchRequest, TurnDispatcher, TurnHandle};
+pub use media::{MediaScope, ScopedMediaStore, StoredMedia};
 pub use noop::{ChannelHostBuilder, NoopHost};
 pub use services::{
     AllowlistStore, ApprovalAsk, ApprovalDecision, ApprovalGate, ConversationMessage,
