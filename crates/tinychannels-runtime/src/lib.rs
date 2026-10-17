@@ -184,10 +184,7 @@ pub fn jitter_millis(backoff_secs: u64) -> u64 {
 /// Log a failed worker join without imposing host-specific error reporting.
 pub fn log_worker_join_result(result: Result<(), tokio::task::JoinError>) {
     if let Err(error) = result {
-        tracing::error!(
-            "{}",
-            tinychannels_bus::context::worker_crash_message(&error)
-        );
+        tracing::error!("{}", crate::context::worker_crash_message(&error));
     }
 }
 
