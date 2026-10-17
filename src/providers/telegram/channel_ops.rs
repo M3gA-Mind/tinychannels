@@ -2065,8 +2065,11 @@ async fn send_typed_media_with_receipt(
                 message.reply_to_id.as_deref(),
             )),
             Err(_) => {
-                failed = Some(anyhow::anyhow!(
-                    "Telegram media upload outcome is uncertain"
+                failed = Some(super::channel_send::partial_text_send_error(
+                    Vec::new(),
+                    "Telegram media upload outcome is uncertain".into(),
+                    false,
+                    true,
                 ));
                 break;
             }
@@ -2411,14 +2414,18 @@ impl crate::channel::ChannelTypedSend for TelegramChannel {
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> Result<tinychannels_bus::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
-        self.send_v2_with_receipt(message)
-            .await
-            .map_err(|_| crate::channel::ChannelSendError {
-                kind: crate::channel::SendErrorKind::Unknown,
-                message: "Telegram typed send failed".into(),
-                retryable: false,
-                sent_before_error: true,
-                ..Default::default()
-            })
+        self.send_v2_with_receipt(message).await.map_err(|error| {
+            if let Some(partial) = error.downcast_ref::<super::channel_send::PartialTextSendError>() {
+                partial.error.clone()
+            } else {
+                crate::channel::ChannelSendError {
+                    kind: crate::channel::SendErrorKind::Forbidden,
+                    message: "Telegram typed send was rejected before provider dispatch".into(),
+                    retryable: false,
+                    sent_before_error: false,
+                    ..Default::default()
+                }
+            }
+        })
     }
 }
