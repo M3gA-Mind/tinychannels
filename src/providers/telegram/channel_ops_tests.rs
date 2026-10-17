@@ -2553,7 +2553,6 @@ async fn finalize_draft_oversized_text_with_invalid_id_sends_chunks_only() {
 }
 
 #[tokio::test]
-#[tokio::test]
 async fn legacy_reaction_marker_is_plain_text_not_a_telegram_operation() {
     let server = mock_api().await;
     mount_post(&server, "sendMessage", ok()).await;
@@ -2567,7 +2566,6 @@ async fn legacy_reaction_marker_is_plain_text_not_a_telegram_operation() {
     assert_eq!(sent_texts(&server).await, ["\\[REACTION:🔥\\] hello"]);
 }
 
-#[tokio::test]
 #[tokio::test]
 async fn send_bare_existing_path_uploads_it_as_attachment() {
     let server = mock_api().await;

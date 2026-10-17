@@ -994,37 +994,6 @@ fn parse_update_reaction_extracts_actor_target_and_emoji() {
 }
 
 #[test]
-fn parse_reaction_marker_supports_optional_target_id() {
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:✅|321]");
-    assert_eq!(content, "");
-    assert_eq!(marker.as_deref(), Some("✅|321"));
-
-    let (content, marker) = TelegramChannel::parse_reaction_marker("hello");
-    assert_eq!(content, "hello");
-    assert!(marker.is_none());
-}
-
-#[test]
-fn parse_reaction_marker_allows_inline_reply_text() {
-    // Bot can react AND reply in one turn: [REACTION:👍] reply text
-    let (content, marker) =
-        TelegramChannel::parse_reaction_marker("[REACTION:👍] That's a great point!");
-    assert_eq!(content, "That's a great point!");
-    assert_eq!(marker.as_deref(), Some("👍"));
-
-    // Explicit target id + inline text
-    let (content, marker) =
-        TelegramChannel::parse_reaction_marker("[REACTION:🔥|999] Here's my full reply.");
-    assert_eq!(content, "Here's my full reply.");
-    assert_eq!(marker.as_deref(), Some("🔥|999"));
-
-    // Reaction only (no trailing text) still works
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:🤔]");
-    assert_eq!(content, "");
-    assert_eq!(marker.as_deref(), Some("🤔"));
-}
-
-#[test]
 fn update_tracking_dedupes_and_skips_stale_updates() {
     let ch = TelegramChannel::new("token".into(), vec!["*".into()], false);
     assert!(ch.track_update_id(10));
@@ -1854,45 +1823,6 @@ fn parse_update_reaction_falls_back_to_user_id_when_username_absent() {
     assert_eq!(reaction.sender, "99999");
     assert_eq!(reaction.emoji, "❤️");
     assert_eq!(reaction.target_message_id, "77");
-}
-
-// ── Reaction marker parsing edge cases ─────────────────────────
-
-#[test]
-fn parse_reaction_marker_plain_emoji_without_pipe_has_no_explicit_target() {
-    // [REACTION:👍] — no pipe separator, no explicit target message id.
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:👍]");
-    assert_eq!(
-        content, "",
-        "content after stripping marker should be empty"
-    );
-    assert_eq!(
-        marker.as_deref(),
-        Some("👍"),
-        "marker should be the emoji without pipe"
-    );
-}
-
-#[test]
-fn parse_reaction_marker_empty_inner_produces_no_marker() {
-    // [REACTION:] — empty inner, no valid emoji.
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:]");
-    assert_eq!(
-        content, "",
-        "content should be empty string for empty marker"
-    );
-    assert!(
-        marker.is_none(),
-        "empty inner must not produce a reaction marker"
-    );
-}
-
-#[test]
-fn parse_reaction_marker_non_marker_text_is_unchanged() {
-    let input = "here is your answer";
-    let (content, marker) = TelegramChannel::parse_reaction_marker(input);
-    assert_eq!(content, input);
-    assert!(marker.is_none());
 }
 
 // ── Typing body construction tests ─────────────────────────────
