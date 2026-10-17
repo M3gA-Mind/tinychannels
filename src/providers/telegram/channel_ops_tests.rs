@@ -983,6 +983,193 @@ fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessag
     }
 }
 
+fn typed_parts(
+    id: &str,
+    parts: Vec<tinychannels_bus::OutboundContentPart>,
+) -> tinychannels_bus::ChannelOutboundMessage {
+    tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "-10042".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:main".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Group,
+            id: "-10042".into(),
+            topic_id: Some("77".into()),
+            ..Default::default()
+        }),
+        reply_to_id: Some("12".into()),
+        thread_id: Some("77".into()),
+        turn_id: Some("turn-1".into()),
+        idempotency_key: id.into(),
+        parts,
+    }
+}
+
+#[tokio::test]
+async fn native_location_contact_buttons_poll_and_presentation_use_bot_api_methods() {
+    use tinychannels_bus::channel::{ButtonAction, ContactMethod, ContentPart};
+    let server = mock_api().await;
+    for method_name in ["sendLocation", "sendContact", "sendMessage", "sendPoll"] {
+        mount_post(
+            &server,
+            method_name,
+            ok_with(serde_json::json!({"message_id": 321})),
+        )
+        .await;
+    }
+    let channel = channel_for(&server, &["*"]);
+
+    let location = typed_parts(
+        "location",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Location {
+                latitude: 29.3,
+                longitude: 47.9,
+                label: Some("Office".into()),
+                address: None,
+                accuracy_meters: Some(15.0),
+                live_until_unix_ms: None,
+            },
+        }],
+    );
+    let outcome = crate::channel::ChannelTypedSend::send_typed(&channel, &location)
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("321")
+    );
+    let body = json_bodies(&server, "sendLocation").await.remove(0);
+    assert_eq!(body["latitude"], 29.3);
+    assert_eq!(body["longitude"], 47.9);
+    assert_eq!(body["message_thread_id"], "77");
+    assert_eq!(body["reply_parameters"]["message_id"], 12);
+
+    let contact = typed_parts(
+        "contact",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Contact {
+                display_name: "Ada Lovelace".into(),
+                phone_numbers: vec![ContactMethod {
+                    value: "+1234567".into(),
+                    label: Some("CELL".into()),
+                }],
+                emails: vec![ContactMethod {
+                    value: "ada@example.test".into(),
+                    label: None,
+                }],
+                organization: Some("Analytical Engine".into()),
+            },
+        }],
+    );
+    crate::channel::ChannelTypedSend::send_typed(&channel, &contact)
+        .await
+        .unwrap();
+    let body = json_bodies(&server, "sendContact").await.remove(0);
+    assert_eq!(body["phone_number"], "+1234567");
+    assert_eq!(body["first_name"], "Ada");
+    assert_eq!(body["last_name"], "Lovelace");
+    assert!(
+        body["vcard"]
+            .as_str()
+            .unwrap()
+            .contains("EMAIL;TYPE=INTERNET:ada@example.test")
+    );
+
+    let buttons = typed_parts(
+        "buttons",
+        vec![
+            tinychannels_bus::OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "Choose".into(),
+                    markdown_dialect: None,
+                },
+            },
+            tinychannels_bus::OutboundContentPart::Content {
+                part: ContentPart::Buttons {
+                    rows: vec![vec![ButtonAction {
+                        id: "opaque-action-17".into(),
+                        label: "Continue".into(),
+                        style: None,
+                        disabled: false,
+                    }]],
+                },
+            },
+        ],
+    );
+    crate::channel::ChannelTypedSend::send_typed(&channel, &buttons)
+        .await
+        .unwrap();
+    let body = json_bodies(&server, "sendMessage").await.remove(0);
+    assert_eq!(
+        body["reply_markup"]["inline_keyboard"][0][0]["callback_data"],
+        "opaque-action-17"
+    );
+    assert_eq!(body["text"], "Choose");
+
+    let poll = typed_parts(
+        "poll",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Poll {
+                question: "Preferred option?".into(),
+                options: vec!["A".into(), "B".into()],
+                multiple_choice: true,
+                closes_at_unix_ms: None,
+                provider_poll_id: None,
+            },
+        }],
+    );
+    crate::channel::ChannelTypedSend::send_typed(&channel, &poll)
+        .await
+        .unwrap();
+    let body = json_bodies(&server, "sendPoll").await.remove(0);
+    assert_eq!(
+        body["options"],
+        serde_json::json!([{"text":"A"},{"text":"B"}])
+    );
+    assert_eq!(body["allows_multiple_answers"], true);
+    assert_eq!(body["message_thread_id"], "77");
+
+    let presentation = typed_parts(
+        "presentation",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Presentation {
+                blocks: serde_json::json!({"title":"Update", "text":"Status"}),
+            },
+        }],
+    );
+    crate::channel::ChannelTypedSend::send_typed(&channel, &presentation)
+        .await
+        .unwrap();
+    let body = json_bodies(&server, "sendMessage").await.remove(0);
+    assert_eq!(body["text"], "Status\nUpdate");
+    assert_eq!(body["parse_mode"], "MarkdownV2");
+}
+
+#[tokio::test]
+async fn telegram_native_data_is_explicitly_unsupported_without_provider_io() {
+    let server = mock_api().await;
+    let channel = channel_for(&server, &["*"]);
+    let message = typed_parts(
+        "native-data",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::channel::ContentPart::Native {
+                provider: "telegram".into(),
+                data: serde_json::json!({"opaque":"payload"}),
+            },
+        }],
+    );
+    let error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+    assert!(error.unsupported);
+    assert!(!error.sent_before_error);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
     let server = mock_api().await;
