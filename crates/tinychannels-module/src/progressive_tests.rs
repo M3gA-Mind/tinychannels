@@ -3889,6 +3889,8 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         )
         .await
         .unwrap();
+    let _storage =
+        crate::storage_fixture::StorageHost::serve(&connection, "voice-pipeline").await;
     let host = HostChannels::new(connection);
     let context = ProgressiveOutputContext {
         turn_id: "turn-voice-1".into(),
@@ -3992,7 +3994,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             matches!(part,
                 tinychannels_bus::OutboundContentPart::Voice {
                     voice: tinychannels_bus::OutboundVoice::Media { media, .. }
-                } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
             )
         });
         assert_eq!(has_media, expected_voice, "policy case {index}: {mode:?}");
@@ -4010,7 +4012,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
                                     media,
                                     ..
                                 }
-                            } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                            } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
                         )))
                     })
                     .unwrap(),
@@ -4110,7 +4112,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
                     if parts.iter().any(|part| matches!(part,
                         tinychannels_bus::OutboundContentPart::Voice {
                             voice: tinychannels_bus::OutboundVoice::Media { media, .. }
-                        } if media.opaque_id.as_deref() == Some("durable-host-voice")
+                        } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
                     ))
                 )
             })
@@ -4146,6 +4148,25 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         drop(requests);
         replies.shutdown().await.expect("close scoped worker");
     }
+
+    let published = callback.published_voice_media.lock().await[0].clone();
+    let published_id = published.opaque_id.as_deref().expect("published voice id");
+    let scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "telegram:bot-1".into(),
+        channel: context.channel.clone(),
+        conversation: context.conversation.clone(),
+        turn_id: context.turn_id.clone(),
+    };
+    let storage = host.storage().await.expect("host-scoped storage is available");
+    let media_store = tinychannels::host::ScopedMediaStore::new(
+        Arc::clone(storage.documents()),
+        Arc::clone(storage.blobs()),
+    );
+    let stored = media_store
+        .read(scope, published_id, 1024 * 1024)
+        .await
+        .expect("progressive policy voice reference resolves in scoped storage");
+    assert_eq!(stored.bytes, progressive_test_ogg());
 
     *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
         mode: tinychannels_bus::HostVoiceReplyMode::Always,
