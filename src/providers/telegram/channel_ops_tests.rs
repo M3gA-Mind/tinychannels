@@ -76,6 +76,12 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 text: None,
                 media_urls: vec!["https://example.invalid/image.png".into()],
             },
+            Feature::VoiceSynthesis => tinychannels_bus::OutboundPayload::Voice {
+                voice: tinychannels_bus::OutboundVoice::Synthesize {
+                    text: "speak this".into(),
+                    voice: None,
+                },
+            },
             _ => {
                 return Err(tinychannels_bus::channel::ChannelSendError {
                     kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
@@ -861,6 +867,10 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         fixture.observations().is_empty(),
         "undeclared voice synthesis must not reach the mock platform"
     );
+    check_feature(&fixture, ConformanceFeature::Image)
+        .await
+        .unwrap();
+    assert!(fixture.observations().is_empty());
 }
 
 #[tokio::test]
