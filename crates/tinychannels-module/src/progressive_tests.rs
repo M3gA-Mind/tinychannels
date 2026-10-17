@@ -25,7 +25,8 @@ fn legacy_feed_retains_the_v1_event_wire_shape() {
 struct Callback {
     sends: Arc<Mutex<Vec<Value>>>,
     requests: Arc<Mutex<Vec<ProgressiveTransportRequest>>>,
-    result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
+    output_result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
+    send_result: Arc<Mutex<Option<ProgressiveTransportResult>>>,
     block: bool,
     entered: Arc<Notify>,
     released: Arc<Notify>,
@@ -60,38 +61,24 @@ impl Callback {
                 self.released.notified().await;
             }
         }
-        let configured = self.result.lock().await.clone();
+        let configured = if matches!(request, ProgressiveTransportRequest::OutputEvent { .. }) {
+            self.output_result.lock().await.clone()
+        } else if typed_send {
+            self.send_result.lock().await.clone()
+        } else {
+            None
+        };
         let result = configured.unwrap_or_else(|| {
             if typed_send {
-                ProgressiveTransportResult::Outcome(Default::default())
+                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+                outcome.receipt.platform_message_ids = vec!["fixture-message".into()];
+                ProgressiveTransportResult::Outcome(outcome)
             } else if matches!(request, ProgressiveTransportRequest::OutputEvent { .. }) {
                 ProgressiveTransportResult::Acknowledged
             } else {
                 ProgressiveTransportResult::Success(serde_json::json!({"id": "fixture-message"}))
             }
         });
-        let result = if !typed_send
-            && matches!(request, ProgressiveTransportRequest::OutputEvent { .. })
-            && matches!(result, ProgressiveTransportResult::Outcome(_))
-        {
-            ProgressiveTransportResult::Acknowledged
-        } else {
-            result
-        };
-        let result = if !typed_send
-            && matches!(
-                request,
-                ProgressiveTransportRequest::OutputEvent {
-                    event: ChannelOutputEvent::FinalMessage { .. },
-                    ..
-                }
-            )
-            && matches!(result, ProgressiveTransportResult::Failed)
-        {
-            ProgressiveTransportResult::Acknowledged
-        } else {
-            result
-        };
         Ok(ChannelBackendResult::ProgressiveTransport(result))
     }
 }
