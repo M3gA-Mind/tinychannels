@@ -1910,7 +1910,12 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         Some("native-v2")
     );
     assert_eq!(fixture.adapter.mode, AdapterMode::TelegramNativeV2);
-    let results = tinychannels_conformance::check_all_features(&fixture).await;
+    let mut results = Vec::new();
+    for feature in ConformanceFeature::ALL {
+        let result = check_feature(&fixture, feature).await;
+        println!("{feature:?}: {result:?}; observations={:?}", fixture.observations());
+        results.push((feature, result));
+    }
     for (feature, result) in &results {
         assert!(result.is_ok(), "{feature:?}: {}", result.as_ref().unwrap_err());
     }
