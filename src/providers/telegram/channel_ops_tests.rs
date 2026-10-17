@@ -1526,7 +1526,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("configured account")
+            .contains("before provider dispatch")
     );
 
     let mut no_turn = scoped_typed_media_message("stored-photo-1");
@@ -1537,8 +1537,9 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("originating turn")
+            .contains("before provider dispatch")
     );
+    assert!(server.received_requests().await.unwrap().is_empty());
 
     let mut no_reply = scoped_typed_media_message("stored-photo-1");
     no_reply.reply_to_id = Some("not-a-platform-id".into());
