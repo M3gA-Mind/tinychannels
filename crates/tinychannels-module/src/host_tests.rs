@@ -564,7 +564,6 @@ async fn scoped_voice_callbacks_round_trip_scope_and_enforce_media_limits() {
             ..Default::default()
         },
         turn_id: "message-88".into(),
-        ..Default::default()
     };
     let transcription = host
         .transcribe_voice(tinychannels_bus::HostVoiceTranscriptionRequest {
