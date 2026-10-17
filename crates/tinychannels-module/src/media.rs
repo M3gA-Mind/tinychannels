@@ -1,6 +1,7 @@
 //! Bounded, runtime-local host-to-module media uploads.
 use futures_util::FutureExt;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
 use tinybus::{Error, Result};
 use tinychannels_bus::{

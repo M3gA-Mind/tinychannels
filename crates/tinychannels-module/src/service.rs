@@ -105,6 +105,7 @@ pub(crate) struct Channels {
     pub(crate) host: HostChannels,
     email: EmailSender,
     media_uploads: Arc<MediaUploads>,
+    media_reads: Arc<crate::media::MediaReads>,
     progressive: Arc<crate::progressive::Replies>,
     /// Shared with each listener task so it can retire its own entry.
     pub(crate) running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
@@ -133,6 +134,7 @@ impl Channels {
             host,
             email: EmailSender::new(),
             media_uploads: Arc::new(MediaUploads::default()),
+            media_reads: Arc::new(crate::media::MediaReads::default()),
             running,
             provider_activations: Mutex::new(HashMap::new()),
             terminal: AtomicBool::new(false),
@@ -1111,6 +1113,90 @@ impl Channels {
             ));
         }
         self.media_uploads.abort(request).await
+    }
+
+    /// Resolve one scoped media reference into a short-lived confidential read.
+    #[tinybus(confidential)]
+    async fn begin_media_read(
+        &self,
+        mut request: tinychannels_bus::MediaReadBegin,
+    ) -> BusResult<tinychannels_bus::MediaReadInfo> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let activation = self.media_activation(&request.instance).await?;
+        if request.scope.conversation.id.trim().is_empty()
+            || request.scope.turn_id.trim().is_empty()
+            || request.media.opaque_id.as_deref().is_none_or(str::is_empty)
+            || request.max_bytes == 0
+            || request.max_bytes > tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES as u64
+        {
+            return Err(BusError::failed("media resolution request is invalid"));
+        }
+        let encoded = serde_json::to_vec(&request)
+            .map_err(|_| BusError::failed("media resolution request is invalid"))?;
+        if encoded.len() > tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES {
+            return Err(BusError::failed("media resolution request exceeds its limit"));
+        }
+        let reservation = self.media_reads.reserve()?;
+        let repository = crate::provider::ModuleMediaRepository(
+            self.host.clone(),
+            request.instance.clone(),
+        );
+        let media_id = request.media.opaque_id.clone().expect("validated opaque id");
+        let media = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            async move {
+                repository
+                    .read_media(request.scope.clone(), media_id, request.max_bytes)
+                    .await
+            },
+        )
+        .await
+        .map_err(|_| BusError::failed("media resolution timed out"))?
+        .map_err(|_| BusError::failed("media could not be resolved"))?;
+        if self.terminal.load(Ordering::SeqCst)
+            || self.media_activation(&request.instance).await? != activation
+        {
+            return Err(BusError::failed(
+                "media provider activation changed during resolution",
+            ));
+        }
+        self.media_reads
+            .complete(request, activation, media, reservation)
+            .await
+    }
+
+    /// Return one bounded chunk over confidential TinyBus method-reply framing.
+    #[tinybus(confidential)]
+    async fn read_media_chunk(
+        &self,
+        request: tinychannels_bus::MediaReadChunk,
+    ) -> BusResult<tinychannels_bus::MediaReadChunkResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_reads.binding(&request.handle).await?;
+        if self.media_activation(&instance).await? != activation {
+            return Err(BusError::failed("media read belongs to another activation"));
+        }
+        self.media_reads.chunk(request).await
+    }
+
+    /// Release a resolved media read and its temporary byte buffer.
+    #[tinybus(confidential)]
+    async fn abort_media_read(
+        &self,
+        request: tinychannels_bus::MediaReadFinish,
+    ) -> BusResult<()> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_reads.binding(&request.0).await?;
+        if self.media_activation(&instance).await? != activation {
+            return Err(BusError::failed("media read belongs to another activation"));
+        }
+        self.media_reads.abort(request).await
     }
 
     /// Append an ordered, retry-safe confidential attachment chunk.
