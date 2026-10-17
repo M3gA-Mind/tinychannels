@@ -906,12 +906,20 @@ async fn run(
                         let _ = response.send(result);
                         break;
                     }
+                    if delivery_has_failure(&result) {
+                        reply.abort().await;
+                        record_terminal(&terminal_feed, fingerprint, &result).await;
+                        let _ = response.send(result);
+                        break;
+                    }
                     if let Some((text, event_parts, has_typed_parts)) = final_message {
+                        let (mut prior_outcomes, mut prior_unsupported) =
+                            delivery_facts(&result);
                         if forward {
                             if !has_typed_parts {
                                 match reply.finalize_existing_text(&text).await {
                                     Ok(Some(outcome)) => {
-                                        result = Ok(ProgressiveResult::DeliveryOutcome { outcome });
+                                        prior_outcomes.push(outcome);
                                     }
                                     Err(error) => {
                                         reply.abort().await;
@@ -920,7 +928,7 @@ async fn run(
                                     Ok(None) => {}
                                 }
                             }
-                            if result.is_ok() && !matches!(&result, Ok(ProgressiveResult::DeliveryOutcome { .. })) {
+                            if result.is_ok() {
                             let parts = if has_typed_parts {
                                 event_parts
                             } else {
@@ -929,10 +937,14 @@ async fn run(
                                 }]
                             };
                             result = match reply.send_parts(&parts, &text).await {
-                                Ok(outcome) => Ok(ProgressiveResult::DeliveryOutcome { outcome }),
+                                Ok(outcome) => {
+                                    prior_outcomes.push(outcome);
+                                    Ok(delivery_result(prior_outcomes, prior_unsupported))
+                                }
                                 Err(ProgressiveSendError::UnsupportedContent) => {
                                     reply.abort().await;
-                                    Ok(ProgressiveResult::DeliveryUnsupported { parts })
+                                    prior_unsupported.extend(parts);
+                                    Ok(delivery_result(prior_outcomes, prior_unsupported))
                                 }
                                 Err(error) => {
                                     reply.abort().await;
@@ -1033,14 +1045,73 @@ async fn apply(
             .map_err(|error| Error::failed(error.to_string()))?;
         outcomes.extend(dispatched.outcomes);
         unsupported.extend(dispatched.unsupported);
+        if outcomes.iter().any(|outcome| outcome.error.is_some()) {
+            break;
+        }
     }
-    if !unsupported.is_empty() {
+    if !unsupported.is_empty() && !outcomes.is_empty() {
+        Ok(ProgressiveResult::DeliveryBatch {
+            outcomes,
+            unsupported,
+        })
+    } else if !unsupported.is_empty() {
         Ok(ProgressiveResult::DeliveryUnsupported { parts: unsupported })
     } else if !outcomes.is_empty() {
         Ok(ProgressiveResult::DeliveryOutcomes { outcomes })
     } else {
         Ok(ProgressiveResult::Updated)
     }
+}
+
+fn delivery_facts(
+    result: &Result<ProgressiveResult>,
+) -> (
+    Vec<tinychannels_bus::channel::ChannelSendOutcome>,
+    Vec<tinychannels_bus::OutboundContentPart>,
+) {
+    match result {
+        Ok(ProgressiveResult::DeliveryOutcome { outcome }) => (vec![outcome.clone()], Vec::new()),
+        Ok(ProgressiveResult::DeliveryOutcomes { outcomes }) => (outcomes.clone(), Vec::new()),
+        Ok(ProgressiveResult::DeliveryUnsupported { parts }) => (Vec::new(), parts.clone()),
+        Ok(ProgressiveResult::DeliveryBatch {
+            outcomes,
+            unsupported,
+        }) => (outcomes.clone(), unsupported.clone()),
+        _ => (Vec::new(), Vec::new()),
+    }
+}
+
+fn delivery_result(
+    outcomes: Vec<tinychannels_bus::channel::ChannelSendOutcome>,
+    unsupported: Vec<tinychannels_bus::OutboundContentPart>,
+) -> ProgressiveResult {
+    match (outcomes.is_empty(), unsupported.is_empty()) {
+        (true, true) => ProgressiveResult::Closed,
+        (false, true) if outcomes.len() == 1 => ProgressiveResult::DeliveryOutcome {
+            outcome: outcomes.into_iter().next().expect("one outcome"),
+        },
+        (false, true) => ProgressiveResult::DeliveryOutcomes { outcomes },
+        (true, false) => ProgressiveResult::DeliveryUnsupported { parts: unsupported },
+        (false, false) => ProgressiveResult::DeliveryBatch {
+            outcomes,
+            unsupported,
+        },
+    }
+}
+
+fn delivery_has_failure(result: &Result<ProgressiveResult>) -> bool {
+    matches!(
+        result,
+        Ok(ProgressiveResult::DeliveryOutcome { outcome }) if outcome.error.is_some()
+    ) || matches!(
+        result,
+        Ok(ProgressiveResult::DeliveryOutcomes { outcomes })
+            if outcomes.iter().any(|outcome| outcome.error.is_some())
+    ) || matches!(
+        result,
+        Ok(ProgressiveResult::DeliveryBatch { outcomes, .. })
+            if outcomes.iter().any(|outcome| outcome.error.is_some())
+    )
 }
 
 #[cfg(test)]

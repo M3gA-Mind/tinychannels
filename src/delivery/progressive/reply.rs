@@ -106,7 +106,7 @@ impl ProgressiveReply {
             Event::TextDelta { text, .. } => self.on_text_delta(text),
             Event::ThinkingDelta { text, .. } => self.on_thinking_delta(text),
             Event::ToolProgress { label, message } => {
-                self.on_tool_result(message.as_deref().unwrap_or(label), true)
+                self.on_tool_progress(message.as_deref().unwrap_or(label))
             }
             Event::ToolCallStarted {
                 tool_name,
@@ -114,7 +114,8 @@ impl ProgressiveReply {
                 ..
             } => self.on_tool_call(display_label.as_deref().unwrap_or(tool_name)),
             Event::ToolCallProgress { call_id, message } => {
-                self.on_tool_result(&format!("{call_id}: {message}"), true)
+                let _ = call_id;
+                self.on_tool_progress(message)
             }
             Event::ToolCallCompleted {
                 tool_name,
@@ -122,6 +123,21 @@ impl ProgressiveReply {
                 display_label,
                 ..
             } => self.on_tool_result(display_label.as_deref().unwrap_or(tool_name), *success),
+            Event::ApprovalRequest {
+                id: _,
+                prompt,
+                choices,
+            } if deliver_typed_content => {
+                let mut text = format!("Approval requested: {prompt}");
+                if !choices.is_empty() {
+                    text.push_str("\nChoices: ");
+                    text.push_str(&choices.join(", "));
+                }
+                self.dispatch_notice(&text, &mut dispatch).await?;
+            }
+            Event::Clarification { prompt } if deliver_typed_content => {
+                self.dispatch_notice(prompt, &mut dispatch).await?;
+            }
             Event::Media { text, parts } if deliver_typed_content => {
                 let mut outbound = Vec::new();
                 if let Some(text) = text {
@@ -203,6 +219,31 @@ impl ProgressiveReply {
         let mark = if success { "✓" } else { "✗" };
         self.state.last_tool = Some(format!("🔧 {tool_name} {mark}"));
         self.state.dirty = true;
+    }
+
+    /// A tool is still running; keep its status active in the draft.
+    pub fn on_tool_progress(&mut self, message: &str) {
+        self.state.last_tool = Some(format!("🔧 {message}…"));
+        self.state.dirty = true;
+    }
+
+    async fn dispatch_notice(
+        &self,
+        text: &str,
+        dispatch: &mut super::ProgressiveOutputDispatch,
+    ) -> Result<(), super::ProgressiveSendError> {
+        let part = tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: text.to_owned(),
+                markdown_dialect: None,
+            },
+        };
+        match self.send_content_parts(&[part.clone()], text).await {
+            Ok(outcome) => dispatch.outcomes.push(outcome),
+            Err(super::ProgressiveSendError::UnsupportedContent) => dispatch.unsupported.push(part),
+            Err(error) => return Err(error),
+        }
+        Ok(())
     }
 
     /// Model reasoning arrived.
