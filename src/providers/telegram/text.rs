@@ -72,6 +72,7 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
     // escaping are identified before emphasis delimiters are considered.
     let mut bracket_stack = Vec::new();
     let mut bracket_pairs = vec![None; chars.len()];
+    let mut nested_bracket = vec![false; chars.len()];
     let mut paren_stack = Vec::new();
     let mut paren_pairs = vec![None; chars.len()];
     for index in 0..chars.len() {
@@ -84,6 +85,9 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
                 if let Some(open) = bracket_stack.pop() {
                     bracket_pairs[open] = Some(index);
                     bracket_pairs[index] = Some(open);
+                    if let Some(parent) = bracket_stack.last() {
+                        nested_bracket[*parent] = true;
+                    }
                 }
             }
             '(' => paren_stack.push(index),
@@ -96,18 +100,19 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
             _ => {}
         }
     }
+    let mut last_url_end = 0;
     for open in 0..chars.len() {
         let Some(close) = bracket_pairs[open] else {
             continue;
         };
-        if chars[open] != '[' || chars.get(close + 1) != Some(&'(') {
+        if chars[open] != '[' || nested_bracket[open] || chars.get(close + 1) != Some(&'(') {
             continue;
         }
         let url_open = close + 1;
         let Some(url_close) = paren_pairs[url_open] else {
             continue;
         };
-        if url[url_open..=url_close].iter().any(|marked| *marked) {
+        if url_open <= last_url_end {
             continue;
         }
         syntax[open] = true;
@@ -115,6 +120,7 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
         syntax[url_open] = true;
         syntax[url_close] = true;
         url[url_open + 1..url_close].fill(true);
+        last_url_end = url_close;
     }
 
     // Preserve only balanced emphasis/spoiler delimiters. Unclosed markers
