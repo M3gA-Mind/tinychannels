@@ -2587,7 +2587,16 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
                 "callback_query": {
                     "id": "allowed-id", "data": "opaque-action",
                     "from": {"id": 42, "username": "outsider"},
-                    "message": {"message_id": 81, "chat": {"id": 100, "type": "private"}}
+                    "message": {"message_id": 81, "message_thread_id": 7,
+                        "chat": {"id": -100, "type": "supergroup"}}
+                }
+            },
+            {
+                "update_id": 44,
+                "callback_query": {
+                    "id": "allowed-username", "data": "other-action",
+                    "from": {"id": 43, "username": "alice"},
+                    "message": {"message_id": 84, "chat": {"id": 101, "type": "private"}}
                 }
             },
             {
@@ -2636,12 +2645,27 @@ async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
         .filter(|(_, kind, _)| kind == "button_callback")
         .map(|(_, _, payload)| payload.clone())
         .collect::<Vec<_>>();
-    assert_eq!(callbacks.len(), 1);
+    assert_eq!(callbacks.len(), 2);
     assert_eq!(callbacks[0]["type"], "button_callback");
     assert_eq!(callbacks[0]["queryId"], "allowed-id");
+    assert_eq!(callbacks[0]["actionId"], "opaque-action");
     assert_eq!(callbacks[0]["actor"]["id"], "42");
+    assert_eq!(callbacks[0]["conversation"]["id"], "-100");
+    assert_eq!(callbacks[0]["conversation"]["topicId"], "7");
+    assert_eq!(callbacks[0]["providerMessageId"], "81");
+    assert_eq!(callbacks[1]["queryId"], "allowed-username");
+    assert_eq!(callbacks[1]["actor"]["id"], "43");
     let acknowledgments = json_bodies(&server, "answerCallbackQuery").await;
-    assert_eq!(acknowledgments.len(), 2);
+    assert_eq!(acknowledgments.len(), 3);
+    assert_eq!(
+        acknowledgments
+            .iter()
+            .map(|body| body["callback_query_id"].as_str().unwrap())
+            .collect::<std::collections::HashSet<_>>(),
+        ["spoofed-first-name", "allowed-id", "allowed-username"]
+            .into_iter()
+            .collect()
+    );
 }
 
 #[test]
