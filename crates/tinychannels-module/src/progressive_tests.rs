@@ -4517,25 +4517,27 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         .await
         .expect("stub codec bus supports the production final voice path");
 
-    let requests = callback.requests.lock().await;
-    let send = requests.iter().find_map(|request| match request {
-        ProgressiveTransportRequest::SendTyped {
-            turn_id: Some(turn_id),
-            parts,
-            ..
-        } if turn_id == "stub-codec-turn" => Some(parts),
-        _ => None,
-    });
-    assert!(send.is_some_and(|parts| parts.iter().any(|part| matches!(
-        part,
-        tinychannels_bus::OutboundContentPart::Voice {
-            voice: tinychannels_bus::OutboundVoice::Media {
-                media,
-                codec: Some(codec),
+    {
+        let requests = callback.requests.lock().await;
+        let send = requests.iter().find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
                 ..
-            }
-        } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
-    ))));
+            } if turn_id == "stub-codec-turn" => Some(parts),
+            _ => None,
+        });
+        assert!(send.is_some_and(|parts| parts.iter().any(|part| matches!(
+            part,
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media,
+                    codec: Some(codec),
+                    ..
+                }
+            } if media.opaque_id.as_deref() == Some("durable-host-voice") && codec == "ogg_opus"
+        ))));
+    }
     assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
     assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 1);
 
