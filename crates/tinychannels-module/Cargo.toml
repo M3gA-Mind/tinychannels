@@ -47,6 +47,7 @@ log = "0.4"
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }
 base64 = "0.23"
+futures-util = "0.3"
 
 [dev-dependencies]
 tinychannels = { path = "../..", features = ["test-support"] }
@@ -55,7 +56,6 @@ tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["te
 tempfile = "3"
 tokio = { version = "1", features = ["test-util"] }
 serde_json = "1"
-futures-util = "0.3"
 tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 wiremock = "0.6"
 
