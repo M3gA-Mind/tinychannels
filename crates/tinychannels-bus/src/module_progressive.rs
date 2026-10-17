@@ -96,6 +96,7 @@ pub enum ChannelOutputEvent {
         success: Option<bool>,
         elapsed_ms: Option<u64>,
         output_chars: Option<usize>,
+        output: Option<String>,
         structured: Option<Value>,
         usage: Option<SubagentUsage>,
         failure: Option<ToolFailureSummary>,
