@@ -80,6 +80,7 @@ pub struct TelegramChannel {
     /// [`TelegramChannel::with_transcriber`].
     pub(crate) transcriber: Option<Arc<dyn crate::host::Transcriber>>,
     pub(crate) voice_media_store: Option<Arc<dyn crate::host::VoiceMediaStore>>,
+    pub(crate) media_repository: Option<Arc<dyn crate::host::MediaRepository>>,
     pub(crate) voice_synthesis: bool,
     /// Injected persisted-allowlist store. On first-run bind/pairing the paired
     /// identity is promoted through this so it survives restarts. `None` ⇒

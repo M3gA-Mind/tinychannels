@@ -176,6 +176,10 @@ impl Hooks {
                 callbacks.clone(),
                 configured_instance.clone(),
             )))
+            .media_repository(Arc::new(ModuleMediaRepository(
+                callbacks.clone(),
+                configured_instance.clone(),
+            )))
             .voice_codec(Arc::new(ModuleVoiceCodec(callbacks.clone())))
             .events(Arc::new(ModuleEvents(
                 callbacks.clone(),
@@ -261,6 +265,54 @@ impl tinychannels::host::StorageProvider for ModuleStorage {
 
     async fn blobs(&self) -> anyhow::Result<Arc<dyn tinystoragedrivers_core::BlobStore>> {
         Ok(Arc::clone(self.0.storage().await?.blobs()))
+    }
+}
+
+struct ModuleMediaRepository(HostChannels, String);
+
+impl ModuleMediaRepository {
+    async fn scoped_store(&self) -> anyhow::Result<tinychannels::host::ScopedMediaStore> {
+        let storage = self
+            .0
+            .storage()
+            .await
+            .map_err(|error| anyhow::anyhow!("host scoped storage is unavailable: {:?}", error.kind()))?;
+        Ok(tinychannels::host::ScopedMediaStore::new(
+            Arc::clone(storage.documents()),
+            Arc::clone(storage.blobs()),
+        ))
+    }
+}
+
+#[async_trait::async_trait]
+impl tinychannels::host::MediaRepository for ModuleMediaRepository {
+    async fn store_media(
+        &self,
+        mut request: tinychannels::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        let scope = &mut request.metadata.scope;
+        if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
+            anyhow::bail!("media storage requires a conversation and turn identity");
+        }
+        scope.configured_instance.clone_from(&self.1);
+        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        scope.channel.account_id = Some(self.1.clone());
+        self.scoped_store().await?.store(request).await
+    }
+
+    async fn read_media(
+        &self,
+        mut scope: tinychannels::host::MediaScope,
+        opaque_id: String,
+        max_bytes: u64,
+    ) -> anyhow::Result<tinychannels::host::StoredMedia> {
+        if scope.conversation.id.trim().is_empty() || scope.turn_id.trim().is_empty() {
+            anyhow::bail!("media resolution requires a conversation and turn identity");
+        }
+        scope.configured_instance.clone_from(&self.1);
+        scope.channel.id = tinychannels_bus::provider_id(&self.1).to_owned();
+        scope.channel.account_id = Some(self.1.clone());
+        self.scoped_store().await?.read(scope, &opaque_id, max_bytes).await
     }
 }
 
