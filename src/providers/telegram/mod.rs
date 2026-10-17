@@ -14,7 +14,6 @@ mod channel_send;
 mod channel_types;
 mod text;
 
-
 pub use channel_types::TelegramChannel;
 
 /// Approval-context client id for Telegram turns: the channel name, as for

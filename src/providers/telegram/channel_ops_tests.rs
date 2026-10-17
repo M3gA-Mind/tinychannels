@@ -2687,13 +2687,18 @@ fn callback_event_keeps_authenticated_actor_message_and_topic_identity() {
     let event = TelegramChannel::callback_event(&update).unwrap();
     assert_eq!(event.channel.id, "telegram");
     assert_eq!(event.conversation.as_ref().unwrap().id, "-100");
-    assert_eq!(event.conversation.as_ref().unwrap().topic_id.as_deref(), Some("6"));
-    assert!(matches!(event.event, tinychannels_bus::ChannelEventKind::ButtonCallback {
+    assert_eq!(
+        event.conversation.as_ref().unwrap().topic_id.as_deref(),
+        Some("6")
+    );
+    assert!(
+        matches!(event.event, tinychannels_bus::ChannelEventKind::ButtonCallback {
         ref query_id,
         ref action_id,
         provider_message_id: Some(ref message_id),
         ref actor,
-    } if query_id == "query-5" && action_id == "approval:opaque-id" && message_id == "81" && actor.id == "31" && actor.name.as_deref() == Some("alice")));
+    } if query_id == "query-5" && action_id == "approval:opaque-id" && message_id == "81" && actor.id == "31" && actor.name.as_deref() == Some("alice"))
+    );
 }
 
 #[test]

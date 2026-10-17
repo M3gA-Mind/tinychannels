@@ -213,8 +213,12 @@ async fn send_text_chunks_marks_continuations_and_replies_only_on_first_chunk() 
     let texts: Vec<&str> = bodies.iter().map(|b| b["text"].as_str().unwrap()).collect();
     assert!(texts[0].ends_with("\\(continues\\.\\.\\.\\)"));
     assert!(!texts[0].starts_with("\\(continued\\)"));
-    assert!(texts[1].starts_with("\\(continued\\)") && texts[1].ends_with("\\(continues\\.\\.\\.\\)"));
-    assert!(texts[2].starts_with("\\(continued\\)") && !texts[2].ends_with("\\(continues\\.\\.\\.\\)"));
+    assert!(
+        texts[1].starts_with("\\(continued\\)") && texts[1].ends_with("\\(continues\\.\\.\\.\\)")
+    );
+    assert!(
+        texts[2].starts_with("\\(continued\\)") && !texts[2].ends_with("\\(continues\\.\\.\\.\\)")
+    );
     assert_eq!(bodies[0]["reply_to_message_id"], 42);
     assert!(bodies[1].get("reply_to_message_id").is_none());
     assert!(bodies[2].get("reply_to_message_id").is_none());
@@ -519,4 +523,3 @@ async fn send_by_url_includes_caption_and_surfaces_rejections() {
         assert!(err.contains("wrong file identifier"), "{err}");
     }
 }
-

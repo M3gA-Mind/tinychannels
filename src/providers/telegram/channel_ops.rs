@@ -76,7 +76,10 @@ impl TelegramChannel {
     }
 
     fn callback_is_allowed(&self, update: &serde_json::Value) -> bool {
-        let Some(user) = update.get("callback_query").and_then(|query| query.get("from")) else {
+        let Some(user) = update
+            .get("callback_query")
+            .and_then(|query| query.get("from"))
+        else {
             return false;
         };
         let id = user

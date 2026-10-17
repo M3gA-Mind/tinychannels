@@ -93,12 +93,16 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
         }
     }
     for open in 0..chars.len() {
-        let Some(close) = bracket_pairs[open] else { continue };
+        let Some(close) = bracket_pairs[open] else {
+            continue;
+        };
         if chars[open] != '[' || chars.get(close + 1) != Some(&'(') {
             continue;
         }
         let url_open = close + 1;
-        let Some(url_close) = paren_pairs[url_open] else { continue };
+        let Some(url_close) = paren_pairs[url_open] else {
+            continue;
+        };
         syntax[open] = true;
         syntax[close] = true;
         syntax[url_open] = true;
@@ -147,7 +151,11 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
         if syntax[cursor] {
             output.push(ch);
         } else if code[cursor] {
-            if ch == '\\' && chars.get(cursor + 1).is_some_and(|next| matches!(next, '\\' | '`')) {
+            if ch == '\\'
+                && chars
+                    .get(cursor + 1)
+                    .is_some_and(|next| matches!(next, '\\' | '`'))
+            {
                 output.push(ch);
                 cursor += 1;
                 output.push(chars[cursor]);
@@ -157,7 +165,11 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
                 }
                 output.push(ch);
             }
-        } else if ch == '\\' && chars.get(cursor + 1).is_some_and(|next| SPECIAL.contains(*next)) {
+        } else if ch == '\\'
+            && chars
+                .get(cursor + 1)
+                .is_some_and(|next| SPECIAL.contains(*next))
+        {
             output.push(ch);
             cursor += 1;
             output.push(chars[cursor]);
