@@ -32,119 +32,112 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
     let mut syntax = vec![false; chars.len()];
     let mut code = vec![false; chars.len()];
     let mut url = vec![false; chars.len()];
-    let is_escaped = |index: usize| {
-        let mut slashes = 0;
-        let mut cursor = index;
-        while cursor > 0 && chars[cursor - 1] == '\\' {
-            slashes += 1;
-            cursor -= 1;
-        }
-        slashes % 2 == 1
-    };
+    let mut escaped = vec![false; chars.len()];
+    let mut slash_run = 0;
+    for (index, ch) in chars.iter().enumerate() {
+        escaped[index] = slash_run % 2 == 1;
+        slash_run = if *ch == '\\' { slash_run + 1 } else { 0 };
+    }
 
-    // Code spans have their own MarkdownV2 escape rules. Preserve the entire
-    // span and only escape a literal backslash/backtick inside it.
+    // Pair inline and fenced code delimiters in one pass. Code spans have
+    // their own escaping rules and are opaque to the later syntax scans.
+    let mut pending_ticks = [Vec::<usize>::new(), Vec::<usize>::new()];
     let mut cursor = 0;
     while cursor < chars.len() {
-        if chars[cursor] != '`' || is_escaped(cursor) {
+        if chars[cursor] != '`' || escaped[cursor] {
             cursor += 1;
             continue;
         }
-        let delimiter_len = if chars[cursor..].starts_with(&['`', '`', '`']) {
-            3
-        } else {
-            1
-        };
-        let mut close = cursor + delimiter_len;
-        let mut found = None;
-        while close < chars.len() {
-            if chars[close] == '`'
-                && !is_escaped(close)
-                && (delimiter_len == 1 || chars[close..].starts_with(&['`', '`', '`']))
-            {
-                found = Some(close);
-                break;
-            }
-            close += 1;
+        let start = cursor;
+        while chars.get(cursor) == Some(&'`') {
+            cursor += 1;
         }
-        if let Some(end) = found {
-            for index in cursor..cursor + delimiter_len {
-                syntax[index] = true;
-            }
-            for index in cursor + delimiter_len..end {
-                code[index] = true;
-            }
-            for index in end..end + delimiter_len {
-                syntax[index] = true;
-            }
-            cursor = end + delimiter_len;
+        let run = cursor - start;
+        let slot = usize::from(run >= 3);
+        let width = if slot == 0 { 1 } else { 3 };
+        if let Some(open) = pending_ticks[slot].pop() {
+            syntax[open..open + width].fill(true);
+            syntax[start..start + width].fill(true);
+            code[open + width..start].fill(true);
         } else {
-            cursor += delimiter_len;
+            pending_ticks[slot].push(start);
         }
+    }
+
+    // Precompute bracket and parenthesis pairs once so link syntax and URL
+    // escaping are identified before emphasis delimiters are considered.
+    let mut bracket_stack = Vec::new();
+    let mut bracket_pairs = vec![None; chars.len()];
+    let mut paren_stack = Vec::new();
+    let mut paren_pairs = vec![None; chars.len()];
+    for index in 0..chars.len() {
+        if code[index] || escaped[index] {
+            continue;
+        }
+        match chars[index] {
+            '[' => bracket_stack.push(index),
+            ']' => {
+                if let Some(open) = bracket_stack.pop() {
+                    bracket_pairs[open] = Some(index);
+                    bracket_pairs[index] = Some(open);
+                }
+            }
+            '(' => paren_stack.push(index),
+            ')' => {
+                if let Some(open) = paren_stack.pop() {
+                    paren_pairs[open] = Some(index);
+                    paren_pairs[index] = Some(open);
+                }
+            }
+            _ => {}
+        }
+    }
+    for open in 0..chars.len() {
+        let Some(close) = bracket_pairs[open] else { continue };
+        if chars[open] != '[' || chars.get(close + 1) != Some(&'(') {
+            continue;
+        }
+        let url_open = close + 1;
+        let Some(url_close) = paren_pairs[url_open] else { continue };
+        syntax[open] = true;
+        syntax[close] = true;
+        syntax[url_open] = true;
+        syntax[url_close] = true;
+        url[url_open + 1..url_close].fill(true);
     }
 
     // Preserve only balanced emphasis/spoiler delimiters. Unclosed markers
     // become escaped literal text rather than invalid Telegram markup.
-    let mut pending = std::collections::HashMap::<char, Vec<usize>>::new();
+    let mut open_tokens = Vec::<(char, usize)>::new();
     cursor = 0;
     while cursor < chars.len() {
-        if code[cursor] || is_escaped(cursor) {
+        if code[cursor] || url[cursor] || escaped[cursor] {
             cursor += 1;
             continue;
         }
-        if chars[cursor] == '|' && chars.get(cursor + 1) == Some(&'|') && !code[cursor + 1] {
-            if let Some(open) = pending.entry('|').or_default().pop() {
-                syntax[open] = true;
-                syntax[open + 1] = true;
-                syntax[cursor] = true;
-                syntax[cursor + 1] = true;
-            } else {
-                pending.entry('|').or_default().push(cursor);
-            }
-            cursor += 2;
-            continue;
-        }
-        if matches!(chars[cursor], '*' | '_' | '~') {
-            let token = pending.entry(chars[cursor]).or_default();
-            if let Some(open) = token.pop() {
-                syntax[open] = true;
-                syntax[cursor] = true;
-            } else {
-                token.push(cursor);
-            }
-        }
-        cursor += 1;
-    }
-
-    // Preserve link syntax. URL contents escape only the characters Telegram
-    // reserves inside link destinations.
-    cursor = 0;
-    while cursor < chars.len() {
-        if chars[cursor] != '[' || code[cursor] || is_escaped(cursor) {
-            cursor += 1;
-            continue;
-        }
-        let Some(close_label) = (cursor + 1..chars.len())
-            .find(|index| chars[*index] == ']' && !is_escaped(*index) && !code[*index])
-        else {
+        let token = if chars[cursor] == '|' && chars.get(cursor + 1) == Some(&'|') {
+            Some(('|', 2))
+        } else if matches!(chars[cursor], '*' | '_' | '~') {
+            Some((chars[cursor], 1))
+        } else {
+            None
+        };
+        let Some((token, width)) = token else {
             cursor += 1;
             continue;
         };
-        if chars.get(close_label + 1) != Some(&'(') {
-            cursor += 1;
-            continue;
+        if open_tokens.last().is_some_and(|(open, _)| *open == token) {
+            let (_, open) = open_tokens.pop().expect("last token exists");
+            syntax[open..open + width].fill(true);
+            syntax[cursor..cursor + width].fill(true);
+        } else if open_tokens.iter().any(|(open, _)| *open == token) {
+            // Crossing markup is invalid in MarkdownV2. Leave all involved
+            // delimiters literal instead of emitting a malformed entity.
+            open_tokens.clear();
+        } else {
+            open_tokens.push((token, cursor));
         }
-        let Some(close_url) = (close_label + 2..chars.len())
-            .find(|index| chars[*index] == ')' && !is_escaped(*index) && !code[*index])
-        else {
-            cursor += 1;
-            continue;
-        };
-        for index in [cursor, close_label, close_label + 1, close_url] {
-            syntax[index] = true;
-        }
-        url[close_label + 2..close_url].fill(true);
-        cursor = close_url + 1;
+        cursor += width;
     }
 
     let mut output = String::with_capacity(message.len() + message.len() / 8);
@@ -154,10 +147,16 @@ pub(crate) fn markdown_v2_text(message: &str) -> String {
         if syntax[cursor] {
             output.push(ch);
         } else if code[cursor] {
-            if matches!(ch, '\\' | '`') {
-                output.push('\\');
+            if ch == '\\' && chars.get(cursor + 1).is_some_and(|next| matches!(next, '\\' | '`')) {
+                output.push(ch);
+                cursor += 1;
+                output.push(chars[cursor]);
+            } else {
+                if matches!(ch, '\\' | '`') {
+                    output.push('\\');
+                }
+                output.push(ch);
             }
-            output.push(ch);
         } else if ch == '\\' && chars.get(cursor + 1).is_some_and(|next| SPECIAL.contains(*next)) {
             output.push(ch);
             cursor += 1;
