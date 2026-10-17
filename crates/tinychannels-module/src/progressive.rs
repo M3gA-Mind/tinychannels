@@ -26,7 +26,7 @@ const MAX_CONTENT: usize = 384 * 1024;
 // Both text and thinking can fill their content budget in one feed. JSON
 // escaping expands a byte to at most six bytes; retain bounded envelope space.
 const MAX_REQUEST: usize = MAX_CONTENT * 12 + 64 * 1024;
-const TURN_LIFETIME: Duration = Duration::from_secs(180);
+const LEGACY_TURN_LIFETIME: Duration = Duration::from_secs(180);
 
 struct Sender {
     host: HostChannels,
@@ -648,7 +648,7 @@ impl Replies {
     }
 
     async fn open(&self, channel: String) -> Result<ProgressiveResult> {
-        self.open_inner(channel, None).await
+        self.open_inner(channel, None, LEGACY_TURN_LIFETIME).await
     }
 
     async fn open_output(
@@ -656,7 +656,7 @@ impl Replies {
         channel: tinychannels_bus::ChannelRef,
         conversation: tinychannels_bus::ConversationRef,
         turn_id: String,
-        _lifetime_ms: u64,
+        lifetime_ms: u64,
     ) -> Result<ProgressiveResult> {
         if channel.id.is_empty()
             || conversation.id.is_empty()
@@ -667,6 +667,10 @@ impl Replies {
         {
             return Err(Error::failed("invalid scoped progressive target"));
         }
+        let lifetime = Duration::from_millis(lifetime_ms);
+        tokio::time::Instant::now()
+            .checked_add(lifetime)
+            .ok_or_else(|| Error::failed("scoped progressive lease is out of range"))?;
         let route = format!("{}:{}", channel.id, conversation.id);
         self.open_inner(
             route,
@@ -675,6 +679,7 @@ impl Replies {
                 channel,
                 conversation,
             }),
+            lifetime,
         )
         .await
     }
@@ -683,6 +688,7 @@ impl Replies {
         &self,
         channel: String,
         context: Option<ProgressiveOutputContext>,
+        lifetime: Duration,
     ) -> Result<ProgressiveResult> {
         if channel.is_empty() || channel.len() > 4096 {
             return Err(Error::failed("invalid progressive target"));
@@ -757,6 +763,7 @@ impl Replies {
             channel,
             capabilities,
             context,
+            lifetime,
             terminal_feed.clone(),
             inbox,
         ));
@@ -937,6 +944,7 @@ async fn run(
     channel: String,
     capabilities: tinychannels_bus::ChannelCapabilities,
     context: Option<ProgressiveOutputContext>,
+    lifetime: Duration,
     terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
     mut inbox: mpsc::Receiver<Command>,
 ) {
@@ -970,7 +978,7 @@ async fn run(
         timer.tick().await;
     }
     reply.typing_tick().await;
-    let expiry = tokio::time::sleep(TURN_LIFETIME);
+    let expiry = tokio::time::sleep(lifetime);
     tokio::pin!(expiry);
     loop {
         tokio::select! {
