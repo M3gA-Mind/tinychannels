@@ -31,6 +31,7 @@ const TURN_LIFETIME: Duration = Duration::from_secs(180);
 struct Sender {
     host: HostChannels,
     context: Option<ProgressiveOutputContext>,
+    text_limit: Option<(u64, tinychannels_bus::LengthUnit)>,
 }
 
 impl Sender {
@@ -135,6 +136,55 @@ impl ProgressiveSender for Sender {
         sequence: u64,
     ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError>
     {
+        let text_only = parts.iter().all(|part| matches!(part,
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { .. }
+            }
+        ));
+        let segments = match self.text_limit.filter(|_| text_only) {
+            Some((limit, unit)) => split_text_by_limit(text, limit, unit)?,
+            None => vec![text.to_owned()],
+        };
+        let mut aggregate = tinychannels_bus::channel::ChannelSendOutcome::default();
+        for (index, segment) in segments.iter().enumerate() {
+            let segment_parts = if text_only && segments.len() > 1 {
+                vec![tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: segment.clone(),
+                        markdown_dialect: None,
+                    },
+                }]
+            } else {
+                parts.to_vec()
+            };
+            let outcome = self.send_typed_part(
+                channel,
+                &segment_parts,
+                segment,
+                context,
+                sequence.saturating_add(index as u64),
+            ).await?;
+            aggregate.receipt.platform_message_ids.extend(outcome.receipt.platform_message_ids);
+            aggregate.receipt.parts.extend(outcome.receipt.parts);
+            if aggregate.receipt.primary_platform_message_id.is_none() {
+                aggregate.receipt.primary_platform_message_id = outcome.receipt.primary_platform_message_id;
+            }
+            if outcome.error.is_some() {
+                aggregate.error = outcome.error;
+                break;
+            }
+        }
+        Ok(aggregate)
+    }
+
+    async fn send_typed_part(
+        &self,
+        channel: &str,
+        parts: &[tinychannels_bus::OutboundContentPart],
+        text: &str,
+        context: Option<&ProgressiveOutputContext>,
+        sequence: u64,
+    ) -> std::result::Result<tinychannels_bus::channel::ChannelSendOutcome, ProgressiveSendError> {
         let idempotency_key = context.map(|context| {
             let scope = serde_json::to_vec(&(
                 &context.turn_id,
@@ -231,6 +281,39 @@ impl ProgressiveSender for Sender {
         .await
         .map(drop)
     }
+}
+
+fn split_text_by_limit(
+    text: &str,
+    limit: u64,
+    unit: tinychannels_bus::LengthUnit,
+) -> std::result::Result<Vec<String>, ProgressiveSendError> {
+    if limit == 0 {
+        return Err(ProgressiveSendError::Other(anyhow::anyhow!("configured text limit is zero")));
+    }
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut used = 0u64;
+    for scalar in text.chars() {
+        let cost = match unit {
+            tinychannels_bus::LengthUnit::Characters => 1,
+            tinychannels_bus::LengthUnit::Utf8Bytes => scalar.len_utf8() as u64,
+            tinychannels_bus::LengthUnit::Utf16Units => scalar.len_utf16() as u64,
+        };
+        if cost > limit {
+            return Err(ProgressiveSendError::Other(anyhow::anyhow!("one text scalar exceeds configured text limit")));
+        }
+        if used > 0 && used + cost > limit {
+            segments.push(std::mem::take(&mut current));
+            used = 0;
+        }
+        current.push(scalar);
+        used += cost;
+    }
+    if !current.is_empty() || segments.is_empty() {
+        segments.push(current);
+    }
+    Ok(segments)
 }
 
 enum Command {
@@ -732,6 +815,7 @@ async fn run(
             Arc::new(Sender {
                 host,
                 context: Some(context.clone()),
+                text_limit: capabilities.text.text_limit.map(|limit| (limit, capabilities.text.length_unit)),
             }),
             channel,
             capabilities,
@@ -742,6 +826,7 @@ async fn run(
             Arc::new(Sender {
                 host,
                 context: None,
+                text_limit: capabilities.text.text_limit.map(|limit| (limit, capabilities.text.length_unit)),
             }),
             channel,
             capabilities,
