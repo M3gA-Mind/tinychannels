@@ -116,6 +116,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 .unwrap()
                 .push(tinychannels_conformance::WireObservation {
                     feature,
+                    operation: "send".into(),
                     channel: self.scope.channel.clone(),
                     conversation,
                     payload_kinds,
