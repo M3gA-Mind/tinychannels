@@ -1296,6 +1296,89 @@ async fn terminal_text_edits_existing_draft_without_duplicate_send() {
     replies.shutdown().await.unwrap();
 }
 
+#[tokio::test(start_paused = true)]
+async fn failed_terminal_edit_retains_the_existing_draft_receipt() {
+    let (base, callback) = fixture(false).await;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.progressive_edits = true;
+    let mut configured = HashMap::new();
+    configured.insert(
+        "discord:failed-final-edit".to_owned(),
+        Running::start(
+            Arc::new(ConfiguredChannelWithCapabilities {
+                name: "discord",
+                capabilities,
+            }),
+            Arc::new(crate::provider::Hooks::default()),
+            base.host.clone(),
+        ),
+    );
+    let replies = Replies::new(base.host.clone(), Arc::new(Mutex::new(configured)));
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "discord".into(),
+                account_id: Some("discord:failed-final-edit".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "room".into(),
+                ..Default::default()
+            },
+            turn_id: "failed-final-edit-turn".into(),
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected opened output")
+    };
+    replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "draft".into(),
+                iteration: Some(1),
+            }],
+        })
+        .await
+        .unwrap();
+    tokio::time::advance(Duration::from_secs(1)).await;
+    for _ in 0..5 {
+        tokio::task::yield_now().await;
+    }
+    let mut edit_error = tinychannels_bus::channel::ChannelSendOutcome::default();
+    edit_error.error = Some(tinychannels_bus::channel::ChannelSendError {
+        kind: tinychannels_bus::channel::SendErrorKind::Transient,
+        message: "edit failed".into(),
+        sent_before_error: true,
+        ..Default::default()
+    });
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Outcome(edit_error));
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "final".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result,
+        ProgressiveResult::DeliveryBatch { outcomes, failure: Some(_), .. }
+            if outcomes.len() == 1
+                && outcomes[0].receipt.platform_message_ids == ["fixture-message"]
+                && outcomes[0].error.as_ref().is_some_and(|error| error.sent_before_error)
+    ));
+    assert_eq!(
+        callback.sends.lock().await.len(),
+        1,
+        "failed edit cannot cause a blind replacement send"
+    );
+    replies.shutdown().await.unwrap();
+}
+
 #[tokio::test]
 async fn partial_media_outcome_is_retained_and_stops_mixed_terminal_batch() {
     let (base, callback) = fixture(false).await;
