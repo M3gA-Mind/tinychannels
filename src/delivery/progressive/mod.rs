@@ -35,6 +35,65 @@ pub use state::{
 pub struct ProgressiveOutputDispatch {
     pub outcomes: Vec<tinychannels_bus::channel::ChannelSendOutcome>,
     pub unsupported: Vec<tinychannels_bus::OutboundContentPart>,
+    pub failure: Option<tinychannels_bus::module_progressive::ProgressiveOutputFailure>,
+}
+
+impl ProgressiveOutputDispatch {
+    /// Append one event's delivery facts while preserving event and part order.
+    pub fn absorb(&mut self, mut other: Self) {
+        self.outcomes.append(&mut other.outcomes);
+        self.unsupported.append(&mut other.unsupported);
+        self.failure = self.failure.or(other.failure);
+    }
+
+    /// Normalize accumulated engine facts into the public module result DTO.
+    pub fn into_result(self) -> tinychannels_bus::module_progressive::ProgressiveResult {
+        use tinychannels_bus::module_progressive::ProgressiveResult as Result;
+        match (self.outcomes.len(), self.unsupported.is_empty(), self.failure) {
+            (0, true, None) => Result::Updated,
+            (1, true, None) => Result::DeliveryOutcome {
+                outcome: self.outcomes.into_iter().next().expect("one outcome"),
+            },
+            (0, false, None) => Result::DeliveryUnsupported {
+                parts: self.unsupported,
+            },
+            (outcomes, true, None) if outcomes > 1 => Result::DeliveryOutcomes {
+                outcomes: self.outcomes,
+            },
+            (_, _, failure) => Result::DeliveryBatch {
+                outcomes: self.outcomes,
+                unsupported: self.unsupported,
+                failure,
+            },
+        }
+    }
+
+    /// Recover accumulated delivery facts before terminal output is applied.
+    pub fn from_result(
+        result: &tinychannels_bus::module_progressive::ProgressiveResult,
+    ) -> Self {
+        use tinychannels_bus::module_progressive::ProgressiveResult as Result;
+        match result {
+            Result::DeliveryOutcome { outcome } => Self {
+                outcomes: vec![outcome.clone()],
+                ..Default::default()
+            },
+            Result::DeliveryOutcomes { outcomes } => Self {
+                outcomes: outcomes.clone(),
+                ..Default::default()
+            },
+            Result::DeliveryUnsupported { parts } => Self {
+                unsupported: parts.clone(),
+                ..Default::default()
+            },
+            Result::DeliveryBatch { outcomes, unsupported, failure } => Self {
+                outcomes: outcomes.clone(),
+                unsupported: unsupported.clone(),
+                failure: *failure,
+            },
+            _ => Self::default(),
+        }
+    }
 }
 
 /// Minimum interval between progressive edits of the outbound message. Stays

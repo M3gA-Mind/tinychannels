@@ -911,20 +911,21 @@ async fn run(
                         break;
                     }
                     if let Some(ref final_event @ ChannelOutputEvent::FinalMessage { ref text, .. }) = final_message {
-                        let (mut prior_outcomes, mut prior_unsupported) =
-                            delivery_facts(&result);
+                        let mut dispatch = match &result {
+                            Ok(result) => ProgressiveOutputDispatch::from_result(result),
+                            Err(_) => ProgressiveOutputDispatch::default(),
+                        };
                         if forward {
                             match reply.finalize_output_event(&final_event).await {
-                                Ok(dispatch) => {
-                                    prior_outcomes.extend(dispatch.outcomes);
-                                    prior_unsupported.extend(dispatch.unsupported);
-                                    result = Ok(delivery_result(prior_outcomes, prior_unsupported));
+                                Ok(final_dispatch) => {
+                                    dispatch.absorb(final_dispatch);
                                 }
                                 Err(error) => {
                                     reply.abort().await;
-                                    result = Err(Error::failed(error.to_string()));
+                                    absorb_progressive_error(&mut dispatch, error);
                                 }
                             }
+                            result = Ok(dispatch.into_result());
                         } else {
                             reply.finalize(&text).await;
                             result = Ok(ProgressiveResult::Closed);
@@ -1003,72 +1004,67 @@ async fn apply(
     {
         return Err(Error::failed("progressive content exceeds its limit"));
     }
-    let mut outcomes = Vec::new();
-    let mut unsupported = Vec::new();
+    let mut dispatch = ProgressiveOutputDispatch::default();
     for event in events {
         if forward {
-            reply
-                .on_output_event(&event)
-                .await
-                .map_err(|_| Error::failed("host output event callback failed"))?;
+            if reply.on_output_event(&event).await.is_err() {
+                dispatch.failure = Some(
+                    tinychannels_bus::module_progressive::ProgressiveOutputFailure::ObservationCallback,
+                );
+                break;
+            }
         }
-        let dispatched = reply
-            .apply_output_event(&event, forward)
-            .await
-            .map_err(|error| Error::failed(error.to_string()))?;
-        outcomes.extend(dispatched.outcomes);
-        unsupported.extend(dispatched.unsupported);
-        if outcomes.iter().any(|outcome| outcome.error.is_some()) {
+        match reply.apply_output_event(&event, forward).await {
+            Ok(dispatched) => dispatch.absorb(dispatched),
+            Err(error) => {
+                absorb_progressive_error(&mut dispatch, error);
+                break;
+            }
+        }
+        if dispatch.failure.is_some() || dispatch.outcomes.iter().any(|outcome| outcome.error.is_some()) {
             break;
         }
     }
-    if !unsupported.is_empty() && !outcomes.is_empty() {
-        Ok(ProgressiveResult::DeliveryBatch {
-            outcomes,
-            unsupported,
-        })
-    } else if !unsupported.is_empty() {
-        Ok(ProgressiveResult::DeliveryUnsupported { parts: unsupported })
-    } else if !outcomes.is_empty() {
-        Ok(ProgressiveResult::DeliveryOutcomes { outcomes })
-    } else {
-        Ok(ProgressiveResult::Updated)
-    }
+    Ok(dispatch.into_result())
 }
 
-fn delivery_facts(
-    result: &Result<ProgressiveResult>,
-) -> (
-    Vec<tinychannels_bus::channel::ChannelSendOutcome>,
-    Vec<tinychannels_bus::OutboundContentPart>,
+fn absorb_progressive_error(
+    dispatch: &mut ProgressiveOutputDispatch,
+    error: ProgressiveSendError,
 ) {
-    match result {
-        Ok(ProgressiveResult::DeliveryOutcome { outcome }) => (vec![outcome.clone()], Vec::new()),
-        Ok(ProgressiveResult::DeliveryOutcomes { outcomes }) => (outcomes.clone(), Vec::new()),
-        Ok(ProgressiveResult::DeliveryUnsupported { parts }) => (Vec::new(), parts.clone()),
-        Ok(ProgressiveResult::DeliveryBatch {
-            outcomes,
-            unsupported,
-        }) => (outcomes.clone(), unsupported.clone()),
-        _ => (Vec::new(), Vec::new()),
+    use tinychannels_bus::module_progressive::ProgressiveOutputFailure;
+    match error {
+        ProgressiveSendError::PartialOutcome(outcome) => dispatch.outcomes.push(outcome),
+        ProgressiveSendError::UnsupportedContent => {}
+        ProgressiveSendError::Unavailable => {
+            dispatch.outcomes.push(progressive_error_outcome(
+                "progressive provider transport unavailable",
+                !dispatch.outcomes.is_empty(),
+            ));
+            dispatch.failure = Some(ProgressiveOutputFailure::ProviderTransport);
+        }
+        error => {
+            dispatch.outcomes.push(progressive_error_outcome(
+                &error.to_string(),
+                true,
+            ));
+            dispatch.failure = Some(ProgressiveOutputFailure::ProviderTransport);
+        }
     }
 }
 
-fn delivery_result(
-    outcomes: Vec<tinychannels_bus::channel::ChannelSendOutcome>,
-    unsupported: Vec<tinychannels_bus::OutboundContentPart>,
-) -> ProgressiveResult {
-    match (outcomes.is_empty(), unsupported.is_empty()) {
-        (true, true) => ProgressiveResult::Closed,
-        (false, true) if outcomes.len() == 1 => ProgressiveResult::DeliveryOutcome {
-            outcome: outcomes.into_iter().next().expect("one outcome"),
-        },
-        (false, true) => ProgressiveResult::DeliveryOutcomes { outcomes },
-        (true, false) => ProgressiveResult::DeliveryUnsupported { parts: unsupported },
-        (false, false) => ProgressiveResult::DeliveryBatch {
-            outcomes,
-            unsupported,
-        },
+fn progressive_error_outcome(
+    message: &str,
+    sent_before_error: bool,
+) -> tinychannels_bus::channel::ChannelSendOutcome {
+    tinychannels_bus::channel::ChannelSendOutcome {
+        error: Some(tinychannels_bus::channel::ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+            message: message.to_owned(),
+            sent_before_error,
+            ..Default::default()
+        }),
+        ..Default::default()
     }
 }
 
@@ -1084,6 +1080,9 @@ fn delivery_has_failure(result: &Result<ProgressiveResult>) -> bool {
         result,
         Ok(ProgressiveResult::DeliveryBatch { outcomes, .. })
             if outcomes.iter().any(|outcome| outcome.error.is_some())
+    ) || matches!(
+        result,
+        Ok(ProgressiveResult::DeliveryBatch { failure: Some(_), .. })
     )
 }
 
