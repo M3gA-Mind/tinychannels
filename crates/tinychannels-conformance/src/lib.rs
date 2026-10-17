@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use tinychannels_bus::{
     ChannelCapabilities, ChannelOutboundIntent, ChannelRef,
-    channel::{ChannelSendError, ChannelSendOutcome, ConversationRef, SendErrorKind},
+    channel::{ChannelSendError, ChannelSendOutcome, ConversationRef},
 };
 use tinychannels_runtime::channel::ChannelAdapter;
 
@@ -91,10 +91,7 @@ impl ConformanceFeature {
             Self::Poll => capabilities.content.poll.outbound,
             Self::Presentation => capabilities.content.presentation.outbound,
             Self::NativeData => capabilities.content.native.outbound,
-            Self::VoiceIn => {
-                capabilities.voice_in.supported
-                    && !capabilities.voice_in.transcript_sources.is_empty()
-            }
+            Self::VoiceIn => capabilities.voice_in.supported,
             Self::VoiceOut => capabilities.voice_out.supported,
             Self::VoiceSynthesis => capabilities.voice_out.synthesis,
             Self::ReplyAddressing => capabilities.addressing.reply_to_id,
@@ -167,11 +164,19 @@ pub async fn check_feature(
 
     if !declared {
         let explicitly_unsupported = match &result {
-            Err(error) => error.unsupported && !error.retryable,
+            Err(error) => error.unsupported
+                && !error.retryable
+                && !error.sent_before_error
+                && error.continuation_message_ids.is_empty()
+                && error.partial_overflow.is_none(),
             Ok(Some(outcome)) => outcome.error.as_ref().is_some_and(|error| {
                 error.unsupported
                     && !error.retryable
+                    && !error.sent_before_error
+                    && error.continuation_message_ids.is_empty()
+                    && error.partial_overflow.is_none()
                     && outcome.receipt.platform_message_ids.is_empty()
+                    && outcome.receipt.primary_platform_message_id.is_none()
                     && outcome.receipt.parts.is_empty()
             }),
             Ok(None) => false,
@@ -223,7 +228,6 @@ pub async fn check_feature(
             | ConformanceFeature::VoiceOut
             | ConformanceFeature::VoiceSynthesis
             | ConformanceFeature::Edit
-            | ConformanceFeature::Delete
             | ConformanceFeature::StreamingDraft
     );
     let receipt = outcome.as_ref().map(|outcome| &outcome.receipt);
@@ -241,11 +245,15 @@ pub async fn check_feature(
             ));
         }
     }
-    if observation.operation != feature.operation() {
-        return Err(format!(
-            "declared {feature:?} observed operation {}",
-            observation.operation
-        ));
+    for required in feature.required_operations() {
+        if !observations.iter().any(|observation| {
+            observation.feature == feature
+                && observation.channel == expected.channel
+                && observation.conversation == expected.conversation
+                && observation.operation == *required
+        }) {
+            return Err(format!("declared {feature:?} omitted operation {required}"));
+        }
     }
     let expected_payload = feature.payload_kind();
     if let Some(expected_payload) = expected_payload
@@ -257,6 +265,12 @@ pub async fn check_feature(
         return Err(format!(
             "{feature:?} wire payload omitted {expected_payload}"
         ));
+    }
+    if feature == ConformanceFeature::VoiceIn
+        && !(observation.payload_kinds.iter().any(|kind| kind == "audio")
+            && observation.payload_kinds.iter().any(|kind| kind == "transcript"))
+    {
+        return Err("VoiceIn ingress omitted audio or transcript evidence".into());
     }
     if let Some(receipt) = receipt
         && observation.platform_message_ids != receipt.platform_message_ids
@@ -285,20 +299,22 @@ impl ConformanceFeature {
             Self::NativeData => Some("native"),
             Self::VoiceOut => Some("voice"),
             Self::VoiceSynthesis => Some("voice"),
+            Self::VoiceIn => None,
             _ => None,
         }
     }
 
-    fn operation(self) -> &'static str {
+    fn required_operations(self) -> &'static [&'static str] {
         match self {
-            Self::Typing => "typing",
-            Self::Reactions => "reaction_send",
-            Self::InboundReactions => "reaction_receive",
-            Self::Edit => "edit",
-            Self::Delete => "delete",
-            Self::ReadReceipts => "read_receipt",
-            Self::StreamingDraft => "draft_update",
-            _ => "send",
+            Self::VoiceIn => &["voice_in"],
+            Self::Typing => &["typing"],
+            Self::Reactions => &["reaction_send"],
+            Self::InboundReactions => &["reaction_receive"],
+            Self::Edit => &["edit"],
+            Self::Delete => &["delete"],
+            Self::ReadReceipts => &["read_receipt"],
+            Self::StreamingDraft => &["draft_create", "draft_update", "draft_finalize", "draft_cancel_cleanup"],
+            _ => &["send"],
         }
     }
 }
