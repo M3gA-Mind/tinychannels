@@ -4667,6 +4667,63 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
     assert_eq!(codec_ops.load(Ordering::SeqCst), 3);
     assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 3);
 
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    let mut explicit_allowed_context = context.clone();
+    explicit_allowed_context.turn_id = "explicit-synthesis-mid-turn".into();
+    let explicit_allowed_sender = Sender {
+        host: host.clone(),
+        context: Some(explicit_allowed_context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "telegram:bot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    };
+    explicit_allowed_sender
+        .send_parts(
+            "telegram:bot-1",
+            &[
+                voice_test_text_part("explicit transcript"),
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Synthesize {
+                        text: "explicit transcript".into(),
+                        voice: None,
+                    },
+                },
+            ],
+            "explicit transcript",
+            Some(&explicit_allowed_context),
+            0,
+        )
+        .await
+        .expect("an explicitly requested typed voice can be sent mid-turn");
+    {
+        let requests = callback.requests.lock().await;
+        let parts = requests.iter().find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(actual_turn),
+                parts,
+                ..
+            } if actual_turn == "explicit-synthesis-mid-turn" => Some(parts),
+            _ => None,
+        });
+        assert!(parts.is_some_and(|parts| matches!(
+            parts.as_slice(),
+            [
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { text, .. }
+                },
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media { .. }
+                }
+            ] if text == "explicit transcript"
+        )));
+    }
+    assert_eq!(codec_ops.load(Ordering::SeqCst), 4);
+    assert_eq!(callback.voice_store_calls.load(Ordering::SeqCst), 4);
+
     let mut audio_capabilities = capabilities.clone();
     audio_capabilities.voice_out.supported = false;
     audio_capabilities.voice_out.accepted_codecs.clear();
