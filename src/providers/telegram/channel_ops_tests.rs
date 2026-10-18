@@ -726,10 +726,10 @@ async fn loopback_bot_api_retries_poll_then_routes_status_reply() {
     // This is the channel-facing part of the host's /status handler: it
     // turns the received command into a provider reply in the originating chat.
     channel
-        .send(&SendMessage::new(
-            "Thread: none\nProvider: openai",
-            inbound.reply_target,
-        ).in_thread(inbound.thread_ts))
+        .send(
+            &SendMessage::new("Thread: none\nProvider: openai", inbound.reply_target)
+                .in_thread(inbound.thread_ts),
+        )
         .await
         .unwrap();
     assert_eq!(

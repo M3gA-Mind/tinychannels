@@ -27,9 +27,7 @@ struct BotApiFakeState {
 
 impl BotApiFake {
     pub(super) async fn start() -> Self {
-        use axum::{
-            body::Bytes, extract::State, http::StatusCode, routing::post, Json, Router,
-        };
+        use axum::{Json, Router, body::Bytes, extract::State, http::StatusCode, routing::post};
 
         async fn handle(
             State(state): State<Arc<BotApiFakeState>>,
@@ -37,7 +35,12 @@ impl BotApiFake {
             headers: axum::http::HeaderMap,
             body: Bytes,
         ) -> (StatusCode, Json<serde_json::Value>) {
-            let method = uri.path().rsplit('/').next().unwrap_or_default().to_string();
+            let method = uri
+                .path()
+                .rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .to_string();
             if method == "getUpdates" {
                 if let Some((status, body)) = state.poll_failures.lock().unwrap().pop_front() {
                     return (StatusCode::from_u16(status).unwrap(), Json(body));
