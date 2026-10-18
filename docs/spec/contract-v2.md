@@ -339,7 +339,7 @@ every capability; query the configured descriptor.
 | Lark/Feishu | lark | Text, media/files, threads, cards/native content, receipts | Optional provider dependency. |
 | IRC, iMessage, Mattermost, QQ, Yuanbao/DingTalk, Linq | always-on (Cargo default is empty) | Text and the provider-supported subset of addressing/events/receipts | Capability is reported per provider/account; no blanket rich-media promise. |
 | Web surface adapter | tinychannels-runtime adapter using host-supplied transport | All portable content/events, subject to host authorization | Host supplies transport, authentication, authorization, and application event wiring. |
-| Relay connector | relay-websocket for WebSocket I/O | Projection of portable events, content and capability facts | Existing descriptor wire v1 remains frozen. |
+| Relay connector | WebSocket I/O (always built) | Projection of portable events, content and capability facts | Existing descriptor wire v1 remains frozen. |
 
 Contract feature coverage is summarized separately from build features:
 

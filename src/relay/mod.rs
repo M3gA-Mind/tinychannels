@@ -4,7 +4,6 @@
 
 pub mod runtime;
 pub mod transport;
-#[cfg(feature = "relay-websocket")]
 pub mod websocket;
 
 pub use runtime::{
@@ -26,7 +25,6 @@ pub use tinychannels_runtime::relay::{
     verify_delivery_signature_at, verify_signature, verify_token, verify_token_at,
 };
 pub use transport::{RelayReconnectHandle, RelayTransport};
-#[cfg(feature = "relay-websocket")]
 pub use websocket::{
     WebSocketRelayConfig, WebSocketRelayDialer, WebSocketRelayIo, connect_websocket_relay_io,
     websocket_dial_url, websocket_upgrade_authorization,
