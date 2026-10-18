@@ -437,9 +437,9 @@ async fn every_other_attachment_kind_becomes_its_content_part() {
         kinds,
         [
             "video:Some(3000)",
+            "audio",
             "file:Some(\"a.pdf\")",
             "sticker",
-            "audio",
             "location",
             "contact:Ada"
         ]

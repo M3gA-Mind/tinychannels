@@ -248,10 +248,24 @@ impl InboundState {
                     markdown_dialect: None,
                 });
             }
+            let mut skipped_caption = None;
             for attachment in &parsed.attachments {
-                if let Some(part) = self.attachment_part(attachment, &id, scope.clone()).await? {
-                    parts.push(part);
+                match self.attachment_part(attachment, &id, scope.clone()).await? {
+                    Some(part) => parts.push(part),
+                    // An attachment the adapter cannot keep still delivers its words.
+                    None => skipped_caption = skipped_caption.or_else(|| attachment.caption()),
                 }
+            }
+            if parsed.text.trim().is_empty()
+                && let Some(caption) = skipped_caption
+            {
+                parts.insert(
+                    0,
+                    ContentPart::Text {
+                        text: caption,
+                        markdown_dialect: None,
+                    },
+                );
             }
             if let Some((latitude, longitude, label, address)) = parsed.location.clone() {
                 parts.push(ContentPart::Location {
