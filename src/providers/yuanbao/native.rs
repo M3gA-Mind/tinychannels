@@ -48,11 +48,12 @@ impl NativeProvider for YuanbaoChannel {
             streaming_pipeline: true,
         });
         if self.native.media_repository.is_some() {
+            let max_bytes = self.limits().file_bytes;
             caps.content.parts.extend(["image".into(), "file".into()]);
             caps.content.image.outbound = true;
-            caps.content.image.max_size_bytes = Some(self.limits().file_bytes);
+            caps.content.image.max_size_bytes = Some(max_bytes);
             caps.content.file.outbound = true;
-            caps.content.file.max_size_bytes = Some(self.limits().file_bytes);
+            caps.content.file.max_size_bytes = Some(max_bytes);
         }
         caps
     }
@@ -69,19 +70,13 @@ impl NativeProvider for YuanbaoChannel {
                 self.outbound
                     .send_text(&recipient, text, reference)
                     .await
-                    .map_err(|_| uncertain("text"))?,
+                    .map_err(final_send_error)?,
                 MessageReceiptPartKind::Text,
             ),
             Step::File(file) => {
-                let kind = if file.mime.starts_with("image/") {
-                    MessageReceiptPartKind::Media
-                } else {
-                    MessageReceiptPartKind::Media
-                };
-                let id = self
+                let body = self
                     .outbound
-                    .send_media_bytes(
-                        &recipient,
+                    .prepare_media_body(
                         &file.bytes,
                         &file.name,
                         &file.mime,
@@ -90,11 +85,15 @@ impl NativeProvider for YuanbaoChannel {
                         &self.config.token,
                         &self.config.api_domain,
                         &self.config.route_env,
-                        reference,
                     )
                     .await
-                    .map_err(|_| uncertain("media"))?;
-                (id, kind)
+                    .map_err(|_| upload_not_delivered())?;
+                let id = self
+                    .outbound
+                    .send_body(&recipient, body, reference)
+                    .await
+                    .map_err(final_send_error)?;
+                (id, MessageReceiptPartKind::Media)
             }
             Step::Voice(_) => {
                 return Err(crate::providers::native::unsupported(
@@ -125,11 +124,30 @@ impl NativeProvider for YuanbaoChannel {
     }
 }
 
-fn uncertain(operation: &str) -> ChannelSendError {
+fn final_send_error(error: super::errors::YuanbaoError) -> ChannelSendError {
+    if matches!(error, super::errors::YuanbaoError::NotConnected) {
+        return ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Transient,
+            message: "Yuanbao is not connected; message was not sent".into(),
+            retryable: true,
+            sent_before_error: false,
+            ..Default::default()
+        };
+    }
     ChannelSendError {
         kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-        message: format!("Yuanbao {operation} outcome is uncertain"),
+        message: "Yuanbao send outcome is uncertain".into(),
         sent_before_error: true,
+        ..Default::default()
+    }
+}
+
+fn upload_not_delivered() -> ChannelSendError {
+    ChannelSendError {
+        kind: tinychannels_bus::channel::SendErrorKind::Transient,
+        message: "Yuanbao media preparation failed before message delivery".into(),
+        retryable: true,
+        sent_before_error: false,
         ..Default::default()
     }
 }

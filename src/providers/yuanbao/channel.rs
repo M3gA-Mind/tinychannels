@@ -130,10 +130,6 @@ impl YuanbaoChannel {
         self
     }
 
-    pub(crate) fn native_media_enabled(&self) -> bool {
-        self.native.media_repository.is_some()
-    }
-
     /// Record a `shortened → original` recipient mapping so the outbound
     /// side can recover the server-recognized id when the agent loop
     /// addresses a reply with the shortened sender / reply_target it
@@ -474,21 +470,7 @@ impl crate::providers::long_tail::LongTail for YuanbaoChannel {
     const DISPLAY: &'static str = "Yuanbao";
 
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
-        use crate::providers::long_tail::{TextSpec, text_capabilities};
-        let mut capabilities = text_capabilities(TextSpec {
-            typing: true,
-            thread: true,
-            streaming_pipeline: true,
-        });
-        if self.native_media_enabled() {
-            capabilities
-                .content
-                .parts
-                .extend(["image".into(), "file".into()]);
-            capabilities.content.image.outbound = true;
-            capabilities.content.file.outbound = true;
-        }
-        capabilities
+        crate::providers::native::NativeProvider::declared_capabilities(self)
     }
 
     fn typing_supported(&self) -> bool {
@@ -496,6 +478,7 @@ impl crate::providers::long_tail::LongTail for YuanbaoChannel {
     }
 }
 
+#[path = "native.rs"]
 mod native;
 crate::providers::native::native_v2_adapter!(YuanbaoChannel);
 

@@ -227,6 +227,30 @@ impl OutboundSender {
         route_env: &str,
         ref_msg_id: Option<&str>,
     ) -> Result<String, YuanbaoError> {
+        let body = self
+            .prepare_media_body(
+                bytes, filename, mime_type, app_key, bot_id, token, api_domain, route_env,
+            )
+            .await?;
+        self.send_body(recipient, body, ref_msg_id).await
+    }
+
+    /// Upload bytes and build the native message element without sending it.
+    /// Keeping this stage separate lets adapters report an upload failure as
+    /// definitely not delivered, then mark only the final message request as
+    /// an uncertain outcome.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prepare_media_body(
+        &self,
+        bytes: &[u8],
+        filename: &str,
+        mime_type: &str,
+        app_key: &str,
+        bot_id: &str,
+        token: &str,
+        api_domain: &str,
+        route_env: &str,
+    ) -> Result<Vec<MsgBodyElement>, YuanbaoError> {
         if bytes.is_empty() {
             return Err(YuanbaoError::Media("empty upload".into()));
         }
@@ -261,7 +285,7 @@ impl OutboundSender {
                 upload.size as u32,
             )
         };
-        self.send_body(recipient, body, ref_msg_id).await
+        Ok(body)
     }
 
     /// Send a pre-built `msg_body`. Waits up to `DEFAULT_SEND_TIMEOUT_SECS`

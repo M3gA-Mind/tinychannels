@@ -1,4 +1,8 @@
 use super::*;
+use crate::factory::{
+    DefaultHttpClients, build_long_tail_channel, build_long_tail_channel_with_host,
+};
+use crate::host::ChannelHostBuilder;
 use crate::host::{MediaScope, MediaStoreRequest, StoredMedia};
 use crate::providers::native::outbound::{plan, target_of};
 use async_trait::async_trait;
@@ -117,4 +121,47 @@ async fn media_planning_reads_the_exact_host_scope_and_opaque_reference() {
             turn_id: "turn-9".into(),
         })
     );
+}
+
+#[test]
+fn host_aware_factory_injects_media_without_changing_legacy_factory_behavior() {
+    let mut yuanbao = crate::providers::yuanbao::YuanbaoConfig::default();
+    yuanbao.app_key = "app".into();
+    yuanbao.token = "token".into();
+    yuanbao.ws_domain = "wss://example.invalid".into();
+    let config = tinychannels_bus::ChannelsConfig {
+        yuanbao: Some(yuanbao),
+        ..Default::default()
+    };
+    let without_host = build_long_tail_channel(&config, &DefaultHttpClients, "yuanbao").unwrap();
+    assert!(!without_host.declared_capabilities().content.image.outbound);
+
+    let repository = Arc::new(MediaRepo::default());
+    let host = ChannelHostBuilder::new()
+        .media_repository(repository)
+        .build();
+    let with_host =
+        build_long_tail_channel_with_host(&config, &host, &DefaultHttpClients, "yuanbao").unwrap();
+    assert!(with_host.declared_capabilities().content.image.outbound);
+    assert!(with_host.declared_capabilities().content.file.outbound);
+}
+
+#[test]
+fn upload_failure_and_disconnected_send_have_distinct_delivery_certainty() {
+    let upload = upload_not_delivered();
+    assert!(upload.retryable);
+    assert!(!upload.sent_before_error);
+
+    let disconnected = final_send_error(
+        crate::providers::yuanbao::errors::YuanbaoError::NotConnected,
+    );
+    assert!(disconnected.retryable);
+    assert!(!disconnected.sent_before_error);
+
+    let uncertain = final_send_error(crate::providers::yuanbao::errors::YuanbaoError::Timeout(
+        "private request id must not escape".into(),
+    ));
+    assert!(!uncertain.retryable);
+    assert!(uncertain.sent_before_error);
+    assert_eq!(uncertain.message, "Yuanbao send outcome is uncertain");
 }
