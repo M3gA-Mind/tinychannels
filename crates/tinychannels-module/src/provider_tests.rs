@@ -4621,6 +4621,81 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         request.method == "POST" && request.url.path() == format!("/channels/{THREAD}/typing")
     }));
 
+    let voice_scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "discord:account-a".into(),
+        channel: channel_ref.clone(),
+        conversation: conversation.clone(),
+        turn_id: "discord-running-voice-out".into(),
+    };
+    let voice_bytes = include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg");
+    let stored_voice = provider_host
+        .media_repository()
+        .unwrap()
+        .store_media(tinychannels::host::MediaStoreRequest {
+            metadata: tinychannels::host::MediaMetadata {
+                scope: voice_scope,
+                kind: tinychannels_bus::MediaKind::Audio,
+                content_type: "audio/ogg".into(),
+                file_name: Some("managed-voice.ogg".into()),
+                duration_ms: Some(200),
+                codec: Some("ogg_opus".into()),
+                voice_direction: None,
+                dedupe_key: None,
+                max_bytes: 8 * 1024 * 1024,
+            },
+            bytes: voice_bytes.to_vec(),
+        })
+        .await
+        .unwrap();
+    let mut voice_intent = intent.clone();
+    voice_intent.idempotency_key = "discord-running-voice-out".into();
+    voice_intent.turn_id = Some("discord-running-voice-out".into());
+    voice_intent.payload = OutboundPayload::Voice {
+        voice: tinychannels_bus::OutboundVoice::Media {
+            media: stored_voice,
+            audio_base64: None,
+            codec: Some("ogg_opus".into()),
+            duration_ms: Some(200),
+            waveform: Some(vec![0.0, 0.5, 1.0]),
+        },
+    };
+    let voice_sent = adapter.send(voice_intent).await.unwrap();
+    assert_eq!(voice_sent.receipt.channel.as_ref(), Some(&channel_ref));
+    assert_eq!(
+        voice_sent.receipt.conversation.as_ref(),
+        Some(&conversation)
+    );
+    assert_eq!(
+        voice_sent.receipt.primary_platform_message_id.as_deref(),
+        Some("1234567890123456789")
+    );
+    let requests = rest.received_requests().await.unwrap();
+    let voice_request = requests
+        .iter()
+        .find(|request| {
+            request.method == "POST"
+                && request.url.path() == format!("/channels/{THREAD}/messages")
+                && request
+                    .body
+                    .windows(voice_bytes.len())
+                    .any(|window| window == voice_bytes)
+        })
+        .expect("Running voice send reads its retained OGG from module-managed storage");
+    let multipart = String::from_utf8_lossy(&voice_request.body);
+    let payload_json = multipart
+        .split("name=\"payload_json\"\r\n\r\n")
+        .nth(1)
+        .and_then(|value| value.split("\r\n--").next())
+        .expect("Discord voice upload includes the typed payload_json field");
+    let voice_payload: serde_json::Value = serde_json::from_str(payload_json).unwrap();
+    assert_eq!(voice_payload["flags"], 8192);
+    assert_eq!(voice_payload["attachments"][0]["duration_secs"], 0.2);
+    assert!(
+        voice_payload["attachments"][0]["waveform"]
+            .as_str()
+            .is_some_and(|value| !value.is_empty())
+    );
+
     let native = adapter.native.as_deref().unwrap();
     let draft_intent = |text: &str| {
         let mut draft = intent.clone();
