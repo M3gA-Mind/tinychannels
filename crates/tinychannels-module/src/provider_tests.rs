@@ -3441,3 +3441,35 @@ async fn legacy_running_routes_reaction_edit_delete_and_refuses_native_drafts() 
     assert!(matches!(draft, Err(RunningSendError::NotDispatched(_))));
     running.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn voice_codec_maps_known_formats_and_surfaces_missing_module_errors() {
+    use tinychannels::host::{VoiceCodec, VoiceCodecRequest};
+    let connection = tinybus::Connection::connect({
+        let bus = tinybus::transport::memory::MemoryBus::new();
+        tinybus::broker::Broker::new().spawn(bus.clone());
+        bus.connect().await.unwrap()
+    })
+    .await
+    .unwrap();
+    let codec = ModuleVoiceCodec(HostChannels::new(connection));
+    let request = |from: &str, target: &str| VoiceCodecRequest {
+        audio_base64: "AAAA".into(),
+        from: from.into(),
+        target: target.into(),
+    };
+    let unsupported = codec.transcode(request("flac", "mp3")).await.unwrap_err();
+    assert!(unsupported.to_string().contains("unsupported TinyVoice codec"));
+    let unsupported = codec
+        .transcode(request("wav_pcm16", "opus-raw"))
+        .await
+        .unwrap_err();
+    assert!(unsupported.to_string().contains("unsupported TinyVoice codec"));
+    for (from, target) in [("audio/mp4", "audio/mpeg"), ("m4a_aac", "mp3"), ("audio/ogg", "audio/wav")] {
+        let error = codec.transcode(request(from, target)).await.unwrap_err();
+        assert!(
+            !error.to_string().contains("unsupported TinyVoice codec"),
+            "{from} -> {target} parses and reaches the TinyVoice module call"
+        );
+    }
+}
