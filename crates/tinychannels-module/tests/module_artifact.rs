@@ -230,6 +230,95 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
             tinychannels_bus::BUS_NAME,
         )
         .unwrap();
+    let web_context = |client_id: &str| tinychannels_bus::WebEventContext {
+        client_id: client_id.into(),
+        thread_id: "same-thread".into(),
+        request_id: "same-request".into(),
+        turn_request_id: None,
+        seq: None,
+        ts: None,
+    };
+    let begin_web_turn = |client_id: &str, scope_key: &str| tinychannels_bus::BeginWebTurn {
+        scope_key: scope_key.into(),
+        context: web_context(client_id),
+    };
+    assert_eq!(
+        proxy
+            .call::<tinychannels_bus::WebTurnHandle>(
+                "BeginWebTurn",
+                begin_web_turn("same-client", "tenant-a"),
+            )
+            .await
+            .unwrap_err()
+            .wire_name(),
+        tinybus::Error::CONFIDENTIALITY_REQUIRED
+    );
+    let tenant_a: tinychannels_bus::WebTurnHandle = proxy
+        .call_confidential("BeginWebTurn", begin_web_turn("same-client", "tenant-a"))
+        .await
+        .unwrap();
+    let tenant_b: tinychannels_bus::WebTurnHandle = proxy
+        .call_confidential("BeginWebTurn", begin_web_turn("same-client", "tenant-b"))
+        .await
+        .unwrap();
+    let project =
+        |handle: &tinychannels_bus::WebTurnHandle, text: &str| tinychannels_bus::ProjectWebOutput {
+            handle: handle.handle.clone(),
+            event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                text: text.into(),
+                iteration: Some(1),
+            },
+        };
+    let tenant_a_first: tinychannels_bus::WebOutputEvents = proxy
+        .call_confidential("ProjectWebOutput", project(&tenant_a, "first"))
+        .await
+        .unwrap();
+    let tenant_a_second: tinychannels_bus::WebOutputEvents = proxy
+        .call_confidential("ProjectWebOutput", project(&tenant_a, "second"))
+        .await
+        .unwrap();
+    let tenant_b_first: tinychannels_bus::WebOutputEvents = proxy
+        .call_confidential("ProjectWebOutput", project(&tenant_b, "isolated"))
+        .await
+        .unwrap();
+    let output_context = |events: &tinychannels_bus::WebOutputEvents| {
+        let tinychannels_bus::WebChannelEvent::TextDelta { context, .. } = &events.events[0] else {
+            panic!("expected text delta from loaded module: {events:?}");
+        };
+        context
+    };
+    assert_eq!(output_context(&tenant_a_first).seq, Some(1));
+    assert_eq!(output_context(&tenant_a_second).seq, Some(2));
+    assert_eq!(output_context(&tenant_b_first).seq, Some(1));
+    assert_eq!(output_context(&tenant_a_first).client_id, "same-client");
+    assert!(output_context(&tenant_a_first).ts.is_some());
+    proxy
+        .call_confidential::<()>(
+            "EndWebTurn",
+            tinychannels_bus::EndWebTurn {
+                handle: tenant_a.handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        proxy
+            .call_confidential::<tinychannels_bus::WebOutputEvents>(
+                "ProjectWebOutput",
+                project(&tenant_a, "late"),
+            )
+            .await
+            .is_err()
+    );
+    proxy
+        .call_confidential::<()>(
+            "EndWebTurn",
+            tinychannels_bus::EndWebTurn {
+                handle: tenant_b.handle.clone(),
+            },
+        )
+        .await
+        .unwrap();
     // Identity scopes use separate objects and preserve all callback arities.
     assert_eq!(
         proxy
