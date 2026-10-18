@@ -34,6 +34,7 @@ use tinychannels_runtime::config::WhatsAppConfigExt as _;
 
 use crate::host::ChannelHost;
 use crate::providers::irc;
+use crate::providers::long_tail::LongTailNative;
 use crate::{
     Channel, DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, LinqChannel,
     MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,

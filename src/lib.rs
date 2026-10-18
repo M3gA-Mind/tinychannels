@@ -72,9 +72,11 @@ pub use backend::{ChannelBackend, ChannelManager};
 pub use factory::build_whatsapp_web_channel;
 pub use factory::{
     ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
-    build_slack_channel, build_telegram_channel, build_whatsapp_cloud_channel,
+    build_long_tail_channel, build_slack_channel, build_telegram_channel,
+    build_whatsapp_cloud_channel,
 };
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
+pub use providers::long_tail::LongTailNative;
 pub use providers::{
     CliChannel, DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, IrcChannelConfig,
     LinqChannel, MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel,
