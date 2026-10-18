@@ -469,7 +469,7 @@ impl Channel for LinqChannel {
     }
 }
 
-super::native::native_v2_adapter!(LinqChannel);
+crate::providers::native::native_v2_adapter!(LinqChannel);
 
 #[cfg(test)]
 #[path = "linq/fixtures_tests.rs"]
