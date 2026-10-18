@@ -369,11 +369,14 @@ async fn non_text_content_is_refused_before_any_request() {
     let mut intent = text_intent("mattermost", "c", None);
     intent.payload = OutboundPayload::Parts {
         parts: vec![OutboundContentPart::Content {
-            part: ContentPart::Media {
+            part: ContentPart::Image {
                 media: MediaReference {
+                    opaque_id: Some("media-1".into()),
                     kind: MediaKind::Image,
                     ..Default::default()
                 },
+                caption: None,
+                alt_text: None,
             },
         }],
     };
