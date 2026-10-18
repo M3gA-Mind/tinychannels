@@ -251,6 +251,35 @@ impl OutboundSender {
         api_domain: &str,
         route_env: &str,
     ) -> Result<Vec<MsgBodyElement>, YuanbaoError> {
+        self.prepare_media_body_with_caption(
+            bytes,
+            filename,
+            mime_type,
+            app_key,
+            bot_id,
+            token,
+            api_domain,
+            route_env,
+            None,
+        )
+        .await
+    }
+
+    /// As [`Self::prepare_media_body`], with optional text accompanying the
+    /// uploaded element in the same Yuanbao message.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prepare_media_body_with_caption(
+        &self,
+        bytes: &[u8],
+        filename: &str,
+        mime_type: &str,
+        app_key: &str,
+        bot_id: &str,
+        token: &str,
+        api_domain: &str,
+        route_env: &str,
+        caption: Option<&str>,
+    ) -> Result<Vec<MsgBodyElement>, YuanbaoError> {
         if bytes.is_empty() {
             return Err(YuanbaoError::Media("empty upload".into()));
         }
@@ -285,6 +314,19 @@ impl OutboundSender {
                 upload.size as u32,
             )
         };
+        let mut body = body;
+        if let Some(caption) = caption.filter(|caption| !caption.trim().is_empty()) {
+            body.insert(
+                0,
+                MsgBodyElement {
+                    msg_type: "TIMTextElem".into(),
+                    msg_content: super::types::MsgContent {
+                        text: Some(caption.to_owned()),
+                        ..Default::default()
+                    },
+                },
+            );
+        }
         Ok(body)
     }
 
