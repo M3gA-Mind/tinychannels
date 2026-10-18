@@ -7,5 +7,7 @@ cargo test --locked -p tinychannels-module raw_voice_synthesis_requires_the_conf
 cargo test --locked -p tinychannels-module configured_running_telegram_adapter_passes_real_mock_wire_conformance -- --nocapture
 cargo test --locked -p tinychannels-module configured_slack_native_adapter_routes_every_port_through_the_ordered_queue -- --nocapture
 cargo test --locked -p tinychannels --lib slack_adapter_passes_the_full_conformance_matrix_against_the_mock_platform -- --nocapture
+cargo test --locked -p tinychannels-module configured_signal_native_adapter_routes_every_port_through_the_ordered_queue -- --nocapture
+cargo test --locked -p tinychannels --lib signal_adapter_passes_the_full_conformance_matrix_against_the_mock_daemon -- --nocapture
 cargo test --locked -p tinychannels-conformance -- --nocapture
 cargo test --locked -p tinychannels-bus unsupported_send_flag_is_additive_to_legacy_error_wire_shape -- --nocapture
