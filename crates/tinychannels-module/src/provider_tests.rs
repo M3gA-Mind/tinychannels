@@ -3121,3 +3121,238 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
     );
     running.stop().await.unwrap();
 }
+
+#[test]
+fn media_scope_rejects_blank_secrets_and_distinguishes_credential_modes() {
+    use tinychannels_bus::config::*;
+    let webhook = |secret: &str| tinychannels_bus::ChannelsConfig {
+        webhook: Some(WebhookConfig {
+            port: 8080,
+            secret: Some(secret.into()),
+        }),
+        ..Default::default()
+    };
+    assert!(configured_media_account_scope("webhook", &webhook("  ")).is_none());
+    assert!(configured_media_account_scope("webhook", &webhook("s")).is_some());
+
+    let whatsapp = |phone: &str, token: &str| tinychannels_bus::ChannelsConfig {
+        whatsapp: Some(WhatsAppConfig {
+            access_token: Some(token.into()),
+            phone_number_id: Some(phone.into()),
+            verify_token: None,
+            app_secret: None,
+            session_path: None,
+            pair_phone: None,
+            pair_code: None,
+            allowed_numbers: vec![],
+        }),
+        ..Default::default()
+    };
+    assert!(configured_media_account_scope("whatsapp", &whatsapp(" ", "t")).is_none());
+    assert!(configured_media_account_scope("whatsapp", &whatsapp("p", " ")).is_none());
+
+    let irc = |sasl: Option<&str>, nickserv: Option<&str>| tinychannels_bus::ChannelsConfig {
+        irc: Some(IrcConfig {
+            server: "irc.example".into(),
+            port: 6697,
+            nickname: "bot".into(),
+            username: Some("auth-user".into()),
+            channels: vec![],
+            allowed_users: vec![],
+            server_password: None,
+            nickserv_password: nickserv.map(str::to_owned),
+            sasl_password: sasl.map(str::to_owned),
+            verify_tls: Some(true),
+        }),
+        ..Default::default()
+    };
+    let sasl = configured_media_account_scope("irc", &irc(Some("pw"), None)).unwrap();
+    let nickserv = configured_media_account_scope("irc", &irc(None, Some("pw"))).unwrap();
+    assert_ne!(sasl, nickserv, "principal differs between SASL and NickServ");
+    assert!(configured_media_account_scope("irc", &irc(Some(" "), None)).is_none());
+
+    let lark = |feishu: bool| tinychannels_bus::ChannelsConfig {
+        lark: Some(LarkConfig {
+            app_id: "app".into(),
+            app_secret: "secret".into(),
+            encrypt_key: None,
+            verification_token: None,
+            allowed_users: vec![],
+            use_feishu: feishu,
+            receive_mode: Default::default(),
+            port: None,
+        }),
+        ..Default::default()
+    };
+    assert_ne!(
+        configured_media_account_scope("lark", &lark(true)),
+        configured_media_account_scope("lark", &lark(false)),
+        "Feishu and Lark are distinct account authorities"
+    );
+}
+
+#[tokio::test]
+async fn legacy_running_adapter_reports_status_and_refuses_second_start() {
+    let (send, _commands) = mpsc::channel::<SendCommand>(1);
+    let (cancel, _) = watch::channel(false);
+    let running = Arc::new(Running {
+        media_account_scope: None,
+        channel: Arc::new(InteractionChannel::default()),
+        configured_instance: "interaction-fixture:account-a".into(),
+        send,
+        cancel,
+        worker: Mutex::new(None),
+        finished: Arc::new(AtomicBool::new(false)),
+        native_ports: None,
+    });
+    struct NullSink;
+    #[async_trait::async_trait]
+    impl tinychannels::channel::ChannelInboundSink for NullSink {
+        async fn push(
+            &self,
+            _event: tinychannels_bus::ChannelIngress,
+        ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+            Ok(())
+        }
+    }
+    let adapter: &dyn tinychannels::channel::ChannelAdapter = running.as_ref();
+    assert_eq!(adapter.proactive_target(), None);
+    let error = adapter.start(&NullSink).await.unwrap_err();
+    assert_eq!(
+        error.kind,
+        tinychannels::channel::SendErrorKind::Forbidden
+    );
+    let status = adapter.status().await.unwrap();
+    assert_eq!(
+        status.account_id.as_deref(),
+        Some("interaction-fixture:account-a")
+    );
+    adapter.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_telegram_native_adapter_owns_polling_typing_drafts_and_scope_checks() {
+    use tinychannels::channel::{ChannelAdapter, ChannelStreamingDraft, ChannelTyping};
+    use tinychannels_bus::ChannelInteraction;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    for (endpoint, result) in [
+        ("sendMessage", serde_json::json!({"message_id": 9, "chat": {"id": -100}})),
+        ("sendChatAction", serde_json::json!(true)),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(format!("/bottest-token/{endpoint}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok":true,"result":result})),
+            )
+            .mount(&server)
+            .await;
+    }
+    let instance = "telegram:account-b".to_owned();
+    let channel = Arc::new(
+        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
+            .with_api_base_for_test(server.uri()),
+    );
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let running = Running::start_telegram(channel, hooks, host, None, true);
+    let handle = running.adapter_handle();
+    let native = handle.telegram_native.as_ref().unwrap().clone();
+
+    assert_eq!(native.proactive_target(), None);
+    assert_eq!(
+        native.receive_ack_policy(),
+        tinychannels::channel::ChannelReceiveAckPolicy::AfterReceiveRecord
+    );
+    struct NullSink;
+    #[async_trait::async_trait]
+    impl tinychannels::channel::ChannelInboundSink for NullSink {
+        async fn push(
+            &self,
+            _event: tinychannels_bus::ChannelIngress,
+        ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+            Ok(())
+        }
+    }
+    let error = native.start(&NullSink).await.unwrap_err();
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Forbidden);
+    let status = native.status().await.unwrap();
+    assert_eq!(status.account_id.as_deref(), Some(instance.as_str()));
+
+    native.start_typing("-100").await.unwrap();
+    native.stop_typing("-100").await.unwrap();
+    assert!(matches!(
+        running
+            .interact(ChannelInteraction::StopTyping {
+                recipient: "-100".into()
+            })
+            .await
+            .unwrap(),
+        tinychannels_bus::ChannelInteractionResult::Completed
+    ));
+
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some(instance.clone()),
+    };
+    let conversation = ConversationRef {
+        kind: ConversationKind::Group,
+        id: "-100".into(),
+        ..Default::default()
+    };
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "draft-scope".into(),
+        channel_id: "telegram".into(),
+        conversation_id: "-100".into(),
+        channel_ref: Some(channel_ref.clone()),
+        conversation_ref: Some(conversation.clone()),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "draft".into(),
+        },
+        ..Default::default()
+    };
+    let draft = native.upsert_draft(None, intent.clone()).await.unwrap();
+    assert_eq!(draft.primary_platform_message_id.as_deref(), Some("9"));
+
+    let before = server.received_requests().await.unwrap().len();
+    let foreign = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram:other".into()),
+    };
+    let reaction = running
+        .interact(ChannelInteraction::SendReaction {
+            channel: foreign.clone(),
+            conversation: conversation.clone(),
+            provider_message_id: "9".into(),
+            reaction: tinychannels_bus::ChannelReaction {
+                value: "👍".into(),
+                ..Default::default()
+            },
+            remove: false,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(reaction, RunningSendError::NotDispatched(_)));
+    let mut foreign_receipt = draft.clone();
+    foreign_receipt.channel = Some(foreign);
+    let delete = running
+        .interact(ChannelInteraction::DeleteMessage {
+            receipt: foreign_receipt,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(delete, RunningSendError::NotDispatched(_)));
+    assert_eq!(server.received_requests().await.unwrap().len(), before);
+
+    native.stop().await.unwrap();
+    let after_stop = running
+        .interact(ChannelInteraction::StartTyping {
+            recipient: "-100".into(),
+        })
+        .await;
+    assert!(after_stop.is_err(), "a stopped runtime accepts no work");
+}
