@@ -4457,7 +4457,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         },
         conversation: ConversationRef {
             kind: ConversationKind::Thread,
-            id: THREAD.into(),
+            id: CHANNEL.into(),
             scope_id: Some(GUILD.into()),
             parent_id: Some(CHANNEL.into()),
             thread_id: Some(THREAD.into()),
@@ -4473,7 +4473,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         .unwrap();
     assert_eq!(retained.bytes, include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg"));
     assert_eq!(retained.content_type, "audio/ogg");
-    assert_eq!(voice_scope.conversation.id, THREAD);
+    assert_eq!(voice_scope.conversation.id, CHANNEL);
     assert_eq!(voice_scope.conversation.scope_id.as_deref(), Some(GUILD));
     assert_eq!(voice_scope.conversation.parent_id.as_deref(), Some(CHANNEL));
     assert_eq!(voice_scope.conversation.thread_id.as_deref(), Some(THREAD));
@@ -4483,7 +4483,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     assert_eq!(stt_scope.turn_id, "discord_1111111111111111111");
     let reaction = callbacks.events.lock().await[0].clone();
     assert_eq!(reaction.channel.account_id.as_deref(), Some("discord:account-a"));
-    assert_eq!(reaction.conversation.as_ref().unwrap().id, THREAD);
+    assert_eq!(reaction.conversation.as_ref().unwrap().id, CHANNEL);
     assert_eq!(reaction.conversation.as_ref().unwrap().scope_id.as_deref(), Some(GUILD));
     match reaction.event {
         tinychannels_bus::ChannelEventKind::ReactionAdded {
