@@ -514,7 +514,7 @@ impl crate::providers::long_tail::LongTail for QQChannel {
 #[path = "qq/native.rs"]
 mod native;
 
-crate::providers::long_tail::impl_long_tail_adapter!(QQChannel);
+crate::providers::native::native_v2_adapter!(QQChannel);
 
 #[cfg(test)]
 #[path = "qq_tests.rs"]
