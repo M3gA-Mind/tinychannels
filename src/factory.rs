@@ -531,7 +531,6 @@ fn build_whatsapp_web(
 ) -> Option<Arc<dyn Channel>> {
     #[cfg(feature = "whatsapp-web")]
     {
-        let _ = wa;
         let config = ChannelsConfig {
             whatsapp: Some(wa.clone()),
             ..Default::default()
