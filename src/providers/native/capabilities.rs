@@ -52,13 +52,14 @@ pub(crate) fn voice_capabilities(
     enabled: bool,
     synthesis: bool,
     max_bytes: u64,
+    codecs: &[&str],
 ) -> VoiceCapabilities {
     if !enabled {
         return VoiceCapabilities::default();
     }
     VoiceCapabilities {
         supported: true,
-        accepted_codecs: ["m4a_aac", "mp3", "ogg_opus"].map(String::from).into(),
+        accepted_codecs: codecs.iter().map(|codec| (*codec).to_owned()).collect(),
         max_size_bytes: Some(max_bytes),
         transcript_sources: vec![VoiceTranscriptSource::HostStt],
         synthesis,

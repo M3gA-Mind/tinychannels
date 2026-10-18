@@ -29,8 +29,14 @@ impl SignalChannel {
             parts.push("voice_note".into());
         }
         content.parts = parts;
-        let voice =
-            |synthesis| voice_capabilities(voice_enabled, synthesis, SIGNAL_MAX_VOICE_BYTES);
+        let voice = |synthesis| {
+            voice_capabilities(
+                voice_enabled,
+                synthesis,
+                SIGNAL_MAX_VOICE_BYTES,
+                &["m4a_aac", "mp3", "ogg_opus"],
+            )
+        };
         ChannelCapabilities {
             remote_control: true,
             chat_approvals: true,
