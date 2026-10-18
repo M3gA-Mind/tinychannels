@@ -367,6 +367,6 @@ async fn a_bundling_provider_receives_every_step_in_one_delivery() {
         .await
         .unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["bundle-1"]);
-    assert_eq!(provider.delivered.lock().unwrap().as_slice(), ["bundle:1"]);
+    assert_eq!(provider.delivered.lock().unwrap().as_slice(), ["bundle:2"]);
     assert!(outcome.error.is_none());
 }
