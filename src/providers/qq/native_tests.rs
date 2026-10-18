@@ -1,8 +1,8 @@
 use super::super::http_test_support::HttpsServer;
 use crate::channel::ChannelAdapter;
-use crate::factory::{build_long_tail_channel_with_host, HttpClientFactory};
+use crate::factory::{HttpClientFactory, build_long_tail_channel_with_host};
 use crate::host::{ChannelHostBuilder, VoiceMediaRequest, VoiceMediaStore};
-use crate::providers::native::fixtures::{stored_media, StubMedia};
+use crate::providers::native::fixtures::{StubMedia, stored_media};
 use base64::Engine as _;
 use serde_json::json;
 use std::sync::Arc;

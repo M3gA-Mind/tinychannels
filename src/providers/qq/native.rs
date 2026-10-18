@@ -213,7 +213,11 @@ impl QQChannel {
                     .get("user_openid")
                     .or_else(|| author.get("id"))?
                     .as_str()?;
-                (sender.to_owned(), format!("user:{sender}"), ConversationKind::Dm)
+                (
+                    sender.to_owned(),
+                    format!("user:{sender}"),
+                    ConversationKind::Dm,
+                )
             }
             "GROUP_AT_MESSAGE_CREATE" => {
                 let author = message.get("author")?;
@@ -250,12 +254,14 @@ impl QQChannel {
                 .get("attachments")
                 .and_then(serde_json::Value::as_array)
         {
-            for (index, attachment) in attachments.iter().take(MAX_INBOUND_ATTACHMENTS).enumerate() {
+            for (index, attachment) in attachments.iter().take(MAX_INBOUND_ATTACHMENTS).enumerate()
+            {
                 let Some(url) = attachment.get("url").and_then(serde_json::Value::as_str) else {
                     continue;
                 };
                 let remaining = INBOUND_ATTACHMENT_LIMIT.saturating_sub(downloaded_bytes);
-                let Some((bytes, response_mime)) = self.download_attachment(url, remaining).await else {
+                let Some((bytes, response_mime)) = self.download_attachment(url, remaining).await
+                else {
                     continue;
                 };
                 downloaded_bytes += bytes.len() as u64;
@@ -347,12 +353,7 @@ impl QQChannel {
         {
             return None;
         }
-        let response = self
-            .attachment_http_client()
-            .get(url)
-            .send()
-            .await
-            .ok()?;
+        let response = self.attachment_http_client().get(url).send().await.ok()?;
         if !response.status().is_success() || response.url().host_str() != Some(host.as_str()) {
             return None;
         }
