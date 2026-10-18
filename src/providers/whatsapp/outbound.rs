@@ -1,7 +1,9 @@
 //! Typed outbound delivery for the WhatsApp Business Cloud adapter.
 
 use super::WhatsAppChannel;
-use crate::channel::{ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind};
+use crate::channel::{
+    ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind,
+};
 use crate::providers::whatsapp_shared::error::WaFailure;
 use crate::providers::whatsapp_shared::plan::{
     self, AttachmentKind, OutboundScope, PlanPorts, PlannedPart, plan_parts,
@@ -255,8 +257,12 @@ impl WhatsAppChannel {
                     caption,
                     ..
                 } => {
-                    let upload_name = file_name.clone().unwrap_or_else(|| attachment_name(kind).into());
-                    let media_id = self.upload_media(bytes, &content_type, &upload_name).await?;
+                    let upload_name = file_name
+                        .clone()
+                        .unwrap_or_else(|| attachment_name(kind).into());
+                    let media_id = self
+                        .upload_media(bytes, &content_type, &upload_name)
+                        .await?;
                     let body = media_body(
                         to,
                         kind,
@@ -269,12 +275,15 @@ impl WhatsAppChannel {
                     sent.push((id, attachment_receipt_kind(kind)));
                 }
                 PlannedPart::Voice {
-                    bytes, content_type, ..
+                    bytes,
+                    content_type,
+                    ..
                 } => {
                     // OGG/Opus uploaded as audio is what WhatsApp renders as a
                     // voice message; the Cloud API has no waveform field.
                     let media_id = self.upload_media(bytes, &content_type, "voice.ogg").await?;
-                    let body = media_body(to, AttachmentKind::Audio, &media_id, None, None, reply_to);
+                    let body =
+                        media_body(to, AttachmentKind::Audio, &media_id, None, None, reply_to);
                     let id = Self::answered_message_id(&self.post_messages(&body).await?)?;
                     sent.push((id, MessageReceiptPartKind::Voice));
                 }
@@ -348,7 +357,10 @@ impl WhatsAppChannel {
                 break;
             }
         }
-        let ids: Vec<String> = parts.iter().map(|part| part.platform_message_id.clone()).collect();
+        let ids: Vec<String> = parts
+            .iter()
+            .map(|part| part.platform_message_id.clone())
+            .collect();
         let receipt = MessageReceipt {
             idempotency_key: Some(message.idempotency_key.clone()),
             channel: Some(scope.channel.clone()),

@@ -9,7 +9,6 @@
     allow(dead_code, reason = "the Web adapter shares these helpers")
 )]
 
-
 use super::error::WaFailure;
 use super::plan::base_mime;
 use crate::host::{
@@ -60,7 +59,11 @@ impl InboundKind {
 /// The scope an inbound attachment is stored under. The module overwrites the
 /// account fields; the adapter supplies the conversation and the message id
 /// that the host's later scoped reads resolve against.
-pub(crate) fn inbound_scope(provider: &str, conversation: &ConversationRef, message_id: &str) -> HostVoiceScope {
+pub(crate) fn inbound_scope(
+    provider: &str,
+    conversation: &ConversationRef,
+    message_id: &str,
+) -> HostVoiceScope {
     HostVoiceScope {
         configured_instance: String::new(),
         channel: ChannelRef {
@@ -93,15 +96,16 @@ pub(crate) async fn store_attachment(
     let content_type = base_mime(&download.content_type);
     // The host store only accepts types it can validate; anything else is
     // preserved as an opaque document rather than dropped.
-    let (kind, media_kind) = if crate::host::is_allowed_content_type(kind.media_kind(), &content_type) {
-        (kind, kind.media_kind())
-    } else if crate::host::is_allowed_content_type(MediaKind::Document, &content_type) {
-        (InboundKind::Document, MediaKind::Document)
-    } else {
-        return Err(WaFailure::rejected(
-            "inbound WhatsApp attachment has an unsupported content type",
-        ));
-    };
+    let (kind, media_kind) =
+        if crate::host::is_allowed_content_type(kind.media_kind(), &content_type) {
+            (kind, kind.media_kind())
+        } else if crate::host::is_allowed_content_type(MediaKind::Document, &content_type) {
+            (InboundKind::Document, MediaKind::Document)
+        } else {
+            return Err(WaFailure::rejected(
+                "inbound WhatsApp attachment has an unsupported content type",
+            ));
+        };
     if download.bytes.is_empty() || download.bytes.len() as u64 > MAX_INBOUND_MEDIA_BYTES {
         return Err(WaFailure::rejected(
             "inbound WhatsApp attachment size is outside its limit",
@@ -188,7 +192,11 @@ pub(crate) async fn store_voice_note(
         .await
         .map_err(|_| WaFailure::uncertain("inbound WhatsApp voice note could not be stored"))?;
     let mut media = stored.media;
-    if media.opaque_id.as_deref().is_none_or(|id| id.trim().is_empty()) {
+    if media
+        .opaque_id
+        .as_deref()
+        .is_none_or(|id| id.trim().is_empty())
+    {
         return Err(WaFailure::uncertain(
             "host voice storage returned no durable opaque reference",
         ));

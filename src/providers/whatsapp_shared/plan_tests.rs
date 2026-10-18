@@ -324,9 +324,13 @@ async fn images_map_to_photos_or_documents_and_unreadable_media_is_rejected() {
             alt_text: None,
         })])
     };
-    let planned = plan(&image(&png, Some(" cap <tool>x</tool>")), Some(&media), None)
-        .await
-        .unwrap();
+    let planned = plan(
+        &image(&png, Some(" cap <tool>x</tool>")),
+        Some(&media),
+        None,
+    )
+    .await
+    .unwrap();
     assert!(matches!(
         &planned[0],
         PlannedPart::Attachment { kind: AttachmentKind::Image, content_type, caption, file_name, .. }
@@ -348,9 +352,11 @@ async fn images_map_to_photos_or_documents_and_unreadable_media_is_rejected() {
     }
     // Every read is bound to the configured account and turn.
     let scopes = media.read_scopes.lock();
-    assert!(scopes.iter().all(|scope| {
-        scope.configured_instance == "whatsapp" && scope.turn_id == "turn-1"
-    }));
+    assert!(
+        scopes
+            .iter()
+            .all(|scope| { scope.configured_instance == "whatsapp" && scope.turn_id == "turn-1" })
+    );
 }
 
 #[tokio::test]
@@ -376,10 +382,20 @@ async fn long_captions_travel_as_a_follow_up_text() {
 async fn video_audio_and_files_map_to_the_right_attachment_kinds() {
     let media = MemoryMedia::default();
     let mp4 = media.seed(MediaKind::Video, "video/mp4", None, b"0000ftypmp42");
-    let webm = media.seed(MediaKind::Video, "video/webm", None, &[0x1a, 0x45, 0xdf, 0xa3, 0]);
+    let webm = media.seed(
+        MediaKind::Video,
+        "video/webm",
+        None,
+        &[0x1a, 0x45, 0xdf, 0xa3, 0],
+    );
     let mp3 = media.seed(MediaKind::Audio, "audio/mpeg", None, b"ID3-----");
     let wav = media.seed(MediaKind::Audio, "audio/wav", None, b"RIFF----WAVE");
-    let pdf = media.seed(MediaKind::Document, "application/pdf", Some("src.pdf"), b"%PDF-1.4 x");
+    let pdf = media.seed(
+        MediaKind::Document,
+        "application/pdf",
+        Some("src.pdf"),
+        b"%PDF-1.4 x",
+    );
     let m = message(vec![
         content(ContentPart::Video {
             media: reference(&mp4),
@@ -552,8 +568,7 @@ async fn oversized_and_undecodable_voice_media_is_rejected() {
         Err(WaFailure::Rejected(_))
     ));
     // Stored payloads that are not base64 cannot be decoded.
-    voices
-        .served_raw("garbled", "audio/ogg", "!!!not-base64!!!");
+    voices.served_raw("garbled", "audio/ogg", "!!!not-base64!!!");
     assert!(matches!(
         plan(&message(vec![voice("garbled", None)]), None, Some(&voices)).await,
         Err(WaFailure::Rejected(_))
@@ -575,7 +590,13 @@ async fn voice_note_parts_are_planned_like_voice_media() {
         },
     })]);
     let planned = plan(&m, None, Some(&voices)).await.unwrap();
-    assert!(matches!(&planned[0], PlannedPart::Voice { waveform: Some(_), .. }));
+    assert!(matches!(
+        &planned[0],
+        PlannedPart::Voice {
+            waveform: Some(_),
+            ..
+        }
+    ));
 }
 
 // --- helpers -------------------------------------------------------------------

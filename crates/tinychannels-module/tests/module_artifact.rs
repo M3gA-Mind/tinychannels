@@ -2263,13 +2263,9 @@ async fn compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native
         "tinychannels-module",
     )
     .unwrap();
-    assert!(
-        info.manifest
-            .provides
-            .iter()
-            .any(|provided| provided.version.interface.as_str()
-                == "ai.tinyhumans.tinychannels.Channels")
-    );
+    assert!(info.manifest.provides.iter().any(
+        |provided| provided.version.interface.as_str() == "ai.tinyhumans.tinychannels.Channels"
+    ));
     let storage = MemoryStorage::new();
     let served_backend = storage.clone();
     let endpoint = PerCallerEndpoint::new(move |_sender| {
@@ -2416,7 +2412,14 @@ async fn compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native
     // A forged or unsigned delivery is refused and reaches no one.
     assert!(deliver(None).await.is_err());
     assert!(deliver(Some("sha256=00".into())).await.is_err());
-    assert!(scoped.0.lock().await.iter().all(|entry| entry["kind"] != "inbound"));
+    assert!(
+        scoped
+            .0
+            .lock()
+            .await
+            .iter()
+            .all(|entry| entry["kind"] != "inbound")
+    );
     let accepted = deliver(Some(signature.clone())).await.unwrap();
     assert!(matches!(
         accepted,
@@ -2501,14 +2504,26 @@ async fn compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native
         .iter()
         .map(|request| serde_json::from_slice(&request.body).unwrap_or_default())
         .collect();
-    assert!(wire.iter().any(|body| body["type"] == "text" && body["text"]["body"] == "native reply"));
-    assert!(wire.iter().any(|body| body["type"] == "reaction" && body["reaction"]["emoji"] == "👍"));
-    assert!(graph.received_requests().await.unwrap().iter().all(|request| {
-        request
-            .headers
-            .get("authorization")
-            .is_some_and(|value| value.to_str().unwrap_or_default() == "Bearer access-token")
-    }));
+    assert!(
+        wire.iter()
+            .any(|body| body["type"] == "text" && body["text"]["body"] == "native reply")
+    );
+    assert!(
+        wire.iter()
+            .any(|body| body["type"] == "reaction" && body["reaction"]["emoji"] == "👍")
+    );
+    assert!(
+        graph
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .all(|request| {
+                request.headers.get("authorization").is_some_and(|value| {
+                    value.to_str().unwrap_or_default() == "Bearer access-token"
+                })
+            })
+    );
     runtime
         .call_confidential::<()>("StopChannel", "whatsapp")
         .await

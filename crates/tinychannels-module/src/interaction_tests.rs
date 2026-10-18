@@ -461,8 +461,14 @@ async fn webhook_deliveries_pass_the_exact_bytes_and_report_the_outcome() {
     let ChannelInteractionResult::WebhookAccepted(outcome) = result else {
         panic!("expected an accepted delivery")
     };
-    assert_eq!((outcome.messages, outcome.events, outcome.duplicates), (2, 1, 3));
-    assert_eq!(*provider.0.lock().unwrap(), ["webhook:sha256=abc:{\"exact\": 1}"]);
+    assert_eq!(
+        (outcome.messages, outcome.events, outcome.duplicates),
+        (2, 1, 3)
+    );
+    assert_eq!(
+        *provider.0.lock().unwrap(),
+        ["webhook:sha256=abc:{\"exact\": 1}"]
+    );
     dispatch(
         provider.as_ref(),
         ChannelInteraction::DeliverWebhook {
@@ -495,7 +501,9 @@ async fn refused_webhooks_are_client_errors_and_ingest_failures_are_retryable_on
     let before = provider.0.lock().unwrap().len();
     let garbage = deliver("!!! not base64 !!!".into()).await.unwrap_err();
     assert_eq!(failure_name(garbage), WEBHOOK_REJECTED_ERROR);
-    let oversized = deliver("A".repeat(4 * 1024 * 1024 * 4 / 3 + 8)).await.unwrap_err();
+    let oversized = deliver("A".repeat(4 * 1024 * 1024 * 4 / 3 + 8))
+        .await
+        .unwrap_err();
     assert_eq!(failure_name(oversized), WEBHOOK_REJECTED_ERROR);
     assert_eq!(provider.0.lock().unwrap().len(), before);
 }
@@ -517,7 +525,10 @@ async fn subscription_handshakes_echo_the_challenge_only_for_the_right_token() {
         verify("right").await.unwrap(),
         ChannelInteractionResult::WebhookChallenge(challenge) if challenge == "12345"
     ));
-    assert_eq!(failure_name(verify("wrong").await.unwrap_err()), WEBHOOK_REJECTED_ERROR);
+    assert_eq!(
+        failure_name(verify("wrong").await.unwrap_err()),
+        WEBHOOK_REJECTED_ERROR
+    );
 }
 
 #[tokio::test]
@@ -539,7 +550,13 @@ async fn read_receipts_run_on_the_provider_and_surface_failure() {
             },
         )
     };
-    assert!(matches!(read("m1").await.unwrap(), ChannelInteractionResult::Completed));
+    assert!(matches!(
+        read("m1").await.unwrap(),
+        ChannelInteractionResult::Completed
+    ));
     assert!(read("fail").await.is_err());
-    assert_eq!(*provider.0.lock().unwrap(), ["read:room:m1", "read:room:fail"]);
+    assert_eq!(
+        *provider.0.lock().unwrap(),
+        ["read:room:m1", "read:room:fail"]
+    );
 }

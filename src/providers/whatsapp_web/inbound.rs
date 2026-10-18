@@ -7,7 +7,7 @@ use crate::providers::whatsapp_shared::inbound::{
 };
 use crate::providers::whatsapp_shared::vcard;
 use tinychannels_bus::{
-    ChannelEvent, ChannelEventKind, ChannelIngress, ChannelInboundEnvelope, ChannelReaction,
+    ChannelEvent, ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelReaction,
     ChannelRef, ContentPart, ConversationRef, SenderRef,
 };
 use wacore::download::Downloadable;
@@ -102,10 +102,7 @@ pub(super) fn parse(message: &wa::Message) -> Parsed<'_> {
     };
     let mut reply = |context: &whatsapp_rust::buffa::MessageField<wa::ContextInfo>| {
         if parsed.reply_to.is_none() {
-            parsed.reply_to = context
-                .stanza_id
-                .clone()
-                .filter(|id| !id.trim().is_empty());
+            parsed.reply_to = context.stanza_id.clone().filter(|id| !id.trim().is_empty());
         }
     };
     reply(&base.extended_text_message.context_info);
@@ -140,7 +137,10 @@ pub(super) fn parse(message: &wa::Message) -> Parsed<'_> {
             latitude,
             longitude,
             location.name.clone().filter(|name| !name.trim().is_empty()),
-            location.address.clone().filter(|address| !address.trim().is_empty()),
+            location
+                .address
+                .clone()
+                .filter(|address| !address.trim().is_empty()),
         ));
     }
     if let Some(contact) = base.contact_message.as_option() {
@@ -315,10 +315,9 @@ impl InboundState {
                 ..Default::default()
             })
         };
-        let delivered = sink
-            .publish_ingress(ingress)
-            .await
-            .map_err(|_| WaFailure::uncertain("WhatsApp ingress could not be delivered to the host"))?;
+        let delivered = sink.publish_ingress(ingress).await.map_err(|_| {
+            WaFailure::uncertain("WhatsApp ingress could not be delivered to the host")
+        })?;
         if delivered {
             self.seen.lock().insert(id);
         }
@@ -464,7 +463,11 @@ impl InboundState {
                 }),
                 event: kind,
             };
-            if sink.publish_ingress(ChannelIngress::Event(event)).await.is_err() {
+            if sink
+                .publish_ingress(ChannelIngress::Event(event))
+                .await
+                .is_err()
+            {
                 tracing::debug!("[whatsapp_web] receipt event could not be delivered");
             }
         }

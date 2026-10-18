@@ -1321,7 +1321,11 @@ fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> Chann
 #[tokio::test]
 async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
     let (host, callback, _server, _storage) = ingress_fixture().await;
-    let events = ModuleEvents(host.clone(), "telegram:bot-a".into(), crate::provider::MediaScope::default());
+    let events = ModuleEvents(
+        host.clone(),
+        "telegram:bot-a".into(),
+        crate::provider::MediaScope::default(),
+    );
     assert!(
         events
             .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(
@@ -1388,7 +1392,11 @@ async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
 #[tokio::test]
 async fn completed_provider_transcript_skips_media_read_and_host_stt() {
     let (host, callback, _server, _storage) = ingress_fixture().await;
-    let events = ModuleEvents(host.clone(), "telegram:bot-a".into(), crate::provider::MediaScope::default());
+    let events = ModuleEvents(
+        host.clone(),
+        "telegram:bot-a".into(),
+        crate::provider::MediaScope::default(),
+    );
     let provider_transcript = tinychannels_bus::VoiceTranscript {
         text: "provider words".into(),
         language: Some("en".into()),
@@ -2063,10 +2071,14 @@ async fn host_adapters_propagate_callback_failures() {
             .is_err()
     );
     assert!(
-        ModuleEvents(host.clone(), "fixture".into(), crate::provider::MediaScope::default())
-            .publish("fixture", "event", serde_json::json!({}))
-            .await
-            .is_err()
+        ModuleEvents(
+            host.clone(),
+            "fixture".into(),
+            crate::provider::MediaScope::default()
+        )
+        .publish("fixture", "event", serde_json::json!({}))
+        .await
+        .is_err()
     );
     let transcriber = ModuleTranscriber(host.clone(), "fixture".into());
     assert_eq!(transcriber.name(), "module-host");
@@ -3248,7 +3260,11 @@ mod whatsapp_native {
         let hooks = Arc::new(Hooks::default());
         let (host, callbacks, connection, storage) = ingress_fixture().await;
         *callbacks.transcription_result.lock().await = Some("fixture spoken words".into());
-        let provider_host = hooks.host(host.clone(), instance, Some("whatsapp:media-v1:test".into()));
+        let provider_host = hooks.host(
+            host.clone(),
+            instance,
+            Some("whatsapp:media-v1:test".into()),
+        );
         let built = tinychannels::build_whatsapp_cloud_channel(
             &cloud_config(),
             &provider_host,
@@ -3313,7 +3329,9 @@ mod whatsapp_native {
         );
         let facts = handle.declared_capabilities();
         assert!(facts.reactions && facts.content.image.outbound);
-        assert!(handle.reactions().is_some() && handle.edits().is_some() && handle.deletes().is_some());
+        assert!(
+            handle.reactions().is_some() && handle.edits().is_some() && handle.deletes().is_some()
+        );
         rig.running.stop().await.unwrap();
     }
 
@@ -3326,7 +3344,10 @@ mod whatsapp_native {
         let result = webhook(&rig, Some(signed(&body)), &body).await.unwrap();
         assert!(matches!(
             result,
-            tinychannels_bus::ChannelInteractionResult::WebhookAccepted(WebhookDeliveryOutcome { messages: 1, .. })
+            tinychannels_bus::ChannelInteractionResult::WebhookAccepted(WebhookDeliveryOutcome {
+                messages: 1,
+                ..
+            })
         ));
         let envelope = first_inbound(&rig).await;
         assert_eq!(rig.callbacks.inbound.lock().await.len(), 1);
@@ -3344,7 +3365,11 @@ mod whatsapp_native {
         let body = delivery(serde_json::json!([
             {"from": "15550001111", "id": "wamid.9", "type": "text", "text": {"body": "forged"}}
         ]));
-        for signature in [None, Some("sha256=00".to_owned()), Some("verify-me".to_owned())] {
+        for signature in [
+            None,
+            Some("sha256=00".to_owned()),
+            Some("verify-me".to_owned()),
+        ] {
             let error = webhook(&rig, signature, &body).await.unwrap_err();
             assert!(matches!(
                 error,
@@ -3359,7 +3384,11 @@ mod whatsapp_native {
             }}]}]
         }))
         .unwrap();
-        assert!(webhook(&rig, Some(signed(&other_number)), &other_number).await.is_err());
+        assert!(
+            webhook(&rig, Some(signed(&other_number)), &other_number)
+                .await
+                .is_err()
+        );
         assert!(rig.callbacks.inbound.lock().await.is_empty());
         rig.running.stop().await.unwrap();
     }
@@ -3395,9 +3424,12 @@ mod whatsapp_native {
             .await;
         Mock::given(method("GET"))
             .and(path("/cdn/ptt-1"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(
-                include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(
+                    include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")
+                        .to_vec(),
+                ),
+            )
             .mount(&rig.server)
             .await;
         let body = delivery(serde_json::json!([
@@ -3413,9 +3445,16 @@ mod whatsapp_native {
             .find(|part| part["kind"] == "voice_note")
             .expect("a voice note part");
         assert_eq!(note["voiceNote"]["pushToTalk"], true);
-        assert_eq!(note["voiceNote"]["transcript"]["text"], "fixture spoken words");
+        assert_eq!(
+            note["voiceNote"]["transcript"]["text"],
+            "fixture spoken words"
+        );
         assert_eq!(note["voiceNote"]["transcript"]["source"], "host_stt");
-        assert!(note["voiceNote"]["media"].get("url").is_none_or(serde_json::Value::is_null));
+        assert!(
+            note["voiceNote"]["media"]
+                .get("url")
+                .is_none_or(serde_json::Value::is_null)
+        );
         assert_eq!(rig.callbacks.stt_calls.load(Ordering::SeqCst), 1);
         rig.running.stop().await.unwrap();
     }
@@ -3426,7 +3465,8 @@ mod whatsapp_native {
         Mock::given(method("POST"))
             .and(path("/v23.0/123/messages"))
             .respond_with(
-                ResponseTemplate::new(200).set_body_json(serde_json::json!({"messages": [{"id": "wamid.ok"}]})),
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"messages": [{"id": "wamid.ok"}]})),
             )
             .mount(&rig.server)
             .await;

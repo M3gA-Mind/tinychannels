@@ -13,7 +13,10 @@ fn identity_is_unknown_until_the_session_reports_an_account() {
 fn the_first_account_binds_and_the_same_account_stays_valid() {
     let identity = LinkedIdentity::default();
     assert!(identity.observe(Some("15550001111@s.whatsapp.net")));
-    assert_eq!(identity.current().as_deref(), Some("15550001111@s.whatsapp.net"));
+    assert_eq!(
+        identity.current().as_deref(),
+        Some("15550001111@s.whatsapp.net")
+    );
     assert!(identity.observe(Some("15550001111@s.whatsapp.net")));
     assert!(identity.observe(None));
     assert!(!identity.is_conflicted());

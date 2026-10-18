@@ -284,7 +284,10 @@ pub fn build_whatsapp_cloud_channel(
     tracing::info!(
         channel = "whatsapp",
         backend = "cloud",
-        signed_webhooks = wa.app_secret.as_deref().is_some_and(|secret| !secret.trim().is_empty()),
+        signed_webhooks = wa
+            .app_secret
+            .as_deref()
+            .is_some_and(|secret| !secret.trim().is_empty()),
         "[channels] whatsapp cloud enabled (credentials not logged)"
     );
     let mut channel = WhatsAppChannel::with_http_client(

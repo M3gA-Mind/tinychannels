@@ -5,11 +5,11 @@
 //! [`whatsapp_rust::Client`]; tests substitute a recording double so the
 //! adapter logic runs without a connected device.
 
+use super::media_build::{self, MediaBuild, UploadedMedia};
 use anyhow::Result;
 use async_trait::async_trait;
 use wacore::download::{Downloadable, MediaType};
 use whatsapp_rust::Jid;
-use super::media_build::{self, MediaBuild, UploadedMedia};
 use whatsapp_rust::waproto::whatsapp as wa;
 
 #[async_trait]
@@ -45,7 +45,6 @@ pub(super) trait OutboundClient: Send + Sync {
     /// The phone-number JID this session is linked to, once it is known.
     fn linked_account(&self) -> Option<Jid>;
 }
-
 
 #[async_trait]
 impl OutboundClient for whatsapp_rust::Client {
@@ -107,15 +106,13 @@ impl OutboundClient for whatsapp_rust::Client {
     }
 
     async fn revoke_message(&self, chat: Jid, message_id: String) -> Result<()> {
-        Ok(
-            whatsapp_rust::Client::revoke_message(
-                self,
-                chat,
-                message_id,
-                whatsapp_rust::RevokeType::Sender,
-            )
-            .await?,
+        Ok(whatsapp_rust::Client::revoke_message(
+            self,
+            chat,
+            message_id,
+            whatsapp_rust::RevokeType::Sender,
         )
+        .await?)
     }
 
     async fn mark_read(&self, chat: &Jid, sender: Option<&Jid>, ids: &[String]) -> Result<()> {

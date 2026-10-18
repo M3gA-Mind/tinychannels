@@ -31,5 +31,8 @@ fn blank_chunks_are_dropped_and_zero_limit_is_clamped() {
 
 #[test]
 fn tool_call_markup_is_stripped() {
-    assert_eq!(strip_tool_call_tags("hi <tool_call>x</tool_call>").trim(), "hi");
+    assert_eq!(
+        strip_tool_call_tags("hi <tool_call>x</tool_call>").trim(),
+        "hi"
+    );
 }

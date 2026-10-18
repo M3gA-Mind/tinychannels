@@ -2888,7 +2888,9 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         "fixture".into(),
         super::ProviderActivation {
             generation: "activation-a".into(),
-            media_account_scope: crate::provider::MediaScope::fixed(Some("fixture:media-v1:test".into())),
+            media_account_scope: crate::provider::MediaScope::fixed(Some(
+                "fixture:media-v1:test".into(),
+            )),
         },
     );
     let bytes = base64::engine::general_purpose::STANDARD
@@ -3063,7 +3065,9 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         "fixture".into(),
         super::ProviderActivation {
             generation: "activation-b".into(),
-            media_account_scope: crate::provider::MediaScope::fixed(Some("fixture:media-v1:test".into())),
+            media_account_scope: crate::provider::MediaScope::fixed(Some(
+                "fixture:media-v1:test".into(),
+            )),
         },
     );
     assert!(

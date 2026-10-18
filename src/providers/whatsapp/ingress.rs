@@ -19,7 +19,7 @@ use hmac::{Hmac, KeyInit, Mac};
 use serde_json::Value;
 use sha2::Sha256;
 use tinychannels_bus::{
-    ChannelEvent, ChannelEventKind, ChannelIngress, ChannelInboundEnvelope, ChannelReaction,
+    ChannelEvent, ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelReaction,
     ChannelRef, ContactMethod, ContentPart, ConversationRef, SenderRef, WebhookDeliveryOutcome,
 };
 
@@ -82,7 +82,12 @@ fn text_of<'a>(value: &'a Value, path: &[&str]) -> Option<&'a str> {
 impl WhatsAppChannel {
     /// Answer the subscription handshake. Only the exact configured verify
     /// token succeeds, and only for `hub.mode=subscribe`.
-    pub(super) fn verify_challenge(&self, mode: &str, token: &str, challenge: &str) -> Option<String> {
+    pub(super) fn verify_challenge(
+        &self,
+        mode: &str,
+        token: &str,
+        challenge: &str,
+    ) -> Option<String> {
         let expected = self.verify_token.as_bytes();
         let provided = token.as_bytes();
         // Compare every byte so the answer does not leak the matching prefix.
@@ -103,7 +108,9 @@ impl WhatsAppChannel {
         body: &[u8],
     ) -> Result<WebhookDeliveryOutcome, WaFailure> {
         if body.len() > MAX_WEBHOOK_BYTES {
-            return Err(WaFailure::rejected("WhatsApp webhook body exceeds its limit"));
+            return Err(WaFailure::rejected(
+                "WhatsApp webhook body exceeds its limit",
+            ));
         }
         let secret = self
             .app_secret
@@ -116,15 +123,31 @@ impl WhatsAppChannel {
         let payload: Value = serde_json::from_slice(body)
             .map_err(|_| WaFailure::rejected("WhatsApp webhook body is not JSON"))?;
         if payload.get("object").and_then(Value::as_str) != Some("whatsapp_business_account") {
-            return Err(WaFailure::rejected("WhatsApp webhook object is not supported"));
+            return Err(WaFailure::rejected(
+                "WhatsApp webhook object is not supported",
+            ));
         }
         let _gate = self.ingest_gate.lock().await;
         let mut outcome = WebhookDeliveryOutcome::default();
         let mut mismatched = 0usize;
         let mut matched = 0usize;
-        for entry in payload.get("entry").and_then(Value::as_array).into_iter().flatten() {
-            for change in entry.get("changes").and_then(Value::as_array).into_iter().flatten() {
-                if change.get("field").and_then(Value::as_str).is_some_and(|field| field != "messages") {
+        for entry in payload
+            .get("entry")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            for change in entry
+                .get("changes")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if change
+                    .get("field")
+                    .and_then(Value::as_str)
+                    .is_some_and(|field| field != "messages")
+                {
                     continue;
                 }
                 let Some(value) = change.get("value") else {
@@ -160,7 +183,12 @@ impl WhatsAppChannel {
         value: &Value,
         outcome: &mut WebhookDeliveryOutcome,
     ) -> Result<(), WaFailure> {
-        for message in value.get("messages").and_then(Value::as_array).into_iter().flatten() {
+        for message in value
+            .get("messages")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
             let Some(id) = text_of(message, &["id"]) else {
                 continue;
             };
@@ -181,8 +209,14 @@ impl WhatsAppChannel {
                 _ => outcome.messages += 1,
             }
         }
-        for status in value.get("statuses").and_then(Value::as_array).into_iter().flatten() {
-            let (Some(id), Some(kind)) = (text_of(status, &["id"]), text_of(status, &["status"])) else {
+        for status in value
+            .get("statuses")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let (Some(id), Some(kind)) = (text_of(status, &["id"]), text_of(status, &["status"]))
+            else {
                 continue;
             };
             let key = format!("status:{id}:{kind}");
@@ -249,7 +283,11 @@ impl WhatsAppChannel {
         })
     }
 
-    async fn message_item(&self, value: &Value, message: &Value) -> Result<Option<Item>, WaFailure> {
+    async fn message_item(
+        &self,
+        value: &Value,
+        message: &Value,
+    ) -> Result<Option<Item>, WaFailure> {
         let Some(from) = text_of(message, &["from"]) else {
             return Ok(None);
         };
@@ -261,7 +299,10 @@ impl WhatsAppChannel {
         let Some(id) = text_of(message, &["id"]) else {
             return Ok(None);
         };
-        let kind = message.get("type").and_then(Value::as_str).unwrap_or_default();
+        let kind = message
+            .get("type")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let conversation = ConversationRef {
             kind: tinychannels_bus::ConversationKind::Dm,
             id: sender.clone(),
@@ -304,9 +345,18 @@ impl WhatsAppChannel {
             "image" | "video" | "document" | "sticker" | "audio" => {
                 let media = message.get(kind).unwrap_or(&Value::Null);
                 if let Some(part) = self.attachment_parts(kind, media, id, scope).await? {
-                    if let ContentPart::Image { caption: Some(caption), .. }
-                    | ContentPart::Video { caption: Some(caption), .. }
-                    | ContentPart::File { caption: Some(caption), .. } = &part
+                    if let ContentPart::Image {
+                        caption: Some(caption),
+                        ..
+                    }
+                    | ContentPart::Video {
+                        caption: Some(caption),
+                        ..
+                    }
+                    | ContentPart::File {
+                        caption: Some(caption),
+                        ..
+                    } = &part
                     {
                         text.clone_from(caption);
                     }
@@ -334,12 +384,20 @@ impl WhatsAppChannel {
                 }
             }
             "contacts" => {
-                for contact in message.get("contacts").and_then(Value::as_array).into_iter().flatten() {
+                for contact in message
+                    .get("contacts")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                {
                     parts.push(Self::contact_part(contact));
                 }
             }
             other => {
-                tracing::debug!(kind = other, "[whatsapp] unsupported inbound message kind skipped");
+                tracing::debug!(
+                    kind = other,
+                    "[whatsapp] unsupported inbound message kind skipped"
+                );
                 return Ok(None);
             }
         }
@@ -475,7 +533,9 @@ impl WhatsAppChannel {
                 Err(error) => return Err(error),
             };
             if download.content_type.is_empty() {
-                download.content_type = text_of(media, &["mime_type"]).unwrap_or_default().to_owned();
+                download.content_type = text_of(media, &["mime_type"])
+                    .unwrap_or_default()
+                    .to_owned();
             }
             return match inbound::store_voice_note(store, scope, download, None).await {
                 Ok(voice_note) => Ok(Some(ContentPart::VoiceNote { voice_note })),
@@ -492,7 +552,9 @@ impl WhatsAppChannel {
         let download = match self.download_media(media_id, MAX_INBOUND_MEDIA_BYTES).await {
             Ok(mut download) => {
                 if download.content_type.is_empty() {
-                    download.content_type = text_of(media, &["mime_type"]).unwrap_or_default().to_owned();
+                    download.content_type = text_of(media, &["mime_type"])
+                        .unwrap_or_default()
+                        .to_owned();
                 }
                 download.file_name = text_of(media, &["filename"]).map(str::to_owned);
                 download
@@ -505,7 +567,16 @@ impl WhatsAppChannel {
         };
         let caption = text_of(media, &["caption"]).map(str::to_owned);
         let dedupe_key = format!("whatsapp:{message_id}:{}", inbound_kind.field());
-        match inbound::store_attachment(repository, scope, inbound_kind, download, caption, dedupe_key).await {
+        match inbound::store_attachment(
+            repository,
+            scope,
+            inbound_kind,
+            download,
+            caption,
+            dedupe_key,
+        )
+        .await
+        {
             Ok(part) => Ok(Some(part)),
             Err(WaFailure::Rejected(reason)) => {
                 tracing::warn!(reason, "[whatsapp] inbound attachment skipped");
@@ -518,10 +589,9 @@ impl WhatsAppChannel {
     /// Hand one item to the host on the ordered ingress path; fall back to the
     /// legacy listener channel when the host cannot take typed ingress.
     async fn publish(&self, item: Item) -> Result<(), WaFailure> {
-        let sink = self
-            .events
-            .as_ref()
-            .ok_or_else(|| WaFailure::rejected("WhatsApp webhook ingress has no host event sink"))?;
+        let sink = self.events.as_ref().ok_or_else(|| {
+            WaFailure::rejected("WhatsApp webhook ingress has no host event sink")
+        })?;
         let (ingress, legacy) = match item {
             Item::Message(envelope) => {
                 let legacy = crate::channel::legacy_message_from_inbound_envelope(
@@ -533,10 +603,9 @@ impl WhatsAppChannel {
             }
             Item::Event(event) => (ChannelIngress::Event(*event), None),
         };
-        let delivered = sink
-            .publish_ingress(ingress)
-            .await
-            .map_err(|_| WaFailure::uncertain("WhatsApp ingress could not be delivered to the host"))?;
+        let delivered = sink.publish_ingress(ingress).await.map_err(|_| {
+            WaFailure::uncertain("WhatsApp ingress could not be delivered to the host")
+        })?;
         if delivered {
             return Ok(());
         }

@@ -1040,14 +1040,19 @@ mod v2 {
         assert!(facts.voice_out.synthesis);
         assert_eq!(wired.declared_capabilities(), wired.capabilities());
         let descriptor = wired.descriptor();
-        assert_eq!(descriptor.metadata.get("backend").map(String::as_str), Some("web"));
+        assert_eq!(
+            descriptor.metadata.get("backend").map(String::as_str),
+            Some("web")
+        );
     }
 
     #[tokio::test]
     async fn typed_sends_edits_deletes_reactions_and_read_receipts_run_on_the_session() {
         let (channel, client) = linked();
         Channel::send_typed(&channel, &typed("one")).await.unwrap();
-        let outcome = Channel::send_typed_with_receipt(&channel, &typed("two")).await.unwrap();
+        let outcome = Channel::send_typed_with_receipt(&channel, &typed("two"))
+            .await
+            .unwrap();
         let receipt = outcome.receipt;
         let edited = Channel::edit_message(
             &channel,
@@ -1055,7 +1060,9 @@ mod v2 {
             &tinychannels_bus::ChannelOutboundIntent {
                 conversation_id: "+15550001111".into(),
                 channel_id: "whatsapp".into(),
-                payload: tinychannels_bus::OutboundPayload::Text { text: "two!".into() },
+                payload: tinychannels_bus::OutboundPayload::Text {
+                    text: "two!".into(),
+                },
                 ..Default::default()
             },
         )
@@ -1067,8 +1074,12 @@ mod v2 {
             value: "👍".into(),
             custom_emoji_id: None,
         };
-        Channel::send_reaction(&channel, &conversation(), "3EB0X", &thumbs, false).await.unwrap();
-        Channel::mark_read(&channel, &conversation(), "3EB0X").await.unwrap();
+        Channel::send_reaction(&channel, &conversation(), "3EB0X", &thumbs, false)
+            .await
+            .unwrap();
+        Channel::mark_read(&channel, &conversation(), "3EB0X")
+            .await
+            .unwrap();
         let kinds: Vec<_> = client
             .calls()
             .iter()
@@ -1081,7 +1092,10 @@ mod v2 {
                 _ => "other",
             })
             .collect();
-        assert_eq!(kinds, ["send", "send", "edit", "revoke", "reaction", "read"]);
+        assert_eq!(
+            kinds,
+            ["send", "send", "edit", "revoke", "reaction", "read"]
+        );
     }
 
     #[tokio::test]
@@ -1091,39 +1105,72 @@ mod v2 {
             value: "👍".into(),
             custom_emoji_id: None,
         };
-        crate::channel::ChannelReaction::send_reaction(&channel, &whatsapp(), &conversation(), "3EB0X", &thumbs, false)
-            .await
-            .unwrap();
+        crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &whatsapp(),
+            &conversation(),
+            "3EB0X",
+            &thumbs,
+            false,
+        )
+        .await
+        .unwrap();
         let wrong = ChannelRef {
             id: "telegram".into(),
             account_id: None,
         };
-        let refused =
-            crate::channel::ChannelReaction::send_reaction(&channel, &wrong, &conversation(), "3EB0X", &thumbs, false)
-                .await
-                .unwrap_err();
+        let refused = crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &wrong,
+            &conversation(),
+            "3EB0X",
+            &thumbs,
+            false,
+        )
+        .await
+        .unwrap_err();
         assert!(!refused.unsupported && !refused.sent_before_error);
-        crate::channel::ChannelTyping::start_typing(&channel, "+15550001111").await.unwrap();
-        crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111").await.unwrap();
+        crate::channel::ChannelTyping::start_typing(&channel, "+15550001111")
+            .await
+            .unwrap();
+        crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111")
+            .await
+            .unwrap();
         // Typing toward a number the account does not admit is silently skipped.
-        crate::channel::ChannelTyping::start_typing(&channel, "+19998887777").await.unwrap();
+        crate::channel::ChannelTyping::start_typing(&channel, "+19998887777")
+            .await
+            .unwrap();
 
-        let sent = crate::channel::ChannelTypedSend::send_typed(&channel, &typed("hi")).await.unwrap();
+        let sent = crate::channel::ChannelTypedSend::send_typed(&channel, &typed("hi"))
+            .await
+            .unwrap();
         let intent = tinychannels_bus::ChannelOutboundIntent {
             conversation_id: "+15550001111".into(),
             channel_id: "whatsapp".into(),
-            payload: tinychannels_bus::OutboundPayload::Text { text: "edited".into() },
+            payload: tinychannels_bus::OutboundPayload::Text {
+                text: "edited".into(),
+            },
             ..Default::default()
         };
-        crate::channel::ChannelEdit::edit(&channel, &sent.receipt, intent.clone()).await.unwrap();
-        crate::channel::ChannelDelete::delete(&channel, &sent.receipt).await.unwrap();
+        crate::channel::ChannelEdit::edit(&channel, &sent.receipt, intent.clone())
+            .await
+            .unwrap();
+        crate::channel::ChannelDelete::delete(&channel, &sent.receipt)
+            .await
+            .unwrap();
         let mut orphan = sent.receipt.clone();
         orphan.conversation = None;
-        assert!(crate::channel::ChannelDelete::delete(&channel, &orphan).await.is_err());
-        assert!(crate::channel::ChannelStreamingDraft::upsert_draft(&channel, None, intent)
-            .await
-            .unwrap_err()
-            .unsupported);
+        assert!(
+            crate::channel::ChannelDelete::delete(&channel, &orphan)
+                .await
+                .is_err()
+        );
+        assert!(
+            crate::channel::ChannelStreamingDraft::upsert_draft(&channel, None, intent)
+                .await
+                .unwrap_err()
+                .unsupported
+        );
         assert!(channel.stop().await.is_ok());
         struct NoSink;
         #[async_trait]
@@ -1144,12 +1191,18 @@ mod v2 {
         let down = channel.status().await.unwrap();
         assert_eq!(down.health_state.as_deref(), Some("unhealthy"));
         channel.connected.store(true, Ordering::Release);
-        assert_eq!(channel.status().await.unwrap().health_state.as_deref(), Some("healthy"));
+        assert_eq!(
+            channel.status().await.unwrap().health_state.as_deref(),
+            Some("healthy")
+        );
     }
 
     #[test]
     fn failures_that_are_not_ours_are_uncertain() {
-        assert!(matches!(failure_of(&anyhow!("socket reset")), WaFailure::Uncertain(_)));
+        assert!(matches!(
+            failure_of(&anyhow!("socket reset")),
+            WaFailure::Uncertain(_)
+        ));
         assert!(matches!(
             failure_of(&anyhow::Error::new(WaFailure::rejected("no"))),
             WaFailure::Rejected(_)
@@ -1158,7 +1211,12 @@ mod v2 {
 
     // --- event handling ------------------------------------------------------
 
-    fn state_with_session() -> (InboundState, Arc<RecordingClient>, Arc<CollectingSink>, mpsc::Receiver<ChannelMessage>) {
+    fn state_with_session() -> (
+        InboundState,
+        Arc<RecordingClient>,
+        Arc<CollectingSink>,
+        mpsc::Receiver<ChannelMessage>,
+    ) {
         let (tx, rx) = mpsc::channel(8);
         let client = Arc::new(RecordingClient::linked("15559998888@s.whatsapp.net"));
         let sink = Arc::new(CollectingSink::new());
@@ -1205,14 +1263,26 @@ mod v2 {
             Some("15559998888@s.whatsapp.net")
         );
         state
-            .handle_event(&batch_of("3EB0ONE", "987@g.us", "15550001111@s.whatsapp.net", "hi group"))
+            .handle_event(&batch_of(
+                "3EB0ONE",
+                "987@g.us",
+                "15550001111@s.whatsapp.net",
+                "hi group",
+            ))
             .await;
         assert_eq!(
             state.authors.lock().get("3EB0ONE").as_deref(),
             Some("15550001111@s.whatsapp.net")
         );
-        assert_eq!(sink.ingress.lock().len(), 1, "published through the typed path");
-        assert!(rx.try_recv().is_err(), "and not duplicated onto the legacy channel");
+        assert_eq!(
+            sink.ingress.lock().len(),
+            1,
+            "published through the typed path"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "and not duplicated onto the legacy channel"
+        );
     }
 
     #[tokio::test]
@@ -1227,20 +1297,31 @@ mod v2 {
             .await;
         assert!(state.identity.is_conflicted());
         state
-            .handle_event(&batch_of("3EB0TWO", "15550001111@s.whatsapp.net", "15550001111@s.whatsapp.net", "hello"))
+            .handle_event(&batch_of(
+                "3EB0TWO",
+                "15550001111@s.whatsapp.net",
+                "15550001111@s.whatsapp.net",
+                "hello",
+            ))
             .await;
         assert!(sink.ingress.lock().is_empty());
     }
 
     #[tokio::test]
-    async fn a_typed_delivery_failure_is_logged_and_dropped_and_declined_ingress_uses_the_legacy_path() {
+    async fn a_typed_delivery_failure_is_logged_and_dropped_and_declined_ingress_uses_the_legacy_path()
+     {
         let (mut state, _client, _sink, mut rx) = state_with_session();
         state.events = Some(Arc::new(CollectingSink {
             fail: true,
             ..CollectingSink::new()
         }));
         state
-            .handle_event(&batch_of("3EB0THREE", "15550001111@s.whatsapp.net", "15550001111@s.whatsapp.net", "x"))
+            .handle_event(&batch_of(
+                "3EB0THREE",
+                "15550001111@s.whatsapp.net",
+                "15550001111@s.whatsapp.net",
+                "x",
+            ))
             .await;
         assert!(rx.try_recv().is_err());
 
@@ -1250,7 +1331,12 @@ mod v2 {
             ..CollectingSink::new()
         }));
         declining
-            .handle_event(&batch_of("3EB0FOUR", "15550001111@s.whatsapp.net", "15550001111@s.whatsapp.net", "legacy"))
+            .handle_event(&batch_of(
+                "3EB0FOUR",
+                "15550001111@s.whatsapp.net",
+                "15550001111@s.whatsapp.net",
+                "legacy",
+            ))
             .await;
         assert_eq!(rx.try_recv().unwrap().content, "legacy");
     }
@@ -1274,7 +1360,8 @@ mod v2 {
     }
 
     #[tokio::test]
-    async fn the_real_client_implements_every_session_operation_and_refuses_them_while_logged_out() {
+    async fn the_real_client_implements_every_session_operation_and_refuses_them_while_logged_out()
+    {
         use crate::providers::whatsapp_web::media_build::MediaBuild;
         let lifecycle = Arc::new(RecordingLifecycle::default());
         let ch = Arc::new(make_channel().with_lifecycle(lifecycle.clone()));
@@ -1286,19 +1373,26 @@ mod v2 {
         wait_for_client(&ch).await;
         let client = ch.client.lock().clone().expect("the real client");
         let jid: Jid = "15551230000@s.whatsapp.net".parse().unwrap();
-        assert!(client.linked_account().is_none(), "no account is linked yet");
+        assert!(
+            client.linked_account().is_none(),
+            "no account is linked yet"
+        );
         let text = wa::Message {
             conversation: Some("x".into()),
             ..Default::default()
         };
         let guard = |future: std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>| async {
-            tokio::time::timeout(HANG_GUARD, future).await.expect("operation hung")
+            tokio::time::timeout(HANG_GUARD, future)
+                .await
+                .expect("operation hung")
         };
-        assert!(guard(Box::pin({
-            let (client, jid, text) = (client.clone(), jid.clone(), text.clone());
-            async move { client.send_message(jid, text).await.is_err() }
-        }))
-        .await);
+        assert!(
+            guard(Box::pin({
+                let (client, jid, text) = (client.clone(), jid.clone(), text.clone());
+                async move { client.send_message(jid, text).await.is_err() }
+            }))
+            .await
+        );
         for build in [
             MediaBuild::Image {
                 caption: None,
@@ -1324,46 +1418,71 @@ mod v2 {
             MediaBuild::Sticker,
         ] {
             let client = client.clone();
-            assert!(guard(Box::pin(async move {
-                client.media_message(vec![1, 2, 3], build, None).await.is_err()
-            }))
-            .await);
+            assert!(
+                guard(Box::pin(async move {
+                    client
+                        .media_message(vec![1, 2, 3], build, None)
+                        .await
+                        .is_err()
+                }))
+                .await
+            );
         }
         let image = wa::message::ImageMessage {
             direct_path: Some("/v/x".into()),
             media_key: Some(vec![1; 32]),
             ..Default::default()
         };
-        assert!(guard(Box::pin({
-            let client = client.clone();
-            async move { client.download(&image).await.is_err() }
-        }))
-        .await);
-        assert!(guard(Box::pin({
-            let (client, jid) = (client.clone(), jid.clone());
-            async move {
-                client
-                    .send_reaction(jid, wa::MessageKey::default(), "👍")
-                    .await
-                    .is_err()
-            }
-        }))
-        .await);
-        assert!(guard(Box::pin({
-            let (client, jid, text) = (client.clone(), jid.clone(), text.clone());
-            async move { client.edit_message(jid, "3EB0X".into(), text).await.is_err() }
-        }))
-        .await);
-        assert!(guard(Box::pin({
-            let (client, jid) = (client.clone(), jid.clone());
-            async move { client.revoke_message(jid, "3EB0X".into()).await.is_err() }
-        }))
-        .await);
-        assert!(guard(Box::pin({
-            let (client, jid) = (client.clone(), jid.clone());
-            async move { client.mark_read(&jid, None, &["3EB0X".into()]).await.is_err() }
-        }))
-        .await);
+        assert!(
+            guard(Box::pin({
+                let client = client.clone();
+                async move { client.download(&image).await.is_err() }
+            }))
+            .await
+        );
+        assert!(
+            guard(Box::pin({
+                let (client, jid) = (client.clone(), jid.clone());
+                async move {
+                    client
+                        .send_reaction(jid, wa::MessageKey::default(), "👍")
+                        .await
+                        .is_err()
+                }
+            }))
+            .await
+        );
+        assert!(
+            guard(Box::pin({
+                let (client, jid, text) = (client.clone(), jid.clone(), text.clone());
+                async move {
+                    client
+                        .edit_message(jid, "3EB0X".into(), text)
+                        .await
+                        .is_err()
+                }
+            }))
+            .await
+        );
+        assert!(
+            guard(Box::pin({
+                let (client, jid) = (client.clone(), jid.clone());
+                async move { client.revoke_message(jid, "3EB0X".into()).await.is_err() }
+            }))
+            .await
+        );
+        assert!(
+            guard(Box::pin({
+                let (client, jid) = (client.clone(), jid.clone());
+                async move {
+                    client
+                        .mark_read(&jid, None, &["3EB0X".into()])
+                        .await
+                        .is_err()
+                }
+            }))
+            .await
+        );
 
         let (_, hook) = lifecycle.hooks.lock().pop().expect("hook registered");
         hook().await;

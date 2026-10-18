@@ -1,8 +1,8 @@
 //! Typed outbound delivery for the WhatsApp Web adapter.
 
+use super::WhatsAppWebChannel;
 use super::client::OutboundClient;
 use super::media_build::MediaBuild;
-use super::WhatsAppWebChannel;
 use crate::channel::{
     ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind,
 };
@@ -15,8 +15,8 @@ use crate::providers::whatsapp_shared::vcard::{self, ContactCard};
 use std::sync::Arc;
 use tinychannels_bus::ChannelOutboundMessage;
 use tinychannels_bus::channel::MessageReceiptSourceResult;
-use whatsapp_rust::wacore_binary::JidExt as _;
 use whatsapp_rust::Jid;
+use whatsapp_rust::wacore_binary::JidExt as _;
 use whatsapp_rust::waproto::whatsapp as wa;
 
 /// Longest text one outbound message carries.
@@ -47,11 +47,13 @@ pub(super) fn text_message(text: &str, context: Option<wa::ContextInfo>) -> wa::
             ..Default::default()
         },
         Some(context) => wa::Message {
-            extended_text_message: whatsapp_rust::buffa::MessageField::some(wa::message::ExtendedTextMessage {
-                text: Some(text.to_owned()),
-                context_info: whatsapp_rust::buffa::MessageField::some(context),
-                ..Default::default()
-            }),
+            extended_text_message: whatsapp_rust::buffa::MessageField::some(
+                wa::message::ExtendedTextMessage {
+                    text: Some(text.to_owned()),
+                    context_info: whatsapp_rust::buffa::MessageField::some(context),
+                    ..Default::default()
+                },
+            ),
             ..Default::default()
         },
     }
@@ -70,7 +72,9 @@ pub(super) fn location_message(
             degrees_longitude: Some(longitude),
             name: name.map(str::to_owned),
             address: address.map(str::to_owned),
-            context_info: context.map(whatsapp_rust::buffa::MessageField::some).unwrap_or_default(),
+            context_info: context
+                .map(whatsapp_rust::buffa::MessageField::some)
+                .unwrap_or_default(),
             ..Default::default()
         }),
         ..Default::default()
@@ -82,7 +86,9 @@ pub(super) fn contact_message(card: &ContactCard, context: Option<wa::ContextInf
         contact_message: whatsapp_rust::buffa::MessageField::some(wa::message::ContactMessage {
             display_name: Some(card.display_name.clone()),
             vcard: Some(vcard::write(card)),
-            context_info: context.map(whatsapp_rust::buffa::MessageField::some).unwrap_or_default(),
+            context_info: context
+                .map(whatsapp_rust::buffa::MessageField::some)
+                .unwrap_or_default(),
             ..Default::default()
         }),
         ..Default::default()
@@ -96,7 +102,8 @@ fn media_build(
     caption: Option<String>,
     duration_ms: Option<u64>,
 ) -> MediaBuild {
-    let duration_seconds = duration_ms.map(|ms| u32::try_from(ms.div_ceil(1000)).unwrap_or(u32::MAX));
+    let duration_seconds =
+        duration_ms.map(|ms| u32::try_from(ms.div_ceil(1000)).unwrap_or(u32::MAX));
     match kind {
         AttachmentKind::Image => MediaBuild::Image {
             caption,
@@ -161,7 +168,12 @@ impl WhatsAppWebChannel {
         let client = self
             .connected_client()
             .map_err(|_| WaFailure::rejected("WhatsApp Web client is not connected"))?;
-        if !self.identity.observe(client.linked_account().map(|jid| jid.to_string()).as_deref()) {
+        if !self.identity.observe(
+            client
+                .linked_account()
+                .map(|jid| jid.to_string())
+                .as_deref(),
+        ) {
             return Err(WaFailure::rejected(
                 "the linked WhatsApp account changed; restart the channel",
             ));
@@ -205,7 +217,10 @@ impl WhatsAppWebChannel {
                         .media_message(bytes, build, context)
                         .await
                         .map_err(|_| WaFailure::rejected("WhatsApp Web media upload failed"))?;
-                    let id = client.send_message(to.clone(), message).await.map_err(uncertain)?;
+                    let id = client
+                        .send_message(to.clone(), message)
+                        .await
+                        .map_err(uncertain)?;
                     let part_kind = if kind == AttachmentKind::Audio {
                         MessageReceiptPartKind::Voice
                     } else {
@@ -228,7 +243,10 @@ impl WhatsAppWebChannel {
                         .media_message(bytes, build, context)
                         .await
                         .map_err(|_| WaFailure::rejected("WhatsApp Web voice upload failed"))?;
-                    let id = client.send_message(to.clone(), message).await.map_err(uncertain)?;
+                    let id = client
+                        .send_message(to.clone(), message)
+                        .await
+                        .map_err(uncertain)?;
                     sent.push((id, MessageReceiptPartKind::Voice));
                 }
                 PlannedPart::Location {
@@ -237,9 +255,17 @@ impl WhatsAppWebChannel {
                     name,
                     address,
                 } => {
-                    let message =
-                        location_message(latitude, longitude, name.as_deref(), address.as_deref(), context);
-                    let id = client.send_message(to.clone(), message).await.map_err(uncertain)?;
+                    let message = location_message(
+                        latitude,
+                        longitude,
+                        name.as_deref(),
+                        address.as_deref(),
+                        context,
+                    );
+                    let id = client
+                        .send_message(to.clone(), message)
+                        .await
+                        .map_err(uncertain)?;
                     sent.push((id, MessageReceiptPartKind::Unknown));
                 }
                 PlannedPart::Contact(card) => {
@@ -284,9 +310,11 @@ impl WhatsAppWebChannel {
                 None
             };
             let context = reply.map(|reply_to| {
-                let participant = self.authors.lock().get(reply_to).or_else(|| {
-                    (!to.is_group()).then(|| to.to_non_ad_string())
-                });
+                let participant = self
+                    .authors
+                    .lock()
+                    .get(reply_to)
+                    .or_else(|| (!to.is_group()).then(|| to.to_non_ad_string()));
                 reply_context(reply_to, participant.as_deref())
             });
             let (sent, stopped) = self
@@ -306,7 +334,10 @@ impl WhatsAppWebChannel {
                 break;
             }
         }
-        let ids: Vec<String> = parts.iter().map(|part| part.platform_message_id.clone()).collect();
+        let ids: Vec<String> = parts
+            .iter()
+            .map(|part| part.platform_message_id.clone())
+            .collect();
         let single = (ids.len() == 1).then(|| ids[0].clone());
         let receipt = MessageReceipt {
             idempotency_key: Some(message.idempotency_key.clone()),
@@ -370,18 +401,26 @@ impl WhatsAppWebChannel {
     ) -> Result<MessageReceipt, WaFailure> {
         let (_, original_id, kind) = Self::receipt_target(receipt)?;
         if kind != MessageReceiptPartKind::Text {
-            return Err(WaFailure::unsupported("WhatsApp can only edit text messages"));
+            return Err(WaFailure::unsupported(
+                "WhatsApp can only edit text messages",
+            ));
         }
         let message = ChannelOutboundMessage::from_intent(intent);
-        let [tinychannels_bus::OutboundContentPart::Content {
-            part: tinychannels_bus::ContentPart::Text { text, .. },
-        }] = message.parts.as_slice()
+        let [
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. },
+            },
+        ] = message.parts.as_slice()
         else {
-            return Err(WaFailure::unsupported("a WhatsApp edit replaces text with text"));
+            return Err(WaFailure::unsupported(
+                "a WhatsApp edit replaces text with text",
+            ));
         };
         let text = crate::providers::whatsapp_shared::text::strip_tool_call_tags(text);
         if text.trim().is_empty() || text.chars().count() > TEXT_LIMIT {
-            return Err(WaFailure::rejected("WhatsApp edit text is empty or too long"));
+            return Err(WaFailure::rejected(
+                "WhatsApp edit text is empty or too long",
+            ));
         }
         let scope = plan::outbound_scope(&message, "whatsapp")?;
         let client = self.live_client()?;
@@ -453,7 +492,9 @@ impl WhatsAppWebChannel {
         provider_message_id: &str,
     ) -> Result<(), WaFailure> {
         if provider_message_id.trim().is_empty() {
-            return Err(WaFailure::rejected("WhatsApp read receipt needs a message id"));
+            return Err(WaFailure::rejected(
+                "WhatsApp read receipt needs a message id",
+            ));
         }
         let client = self.live_client()?;
         let chat = self.admitted_jid(&conversation.id)?;

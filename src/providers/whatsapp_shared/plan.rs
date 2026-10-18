@@ -149,7 +149,9 @@ impl OutboundScope {
             .account_id
             .clone()
             .filter(|account| !account.trim().is_empty())
-            .ok_or_else(|| WaFailure::rejected("WhatsApp media send requires a configured account"))?;
+            .ok_or_else(|| {
+                WaFailure::rejected("WhatsApp media send requires a configured account")
+            })?;
         let turn_id = self.turn_id.clone().ok_or_else(|| {
             WaFailure::rejected("WhatsApp media send requires the originating turn identity")
         })?;
@@ -208,7 +210,9 @@ async fn read_attachment(
         || stored.bytes.is_empty()
         || stored.bytes.len() as u64 > limit
     {
-        return Err(WaFailure::rejected("WhatsApp media failed upload validation"));
+        return Err(WaFailure::rejected(
+            "WhatsApp media failed upload validation",
+        ));
     }
     Ok(StoredAttachment {
         bytes: stored.bytes,
@@ -228,7 +232,11 @@ pub(crate) fn waveform_bytes(waveform: &[f32]) -> Option<Vec<u8>> {
         let start = bucket * waveform.len() / WAVEFORM_BUCKETS;
         let end = ((bucket + 1) * waveform.len() / WAVEFORM_BUCKETS).max(start + 1);
         let window = &waveform[start.min(waveform.len() - 1)..end.min(waveform.len())];
-        let peak = window.iter().copied().fold(0.0_f32, f32::max).clamp(0.0, 1.0);
+        let peak = window
+            .iter()
+            .copied()
+            .fold(0.0_f32, f32::max)
+            .clamp(0.0, 1.0);
         buckets.push((peak * 100.0).round() as u8);
     }
     Some(buckets)
@@ -261,7 +269,9 @@ async fn plan_voice(
         ));
     }
     if bytes.len() as u64 > MAX_VOICE_BYTES {
-        return Err(WaFailure::rejected("WhatsApp voice media exceeds its size limit"));
+        return Err(WaFailure::rejected(
+            "WhatsApp voice media exceeds its size limit",
+        ));
     }
     Ok(PlannedPart::Voice {
         bytes,
@@ -324,7 +334,8 @@ pub(crate) async fn plan_parts(
             OutboundContentPart::Content {
                 part: ContentPart::Image { media, caption, .. },
             } => {
-                let stored = read_attachment(scope, ports, MediaKind::Image, media, limits.image).await?;
+                let stored =
+                    read_attachment(scope, ports, MediaKind::Image, media, limits.image).await?;
                 // WhatsApp renders JPEG and PNG as photos; other images keep
                 // their bytes as a document instead of being refused.
                 let kind = if matches!(stored.content_type.as_str(), "image/jpeg" | "image/png") {
@@ -332,7 +343,14 @@ pub(crate) async fn plan_parts(
                 } else {
                     AttachmentKind::Document
                 };
-                attachment(kind, stored, caption.as_deref(), None, limits, &mut follow_up)
+                attachment(
+                    kind,
+                    stored,
+                    caption.as_deref(),
+                    None,
+                    limits,
+                    &mut follow_up,
+                )
             }
             OutboundContentPart::Content {
                 part:
@@ -343,13 +361,21 @@ pub(crate) async fn plan_parts(
                         ..
                     },
             } => {
-                let stored = read_attachment(scope, ports, MediaKind::Video, media, limits.video).await?;
+                let stored =
+                    read_attachment(scope, ports, MediaKind::Video, media, limits.video).await?;
                 let kind = if stored.content_type == "video/mp4" {
                     AttachmentKind::Video
                 } else {
                     AttachmentKind::Document
                 };
-                attachment(kind, stored, caption.as_deref(), *duration_ms, limits, &mut follow_up)
+                attachment(
+                    kind,
+                    stored,
+                    caption.as_deref(),
+                    *duration_ms,
+                    limits,
+                    &mut follow_up,
+                )
             }
             OutboundContentPart::Content {
                 part:
@@ -360,7 +386,8 @@ pub(crate) async fn plan_parts(
                         ..
                     },
             } => {
-                let stored = read_attachment(scope, ports, MediaKind::Audio, media, limits.audio).await?;
+                let stored =
+                    read_attachment(scope, ports, MediaKind::Audio, media, limits.audio).await?;
                 let kind = if matches!(
                     stored.content_type.as_str(),
                     "audio/mpeg" | "audio/mp4" | "audio/ogg"
@@ -389,7 +416,8 @@ pub(crate) async fn plan_parts(
                     },
             } => {
                 let mut stored =
-                    read_attachment(scope, ports, MediaKind::Document, media, limits.document).await?;
+                    read_attachment(scope, ports, MediaKind::Document, media, limits.document)
+                        .await?;
                 if let Some(name) = file_name.as_deref().filter(|name| !name.trim().is_empty()) {
                     stored.file_name = Some(name.to_owned());
                 }
@@ -408,11 +436,16 @@ pub(crate) async fn plan_parts(
                 let stored =
                     read_attachment(scope, ports, MediaKind::Image, media, limits.sticker).await?;
                 if stored.content_type != "image/webp" {
-                    return Err(WaFailure::rejected(
-                        "WhatsApp stickers must be WEBP images",
-                    ));
+                    return Err(WaFailure::rejected("WhatsApp stickers must be WEBP images"));
                 }
-                attachment(AttachmentKind::Sticker, stored, None, None, limits, &mut follow_up)
+                attachment(
+                    AttachmentKind::Sticker,
+                    stored,
+                    None,
+                    None,
+                    limits,
+                    &mut follow_up,
+                )
             }
             OutboundContentPart::Content {
                 part:

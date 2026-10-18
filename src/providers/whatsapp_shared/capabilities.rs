@@ -124,12 +124,7 @@ pub(crate) fn capabilities(spec: &CapabilitySpec) -> ChannelCapabilities {
                 limits.audio,
             ),
             file: media_capability(spec.media, DOCUMENT_TYPES, DOCUMENT_TYPES, limits.document),
-            sticker: media_capability(
-                spec.media,
-                &["image/webp"],
-                &["image/webp"],
-                limits.sticker,
-            ),
+            sticker: media_capability(spec.media, &["image/webp"], &["image/webp"], limits.sticker),
             location: both_ways.clone(),
             contact: both_ways,
             ..Default::default()

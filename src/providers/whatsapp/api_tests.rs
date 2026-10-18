@@ -3,14 +3,22 @@ use wiremock::matchers::{body_string_contains, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn channel(server: &MockServer) -> WhatsAppChannel {
-    WhatsAppChannel::new("tok".into(), "123".into(), "verify".into(), vec!["*".into()])
-        .with_api_base_for_test(&server.uri())
+    WhatsAppChannel::new(
+        "tok".into(),
+        "123".into(),
+        "verify".into(),
+        vec!["*".into()],
+    )
+    .with_api_base_for_test(&server.uri())
 }
 
 #[test]
 fn graph_base_is_trimmed_and_defaults_when_blank() {
     assert_eq!(resolve_graph_base(None), "https://graph.facebook.com");
-    assert_eq!(resolve_graph_base(Some("  ".into())), "https://graph.facebook.com");
+    assert_eq!(
+        resolve_graph_base(Some("  ".into())),
+        "https://graph.facebook.com"
+    );
     assert_eq!(
         resolve_graph_base(Some(" http://127.0.0.1:9/ ".into())),
         "http://127.0.0.1:9"
@@ -50,7 +58,10 @@ fn urls_name_the_pinned_graph_version() {
 #[test]
 fn answered_ids_are_never_inferred() {
     let ok = serde_json::json!({"messages": [{"id": "wamid.9"}]});
-    assert_eq!(WhatsAppChannel::answered_message_id(&ok).unwrap(), "wamid.9");
+    assert_eq!(
+        WhatsAppChannel::answered_message_id(&ok).unwrap(),
+        "wamid.9"
+    );
     for bad in [
         serde_json::json!({}),
         serde_json::json!({"messages": []}),
@@ -82,13 +93,22 @@ async fn posting_messages_authenticates_with_a_bearer_header_only() {
         .unwrap();
     assert_eq!(answer["messages"][0]["id"], "wamid.1");
     let requests = server.received_requests().await.unwrap();
-    assert!(!requests[0].url.as_str().contains("tok"), "token never in the URL");
+    assert!(
+        !requests[0].url.as_str().contains("tok"),
+        "token never in the URL"
+    );
 }
 
 #[tokio::test]
 async fn send_failures_are_classified_by_whether_the_account_was_touched() {
     let server = MockServer::start().await;
-    for (status, rejected) in [(400u16, true), (401, true), (429, true), (408, false), (500, false)] {
+    for (status, rejected) in [
+        (400u16, true),
+        (401, true),
+        (429, true),
+        (408, false),
+        (500, false),
+    ] {
         server.reset().await;
         Mock::given(method("POST"))
             .respond_with(ResponseTemplate::new(status))
@@ -120,7 +140,9 @@ async fn transport_failures_and_insecure_bases_are_handled() {
         Err(WaFailure::Uncertain(_))
     ));
     assert!(matches!(
-        unreachable.upload_media(vec![1], "image/png", "a.png").await,
+        unreachable
+            .upload_media(vec![1], "image/png", "a.png")
+            .await,
         Err(WaFailure::Rejected(_))
     ));
     let insecure = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
@@ -143,7 +165,9 @@ async fn uploads_send_multipart_and_return_the_media_id() {
         .and(header("authorization", "Bearer tok"))
         .and(body_string_contains("messaging_product"))
         .and(body_string_contains("image/png"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "media-7"})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "media-7"})),
+        )
         .expect(1)
         .mount(&server)
         .await;
@@ -165,14 +189,21 @@ async fn failed_uploads_are_always_retry_safe() {
         ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": " "})),
     ] {
         server.reset().await;
-        Mock::given(method("POST")).respond_with(response).mount(&server).await;
+        Mock::given(method("POST"))
+            .respond_with(response)
+            .mount(&server)
+            .await;
         assert!(matches!(
-            channel(&server).upload_media(vec![1], "image/png", "a").await,
+            channel(&server)
+                .upload_media(vec![1], "image/png", "a")
+                .await,
             Err(WaFailure::Rejected(_))
         ));
     }
     assert!(matches!(
-        channel(&server).upload_media(vec![1], "bad mime", "a").await,
+        channel(&server)
+            .upload_media(vec![1], "bad mime", "a")
+            .await,
         Err(WaFailure::Rejected(_))
     ));
 }

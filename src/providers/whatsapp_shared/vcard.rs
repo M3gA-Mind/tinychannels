@@ -2,9 +2,11 @@
 
 #![cfg_attr(
     not(feature = "whatsapp-web"),
-    allow(dead_code, reason = "vCard reading and writing serve the WhatsApp Web adapter")
+    allow(
+        dead_code,
+        reason = "vCard reading and writing serve the WhatsApp Web adapter"
+    )
 )]
-
 
 use tinychannels_bus::ContactMethod;
 

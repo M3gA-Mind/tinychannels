@@ -1,5 +1,7 @@
 use super::*;
-use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices, png_bytes};
+use crate::providers::whatsapp_shared::fakes::{
+    CollectingSink, MemoryMedia, MemoryVoices, png_bytes,
+};
 use crate::providers::whatsapp_web::client::OutboundClient;
 use crate::providers::whatsapp_web::fakes::{RecordingClient, base_state};
 use parking_lot::Mutex;
@@ -29,7 +31,11 @@ fn info(id: &str, chat: &str, sender: &str) -> MessageInfo {
 fn dm(id: &str, message: wa::Message) -> InboundMessage {
     InboundMessage::builder()
         .message(Arc::new(message))
-        .info(Arc::new(info(id, "15550001111@s.whatsapp.net", "15550001111@s.whatsapp.net")))
+        .info(Arc::new(info(
+            id,
+            "15550001111@s.whatsapp.net",
+            "15550001111@s.whatsapp.net",
+        )))
         .build()
 }
 
@@ -82,7 +88,13 @@ fn rig() -> Rig {
 
 async fn publish(rig: &Rig, inbound: &InboundMessage) -> Result<bool, WaFailure> {
     rig.state
-        .publish_typed(inbound, "+15550001111", "+15550001111", Some("Ada".into()), false)
+        .publish_typed(
+            inbound,
+            "+15550001111",
+            "+15550001111",
+            Some("Ada".into()),
+            false,
+        )
         .await
 }
 
@@ -183,11 +195,31 @@ fn parse_finds_every_attachment_kind_with_its_facts() {
     let facts: Vec<_> = parsed
         .attachments
         .iter()
-        .map(|a| (a.kind().field(), a.mime(), a.caption(), a.file_name(), a.duration_ms()))
+        .map(|a| {
+            (
+                a.kind().field(),
+                a.mime(),
+                a.caption(),
+                a.file_name(),
+                a.duration_ms(),
+            )
+        })
         .collect();
-    assert_eq!(facts[0], ("image", "image/png".into(), Some("img".into()), None, None));
+    assert_eq!(
+        facts[0],
+        ("image", "image/png".into(), Some("img".into()), None, None)
+    );
     assert_eq!(facts[1].4, Some(4000));
-    assert_eq!(facts[2], ("audio", "audio/ogg; codecs=opus".into(), None, None, Some(2000)));
+    assert_eq!(
+        facts[2],
+        (
+            "audio",
+            "audio/ogg; codecs=opus".into(),
+            None,
+            None,
+            Some(2000)
+        )
+    );
     assert_eq!(facts[3].3.as_deref(), Some("a.pdf"));
     assert_eq!(facts[4].0, "sticker");
     assert_eq!(parsed.reply_to.as_deref(), Some("q"));
@@ -268,11 +300,17 @@ async fn a_text_message_is_published_once_as_a_typed_envelope() {
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].message_id, "3EB0TEXT");
     assert_eq!(sent[0].conversation.id, "+15550001111");
-    assert_eq!(sent[0].conversation.kind, tinychannels_bus::ConversationKind::Dm);
+    assert_eq!(
+        sent[0].conversation.kind,
+        tinychannels_bus::ConversationKind::Dm
+    );
     assert_eq!(sent[0].sender.name.as_deref(), Some("Ada"));
     assert_eq!(sent[0].timestamp_unix_ms, Some(1_700_000_000_000));
     assert_eq!(sent[0].text, "hello");
-    assert_eq!(sent[0].raw.as_ref().unwrap()["providerMessageId"], "3EB0TEXT");
+    assert_eq!(
+        sent[0].raw.as_ref().unwrap()["providerMessageId"],
+        "3EB0TEXT"
+    );
 }
 
 #[tokio::test]
@@ -290,15 +328,22 @@ async fn the_legacy_path_is_used_when_typed_ingress_is_unavailable() {
     });
     legacy_state.events = Some(declining);
     let inbound = dm("3EB0LEGACY", text("x"));
-    assert!(!legacy_state
-        .publish_typed(&inbound, "+1", "+1", None, false)
-        .await
-        .unwrap());
+    assert!(
+        !legacy_state
+            .publish_typed(&inbound, "+1", "+1", None, false)
+            .await
+            .unwrap()
+    );
     assert!(!legacy_state.seen.lock().contains("3EB0LEGACY"));
     // No sink at all.
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let bare = base_state(tx, &["*"]);
-    assert!(!bare.publish_typed(&inbound, "+1", "+1", None, false).await.unwrap());
+    assert!(
+        !bare
+            .publish_typed(&inbound, "+1", "+1", None, false)
+            .await
+            .unwrap()
+    );
     // A failing sink is an uncertain delivery.
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let mut failing = base_state(tx, &["*"]);
@@ -307,7 +352,9 @@ async fn the_legacy_path_is_used_when_typed_ingress_is_unavailable() {
         ..CollectingSink::new()
     }));
     assert!(matches!(
-        failing.publish_typed(&inbound, "+1", "+1", None, false).await,
+        failing
+            .publish_typed(&inbound, "+1", "+1", None, false)
+            .await,
         Err(WaFailure::Uncertain(_))
     ));
 }
@@ -317,15 +364,23 @@ async fn group_messages_keep_the_group_conversation_kind() {
     let rig = rig();
     let inbound = InboundMessage::builder()
         .message(Arc::new(text("hi all")))
-        .info(Arc::new(info("3EB0GROUP", "987@g.us", "15550001111@s.whatsapp.net")))
+        .info(Arc::new(info(
+            "3EB0GROUP",
+            "987@g.us",
+            "15550001111@s.whatsapp.net",
+        )))
         .build();
-    assert!(rig
-        .state
-        .publish_typed(&inbound, "987@g.us", "+15550001111", None, true)
-        .await
-        .unwrap());
+    assert!(
+        rig.state
+            .publish_typed(&inbound, "987@g.us", "+15550001111", None, true)
+            .await
+            .unwrap()
+    );
     let sent = envelopes(&rig);
-    assert_eq!(sent[0].conversation.kind, tinychannels_bus::ConversationKind::Group);
+    assert_eq!(
+        sent[0].conversation.kind,
+        tinychannels_bus::ConversationKind::Group
+    );
     assert_eq!(sent[0].conversation.id, "987@g.us");
 }
 
@@ -350,28 +405,43 @@ async fn reactions_are_events_and_empty_messages_publish_nothing() {
     };
     assert!(publish(&rig, &reaction(Some("🔥"), "r1")).await.unwrap());
     assert!(publish(&rig, &reaction(None, "r2")).await.unwrap());
-    assert!(publish(&rig, &dm("e1", wa::Message::default())).await.unwrap());
+    assert!(
+        publish(&rig, &dm("e1", wa::Message::default()))
+            .await
+            .unwrap()
+    );
     let sent = events(&rig);
     assert_eq!(sent.len(), 2);
     assert!(matches!(
         &sent[0].event,
         ChannelEventKind::ReactionAdded { message_id, reaction, .. } if message_id == "3EB0TARGET" && reaction.value == "🔥"
     ));
-    assert!(matches!(&sent[1].event, ChannelEventKind::ReactionRemoved { .. }));
+    assert!(matches!(
+        &sent[1].event,
+        ChannelEventKind::ReactionRemoved { .. }
+    ));
     assert!(envelopes(&rig).is_empty());
 }
 
 #[tokio::test]
 async fn attachments_are_downloaded_through_the_session_and_stored_by_the_host() {
     let rig = rig();
-    rig.client.downloads.lock().insert("/v/img1".into(), png_bytes());
+    rig.client
+        .downloads
+        .lock()
+        .insert("/v/img1".into(), png_bytes());
     let inbound = dm("3EB0IMG", image("/v/img1", Some("look")));
     assert!(publish(&rig, &inbound).await.unwrap());
     let sent = envelopes(&rig);
     assert_eq!(sent[0].text, "look");
-    assert!(matches!(&sent[0].parts[0], ContentPart::Image { caption: Some(c), .. } if c == "look"));
+    assert!(
+        matches!(&sent[0].parts[0], ContentPart::Image { caption: Some(c), .. } if c == "look")
+    );
     assert_eq!(sent[0].media.len(), 1);
-    assert_eq!(rig.media.stored.lock()[0].dedupe_key.as_deref(), Some("whatsapp:3EB0IMG:image"));
+    assert_eq!(
+        rig.media.stored.lock()[0].dedupe_key.as_deref(),
+        Some("whatsapp:3EB0IMG:image")
+    );
 }
 
 #[tokio::test]
@@ -463,8 +533,14 @@ fn voice_message(path: &str, ptt: bool, waveform: Option<Vec<u8>>) -> wa::Messag
 #[tokio::test]
 async fn push_to_talk_audio_is_a_voice_note_with_its_waveform() {
     let rig = rig();
-    rig.client.downloads.lock().insert("/v/ptt".into(), b"OggS-----".to_vec());
-    let inbound = dm("3EB0VOICE", voice_message("/v/ptt", true, Some(vec![0, 50, 100])));
+    rig.client
+        .downloads
+        .lock()
+        .insert("/v/ptt".into(), b"OggS-----".to_vec());
+    let inbound = dm(
+        "3EB0VOICE",
+        voice_message("/v/ptt", true, Some(vec![0, 50, 100])),
+    );
     assert!(publish(&rig, &inbound).await.unwrap());
     let ContentPart::VoiceNote { voice_note } = &envelopes(&rig)[0].parts[0] else {
         panic!("expected a voice note")
@@ -480,11 +556,21 @@ async fn push_to_talk_audio_is_a_voice_note_with_its_waveform() {
 async fn missing_storage_oversized_media_and_failed_downloads_follow_their_classes() {
     let rig = rig();
     // A voice note the host store refuses is skipped (permanent) ...
-    rig.client.downloads.lock().insert("/v/empty".into(), Vec::new());
-    assert!(publish(&rig, &dm("v1", voice_message("/v/empty", true, None))).await.unwrap());
+    rig.client
+        .downloads
+        .lock()
+        .insert("/v/empty".into(), Vec::new());
+    assert!(
+        publish(&rig, &dm("v1", voice_message("/v/empty", true, None)))
+            .await
+            .unwrap()
+    );
     assert!(envelopes(&rig).is_empty());
     // ... unless the host store itself is down (transient).
-    rig.client.downloads.lock().insert("/v/ptt".into(), b"OggS-----".to_vec());
+    rig.client
+        .downloads
+        .lock()
+        .insert("/v/ptt".into(), b"OggS-----".to_vec());
     *rig.voices.omit_opaque_id.lock() = true;
     assert!(matches!(
         publish(&rig, &dm("v2", voice_message("/v/ptt", true, None))).await,
@@ -510,7 +596,10 @@ async fn missing_storage_oversized_media_and_failed_downloads_follow_their_class
     assert!(publish(&rig, &dm("i2", big)).await.unwrap());
     assert_eq!(envelopes(&rig)[0].text, "huge");
     // An unsupported content type is skipped; a store outage is transient.
-    rig.client.downloads.lock().insert("/v/odd".into(), b"zzz".to_vec());
+    rig.client
+        .downloads
+        .lock()
+        .insert("/v/odd".into(), b"zzz".to_vec());
     let odd = wa::Message {
         image_message: MessageField::some(wa::message::ImageMessage {
             direct_path: Some("/v/odd".into()),
@@ -520,7 +609,10 @@ async fn missing_storage_oversized_media_and_failed_downloads_follow_their_class
         ..Default::default()
     };
     assert!(publish(&rig, &dm("i3", odd)).await.unwrap());
-    rig.client.downloads.lock().insert("/v/ok".into(), png_bytes());
+    rig.client
+        .downloads
+        .lock()
+        .insert("/v/ok".into(), png_bytes());
     *rig.media.fail_store.lock() = true;
     assert!(matches!(
         publish(&rig, &dm("i4", image("/v/ok", None))).await,
@@ -534,10 +626,18 @@ async fn attachments_without_ports_or_a_connected_session_are_handled() {
     let sink = Arc::new(CollectingSink::new());
     let mut no_ports = base_state(tx, &["*"]);
     no_ports.events = Some(sink.clone());
-    assert!(no_ports
-        .publish_typed(&dm("a1", image("/v/x", Some("words"))), "+1", "+1", None, false)
-        .await
-        .unwrap());
+    assert!(
+        no_ports
+            .publish_typed(
+                &dm("a1", image("/v/x", Some("words"))),
+                "+1",
+                "+1",
+                None,
+                false
+            )
+            .await
+            .unwrap()
+    );
     let ingress = sink.ingress.lock();
     assert!(matches!(&ingress[0], ChannelIngress::Inbound(envelope) if envelope.text == "words"));
     drop(ingress);
@@ -557,12 +657,26 @@ async fn attachments_without_ports_or_a_connected_session_are_handled() {
     let rig = rig();
     let mut repo_only = rig.state.clone();
     repo_only.voice_media_store = None;
-    rig.client.downloads.lock().insert("/v/ptt".into(), b"OggS-----".to_vec());
-    assert!(repo_only
-        .publish_typed(&dm("a3", voice_message("/v/ptt", true, None)), "+1", "+1", None, false)
-        .await
-        .unwrap());
-    assert!(matches!(&envelopes(&rig)[0].parts[0], ContentPart::Audio { .. }));
+    rig.client
+        .downloads
+        .lock()
+        .insert("/v/ptt".into(), b"OggS-----".to_vec());
+    assert!(
+        repo_only
+            .publish_typed(
+                &dm("a3", voice_message("/v/ptt", true, None)),
+                "+1",
+                "+1",
+                None,
+                false
+            )
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        &envelopes(&rig)[0].parts[0],
+        ContentPart::Audio { .. }
+    ));
 }
 
 // --- receipts ----------------------------------------------------------------
@@ -585,14 +699,38 @@ fn receipt(kind: ReceiptType, from_me: bool, chat: &str) -> Receipt {
 #[tokio::test]
 async fn delivery_and_read_receipts_for_our_messages_become_events() {
     let rig = rig();
-    rig.state.publish_receipt(&receipt(ReceiptType::Delivered, false, "15550001111@s.whatsapp.net")).await;
-    rig.state.publish_receipt(&receipt(ReceiptType::Read, false, "987@g.us")).await;
+    rig.state
+        .publish_receipt(&receipt(
+            ReceiptType::Delivered,
+            false,
+            "15550001111@s.whatsapp.net",
+        ))
+        .await;
+    rig.state
+        .publish_receipt(&receipt(ReceiptType::Read, false, "987@g.us"))
+        .await;
     // Our own receipts, other receipt kinds and a sink-less state do nothing.
-    rig.state.publish_receipt(&receipt(ReceiptType::Read, true, "15550001111@s.whatsapp.net")).await;
-    rig.state.publish_receipt(&receipt(ReceiptType::Played, false, "15550001111@s.whatsapp.net")).await;
+    rig.state
+        .publish_receipt(&receipt(
+            ReceiptType::Read,
+            true,
+            "15550001111@s.whatsapp.net",
+        ))
+        .await;
+    rig.state
+        .publish_receipt(&receipt(
+            ReceiptType::Played,
+            false,
+            "15550001111@s.whatsapp.net",
+        ))
+        .await;
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     base_state(tx, &["*"])
-        .publish_receipt(&receipt(ReceiptType::Read, false, "15550001111@s.whatsapp.net"))
+        .publish_receipt(&receipt(
+            ReceiptType::Read,
+            false,
+            "15550001111@s.whatsapp.net",
+        ))
         .await;
     let sent = events(&rig);
     assert_eq!(sent.len(), 4);
@@ -602,7 +740,9 @@ async fn delivery_and_read_receipts_for_our_messages_become_events() {
             if message_id == "3EB0A" && actor.id == "+15550001111"
     ));
     assert_eq!(sent[0].conversation.as_ref().unwrap().id, "+15550001111");
-    assert!(matches!(&sent[2].event, ChannelEventKind::ReadReceipt { message_id, .. } if message_id == "3EB0A"));
+    assert!(
+        matches!(&sent[2].event, ChannelEventKind::ReadReceipt { message_id, .. } if message_id == "3EB0A")
+    );
     let group = sent[2].conversation.as_ref().unwrap();
     assert_eq!(group.id, "987@g.us");
     assert_eq!(group.kind, tinychannels_bus::ConversationKind::Group);
@@ -617,7 +757,13 @@ async fn a_failing_sink_does_not_stop_receipt_delivery() {
         fail: true,
         ..CollectingSink::new()
     }));
-    state.publish_receipt(&receipt(ReceiptType::Read, false, "15550001111@s.whatsapp.net")).await;
+    state
+        .publish_receipt(&receipt(
+            ReceiptType::Read,
+            false,
+            "15550001111@s.whatsapp.net",
+        ))
+        .await;
 }
 
 #[test]

@@ -51,20 +51,20 @@ mod client;
 #[cfg(feature = "whatsapp-web")]
 mod identity;
 #[cfg(feature = "whatsapp-web")]
-mod media_build;
-#[cfg(feature = "whatsapp-web")]
 mod inbound;
+#[cfg(feature = "whatsapp-web")]
+mod media_build;
 #[cfg(feature = "whatsapp-web")]
 mod outbound;
 
 #[cfg(feature = "whatsapp-web")]
-use crate::providers::whatsapp_shared::window::{BoundedMap, SeenSet};
-#[cfg(feature = "whatsapp-web")]
-use client::OutboundClient;
-#[cfg(feature = "whatsapp-web")]
 use crate::providers::whatsapp_shared::capabilities::{CapabilitySpec, capabilities};
 #[cfg(feature = "whatsapp-web")]
 use crate::providers::whatsapp_shared::error::WaFailure;
+#[cfg(feature = "whatsapp-web")]
+use crate::providers::whatsapp_shared::window::{BoundedMap, SeenSet};
+#[cfg(feature = "whatsapp-web")]
+use client::OutboundClient;
 
 // Imports used only by the real (feature-on) implementation; gated so the
 // feature-off stub build doesn't flag them as unused.
@@ -790,7 +790,10 @@ impl Channel for WhatsAppWebChannel {
     }
 
     async fn send_typed(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> Result<()> {
-        self.send_v2(message).await.map(|_| ()).map_err(anyhow::Error::new)
+        self.send_v2(message)
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::new)
     }
 
     async fn send_typed_with_receipt(
@@ -827,10 +830,15 @@ impl Channel for WhatsAppWebChannel {
         receipt: &tinychannels_bus::channel::MessageReceipt,
         intent: &tinychannels_bus::ChannelOutboundIntent,
     ) -> Result<tinychannels_bus::channel::MessageReceipt> {
-        self.edit_v2(receipt, intent).await.map_err(anyhow::Error::new)
+        self.edit_v2(receipt, intent)
+            .await
+            .map_err(anyhow::Error::new)
     }
 
-    async fn delete_message(&self, receipt: &tinychannels_bus::channel::MessageReceipt) -> Result<()> {
+    async fn delete_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> Result<()> {
         self.delete_v2(receipt).await.map_err(anyhow::Error::new)
     }
 
@@ -949,9 +957,12 @@ impl crate::channel::ChannelAdapter for WhatsAppWebChannel {
     async fn send(
         &self,
         intent: tinychannels_bus::ChannelOutboundIntent,
-    ) -> std::result::Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
+    ) -> std::result::Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError>
+    {
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
-        self.send_v2(&message).await.map_err(WaFailure::into_send_error)
+        self.send_v2(&message)
+            .await
+            .map_err(WaFailure::into_send_error)
     }
 
     async fn status(
@@ -979,8 +990,11 @@ impl crate::channel::ChannelTypedSend for WhatsAppWebChannel {
     async fn send_typed(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> std::result::Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
-        self.send_v2(message).await.map_err(WaFailure::into_send_error)
+    ) -> std::result::Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError>
+    {
+        self.send_v2(message)
+            .await
+            .map_err(WaFailure::into_send_error)
     }
 }
 
@@ -1019,7 +1033,7 @@ impl crate::channel::ChannelReaction for WhatsAppWebChannel {
     ) -> std::result::Result<(), crate::channel::ChannelSendError> {
         if channel.id != "whatsapp" {
             return Err(
-                WaFailure::rejected("reaction channel does not match WhatsApp").into_send_error()
+                WaFailure::rejected("reaction channel does not match WhatsApp").into_send_error(),
             );
         }
         self.react_v2(conversation, provider_message_id, reaction, remove)
@@ -1035,8 +1049,10 @@ impl crate::channel::ChannelEdit for WhatsAppWebChannel {
         &self,
         receipt: &tinychannels_bus::channel::MessageReceipt,
         intent: tinychannels_bus::ChannelOutboundIntent,
-    ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError>
-    {
+    ) -> std::result::Result<
+        tinychannels_bus::channel::MessageReceipt,
+        crate::channel::ChannelSendError,
+    > {
         self.edit_v2(receipt, &intent)
             .await
             .map_err(WaFailure::into_send_error)
@@ -1050,7 +1066,9 @@ impl crate::channel::ChannelDelete for WhatsAppWebChannel {
         &self,
         receipt: &tinychannels_bus::channel::MessageReceipt,
     ) -> std::result::Result<(), crate::channel::ChannelSendError> {
-        self.delete_v2(receipt).await.map_err(WaFailure::into_send_error)
+        self.delete_v2(receipt)
+            .await
+            .map_err(WaFailure::into_send_error)
     }
 }
 
@@ -1061,9 +1079,14 @@ impl crate::channel::ChannelStreamingDraft for WhatsAppWebChannel {
         &self,
         _previous: Option<&tinychannels_bus::channel::MessageReceipt>,
         _intent: tinychannels_bus::ChannelOutboundIntent,
-    ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError>
-    {
-        Err(WaFailure::unsupported("WhatsApp messages cannot be streamed as edited drafts").into_send_error())
+    ) -> std::result::Result<
+        tinychannels_bus::channel::MessageReceipt,
+        crate::channel::ChannelSendError,
+    > {
+        Err(
+            WaFailure::unsupported("WhatsApp messages cannot be streamed as edited drafts")
+                .into_send_error(),
+        )
     }
 }
 

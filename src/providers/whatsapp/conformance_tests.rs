@@ -4,7 +4,9 @@
 use super::*;
 use crate::channel::{ChannelEdit as _, ChannelStreamingDraft as _};
 use crate::providers::whatsapp::api::GRAPH_VERSION;
-use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices, ogg_bytes, png_bytes};
+use crate::providers::whatsapp_shared::fakes::{
+    CollectingSink, MemoryMedia, MemoryVoices, ogg_bytes, png_bytes,
+};
 use hmac::{Hmac, KeyInit, Mac};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -121,18 +123,48 @@ async fn kit() -> CloudKit {
     let voices = Arc::new(MemoryVoices::default());
     voices.seed("voice-kit", "audio/ogg", &ogg_bytes());
     let mut media = HashMap::new();
-    media.insert(Feature::Image, repository.seed(MediaKind::Image, "image/png", Some("kit.png"), &png_bytes()));
-    media.insert(Feature::Video, repository.seed(MediaKind::Video, "video/mp4", Some("kit.mp4"), b"0000ftypmp42"));
-    media.insert(Feature::Audio, repository.seed(MediaKind::Audio, "audio/mpeg", Some("kit.mp3"), b"ID3-----"));
-    media.insert(Feature::File, repository.seed(MediaKind::Document, "application/pdf", Some("kit.pdf"), b"%PDF-1.4 x"));
-    media.insert(Feature::Sticker, repository.seed(MediaKind::Image, "image/webp", None, b"RIFF----WEBPxxxx"));
+    media.insert(
+        Feature::Image,
+        repository.seed(MediaKind::Image, "image/png", Some("kit.png"), &png_bytes()),
+    );
+    media.insert(
+        Feature::Video,
+        repository.seed(
+            MediaKind::Video,
+            "video/mp4",
+            Some("kit.mp4"),
+            b"0000ftypmp42",
+        ),
+    );
+    media.insert(
+        Feature::Audio,
+        repository.seed(MediaKind::Audio, "audio/mpeg", Some("kit.mp3"), b"ID3-----"),
+    );
+    media.insert(
+        Feature::File,
+        repository.seed(
+            MediaKind::Document,
+            "application/pdf",
+            Some("kit.pdf"),
+            b"%PDF-1.4 x",
+        ),
+    );
+    media.insert(
+        Feature::Sticker,
+        repository.seed(MediaKind::Image, "image/webp", None, b"RIFF----WEBPxxxx"),
+    );
     let channel = Arc::new(
-        WhatsAppChannel::new("tok".into(), "123".into(), "verify".into(), vec!["+15550001111".into()])
-            .with_api_base_for_test(&server.uri())
-            .with_app_secret(Some(SECRET.into()))
-            .with_events(sink.clone())
-            .with_media_repository(repository)
-            .with_voice_media_store(voices),
+        WhatsAppChannel::new(
+            "tok".into(),
+            "123".into(),
+            "verify".into(),
+            vec!["+15550001111".into()],
+        )
+        .with_api_base_for_test(&server.uri())
+        .with_app_secret(Some(SECRET.into()))
+        .with_events(sink.clone())
+        .with_media_repository(repository)
+        .with_voice_media_store(voices),
     );
     CloudKit {
         channel,
@@ -274,14 +306,19 @@ impl AdapterFixture for CloudKit {
         self.observed.lock().clone()
     }
 
-    async fn exercise(&self, feature: Feature) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+    async fn exercise(
+        &self,
+        feature: Feature,
+    ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         let content = |part| OutboundPayload::Parts {
             parts: vec![OutboundContentPart::Content { part }],
         };
         let payload = match feature {
-            Feature::Text | Feature::ReplyAddressing | Feature::ThreadAddressing => OutboundPayload::Text {
-                text: "hello kit".into(),
-            },
+            Feature::Text | Feature::ReplyAddressing | Feature::ThreadAddressing => {
+                OutboundPayload::Text {
+                    text: "hello kit".into(),
+                }
+            }
             Feature::Image => content(ContentPart::Image {
                 media: self.media_ref(feature),
                 caption: Some("image".into()),
@@ -420,10 +457,15 @@ impl AdapterFixture for CloudKit {
                                   "reaction": {"message_id": "wamid.OUT1", "emoji": "🔥"}}]
                 })))
                 .await;
-                let event = self.sink.ingress.lock().iter().find_map(|ingress| match ingress {
-                    ChannelIngress::Event(event) => Some(event.clone()),
-                    ChannelIngress::Inbound(_) => None,
-                });
+                let event = self
+                    .sink
+                    .ingress
+                    .lock()
+                    .iter()
+                    .find_map(|ingress| match ingress {
+                        ChannelIngress::Event(event) => Some(event.clone()),
+                        ChannelIngress::Inbound(_) => None,
+                    });
                 let event = event.expect("a reaction event was published");
                 self.observed.lock().push(WireObservation {
                     feature,
@@ -444,10 +486,15 @@ impl AdapterFixture for CloudKit {
                     "statuses": [{"id": "wamid.OUT1", "status": "read", "recipient_id": "15550001111", "timestamp": "3"}]
                 })))
                 .await;
-                let event = self.sink.ingress.lock().iter().find_map(|ingress| match ingress {
-                    ChannelIngress::Event(event) => Some(event.clone()),
-                    ChannelIngress::Inbound(_) => None,
-                });
+                let event = self
+                    .sink
+                    .ingress
+                    .lock()
+                    .iter()
+                    .find_map(|ingress| match ingress {
+                        ChannelIngress::Event(event) => Some(event.clone()),
+                        ChannelIngress::Inbound(_) => None,
+                    });
                 let event = event.expect("a receipt event was published");
                 self.observed.lock().push(WireObservation {
                     feature,
@@ -534,7 +581,12 @@ impl AdapterFixture for CloudKit {
         self.observe_wire(feature);
         match result {
             Ok(outcome) => Ok(outcome),
-            Err(error) if matches!(feature, Feature::Edit | Feature::Delete | Feature::StreamingDraft) => {
+            Err(error)
+                if matches!(
+                    feature,
+                    Feature::Edit | Feature::Delete | Feature::StreamingDraft
+                ) =>
+            {
                 debug_assert!(error.unsupported);
                 Err(error)
             }
@@ -549,7 +601,11 @@ async fn the_cloud_adapter_passes_the_whole_conformance_matrix_against_its_wire(
     let results = check_all_features(&kit).await;
     assert_eq!(results.len(), Feature::ALL.len());
     for (feature, result) in &results {
-        assert!(result.is_ok(), "{feature:?}: {}", result.as_ref().unwrap_err());
+        assert!(
+            result.is_ok(),
+            "{feature:?}: {}",
+            result.as_ref().unwrap_err()
+        );
     }
 }
 
@@ -601,6 +657,10 @@ async fn the_cloud_adapter_declares_exactly_what_the_protocol_and_its_ports_allo
         Feature::ReadReceipts,
     ];
     for feature in Feature::ALL {
-        assert_eq!(declared(feature), supported.contains(&feature), "{feature:?}");
+        assert_eq!(
+            declared(feature),
+            supported.contains(&feature),
+            "{feature:?}"
+        );
     }
 }

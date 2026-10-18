@@ -2,16 +2,20 @@
 //! observation read from what the linked-session double actually received.
 
 use super::*;
-use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices, ogg_bytes, png_bytes};
+use crate::providers::whatsapp_shared::fakes::{
+    CollectingSink, MemoryMedia, MemoryVoices, ogg_bytes, png_bytes,
+};
 use crate::providers::whatsapp_web::fakes::{Call, RecordingClient};
 use std::collections::HashMap;
 use tinychannels_bus::channel::{ChannelSendError, ChannelSendOutcome, SendErrorKind};
 use tinychannels_bus::{
     ChannelIngress, ChannelOutboundIntent, ChannelRef, ContentPart, ConversationKind,
-    ConversationRef, MediaKind, MediaReference, OutboundContentPart, OutboundPayload, OutboundVoice,
+    ConversationRef, MediaKind, MediaReference, OutboundContentPart, OutboundPayload,
+    OutboundVoice,
 };
 use tinychannels_conformance::{
-    AdapterFixture, ConformanceFeature as Feature, ExpectedScope, WireObservation, check_all_features,
+    AdapterFixture, ConformanceFeature as Feature, ExpectedScope, WireObservation,
+    check_all_features,
 };
 use wacore::types::events::{BatchOrigin, Event, InboundMessage, MessageBatch, Receipt};
 use wacore::types::message::{MessageInfo, MessageSource};
@@ -73,16 +77,46 @@ fn kit() -> WebKit {
     let voices = Arc::new(MemoryVoices::default());
     voices.seed("voice-kit", "audio/ogg", &ogg_bytes());
     let mut media = HashMap::new();
-    media.insert(Feature::Image, repository.seed(MediaKind::Image, "image/png", Some("kit.png"), &png_bytes()));
-    media.insert(Feature::Video, repository.seed(MediaKind::Video, "video/mp4", Some("kit.mp4"), b"0000ftypmp42"));
-    media.insert(Feature::Audio, repository.seed(MediaKind::Audio, "audio/mpeg", Some("kit.mp3"), b"ID3-----"));
-    media.insert(Feature::File, repository.seed(MediaKind::Document, "application/pdf", Some("kit.pdf"), b"%PDF-1.4 x"));
-    media.insert(Feature::Sticker, repository.seed(MediaKind::Image, "image/webp", None, b"RIFF----WEBPxxxx"));
+    media.insert(
+        Feature::Image,
+        repository.seed(MediaKind::Image, "image/png", Some("kit.png"), &png_bytes()),
+    );
+    media.insert(
+        Feature::Video,
+        repository.seed(
+            MediaKind::Video,
+            "video/mp4",
+            Some("kit.mp4"),
+            b"0000ftypmp42",
+        ),
+    );
+    media.insert(
+        Feature::Audio,
+        repository.seed(MediaKind::Audio, "audio/mpeg", Some("kit.mp3"), b"ID3-----"),
+    );
+    media.insert(
+        Feature::File,
+        repository.seed(
+            MediaKind::Document,
+            "application/pdf",
+            Some("kit.pdf"),
+            b"%PDF-1.4 x",
+        ),
+    );
+    media.insert(
+        Feature::Sticker,
+        repository.seed(MediaKind::Image, "image/webp", None, b"RIFF----WEBPxxxx"),
+    );
     let channel = Arc::new(
-        WhatsAppWebChannel::new("/tmp/kit.db".into(), None, None, vec!["+15550001111".into()])
-            .with_events(sink.clone())
-            .with_media_repository(repository)
-            .with_voice_media_store(voices),
+        WhatsAppWebChannel::new(
+            "/tmp/kit.db".into(),
+            None,
+            None,
+            vec!["+15550001111".into()],
+        )
+        .with_events(sink.clone())
+        .with_media_repository(repository)
+        .with_voice_media_store(voices),
     );
     *channel.client.lock() = Some(client.clone() as Arc<dyn OutboundClient>);
     WebKit {
@@ -104,7 +138,11 @@ fn payload_kind(message: &wa::Message) -> &'static str {
     } else if message.video_message.as_option().is_some() {
         "video"
     } else if let Some(audio) = message.audio_message.as_option() {
-        if audio.ptt == Some(true) { "voice" } else { "audio" }
+        if audio.ptt == Some(true) {
+            "voice"
+        } else {
+            "audio"
+        }
     } else if message.document_message.as_option().is_some() {
         "file"
     } else if message.sticker_message.as_option().is_some() {
@@ -170,7 +208,9 @@ impl WebKit {
                 }
                 Call::Composing(to) => self.observation(feature, "typing", to),
                 Call::Reaction { chat, .. } => self.observation(feature, "reaction_send", chat),
-                Call::Edit { chat, original_id, .. } => {
+                Call::Edit {
+                    chat, original_id, ..
+                } => {
                     let mut observation = self.observation(feature, "edit", chat);
                     observation.platform_message_ids = vec![original_id.clone()];
                     observation
@@ -261,7 +301,10 @@ impl AdapterFixture for WebKit {
         self.observed.lock().clone()
     }
 
-    async fn exercise(&self, feature: Feature) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+    async fn exercise(
+        &self,
+        feature: Feature,
+    ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         let content = |part| OutboundPayload::Parts {
             parts: vec![OutboundContentPart::Content { part }],
         };
@@ -357,9 +400,11 @@ impl AdapterFixture for WebKit {
         };
         let intent = self.intent(feature, payload);
         let result = match feature {
-            Feature::Typing => crate::channel::ChannelTyping::start_typing(self.channel.as_ref(), "+15550001111")
-                .await
-                .map(|()| None),
+            Feature::Typing => {
+                crate::channel::ChannelTyping::start_typing(self.channel.as_ref(), "+15550001111")
+                    .await
+                    .map(|()| None)
+            }
             Feature::Reactions => crate::channel::ChannelReaction::send_reaction(
                 self.channel.as_ref(),
                 &self.scope.channel,
@@ -374,7 +419,9 @@ impl AdapterFixture for WebKit {
             .await
             .map(|()| None),
             Feature::Edit => {
-                let sent = crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent.clone()).await?;
+                let sent =
+                    crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent.clone())
+                        .await?;
                 let edited = crate::channel::ChannelEdit::edit(
                     self.channel.as_ref(),
                     &sent.receipt,
@@ -390,16 +437,19 @@ impl AdapterFixture for WebKit {
                 }))
             }
             Feature::Delete => {
-                let sent = crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent).await?;
+                let sent =
+                    crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent).await?;
                 crate::channel::ChannelDelete::delete(self.channel.as_ref(), &sent.receipt)
                     .await
                     .map(|()| None)
             }
-            Feature::StreamingDraft => {
-                crate::channel::ChannelStreamingDraft::upsert_draft(self.channel.as_ref(), None, intent)
-                    .await
-                    .map(|_| None)
-            }
+            Feature::StreamingDraft => crate::channel::ChannelStreamingDraft::upsert_draft(
+                self.channel.as_ref(),
+                None,
+                intent,
+            )
+            .await
+            .map(|_| None),
             Feature::InboundReactions => {
                 self.published();
                 self.inbound(
@@ -425,7 +475,8 @@ impl AdapterFixture for WebKit {
                         ChannelIngress::Inbound(_) => None,
                     })
                     .expect("a reaction event was published");
-                let mut observation = self.observation(feature, "reaction_receive", "15550001111@s.whatsapp.net");
+                let mut observation =
+                    self.observation(feature, "reaction_receive", "15550001111@s.whatsapp.net");
                 observation.conversation = event.conversation.clone().unwrap_or_default();
                 observation.request = serde_json::to_value(&event).unwrap();
                 self.observed.lock().push(observation);
@@ -457,7 +508,8 @@ impl AdapterFixture for WebKit {
                         ChannelIngress::Inbound(_) => None,
                     })
                     .expect("a receipt event was published");
-                let mut observation = self.observation(feature, "read_receipt", "15550001111@s.whatsapp.net");
+                let mut observation =
+                    self.observation(feature, "read_receipt", "15550001111@s.whatsapp.net");
                 observation.conversation = event.conversation.clone().unwrap_or_default();
                 observation.request = serde_json::to_value(&event).unwrap();
                 self.observed.lock().push(observation);
@@ -504,7 +556,8 @@ impl AdapterFixture for WebKit {
                     Some(Arc::new(Transcribe)),
                 )
                 .await;
-                let mut observation = self.observation(feature, "voice_in", "15550001111@s.whatsapp.net");
+                let mut observation =
+                    self.observation(feature, "voice_in", "15550001111@s.whatsapp.net");
                 observation.payload_kinds = vec!["audio".into()];
                 if note.transcript.as_ref().is_some_and(|t| !t.text.is_empty()) {
                     observation.payload_kinds.push("transcript".into());
@@ -532,7 +585,11 @@ async fn the_web_adapter_passes_the_whole_conformance_matrix_against_its_session
     let results = check_all_features(&kit).await;
     assert_eq!(results.len(), Feature::ALL.len());
     for (feature, result) in &results {
-        assert!(result.is_ok(), "{feature:?}: {}", result.as_ref().unwrap_err());
+        assert!(
+            result.is_ok(),
+            "{feature:?}: {}",
+            result.as_ref().unwrap_err()
+        );
     }
 }
 
@@ -540,9 +597,21 @@ async fn the_web_adapter_passes_the_whole_conformance_matrix_against_its_session
 async fn the_web_adapter_declares_exactly_what_the_protocol_and_its_ports_allow() {
     let kit = kit();
     let facts = crate::channel::ChannelAdapter::declared_capabilities(kit.channel.as_ref());
-    assert!(facts.voice_out.native_waveform, "voice notes carry WhatsApp's waveform");
+    assert!(
+        facts.voice_out.native_waveform,
+        "voice notes carry WhatsApp's waveform"
+    );
     let has = |name: &str| facts.actions.supported.iter().any(|action| action == name);
-    for supported in ["send", "typing", "mark-read", "react", "reply", "edit", "delete", "unsend"] {
+    for supported in [
+        "send",
+        "typing",
+        "mark-read",
+        "react",
+        "reply",
+        "edit",
+        "delete",
+        "unsend",
+    ] {
         assert!(has(supported), "{supported}");
     }
     assert!(!has("draft-update") && !facts.progressive_edits);

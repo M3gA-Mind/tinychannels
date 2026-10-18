@@ -1343,7 +1343,10 @@ impl tinychannels::channel::ChannelAdapter for NativeAdapter {
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         Err(tinychannels::channel::ChannelSendError {
             kind: tinychannels::channel::SendErrorKind::Forbidden,
-            message: format!("{} ingress is already owned by the configured module runtime", self.label()),
+            message: format!(
+                "{} ingress is already owned by the configured module runtime",
+                self.label()
+            ),
             retryable: false,
             ..Default::default()
         })

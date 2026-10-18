@@ -1,8 +1,8 @@
 use super::*;
 use crate::providers::whatsapp_shared::fakes::{MemoryMedia, MemoryVoices, ogg_bytes, png_bytes};
+use crate::providers::whatsapp_shared::vcard::ContactCard;
 use crate::providers::whatsapp_web::fakes::{Call, RecordingClient};
 use crate::traits::Channel as _;
-use crate::providers::whatsapp_shared::vcard::ContactCard;
 use tinychannels_bus::{
     ChannelRef, ContactMethod, ContentPart, ConversationRef, MediaKind, MediaReference,
     OutboundContentPart, OutboundVoice,
@@ -75,7 +75,13 @@ fn quoted_text_uses_the_extended_text_message_and_plain_text_the_conversation_fi
 
 #[test]
 fn location_and_contact_messages_carry_their_protocol_fields() {
-    let location = location_message(1.5, -2.5, Some("Home"), None, Some(reply_context("q", None)));
+    let location = location_message(
+        1.5,
+        -2.5,
+        Some("Home"),
+        None,
+        Some(reply_context("q", None)),
+    );
     let location = location.location_message.as_option().unwrap();
     assert_eq!(location.degrees_latitude, Some(1.5));
     assert_eq!(location.degrees_longitude, Some(-2.5));
@@ -103,7 +109,13 @@ fn location_and_contact_messages_carry_their_protocol_fields() {
 fn media_builds_round_durations_up_to_whole_seconds() {
     use crate::providers::whatsapp_shared::plan::AttachmentKind;
     assert_eq!(
-        media_build(AttachmentKind::Video, "video/mp4", None, Some("c".into()), Some(1001)),
+        media_build(
+            AttachmentKind::Video,
+            "video/mp4",
+            None,
+            Some("c".into()),
+            Some(1001)
+        ),
         MediaBuild::Video {
             caption: Some("c".into()),
             duration_seconds: Some(2)
@@ -121,15 +133,39 @@ fn media_builds_round_durations_up_to_whole_seconds() {
         MediaBuild::Image { .. }
     ));
     assert!(matches!(
-        media_build(AttachmentKind::Document, "application/pdf", Some("a".into()), None, None),
+        media_build(
+            AttachmentKind::Document,
+            "application/pdf",
+            Some("a".into()),
+            None,
+            None
+        ),
         MediaBuild::Document { .. }
     ));
     assert_eq!(
-        media_build(AttachmentKind::Sticker, "image/webp", None, None, Some(u64::MAX)),
+        media_build(
+            AttachmentKind::Sticker,
+            "image/webp",
+            None,
+            None,
+            Some(u64::MAX)
+        ),
         MediaBuild::Sticker
     );
-    let huge = media_build(AttachmentKind::Video, "video/mp4", None, None, Some(u64::MAX));
-    assert!(matches!(huge, MediaBuild::Video { duration_seconds: Some(u32::MAX), .. }));
+    let huge = media_build(
+        AttachmentKind::Video,
+        "video/mp4",
+        None,
+        None,
+        Some(u64::MAX),
+    );
+    assert!(matches!(
+        huge,
+        MediaBuild::Video {
+            duration_seconds: Some(u32::MAX),
+            ..
+        }
+    ));
 }
 
 // --- admission ---------------------------------------------------------------
@@ -141,12 +177,27 @@ fn the_outbound_policy_gates_addressing_before_any_client_call() {
         channel.admitted_jid("+15550001111").unwrap().to_string(),
         "15550001111@s.whatsapp.net"
     );
-    assert!(matches!(channel.admitted_jid("+19998887777"), Err(WaFailure::Rejected(_))));
-    assert!(matches!(channel.admitted_jid("1@g.us"), Err(WaFailure::Rejected(_))));
+    assert!(matches!(
+        channel.admitted_jid("+19998887777"),
+        Err(WaFailure::Rejected(_))
+    ));
+    assert!(matches!(
+        channel.admitted_jid("1@g.us"),
+        Err(WaFailure::Rejected(_))
+    ));
     channel.allowed_groups.lock().insert("1@g.us".into());
-    assert!(channel.admitted_jid("1@g.us").unwrap().to_string().ends_with("@g.us"));
+    assert!(
+        channel
+            .admitted_jid("1@g.us")
+            .unwrap()
+            .to_string()
+            .ends_with("@g.us")
+    );
     let (open, _) = self::channel(&[]);
-    assert!(matches!(open.admitted_jid("@@"), Err(WaFailure::Rejected(_))));
+    assert!(matches!(
+        open.admitted_jid("@@"),
+        Err(WaFailure::Rejected(_))
+    ));
 }
 
 #[test]
@@ -169,7 +220,10 @@ fn a_disconnected_or_re_linked_session_refuses_operations() {
 #[tokio::test]
 async fn text_goes_to_the_phone_jid_and_the_receipt_carries_the_session_ids() {
     let (channel, client) = channel(&["+15550001111"]);
-    let outcome = channel.send_v2(&message(vec![text("hello")])).await.unwrap();
+    let outcome = channel
+        .send_v2(&message(vec![text("hello")]))
+        .await
+        .unwrap();
     assert!(outcome.error.is_none());
     assert_eq!(
         client.texts(),
@@ -180,26 +234,48 @@ async fn text_goes_to_the_phone_jid_and_the_receipt_carries_the_session_ids() {
     assert_eq!(receipt.edit_token.as_deref(), Some("3EB00001"));
     assert_eq!(receipt.delete_token.as_deref(), Some("3EB00001"));
     assert_eq!(receipt.parts[0].edit_token.as_deref(), Some("3EB00001"));
-    assert_eq!(receipt.channel.unwrap().account_id.as_deref(), Some("whatsapp"));
+    assert_eq!(
+        receipt.channel.unwrap().account_id.as_deref(),
+        Some("whatsapp")
+    );
     assert_eq!(receipt.conversation.unwrap().id, "+15550001111");
 }
 
 #[tokio::test]
 async fn replies_quote_the_known_author_or_the_dm_peer_and_only_on_the_first_message() {
     let (channel, client) = channel(&["+15550001111"]);
-    let mut request = message(vec![text(&format!("{}\n{}", "a".repeat(10_000), "b".repeat(10_000)))]);
+    let mut request = message(vec![text(&format!(
+        "{}\n{}",
+        "a".repeat(10_000),
+        "b".repeat(10_000)
+    ))]);
     request.reply_to_id = Some("3EB0SRC".into());
-    channel.authors.lock().insert("3EB0SRC", "15550001111@s.whatsapp.net");
+    channel
+        .authors
+        .lock()
+        .insert("3EB0SRC", "15550001111@s.whatsapp.net");
     let outcome = channel.send_v2(&request).await.unwrap();
     assert_eq!(outcome.receipt.platform_message_ids.len(), 2);
     let sent = client.messages();
     let context = &sent[0].extended_text_message.context_info;
     assert_eq!(context.stanza_id.as_deref(), Some("3EB0SRC"));
-    assert_eq!(context.participant.as_deref(), Some("15550001111@s.whatsapp.net"));
-    assert!(sent[1].conversation.is_some(), "the follow-on chunk is not quoted");
-    assert_eq!(outcome.receipt.parts[0].reply_to_id.as_deref(), Some("3EB0SRC"));
+    assert_eq!(
+        context.participant.as_deref(),
+        Some("15550001111@s.whatsapp.net")
+    );
+    assert!(
+        sent[1].conversation.is_some(),
+        "the follow-on chunk is not quoted"
+    );
+    assert_eq!(
+        outcome.receipt.parts[0].reply_to_id.as_deref(),
+        Some("3EB0SRC")
+    );
     assert_eq!(outcome.receipt.parts[1].reply_to_id, None);
-    assert!(outcome.receipt.edit_token.is_none(), "a multi-message send is not editable as one");
+    assert!(
+        outcome.receipt.edit_token.is_none(),
+        "a multi-message send is not editable as one"
+    );
 
     // Unknown author: a DM quotes the peer, a group quotes without a participant.
     let (channel, client) = self::channel(&["+15550001111"]);
@@ -207,7 +283,11 @@ async fn replies_quote_the_known_author_or_the_dm_peer_and_only_on_the_first_mes
     dm.reply_to_id = Some("3EB0UNKNOWN".into());
     channel.send_v2(&dm).await.unwrap();
     assert_eq!(
-        client.messages()[0].extended_text_message.context_info.participant.as_deref(),
+        client.messages()[0]
+            .extended_text_message
+            .context_info
+            .participant
+            .as_deref(),
         Some("15550001111@s.whatsapp.net")
     );
     channel.allowed_groups.lock().insert("9@g.us".into());
@@ -216,7 +296,13 @@ async fn replies_quote_the_known_author_or_the_dm_peer_and_only_on_the_first_mes
     group.conversation_ref.as_mut().unwrap().id = "9@g.us".into();
     group.reply_to_id = Some("3EB0UNKNOWN".into());
     channel.send_v2(&group).await.unwrap();
-    assert!(client.messages()[1].extended_text_message.context_info.participant.is_none());
+    assert!(
+        client.messages()[1]
+            .extended_text_message
+            .context_info
+            .participant
+            .is_none()
+    );
 }
 
 #[tokio::test]
@@ -228,9 +314,16 @@ async fn every_content_kind_is_uploaded_or_built_and_sent_in_order() {
     let png = media.seed(MediaKind::Image, "image/png", None, &png_bytes());
     let mp4 = media.seed(MediaKind::Video, "video/mp4", None, b"0000ftypmp42");
     let mp3 = media.seed(MediaKind::Audio, "audio/mpeg", None, b"ID3-----");
-    let pdf = media.seed(MediaKind::Document, "application/pdf", Some("a.pdf"), b"%PDF-1.4 x");
+    let pdf = media.seed(
+        MediaKind::Document,
+        "application/pdf",
+        Some("a.pdf"),
+        b"%PDF-1.4 x",
+    );
     let webp = media.seed(MediaKind::Image, "image/webp", None, b"RIFF----WEBPxxxx");
-    let channel = channel.with_media_repository(media).with_voice_media_store(voices);
+    let channel = channel
+        .with_media_repository(media)
+        .with_voice_media_store(voices);
     let content = |part| OutboundContentPart::Content { part };
     let request = message(vec![
         content(ContentPart::Image {
@@ -301,7 +394,13 @@ async fn every_content_kind_is_uploaded_or_built_and_sent_in_order() {
     assert_eq!(builds.len(), 6, "every attachment is uploaded exactly once");
     assert!(builds.iter().all(|(_, bytes)| *bytes > 0));
     assert!(matches!(builds[0].0, MediaBuild::Image { .. }));
-    assert!(matches!(builds[5].0, MediaBuild::Voice { duration_seconds: Some(2), .. }));
+    assert!(matches!(
+        builds[5].0,
+        MediaBuild::Voice {
+            duration_seconds: Some(2),
+            ..
+        }
+    ));
     let sent = client.messages();
     assert!(sent[0].image_message.as_option().is_some());
     assert_eq!(sent[1].video_message.seconds, Some(2));
@@ -318,9 +417,24 @@ async fn every_content_kind_is_uploaded_or_built_and_sent_in_order() {
     use tinychannels_bus::channel::MessageReceiptPartKind as Kind;
     assert_eq!(
         kinds,
-        [Kind::Media, Kind::Media, Kind::Voice, Kind::Media, Kind::Media, Kind::Voice, Kind::Unknown, Kind::Unknown]
+        [
+            Kind::Media,
+            Kind::Media,
+            Kind::Voice,
+            Kind::Media,
+            Kind::Media,
+            Kind::Voice,
+            Kind::Unknown,
+            Kind::Unknown
+        ]
     );
-    assert!(outcome.receipt.parts.iter().all(|part| part.delete_token.is_some()));
+    assert!(
+        outcome
+            .receipt
+            .parts
+            .iter()
+            .all(|part| part.delete_token.is_some())
+    );
     assert!(outcome.receipt.parts[0].edit_token.is_none());
 }
 
@@ -389,10 +503,16 @@ async fn unadmitted_or_unaddressable_sends_never_reach_the_session() {
     let mut stranger = message(vec![text("x")]);
     stranger.conversation_id = "+19998887777".into();
     stranger.conversation_ref.as_mut().unwrap().id = "+19998887777".into();
-    assert!(matches!(channel.send_v2(&stranger).await, Err(WaFailure::Rejected(_))));
+    assert!(matches!(
+        channel.send_v2(&stranger).await,
+        Err(WaFailure::Rejected(_))
+    ));
     let mut threaded = message(vec![text("x")]);
     threaded.thread_id = Some("t".into());
-    assert!(matches!(channel.send_v2(&threaded).await, Err(WaFailure::Unsupported(_))));
+    assert!(matches!(
+        channel.send_v2(&threaded).await,
+        Err(WaFailure::Unsupported(_))
+    ));
     let offline = WhatsAppWebChannel::new("/tmp/t.db".into(), None, None, vec![]);
     assert!(matches!(
         offline.send_v2(&message(vec![text("x")])).await,
@@ -404,7 +524,11 @@ async fn unadmitted_or_unaddressable_sends_never_reach_the_session() {
 // --- edit, delete, react, read ---------------------------------------------------
 
 async fn sent_text(channel: &WhatsAppWebChannel) -> tinychannels_bus::channel::MessageReceipt {
-    channel.send_v2(&message(vec![text("first")])).await.unwrap().receipt
+    channel
+        .send_v2(&message(vec![text("first")]))
+        .await
+        .unwrap()
+        .receipt
 }
 
 fn edit_intent(body: &str) -> tinychannels_bus::ChannelOutboundIntent {
@@ -429,16 +553,26 @@ fn edit_intent(body: &str) -> tinychannels_bus::ChannelOutboundIntent {
 async fn text_messages_can_be_edited_and_keep_their_identity() {
     let (channel, client) = channel(&["+15550001111"]);
     let receipt = sent_text(&channel).await;
-    let edited = channel.edit_v2(&receipt, &edit_intent("fixed <tool>x</tool>")).await.unwrap();
+    let edited = channel
+        .edit_v2(&receipt, &edit_intent("fixed <tool>x</tool>"))
+        .await
+        .unwrap();
     assert_eq!(edited.platform_message_ids, receipt.platform_message_ids);
     let edit = client.calls().into_iter().find_map(|call| match call {
-        Call::Edit { chat, original_id, content } => Some((chat, original_id, content)),
+        Call::Edit {
+            chat,
+            original_id,
+            content,
+        } => Some((chat, original_id, content)),
         _ => None,
     });
     let (chat, original_id, content) = edit.unwrap();
     assert_eq!(chat, "15550001111@s.whatsapp.net");
     assert_eq!(original_id, "3EB00001");
-    assert_eq!(content.conversation.as_deref().map(str::trim), Some("fixed"));
+    assert_eq!(
+        content.conversation.as_deref().map(str::trim),
+        Some("fixed")
+    );
 }
 
 #[tokio::test]
@@ -447,26 +581,43 @@ async fn edits_are_refused_for_anything_but_a_single_text_message() {
     let receipt = sent_text(&channel).await;
     let mut non_text = receipt.clone();
     non_text.parts[0].kind = tinychannels_bus::channel::MessageReceiptPartKind::Media;
-    assert!(matches!(channel.edit_v2(&non_text, &edit_intent("x")).await, Err(WaFailure::Unsupported(_))));
+    assert!(matches!(
+        channel.edit_v2(&non_text, &edit_intent("x")).await,
+        Err(WaFailure::Unsupported(_))
+    ));
     let mut two = receipt.clone();
     two.parts.push(two.parts[0].clone());
-    assert!(matches!(channel.edit_v2(&two, &edit_intent("x")).await, Err(WaFailure::Unsupported(_))));
+    assert!(matches!(
+        channel.edit_v2(&two, &edit_intent("x")).await,
+        Err(WaFailure::Unsupported(_))
+    ));
     let mut nowhere = receipt.clone();
     nowhere.conversation = None;
-    assert!(matches!(channel.edit_v2(&nowhere, &edit_intent("x")).await, Err(WaFailure::Rejected(_))));
+    assert!(matches!(
+        channel.edit_v2(&nowhere, &edit_intent("x")).await,
+        Err(WaFailure::Rejected(_))
+    ));
     let mut poll = edit_intent("x");
     poll.payload = tinychannels_bus::OutboundPayload::Poll {
         question: "q".into(),
         options: vec!["a".into()],
     };
-    assert!(matches!(channel.edit_v2(&receipt, &poll).await, Err(WaFailure::Unsupported(_))));
+    assert!(matches!(
+        channel.edit_v2(&receipt, &poll).await,
+        Err(WaFailure::Unsupported(_))
+    ));
     for body in ["   ", &"x".repeat(TEXT_LIMIT + 1)] {
         assert!(matches!(
             channel.edit_v2(&receipt, &edit_intent(body)).await,
             Err(WaFailure::Rejected(_))
         ));
     }
-    assert!(!client.calls().iter().any(|call| matches!(call, Call::Edit { .. })));
+    assert!(
+        !client
+            .calls()
+            .iter()
+            .any(|call| matches!(call, Call::Edit { .. }))
+    );
     // The session failing is an uncertain outcome.
     let failing = Arc::new(RecordingClient {
         fail: true,
@@ -490,13 +641,19 @@ async fn sent_messages_can_be_unsent_for_everyone() {
     )));
     let mut nowhere = receipt.clone();
     nowhere.conversation = None;
-    assert!(matches!(channel.delete_v2(&nowhere).await, Err(WaFailure::Rejected(_))));
+    assert!(matches!(
+        channel.delete_v2(&nowhere).await,
+        Err(WaFailure::Rejected(_))
+    ));
     let failing = Arc::new(RecordingClient {
         fail: true,
         ..RecordingClient::linked("15559998888@s.whatsapp.net")
     });
     *channel.client.lock() = Some(failing as Arc<dyn OutboundClient>);
-    assert!(matches!(channel.delete_v2(&receipt).await, Err(WaFailure::Uncertain(_))));
+    assert!(matches!(
+        channel.delete_v2(&receipt).await,
+        Err(WaFailure::Uncertain(_))
+    ));
 }
 
 #[tokio::test]
@@ -510,15 +667,27 @@ async fn reactions_name_the_target_and_group_reactions_name_its_author() {
         value: "👍".into(),
         custom_emoji_id: None,
     };
-    channel.react_v2(&conversation, "3EB0T", &thumbs, false).await.unwrap();
-    channel.react_v2(&conversation, "3EB0T", &thumbs, true).await.unwrap();
+    channel
+        .react_v2(&conversation, "3EB0T", &thumbs, false)
+        .await
+        .unwrap();
+    channel
+        .react_v2(&conversation, "3EB0T", &thumbs, true)
+        .await
+        .unwrap();
     channel.allowed_groups.lock().insert("9@g.us".into());
-    channel.authors.lock().insert("3EB0G", "15551112222@s.whatsapp.net");
+    channel
+        .authors
+        .lock()
+        .insert("3EB0G", "15551112222@s.whatsapp.net");
     let group = ConversationRef {
         id: "9@g.us".into(),
         ..Default::default()
     };
-    channel.react_v2(&group, "3EB0G", &thumbs, false).await.unwrap();
+    channel
+        .react_v2(&group, "3EB0G", &thumbs, false)
+        .await
+        .unwrap();
     let reactions: Vec<_> = client
         .calls()
         .into_iter()
@@ -532,7 +701,10 @@ async fn reactions_name_the_target_and_group_reactions_name_its_author() {
     assert_eq!(reactions[0].1.from_me, Some(false));
     assert!(reactions[0].1.participant.is_none());
     assert_eq!(reactions[1].2, "", "an empty emoji removes the reaction");
-    assert_eq!(reactions[2].1.participant.as_deref(), Some("15551112222@s.whatsapp.net"));
+    assert_eq!(
+        reactions[2].1.participant.as_deref(),
+        Some("15551112222@s.whatsapp.net")
+    );
 }
 
 #[tokio::test]
@@ -551,9 +723,18 @@ async fn invalid_reactions_never_reach_the_session() {
         value: "👍".into(),
         custom_emoji_id: None,
     };
-    assert!(matches!(channel.react_v2(&conversation, "t", &custom, false).await, Err(WaFailure::Unsupported(_))));
-    assert!(matches!(channel.react_v2(&conversation, "t", &blank, false).await, Err(WaFailure::Rejected(_))));
-    assert!(matches!(channel.react_v2(&conversation, " ", &thumbs, false).await, Err(WaFailure::Rejected(_))));
+    assert!(matches!(
+        channel.react_v2(&conversation, "t", &custom, false).await,
+        Err(WaFailure::Unsupported(_))
+    ));
+    assert!(matches!(
+        channel.react_v2(&conversation, "t", &blank, false).await,
+        Err(WaFailure::Rejected(_))
+    ));
+    assert!(matches!(
+        channel.react_v2(&conversation, " ", &thumbs, false).await,
+        Err(WaFailure::Rejected(_))
+    ));
     assert!(client.calls().is_empty());
     let failing = Arc::new(RecordingClient {
         fail: true,
@@ -575,7 +756,10 @@ async fn read_receipts_name_the_chat_and_the_group_author() {
     };
     channel.read_v2(&dm, "3EB0A").await.unwrap();
     channel.allowed_groups.lock().insert("9@g.us".into());
-    channel.authors.lock().insert("3EB0B", "15551112222@s.whatsapp.net");
+    channel
+        .authors
+        .lock()
+        .insert("3EB0B", "15551112222@s.whatsapp.net");
     let group = ConversationRef {
         id: "9@g.us".into(),
         ..Default::default()
@@ -589,7 +773,14 @@ async fn read_receipts_name_the_chat_and_the_group_author() {
             _ => None,
         })
         .collect();
-    assert_eq!(reads[0], ("15550001111@s.whatsapp.net".into(), None, vec!["3EB0A".into()]));
+    assert_eq!(
+        reads[0],
+        (
+            "15550001111@s.whatsapp.net".into(),
+            None,
+            vec!["3EB0A".into()]
+        )
+    );
     assert_eq!(
         reads[1],
         (
@@ -598,11 +789,17 @@ async fn read_receipts_name_the_chat_and_the_group_author() {
             vec!["3EB0B".into()]
         )
     );
-    assert!(matches!(channel.read_v2(&dm, "  ").await, Err(WaFailure::Rejected(_))));
+    assert!(matches!(
+        channel.read_v2(&dm, "  ").await,
+        Err(WaFailure::Rejected(_))
+    ));
     let failing = Arc::new(RecordingClient {
         fail: true,
         ..RecordingClient::linked("15559998888@s.whatsapp.net")
     });
     *channel.client.lock() = Some(failing as Arc<dyn OutboundClient>);
-    assert!(matches!(channel.read_v2(&dm, "3EB0A").await, Err(WaFailure::Uncertain(_))));
+    assert!(matches!(
+        channel.read_v2(&dm, "3EB0A").await,
+        Err(WaFailure::Uncertain(_))
+    ));
 }

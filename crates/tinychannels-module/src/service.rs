@@ -278,9 +278,23 @@ impl Channels {
                 outbound_only,
             )
         } else if let Some(cloud) = whatsapp_cloud {
-            Running::start_native("WhatsApp", cloud, hooks, self.host.clone(), supervision, outbound_only)
+            Running::start_native(
+                "WhatsApp",
+                cloud,
+                hooks,
+                self.host.clone(),
+                supervision,
+                outbound_only,
+            )
         } else if let Some(web) = whatsapp_web {
-            Running::start_native("WhatsApp", web, hooks, self.host.clone(), supervision, outbound_only)
+            Running::start_native(
+                "WhatsApp",
+                web,
+                hooks,
+                self.host.clone(),
+                supervision,
+                outbound_only,
+            )
         } else {
             match supervision {
                 Some(policy) => {

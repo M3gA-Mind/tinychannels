@@ -2,7 +2,9 @@ use super::*;
 use crate::providers::whatsapp_shared::fakes::{MemoryMedia, MemoryVoices, ogg_bytes, png_bytes};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinychannels_bus::{ContactMethod, ContentPart, MediaKind, MediaReference, OutboundContentPart};
+use tinychannels_bus::{
+    ContactMethod, ContentPart, MediaKind, MediaReference, OutboundContentPart,
+};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
@@ -11,7 +13,8 @@ struct Counting(AtomicUsize);
 impl Respond for Counting {
     fn respond(&self, _request: &Request) -> ResponseTemplate {
         let n = self.0.fetch_add(1, Ordering::SeqCst) + 1;
-        ResponseTemplate::new(200).set_body_json(json!({"messages": [{"id": format!("wamid.{n}")}]}))
+        ResponseTemplate::new(200)
+            .set_body_json(json!({"messages": [{"id": format!("wamid.{n}")}]}))
     }
 }
 
@@ -25,7 +28,8 @@ impl Respond for FailAfter {
     fn respond(&self, _request: &Request) -> ResponseTemplate {
         let n = self.seen.fetch_add(1, Ordering::SeqCst) + 1;
         if n <= self.ok {
-            ResponseTemplate::new(200).set_body_json(json!({"messages": [{"id": format!("wamid.{n}")}]}))
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"messages": [{"id": format!("wamid.{n}")}]}))
         } else {
             ResponseTemplate::new(500)
         }
@@ -35,12 +39,18 @@ impl Respond for FailAfter {
 async fn messages_server(responder: impl Respond + 'static) -> MockServer {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path(format!("/{}/123/messages", crate::providers::whatsapp::api::GRAPH_VERSION)))
+        .and(path(format!(
+            "/{}/123/messages",
+            crate::providers::whatsapp::api::GRAPH_VERSION
+        )))
         .respond_with(responder)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
-        .and(path(format!("/{}/123/media", crate::providers::whatsapp::api::GRAPH_VERSION)))
+        .and(path(format!(
+            "/{}/123/media",
+            crate::providers::whatsapp::api::GRAPH_VERSION
+        )))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "media-1"})))
         .mount(&server)
         .await;
@@ -48,8 +58,13 @@ async fn messages_server(responder: impl Respond + 'static) -> MockServer {
 }
 
 fn channel(server: &MockServer) -> WhatsAppChannel {
-    WhatsAppChannel::new("tok".into(), "123".into(), "verify".into(), vec!["*".into()])
-        .with_api_base_for_test(&server.uri())
+    WhatsAppChannel::new(
+        "tok".into(),
+        "123".into(),
+        "verify".into(),
+        vec!["*".into()],
+    )
+    .with_api_base_for_test(&server.uri())
 }
 
 fn message(parts: Vec<OutboundContentPart>) -> ChannelOutboundMessage {
@@ -97,8 +112,14 @@ async fn bodies(server: &MockServer, suffix: &str) -> Vec<Value> {
 
 #[test]
 fn recipients_are_reduced_to_digits_and_must_have_some() {
-    assert_eq!(recipient_digits("+1 (555) 000-1111").unwrap(), "15550001111");
-    assert!(matches!(recipient_digits("abc"), Err(WaFailure::Rejected(_))));
+    assert_eq!(
+        recipient_digits("+1 (555) 000-1111").unwrap(),
+        "15550001111"
+    );
+    assert!(matches!(
+        recipient_digits("abc"),
+        Err(WaFailure::Rejected(_))
+    ));
 }
 
 #[test]
@@ -116,18 +137,36 @@ fn text_and_quote_bodies_follow_the_cloud_api_shape() {
 
 #[test]
 fn media_bodies_carry_captions_and_file_names_only_where_whatsapp_allows() {
-    let image = media_body("1", AttachmentKind::Image, "m", Some("cap"), Some("f.png"), None);
+    let image = media_body(
+        "1",
+        AttachmentKind::Image,
+        "m",
+        Some("cap"),
+        Some("f.png"),
+        None,
+    );
     assert_eq!(image["image"]["id"], "m");
     assert_eq!(image["image"]["caption"], "cap");
     assert!(image["image"].get("filename").is_none());
-    let document = media_body("1", AttachmentKind::Document, "m", Some("cap"), Some("f.pdf"), Some("q"));
+    let document = media_body(
+        "1",
+        AttachmentKind::Document,
+        "m",
+        Some("cap"),
+        Some("f.pdf"),
+        Some("q"),
+    );
     assert_eq!(document["document"]["filename"], "f.pdf");
     assert_eq!(document["context"]["message_id"], "q");
     let video = media_body("1", AttachmentKind::Video, "m", Some("c"), None, None);
     assert_eq!(video["video"]["caption"], "c");
     for kind in [AttachmentKind::Audio, AttachmentKind::Sticker] {
         let body = media_body("1", kind, "m", Some("ignored"), Some("ignored"), None);
-        let name = if kind == AttachmentKind::Audio { "audio" } else { "sticker" };
+        let name = if kind == AttachmentKind::Audio {
+            "audio"
+        } else {
+            "sticker"
+        };
         assert_eq!(body[name], json!({"id": "m"}));
     }
 }
@@ -184,11 +223,21 @@ fn location_contact_reaction_and_read_bodies_follow_the_cloud_api_shape() {
 
     let reaction = reaction_body("1", "wamid.1", "👍");
     assert_eq!(reaction["type"], "reaction");
-    assert_eq!(reaction["reaction"], json!({"message_id": "wamid.1", "emoji": "👍"}));
+    assert_eq!(
+        reaction["reaction"],
+        json!({"message_id": "wamid.1", "emoji": "👍"})
+    );
 
     assert_eq!(read_body("wamid.1", false)["status"], "read");
-    assert!(read_body("wamid.1", false).get("typing_indicator").is_none());
-    assert_eq!(read_body("wamid.1", true)["typing_indicator"]["type"], "text");
+    assert!(
+        read_body("wamid.1", false)
+            .get("typing_indicator")
+            .is_none()
+    );
+    assert_eq!(
+        read_body("wamid.1", true)["typing_indicator"]["type"],
+        "text"
+    );
 }
 
 // --- delivery ------------------------------------------------------------------
@@ -196,22 +245,35 @@ fn location_contact_reaction_and_read_bodies_follow_the_cloud_api_shape() {
 #[tokio::test]
 async fn text_is_sent_with_the_quote_on_the_first_message_only() {
     let server = messages_server(Counting(AtomicUsize::new(0))).await;
-    let mut request = message(vec![text(&format!("{}\n{}", "a".repeat(4000), "b".repeat(4000)))]);
+    let mut request = message(vec![text(&format!(
+        "{}\n{}",
+        "a".repeat(4000),
+        "b".repeat(4000)
+    ))]);
     request.reply_to_id = Some("wamid.src".into());
     let outcome = channel(&server).send_v2(&request).await.unwrap();
     assert!(outcome.error.is_none());
     assert_eq!(outcome.receipt.platform_message_ids, ["wamid.1", "wamid.2"]);
-    assert_eq!(outcome.receipt.primary_platform_message_id.as_deref(), Some("wamid.1"));
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("wamid.1")
+    );
     assert_eq!(outcome.receipt.idempotency_key.as_deref(), Some("key-1"));
     assert_eq!(outcome.receipt.reply_to_id.as_deref(), Some("wamid.src"));
-    assert_eq!(outcome.receipt.channel.unwrap().account_id.as_deref(), Some("whatsapp"));
+    assert_eq!(
+        outcome.receipt.channel.unwrap().account_id.as_deref(),
+        Some("whatsapp")
+    );
     assert!(outcome.receipt.edit_token.is_none() && outcome.receipt.delete_token.is_none());
     let sent = bodies(&server, "/messages").await;
     assert_eq!(sent.len(), 2);
     assert_eq!(sent[0]["to"], "15550001111");
     assert_eq!(sent[0]["context"]["message_id"], "wamid.src");
     assert!(sent[1].get("context").is_none());
-    assert_eq!(outcome.receipt.parts[0].reply_to_id.as_deref(), Some("wamid.src"));
+    assert_eq!(
+        outcome.receipt.parts[0].reply_to_id.as_deref(),
+        Some("wamid.src")
+    );
     assert_eq!(outcome.receipt.parts[1].reply_to_id, None);
 }
 
@@ -236,7 +298,11 @@ async fn a_text_split_into_chunks_keeps_the_ids_of_the_chunks_that_were_delivere
         ok: 1,
     })
     .await;
-    let request = message(vec![text(&format!("{}\n{}", "a".repeat(4000), "b".repeat(4000)))]);
+    let request = message(vec![text(&format!(
+        "{}\n{}",
+        "a".repeat(4000),
+        "b".repeat(4000)
+    ))]);
     let outcome = channel(&server).send_v2(&request).await.unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["wamid.1"]);
     assert!(outcome.error.is_some());
@@ -279,7 +345,12 @@ async fn attachments_are_uploaded_then_sent_by_media_id() {
     let voices = Arc::new(MemoryVoices::default());
     voices.seed("v1", "audio/ogg", &ogg_bytes());
     let png = media.seed(MediaKind::Image, "image/png", Some("pic.png"), &png_bytes());
-    let pdf = media.seed(MediaKind::Document, "application/pdf", Some("doc.pdf"), b"%PDF-1.4 x");
+    let pdf = media.seed(
+        MediaKind::Document,
+        "application/pdf",
+        Some("doc.pdf"),
+        b"%PDF-1.4 x",
+    );
     let webp = media.seed(MediaKind::Image, "image/webp", None, b"RIFF----WEBPxxxx");
     let channel = channel(&server)
         .with_media_repository(media.clone())
@@ -359,8 +430,16 @@ async fn attachments_are_uploaded_then_sent_by_media_id() {
         ]
     );
     let sent = bodies(&server, "/messages").await;
-    let types: Vec<_> = sent.iter().map(|body| body["type"].as_str().unwrap().to_owned()).collect();
-    assert_eq!(types, ["image", "document", "sticker", "audio", "location", "contacts"]);
+    let types: Vec<_> = sent
+        .iter()
+        .map(|body| body["type"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(
+        types,
+        [
+            "image", "document", "sticker", "audio", "location", "contacts"
+        ]
+    );
     assert_eq!(sent[0]["image"]["caption"], "look");
     assert_eq!(sent[1]["document"]["filename"], "doc.pdf");
     assert_eq!(sent[2]["sticker"], json!({"id": "media-1"}));
@@ -381,7 +460,10 @@ async fn attachments_are_uploaded_then_sent_by_media_id() {
 async fn a_failed_upload_stops_the_send_and_is_safe_to_retry() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .and(path(format!("/{}/123/media", crate::providers::whatsapp::api::GRAPH_VERSION)))
+        .and(path(format!(
+            "/{}/123/media",
+            crate::providers::whatsapp::api::GRAPH_VERSION
+        )))
         .respond_with(ResponseTemplate::new(500))
         .mount(&server)
         .await;

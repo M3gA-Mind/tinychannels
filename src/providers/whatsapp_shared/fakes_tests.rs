@@ -8,8 +8,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use tinychannels_bus::{
-    ChannelIngress, HostReadVoiceMediaResult, HostStoreVoiceMediaResult, MediaKind,
-    MediaReference,
+    ChannelIngress, HostReadVoiceMediaResult, HostStoreVoiceMediaResult, MediaKind, MediaReference,
 };
 
 /// Scoped media storage that remembers what it was asked to store.

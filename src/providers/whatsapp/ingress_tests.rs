@@ -1,6 +1,8 @@
 use super::*;
 use crate::providers::whatsapp::api::GRAPH_VERSION;
-use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices, png_bytes};
+use crate::providers::whatsapp_shared::fakes::{
+    CollectingSink, MemoryMedia, MemoryVoices, png_bytes,
+};
 use serde_json::json;
 use std::sync::Arc;
 use tinychannels_bus::ChannelIngress;
@@ -125,7 +127,10 @@ fn signatures_must_be_a_valid_hmac_of_the_exact_bytes() {
             continue;
         }
         assert!(
-            matches!(verify_signature(SECRET, bad, body), Err(WaFailure::Rejected(_))),
+            matches!(
+                verify_signature(SECRET, bad, body),
+                Err(WaFailure::Rejected(_))
+            ),
             "{bad:?}"
         );
     }
@@ -136,12 +141,20 @@ fn signatures_must_be_a_valid_hmac_of_the_exact_bytes() {
 fn the_verify_token_only_answers_the_subscribe_handshake() {
     let channel = WhatsAppChannel::new("t".into(), "1".into(), "verify-me".into(), vec![]);
     assert_eq!(
-        channel.verify_challenge("subscribe", "verify-me", "abc").as_deref(),
+        channel
+            .verify_challenge("subscribe", "verify-me", "abc")
+            .as_deref(),
         Some("abc")
     );
-    assert_eq!(channel.verify_challenge("subscribe", "verify-mx", "abc"), None);
+    assert_eq!(
+        channel.verify_challenge("subscribe", "verify-mx", "abc"),
+        None
+    );
     assert_eq!(channel.verify_challenge("subscribe", "verify", "abc"), None);
-    assert_eq!(channel.verify_challenge("unsubscribe", "verify-me", "abc"), None);
+    assert_eq!(
+        channel.verify_challenge("unsubscribe", "verify-me", "abc"),
+        None
+    );
     assert_eq!(channel.verify_challenge("subscribe", "verify-me", ""), None);
     let unset = WhatsAppChannel::new("t".into(), "1".into(), String::new(), vec![]);
     assert_eq!(unset.verify_challenge("subscribe", "", "abc"), None);
@@ -150,27 +163,48 @@ fn the_verify_token_only_answers_the_subscribe_handshake() {
 #[tokio::test]
 async fn unauthenticated_oversized_and_malformed_deliveries_are_refused_before_parsing() {
     let rig = rig(true).await;
-    let body = serde_json::to_vec(&delivery(value_with(json!([text_message("w1", "15550001111", "hi")])))).unwrap();
+    let body = serde_json::to_vec(&delivery(value_with(json!([text_message(
+        "w1",
+        "15550001111",
+        "hi"
+    )]))))
+    .unwrap();
     // Missing and wrong signatures.
     assert!(rig.channel.ingest_webhook(None, &body).await.is_err());
-    assert!(rig.channel.ingest_webhook(Some(&sign("other", &body)), &body).await.is_err());
+    assert!(
+        rig.channel
+            .ingest_webhook(Some(&sign("other", &body)), &body)
+            .await
+            .is_err()
+    );
     // A verify token is not a POST signature.
-    assert!(rig.channel.ingest_webhook(Some("verify-me"), &body).await.is_err());
+    assert!(
+        rig.channel
+            .ingest_webhook(Some("verify-me"), &body)
+            .await
+            .is_err()
+    );
     // Oversized body: refused even with a valid signature.
     let huge = vec![b' '; MAX_WEBHOOK_BYTES + 1];
     assert!(matches!(
-        rig.channel.ingest_webhook(Some(&sign(SECRET, &huge)), &huge).await,
+        rig.channel
+            .ingest_webhook(Some(&sign(SECRET, &huge)), &huge)
+            .await,
         Err(WaFailure::Rejected(_))
     ));
     // Signed but not JSON, and signed JSON for another object.
     let junk = b"not json";
     assert!(matches!(
-        rig.channel.ingest_webhook(Some(&sign(SECRET, junk)), junk).await,
+        rig.channel
+            .ingest_webhook(Some(&sign(SECRET, junk)), junk)
+            .await,
         Err(WaFailure::Rejected(_))
     ));
     let other = serde_json::to_vec(&json!({"object": "page", "entry": []})).unwrap();
     assert!(matches!(
-        rig.channel.ingest_webhook(Some(&sign(SECRET, &other)), &other).await,
+        rig.channel
+            .ingest_webhook(Some(&sign(SECRET, &other)), &other)
+            .await,
         Err(WaFailure::Rejected(_))
     ));
     assert!(rig.sink.ingress.lock().is_empty(), "nothing leaked through");
@@ -196,7 +230,10 @@ async fn a_delivery_for_another_phone_number_is_refused_not_routed() {
     let rig = rig(true).await;
     let mut other = value_with(json!([text_message("w1", "15550001111", "hi")]));
     other["metadata"]["phone_number_id"] = json!("999");
-    assert!(matches!(post(&rig, &delivery(other.clone())).await, Err(WaFailure::Rejected(_))));
+    assert!(matches!(
+        post(&rig, &delivery(other.clone())).await,
+        Err(WaFailure::Rejected(_))
+    ));
     let mut missing = other.clone();
     missing["metadata"] = json!({});
     assert!(post(&rig, &delivery(missing)).await.is_err());
@@ -224,7 +261,9 @@ async fn an_allowed_text_message_becomes_a_typed_envelope() {
     let rig = rig(true).await;
     let mut message = text_message("wamid.1", "15550001111", "hello");
     message["context"] = json!({"id": "wamid.quoted"});
-    let outcome = post(&rig, &delivery(value_with(json!([message])))).await.unwrap();
+    let outcome = post(&rig, &delivery(value_with(json!([message]))))
+        .await
+        .unwrap();
     assert_eq!(
         outcome,
         WebhookDeliveryOutcome {
@@ -238,20 +277,33 @@ async fn an_allowed_text_message_becomes_a_typed_envelope() {
     assert_eq!(envelope.reply_to_id.as_deref(), Some("wamid.quoted"));
     assert_eq!(envelope.timestamp_unix_ms, Some(1_700_000_000_000));
     assert_eq!(envelope.conversation.id, "+15550001111");
-    assert_eq!(envelope.conversation.kind, tinychannels_bus::ConversationKind::Dm);
+    assert_eq!(
+        envelope.conversation.kind,
+        tinychannels_bus::ConversationKind::Dm
+    );
     assert_eq!(envelope.sender.id, "+15550001111");
     assert_eq!(envelope.sender.name.as_deref(), Some("Ada"));
     assert_eq!(envelope.text, "hello");
-    assert_eq!(envelope.raw.as_ref().unwrap()["providerMessageId"], "wamid.1");
+    assert_eq!(
+        envelope.raw.as_ref().unwrap()["providerMessageId"],
+        "wamid.1"
+    );
     assert!(matches!(&envelope.parts[0], ContentPart::Text { text, .. } if text == "hello"));
     // The latest inbound id anchors typing indicators for that conversation.
-    assert_eq!(rig.channel.anchors.lock().get("+15550001111").as_deref(), Some("wamid.1"));
+    assert_eq!(
+        rig.channel.anchors.lock().get("+15550001111").as_deref(),
+        Some("wamid.1")
+    );
 }
 
 #[tokio::test]
 async fn redelivery_is_published_once() {
     let rig = rig(true).await;
-    let payload = delivery(value_with(json!([text_message("wamid.1", "15550001111", "hello")])));
+    let payload = delivery(value_with(json!([text_message(
+        "wamid.1",
+        "15550001111",
+        "hello"
+    )])));
     assert_eq!(post(&rig, &payload).await.unwrap().messages, 1);
     let second = post(&rig, &payload).await.unwrap();
     assert_eq!((second.messages, second.duplicates), (0, 1));
@@ -345,7 +397,9 @@ async fn reactions_are_events_added_or_removed() {
         ChannelEventKind::ReactionAdded { message_id, provider_message_id: Some(provider), reaction, actor }
             if message_id == "wamid.target" && provider == "wamid.target" && reaction.value == "👍" && actor.id == "+15550001111"
     ));
-    assert!(matches!(&sent[1].event, ChannelEventKind::ReactionRemoved { reaction, .. } if reaction.value.is_empty()));
+    assert!(
+        matches!(&sent[1].event, ChannelEventKind::ReactionRemoved { reaction, .. } if reaction.value.is_empty())
+    );
     assert_eq!(sent[0].event_id, "whatsapp:reaction:r1");
     assert_eq!(sent[0].source_timestamp, Some(5000));
 }
@@ -372,7 +426,13 @@ async fn statuses_become_receipt_events_and_failures_carry_only_the_error_code()
         &sent[0].event,
         ChannelEventKind::DeliveredReceipt { message_id, timestamp: Some(11_000), .. } if message_id == "wamid.out"
     ));
-    assert!(matches!(&sent[1].event, ChannelEventKind::ReadReceipt { timestamp: Some(12_000), .. }));
+    assert!(matches!(
+        &sent[1].event,
+        ChannelEventKind::ReadReceipt {
+            timestamp: Some(12_000),
+            ..
+        }
+    ));
     let ChannelEventKind::Lifecycle { state, reason } = &sent[2].event else {
         panic!("expected a lifecycle event")
     };
@@ -407,8 +467,20 @@ async fn attachments_are_downloaded_stored_and_typed() {
     let rig = rig(true).await;
     mount_media(&rig.server, "img", "image/png", png_bytes()).await;
     mount_media(&rig.server, "vid", "video/mp4", b"0000ftypmp42".to_vec()).await;
-    mount_media(&rig.server, "doc", "application/pdf", b"%PDF-1.4 x".to_vec()).await;
-    mount_media(&rig.server, "stk", "image/webp", b"RIFF----WEBPxxxx".to_vec()).await;
+    mount_media(
+        &rig.server,
+        "doc",
+        "application/pdf",
+        b"%PDF-1.4 x".to_vec(),
+    )
+    .await;
+    mount_media(
+        &rig.server,
+        "stk",
+        "image/webp",
+        b"RIFF----WEBPxxxx".to_vec(),
+    )
+    .await;
     mount_media(&rig.server, "aud", "audio/mpeg", b"ID3-----".to_vec()).await;
     let payload = delivery(value_with(json!([
         {"from": "15550001111", "id": "m1", "type": "image", "image": {"id": "img", "caption": "look", "mime_type": "image/png"}},
@@ -419,14 +491,27 @@ async fn attachments_are_downloaded_stored_and_typed() {
     ])));
     assert_eq!(post(&rig, &payload).await.unwrap().messages, 5);
     let envelopes = inbound(&rig.sink);
-    assert!(matches!(&envelopes[0].parts[1], ContentPart::Image { caption: Some(c), .. } if c == "look"));
+    assert!(
+        matches!(&envelopes[0].parts[1], ContentPart::Image { caption: Some(c), .. } if c == "look")
+    );
     assert_eq!(envelopes[0].text, "look");
     assert!(matches!(&envelopes[1].parts[1], ContentPart::Video { .. }));
-    assert!(matches!(&envelopes[2].parts[0], ContentPart::File { file_name: Some(n), .. } if n == "a.pdf"));
-    assert!(matches!(&envelopes[3].parts[0], ContentPart::Sticker { .. }));
+    assert!(
+        matches!(&envelopes[2].parts[0], ContentPart::File { file_name: Some(n), .. } if n == "a.pdf")
+    );
+    assert!(matches!(
+        &envelopes[3].parts[0],
+        ContentPart::Sticker { .. }
+    ));
     assert!(matches!(&envelopes[4].parts[0], ContentPart::Audio { .. }));
     assert_eq!(envelopes[0].media.len(), 1);
-    assert!(envelopes[0].media[0].opaque_id.as_deref().unwrap().starts_with("stored-"));
+    assert!(
+        envelopes[0].media[0]
+            .opaque_id
+            .as_deref()
+            .unwrap()
+            .starts_with("stored-")
+    );
     let stored = rig.media.stored.lock();
     assert_eq!(stored[0].dedupe_key.as_deref(), Some("whatsapp:m1:image"));
     assert_eq!(stored[0].scope.turn_id, "m1");
@@ -436,7 +521,13 @@ async fn attachments_are_downloaded_stored_and_typed() {
 #[tokio::test]
 async fn push_to_talk_audio_is_kept_as_a_voice_note_without_provider_urls() {
     let rig = rig(true).await;
-    mount_media(&rig.server, "ptt", "audio/ogg; codecs=opus", b"OggS-----".to_vec()).await;
+    mount_media(
+        &rig.server,
+        "ptt",
+        "audio/ogg; codecs=opus",
+        b"OggS-----".to_vec(),
+    )
+    .await;
     let payload = delivery(value_with(json!([
         {"from": "15550001111", "id": "v1", "type": "audio", "audio": {"id": "ptt", "voice": true, "mime_type": "audio/ogg; codecs=opus"}}
     ])));
@@ -448,9 +539,15 @@ async fn push_to_talk_audio_is_kept_as_a_voice_note_without_provider_urls() {
     assert!(voice_note.push_to_talk);
     assert_eq!(voice_note.codec.as_deref(), Some("ogg_opus"));
     assert!(voice_note.media.url.is_none());
-    assert!(voice_note.transcript.is_none(), "transcription is the module's job");
+    assert!(
+        voice_note.transcript.is_none(),
+        "transcription is the module's job"
+    );
     assert_eq!(rig.voices.stored.lock().len(), 1);
-    assert!(rig.media.stored.lock().is_empty(), "voice goes to the voice store");
+    assert!(
+        rig.media.stored.lock().is_empty(),
+        "voice goes to the voice store"
+    );
 }
 
 #[tokio::test]
@@ -465,8 +562,14 @@ async fn without_storage_ports_attachments_are_skipped_but_the_caption_survives(
         {"from": "15550001111", "id": "m2", "type": "audio", "audio": {"id": "aud", "voice": true}},
     ])));
     let body = serde_json::to_vec(&payload).unwrap();
-    let outcome = bare.ingest_webhook(Some(&sign(SECRET, &body)), &body).await.unwrap();
-    assert_eq!(outcome.messages, 1, "the silent voice note has nothing to deliver");
+    let outcome = bare
+        .ingest_webhook(Some(&sign(SECRET, &body)), &body)
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.messages, 1,
+        "the silent voice note has nothing to deliver"
+    );
     assert_eq!(inbound(&rig.sink)[0].text, "just words");
     assert!(rig.server.received_requests().await.unwrap().is_empty());
 }
@@ -484,8 +587,14 @@ async fn a_voice_note_falls_back_to_the_media_repository_without_a_voice_store()
         {"from": "15550001111", "id": "v1", "type": "audio", "audio": {"id": "ptt", "voice": true}}
     ])));
     let body = serde_json::to_vec(&payload).unwrap();
-    repo_only.ingest_webhook(Some(&sign(SECRET, &body)), &body).await.unwrap();
-    assert!(matches!(&inbound(&rig.sink)[0].parts[0], ContentPart::Audio { .. }));
+    repo_only
+        .ingest_webhook(Some(&sign(SECRET, &body)), &body)
+        .await
+        .unwrap();
+    assert!(matches!(
+        &inbound(&rig.sink)[0].parts[0],
+        ContentPart::Audio { .. }
+    ));
 }
 
 #[tokio::test]
@@ -513,7 +622,10 @@ async fn permanent_media_failures_skip_the_attachment_and_transient_ones_ask_for
     let flaky = delivery(value_with(json!([
         {"from": "15550001111", "id": "t1", "type": "image", "image": {"id": "flaky"}}
     ])));
-    assert!(matches!(post(&rig, &flaky).await, Err(WaFailure::Uncertain(_))));
+    assert!(matches!(
+        post(&rig, &flaky).await,
+        Err(WaFailure::Uncertain(_))
+    ));
     assert_eq!(inbound(&rig.sink).len(), 1);
     // Recovery: the redelivery now succeeds because the id was not remembered.
     rig.server.reset().await;
@@ -528,19 +640,29 @@ async fn unstorable_attachments_follow_the_same_classes() {
     let odd = delivery(value_with(json!([
         {"from": "15550001111", "id": "o1", "type": "document", "document": {"id": "odd", "caption": "cap"}}
     ])));
-    assert_eq!(post(&rig, &odd).await.unwrap().messages, 1, "unsupported type is skipped");
+    assert_eq!(
+        post(&rig, &odd).await.unwrap().messages,
+        1,
+        "unsupported type is skipped"
+    );
     mount_media(&rig.server, "ok", "image/png", png_bytes()).await;
     *rig.media.fail_store.lock() = true;
     let store_down = delivery(value_with(json!([
         {"from": "15550001111", "id": "o2", "type": "image", "image": {"id": "ok"}}
     ])));
-    assert!(matches!(post(&rig, &store_down).await, Err(WaFailure::Uncertain(_))));
+    assert!(matches!(
+        post(&rig, &store_down).await,
+        Err(WaFailure::Uncertain(_))
+    ));
     mount_media(&rig.server, "ptt", "audio/ogg", b"OggS-----".to_vec()).await;
     *rig.voices.omit_opaque_id.lock() = true;
     let voice_down = delivery(value_with(json!([
         {"from": "15550001111", "id": "o3", "type": "audio", "audio": {"id": "ptt", "voice": true}}
     ])));
-    assert!(matches!(post(&rig, &voice_down).await, Err(WaFailure::Uncertain(_))));
+    assert!(matches!(
+        post(&rig, &voice_down).await,
+        Err(WaFailure::Uncertain(_))
+    ));
     // A voice note the host refuses on size is skipped like other permanent failures.
     mount_media(&rig.server, "empty", "audio/ogg", Vec::new()).await;
     let empty = delivery(value_with(json!([
@@ -556,9 +678,16 @@ async fn a_host_without_typed_ingress_receives_the_legacy_message_through_the_li
     let rig = rig(false).await;
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     *rig.channel.listener.lock() = Some(tx);
-    let payload = delivery(value_with(json!([text_message("wamid.1", "15550001111", "hello")])));
+    let payload = delivery(value_with(json!([text_message(
+        "wamid.1",
+        "15550001111",
+        "hello"
+    )])));
     assert_eq!(post(&rig, &payload).await.unwrap().messages, 1);
-    #[allow(deprecated, reason = "the legacy sink is the compatibility path under test")]
+    #[allow(
+        deprecated,
+        reason = "the legacy sink is the compatibility path under test"
+    )]
     let legacy = rx.recv().await.unwrap();
     assert_eq!(legacy.content, "hello");
     assert_eq!(legacy.sender, "+15550001111");
@@ -569,14 +698,20 @@ async fn delivery_fails_when_the_host_cannot_take_it() {
     // No ordered sink acceptance and no listener.
     let rig_no_listener = rig(false).await;
     let payload = delivery(value_with(json!([text_message("a", "15550001111", "x")])));
-    assert!(matches!(post(&rig_no_listener, &payload).await, Err(WaFailure::Uncertain(_))));
+    assert!(matches!(
+        post(&rig_no_listener, &payload).await,
+        Err(WaFailure::Uncertain(_))
+    ));
 
     // A listener that has gone away.
     let rig_closed = rig(false).await;
     let (tx, rx) = tokio::sync::mpsc::channel(1);
     drop(rx);
     *rig_closed.channel.listener.lock() = Some(tx);
-    assert!(matches!(post(&rig_closed, &payload).await, Err(WaFailure::Uncertain(_))));
+    assert!(matches!(
+        post(&rig_closed, &payload).await,
+        Err(WaFailure::Uncertain(_))
+    ));
 
     // A failing sink.
     let failing = Arc::new(CollectingSink {
@@ -588,7 +723,9 @@ async fn delivery_fails_when_the_host_cannot_take_it() {
         .with_events(failing);
     let body = serde_json::to_vec(&payload).unwrap();
     assert!(matches!(
-        channel.ingest_webhook(Some(&sign(SECRET, &body)), &body).await,
+        channel
+            .ingest_webhook(Some(&sign(SECRET, &body)), &body)
+            .await,
         Err(WaFailure::Uncertain(_))
     ));
 
@@ -596,7 +733,9 @@ async fn delivery_fails_when_the_host_cannot_take_it() {
     let sinkless = WhatsAppChannel::new("t".into(), "123".into(), "v".into(), vec!["*".into()])
         .with_app_secret(Some(SECRET.into()));
     assert!(matches!(
-        sinkless.ingest_webhook(Some(&sign(SECRET, &body)), &body).await,
+        sinkless
+            .ingest_webhook(Some(&sign(SECRET, &body)), &body)
+            .await,
         Err(WaFailure::Rejected(_))
     ));
 }
@@ -605,5 +744,8 @@ async fn delivery_fails_when_the_host_cannot_take_it() {
 async fn an_unrelated_change_field_and_empty_deliveries_do_nothing() {
     let rig = rig(true).await;
     let empty = delivery(value_with(json!([])));
-    assert_eq!(post(&rig, &empty).await.unwrap(), WebhookDeliveryOutcome::default());
+    assert_eq!(
+        post(&rig, &empty).await.unwrap(),
+        WebhookDeliveryOutcome::default()
+    );
 }

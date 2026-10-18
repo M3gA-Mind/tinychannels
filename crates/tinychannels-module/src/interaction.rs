@@ -67,7 +67,11 @@ async fn deliver_webhook(
         .map_err(|_| webhook_rejected())?;
     match provider.deliver_webhook(signature, &body).await {
         Ok(outcome) => Ok(ChannelInteractionResult::WebhookAccepted(outcome)),
-        Err(error) if error.downcast_ref::<tinychannels::WebhookRejected>().is_some() => {
+        Err(error)
+            if error
+                .downcast_ref::<tinychannels::WebhookRejected>()
+                .is_some() =>
+        {
             Err(webhook_rejected())
         }
         Err(_) => Err(webhook_failed()),

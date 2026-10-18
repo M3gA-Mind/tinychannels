@@ -51,7 +51,9 @@ fn status_failure(status: reqwest::StatusCode, operation: &str) -> WaFailure {
     if status.is_client_error() && status != reqwest::StatusCode::REQUEST_TIMEOUT {
         WaFailure::rejected(format!("WhatsApp {operation} was refused ({status})"))
     } else {
-        WaFailure::uncertain(format!("WhatsApp {operation} outcome is uncertain ({status})"))
+        WaFailure::uncertain(format!(
+            "WhatsApp {operation} outcome is uncertain ({status})"
+        ))
     }
 }
 
@@ -155,7 +157,11 @@ impl WhatsAppChannel {
         media_id: &str,
         limit: u64,
     ) -> Result<DownloadedAttachment, WaFailure> {
-        if media_id.is_empty() || !media_id.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-') {
+        if media_id.is_empty()
+            || !media_id
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
+        {
             return Err(WaFailure::rejected("inbound media id is malformed"));
         }
         let lookup = self.secure_url(media_id)?;
@@ -202,7 +208,10 @@ impl WhatsAppChannel {
         if !status.is_success() {
             return Err(status_failure(status, "media download"));
         }
-        if response.content_length().is_some_and(|length| length > limit) {
+        if response
+            .content_length()
+            .is_some_and(|length| length > limit)
+        {
             return Err(WaFailure::rejected("inbound media exceeds its size limit"));
         }
         let mut bytes = Vec::new();

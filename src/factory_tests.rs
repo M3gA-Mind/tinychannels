@@ -364,7 +364,9 @@ fn signed(secret: &str, body: &[u8]) -> String {
 async fn the_cloud_builder_carries_the_app_secret_into_the_webhook_authenticator() {
     use crate::providers::whatsapp_shared::fakes::CollectingSink;
     let sink = Arc::new(CollectingSink::new());
-    let host: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new().events(sink.clone()).build();
+    let host: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
+        .events(sink.clone())
+        .build();
     let body = serde_json::to_vec(&serde_json::json!({
         "object": "whatsapp_business_account",
         "entry": [{"changes": [{"field": "messages", "value": {
@@ -374,18 +376,28 @@ async fn the_cloud_builder_carries_the_app_secret_into_the_webhook_authenticator
     }))
     .unwrap();
 
-    let with_secret = build_whatsapp_cloud_channel(&cloud_config(Some("s3cret")), &host, &DefaultHttpClients)
-        .expect("a complete Cloud config builds");
-    let outcome = crate::Channel::deliver_webhook(with_secret.as_ref(), Some(&signed("s3cret", &body)), &body)
-        .await
-        .unwrap();
+    let with_secret =
+        build_whatsapp_cloud_channel(&cloud_config(Some("s3cret")), &host, &DefaultHttpClients)
+            .expect("a complete Cloud config builds");
+    let outcome = crate::Channel::deliver_webhook(
+        with_secret.as_ref(),
+        Some(&signed("s3cret", &body)),
+        &body,
+    )
+    .await
+    .unwrap();
     assert_eq!(outcome.messages, 1);
 
-    let without_secret = build_whatsapp_cloud_channel(&cloud_config(None), &host, &DefaultHttpClients).unwrap();
+    let without_secret =
+        build_whatsapp_cloud_channel(&cloud_config(None), &host, &DefaultHttpClients).unwrap();
     assert!(
-        crate::Channel::deliver_webhook(without_secret.as_ref(), Some(&signed("s3cret", &body)), &body)
-            .await
-            .is_err(),
+        crate::Channel::deliver_webhook(
+            without_secret.as_ref(),
+            Some(&signed("s3cret", &body)),
+            &body
+        )
+        .await
+        .is_err(),
         "a verify token is not a POST signature, and no secret means no ingress"
     );
 }
@@ -393,13 +405,17 @@ async fn the_cloud_builder_carries_the_app_secret_into_the_webhook_authenticator
 #[test]
 fn the_cloud_builder_wires_the_host_ports_into_the_declared_capabilities() {
     use crate::providers::whatsapp_shared::fakes::{MemoryMedia, MemoryVoices};
-    let bare = build_whatsapp_cloud_channel(&cloud_config(None), &host(), &DefaultHttpClients).unwrap();
-    assert!(!bare.capabilities().content.image.outbound && !bare.capabilities().voice_out.supported);
+    let bare =
+        build_whatsapp_cloud_channel(&cloud_config(None), &host(), &DefaultHttpClients).unwrap();
+    assert!(
+        !bare.capabilities().content.image.outbound && !bare.capabilities().voice_out.supported
+    );
     let wired_host: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
         .media_repository(Arc::new(MemoryMedia::default()))
         .voice_media_store(Arc::new(MemoryVoices::default()))
         .build();
-    let wired = build_whatsapp_cloud_channel(&cloud_config(None), &wired_host, &DefaultHttpClients).unwrap();
+    let wired = build_whatsapp_cloud_channel(&cloud_config(None), &wired_host, &DefaultHttpClients)
+        .unwrap();
     assert!(wired.capabilities().content.image.outbound);
     assert!(wired.capabilities().voice_out.supported);
     // Anything but a complete Cloud stanza is not a Cloud channel.
@@ -411,7 +427,10 @@ fn the_cloud_builder_wires_the_host_ports_into_the_declared_capabilities() {
         ..Default::default()
     };
     assert!(build_whatsapp_cloud_channel(&incomplete, &host(), &DefaultHttpClients).is_none());
-    assert!(build_whatsapp_cloud_channel(&ChannelsConfig::default(), &host(), &DefaultHttpClients).is_none());
+    assert!(
+        build_whatsapp_cloud_channel(&ChannelsConfig::default(), &host(), &DefaultHttpClients)
+            .is_none()
+    );
 }
 
 #[cfg(feature = "whatsapp-web")]
@@ -431,7 +450,12 @@ fn the_web_builder_wires_ports_and_refuses_cloud_shaped_stanzas() {
         .voice_media_store(Arc::new(MemoryVoices::default()))
         .build();
     let channel = build_whatsapp_web_channel(&web(None, Some("label")), &wired_host).unwrap();
-    assert!(crate::Channel::capabilities(channel.as_ref()).content.image.outbound);
+    assert!(
+        crate::Channel::capabilities(channel.as_ref())
+            .content
+            .image
+            .outbound
+    );
     assert!(build_whatsapp_web_channel(&web(None, None), &wired_host).is_none());
     // A stanza that names a phone number id is a Cloud stanza, never a session.
     assert!(build_whatsapp_web_channel(&web(Some("123"), Some("label")), &wired_host).is_none());

@@ -30,14 +30,25 @@ fn a_bare_account_advertises_text_location_contact_and_the_always_available_acti
     assert!(!facts.voice_in.supported && !facts.voice_out.supported);
     assert!(facts.reactions && facts.addressing.reply_to_id && !facts.addressing.thread_id);
     for action in ["send", "typing", "mark-read", "react", "reply"] {
-        assert!(facts.actions.supported.iter().any(|a| a == action), "{action}");
+        assert!(
+            facts.actions.supported.iter().any(|a| a == action),
+            "{action}"
+        );
     }
     for action in ["edit", "delete", "unsend", "draft-update"] {
-        assert!(!facts.actions.supported.iter().any(|a| a == action), "{action}");
+        assert!(
+            !facts.actions.supported.iter().any(|a| a == action),
+            "{action}"
+        );
     }
     assert!(!facts.progressive_edits && !facts.streaming_reply_pipeline);
     assert_eq!(facts.text.text_limit, Some(4096));
-    for event in ["reaction_added", "reaction_removed", "read_receipt", "delivered_receipt"] {
+    for event in [
+        "reaction_added",
+        "reaction_removed",
+        "read_receipt",
+        "delivered_receipt",
+    ] {
         assert!(facts.events.supported.iter().any(|e| e == event), "{event}");
     }
 }
@@ -56,8 +67,17 @@ fn scoped_media_storage_unlocks_every_attachment_kind_with_its_limit() {
     assert_eq!(facts.content.audio.max_size_bytes, Some(17));
     assert_eq!(facts.content.file.max_size_bytes, Some(100));
     assert_eq!(facts.content.sticker.accepted_types, ["image/webp"]);
-    assert_eq!(facts.content.image.emitted_types, ["image/jpeg", "image/png"]);
-    assert!(facts.content.audio.emitted_types.contains(&"audio/ogg".to_owned()));
+    assert_eq!(
+        facts.content.image.emitted_types,
+        ["image/jpeg", "image/png"]
+    );
+    assert!(
+        facts
+            .content
+            .audio
+            .emitted_types
+            .contains(&"audio/ogg".to_owned())
+    );
 }
 
 #[test]
@@ -91,6 +111,9 @@ fn edit_and_unsend_are_advertised_only_when_the_protocol_carries_them() {
         ..spec()
     });
     for action in ["edit", "delete", "unsend"] {
-        assert!(facts.actions.supported.iter().any(|a| a == action), "{action}");
+        assert!(
+            facts.actions.supported.iter().any(|a| a == action),
+            "{action}"
+        );
     }
 }

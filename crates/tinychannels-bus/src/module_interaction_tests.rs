@@ -210,7 +210,10 @@ fn outbound_voice_carries_an_optional_waveform_without_breaking_older_payloads()
     };
     let value = serde_json::to_value(&with).unwrap();
     assert_eq!(value["waveform"], serde_json::json!([0.0, 0.5, 1.0]));
-    assert_eq!(serde_json::from_value::<OutboundVoice>(value).unwrap(), with);
+    assert_eq!(
+        serde_json::from_value::<OutboundVoice>(value).unwrap(),
+        with
+    );
     // A payload from before the field existed still decodes, with no waveform.
     let older = serde_json::json!({
         "kind": "media",

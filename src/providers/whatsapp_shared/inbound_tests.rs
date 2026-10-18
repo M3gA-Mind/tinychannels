@@ -33,10 +33,18 @@ async fn each_attachment_kind_is_stored_and_shaped_into_its_content_part() {
     let scope = inbound_scope("whatsapp", &conversation(), "wamid.1");
     let cases = [
         (InboundKind::Image, "image/png", png_bytes()),
-        (InboundKind::Sticker, "image/webp", b"RIFF----WEBPxxxx".to_vec()),
+        (
+            InboundKind::Sticker,
+            "image/webp",
+            b"RIFF----WEBPxxxx".to_vec(),
+        ),
         (InboundKind::Video, "video/mp4", b"0000ftypmp42".to_vec()),
         (InboundKind::Audio, "audio/mpeg", b"ID3-----".to_vec()),
-        (InboundKind::Document, "application/pdf", b"%PDF-1.4 x".to_vec()),
+        (
+            InboundKind::Document,
+            "application/pdf",
+            b"%PDF-1.4 x".to_vec(),
+        ),
     ];
     let mut shapes = Vec::new();
     for (kind, content_type, bytes) in cases {
@@ -167,17 +175,13 @@ async fn voice_notes_with_bad_sizes_or_no_durable_reference_fail() {
     let store = MemoryVoices::default();
     let scope = inbound_scope("whatsapp", &conversation(), "wamid.5");
     for bytes in [Vec::new(), vec![0u8; MAX_INBOUND_VOICE_BYTES as usize + 1]] {
-        let result = store_voice_note(&store, scope.clone(), download("audio/ogg", bytes), None).await;
+        let result =
+            store_voice_note(&store, scope.clone(), download("audio/ogg", bytes), None).await;
         assert!(matches!(result, Err(WaFailure::Rejected(_))));
     }
     *store.omit_opaque_id.lock() = true;
-    let result = store_voice_note(
-        &store,
-        scope,
-        download("audio/ogg", b"OggS".to_vec()),
-        None,
-    )
-    .await;
+    let result =
+        store_voice_note(&store, scope, download("audio/ogg", b"OggS".to_vec()), None).await;
     assert!(matches!(result, Err(WaFailure::Uncertain(_))));
 }
 

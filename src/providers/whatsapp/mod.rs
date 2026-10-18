@@ -324,15 +324,22 @@ impl Channel for WhatsAppChannel {
         reason = "the v21 text send is kept as a projection of the typed send"
     )]
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let typed = tinychannels_bus::ChannelOutboundMessage::from_legacy_message("whatsapp", message);
+        let typed =
+            tinychannels_bus::ChannelOutboundMessage::from_legacy_message("whatsapp", message);
         self.send_v2(&typed)
             .await
             .map(|_| ())
             .map_err(anyhow::Error::new)
     }
 
-    async fn send_typed(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> anyhow::Result<()> {
-        self.send_v2(message).await.map(|_| ()).map_err(anyhow::Error::new)
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<()> {
+        self.send_v2(message)
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::new)
     }
 
     async fn send_typed_with_receipt(
@@ -495,13 +502,17 @@ impl crate::channel::ChannelAdapter for WhatsAppChannel {
         intent: tinychannels_bus::ChannelOutboundIntent,
     ) -> Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
-        self.send_v2(&message).await.map_err(WaFailure::into_send_error)
+        self.send_v2(&message)
+            .await
+            .map_err(WaFailure::into_send_error)
     }
 
     async fn status(
         &self,
-    ) -> Result<tinychannels_runtime::controllers::ChannelAccountSnapshot, crate::channel::ChannelSendError>
-    {
+    ) -> Result<
+        tinychannels_runtime::controllers::ChannelAccountSnapshot,
+        crate::channel::ChannelSendError,
+    > {
         Ok(tinychannels_bus::controllers::ChannelAccountSnapshot {
             channel_id: "whatsapp".into(),
             states: vec![
@@ -520,19 +531,27 @@ impl crate::channel::ChannelTypedSend for WhatsAppChannel {
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
-        self.send_v2(message).await.map_err(WaFailure::into_send_error)
+        self.send_v2(message)
+            .await
+            .map_err(WaFailure::into_send_error)
     }
 }
 
 #[async_trait]
 impl crate::channel::ChannelTyping for WhatsAppChannel {
-    async fn start_typing(&self, conversation_id: &str) -> Result<(), crate::channel::ChannelSendError> {
+    async fn start_typing(
+        &self,
+        conversation_id: &str,
+    ) -> Result<(), crate::channel::ChannelSendError> {
         Channel::start_typing(self, conversation_id)
             .await
             .map_err(|error| failure_of(&error).into_send_error())
     }
 
-    async fn stop_typing(&self, conversation_id: &str) -> Result<(), crate::channel::ChannelSendError> {
+    async fn stop_typing(
+        &self,
+        conversation_id: &str,
+    ) -> Result<(), crate::channel::ChannelSendError> {
         Channel::stop_typing(self, conversation_id)
             .await
             .map_err(|error| failure_of(&error).into_send_error())
@@ -550,7 +569,9 @@ impl crate::channel::ChannelReaction for WhatsAppChannel {
         remove: bool,
     ) -> Result<(), crate::channel::ChannelSendError> {
         if channel.id != "whatsapp" {
-            return Err(WaFailure::rejected("reaction channel does not match WhatsApp").into_send_error());
+            return Err(
+                WaFailure::rejected("reaction channel does not match WhatsApp").into_send_error(),
+            );
         }
         Channel::send_reaction(self, conversation, provider_message_id, reaction, remove)
             .await
@@ -565,7 +586,9 @@ impl crate::channel::ChannelEdit for WhatsAppChannel {
         _receipt: &tinychannels_bus::channel::MessageReceipt,
         _intent: tinychannels_bus::ChannelOutboundIntent,
     ) -> Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError> {
-        Err(unsupported("the WhatsApp Cloud API cannot edit a sent message"))
+        Err(unsupported(
+            "the WhatsApp Cloud API cannot edit a sent message",
+        ))
     }
 }
 
@@ -575,7 +598,9 @@ impl crate::channel::ChannelDelete for WhatsAppChannel {
         &self,
         _receipt: &tinychannels_bus::channel::MessageReceipt,
     ) -> Result<(), crate::channel::ChannelSendError> {
-        Err(unsupported("the WhatsApp Cloud API cannot unsend a message"))
+        Err(unsupported(
+            "the WhatsApp Cloud API cannot unsend a message",
+        ))
     }
 }
 
@@ -586,7 +611,9 @@ impl crate::channel::ChannelStreamingDraft for WhatsAppChannel {
         _previous: Option<&tinychannels_bus::channel::MessageReceipt>,
         _intent: tinychannels_bus::ChannelOutboundIntent,
     ) -> Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError> {
-        Err(unsupported("WhatsApp messages cannot be streamed as edited drafts"))
+        Err(unsupported(
+            "WhatsApp messages cannot be streamed as edited drafts",
+        ))
     }
 }
 

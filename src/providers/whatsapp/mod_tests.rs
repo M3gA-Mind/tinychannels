@@ -943,7 +943,10 @@ mod v2 {
         let facts = wired.capabilities();
         assert!(facts.content.image.outbound && facts.content.sticker.outbound);
         assert!(facts.voice_in.supported && facts.voice_out.synthesis);
-        assert!(!facts.voice_out.native_waveform, "the Cloud API has no waveform field");
+        assert!(
+            !facts.voice_out.native_waveform,
+            "the Cloud API has no waveform field"
+        );
         // Synthesis needs the voice store; without it the flag alone is not enough.
         let synth_only = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
             .with_voice_synthesis(true);
@@ -956,15 +959,23 @@ mod v2 {
         let channel = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![]);
         let descriptor = channel.descriptor();
         assert_eq!(descriptor.id, "whatsapp");
-        assert_eq!(descriptor.metadata.get("adapterMode").map(String::as_str), Some("native-v2"));
-        assert_eq!(descriptor.metadata.get("backend").map(String::as_str), Some("cloud"));
+        assert_eq!(
+            descriptor.metadata.get("adapterMode").map(String::as_str),
+            Some("native-v2")
+        );
+        assert_eq!(
+            descriptor.metadata.get("backend").map(String::as_str),
+            Some("cloud")
+        );
     }
 
     #[tokio::test]
     async fn the_legacy_text_send_is_a_projection_of_the_typed_send() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
-            .and(body_partial_json(json!({"to": "15551234567", "type": "text", "text": {"body": "hi"}})))
+            .and(body_partial_json(
+                json!({"to": "15551234567", "type": "text", "text": {"body": "hi"}}),
+            ))
             .respond_with(
                 ResponseTemplate::new(200).set_body_json(json!({"messages": [{"id": "wamid.1"}]})),
             )
@@ -1012,20 +1023,31 @@ mod v2 {
             .await;
         let channel = channel(&server);
         // No inbound message yet: nothing to anchor the indicator to.
-        let error = Channel::start_typing(&channel, "+15550001111").await.unwrap_err();
+        let error = Channel::start_typing(&channel, "+15550001111")
+            .await
+            .unwrap_err();
         assert!(error.downcast_ref::<WaFailure>().is_some());
         assert!(matches!(
             crate::channel::ChannelTyping::start_typing(&channel, "+15550001111").await,
             Err(error) if !error.unsupported && !error.sent_before_error
         ));
-        channel.anchors.lock().insert("+15550001111", "wamid.anchor");
-        Channel::start_typing(&channel, "+15550001111").await.unwrap();
-        Channel::stop_typing(&channel, "+15550001111").await.unwrap();
+        channel
+            .anchors
+            .lock()
+            .insert("+15550001111", "wamid.anchor");
+        Channel::start_typing(&channel, "+15550001111")
+            .await
+            .unwrap();
+        Channel::stop_typing(&channel, "+15550001111")
+            .await
+            .unwrap();
         assert!(matches!(
             Channel::start_typing(&channel, "no digits").await,
             Err(_)
         ));
-        crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111").await.unwrap();
+        crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111")
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -1060,24 +1082,27 @@ mod v2 {
         };
         let blank = tinychannels_bus::ChannelReaction::default();
         for (reaction, unsupported) in [(&custom, true), (&blank, false)] {
-            let error = Channel::send_reaction(&channel, &conversation(), "wamid.t", reaction, false)
-                .await
-                .unwrap_err();
+            let error =
+                Channel::send_reaction(&channel, &conversation(), "wamid.t", reaction, false)
+                    .await
+                    .unwrap_err();
             let failure = error.downcast_ref::<WaFailure>().unwrap();
             assert_eq!(matches!(failure, WaFailure::Unsupported(_)), unsupported);
         }
-        assert!(Channel::send_reaction(
-            &channel,
-            &ConversationRef {
-                id: "name".into(),
-                ..Default::default()
-            },
-            "wamid.t",
-            &thumbs,
-            false
-        )
-        .await
-        .is_err());
+        assert!(
+            Channel::send_reaction(
+                &channel,
+                &ConversationRef {
+                    id: "name".into(),
+                    ..Default::default()
+                },
+                "wamid.t",
+                &thumbs,
+                false
+            )
+            .await
+            .is_err()
+        );
         // The adapter port checks the channel identity first.
         let other = ChannelRef {
             id: "telegram".into(),
@@ -1087,15 +1112,38 @@ mod v2 {
             id: "whatsapp".into(),
             account_id: None,
         };
-        assert!(crate::channel::ChannelReaction::send_reaction(&channel, &other, &conversation(), "w", &thumbs, false)
+        assert!(
+            crate::channel::ChannelReaction::send_reaction(
+                &channel,
+                &other,
+                &conversation(),
+                "w",
+                &thumbs,
+                false
+            )
             .await
-            .is_err());
-        crate::channel::ChannelReaction::send_reaction(&channel, &mine, &conversation(), "w", &thumbs, false)
-            .await
-            .unwrap();
-        let bad = crate::channel::ChannelReaction::send_reaction(&channel, &mine, &conversation(), "w", &custom, false)
-            .await
-            .unwrap_err();
+            .is_err()
+        );
+        crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &mine,
+            &conversation(),
+            "w",
+            &thumbs,
+            false,
+        )
+        .await
+        .unwrap();
+        let bad = crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &mine,
+            &conversation(),
+            "w",
+            &custom,
+            false,
+        )
+        .await
+        .unwrap_err();
         assert!(bad.unsupported);
     }
 
@@ -1104,12 +1152,18 @@ mod v2 {
         let server = MockServer::start().await;
         accept_messages(&server).await;
         let channel = channel(&server);
-        Channel::mark_read(&channel, &conversation(), "wamid.in").await.unwrap();
+        Channel::mark_read(&channel, &conversation(), "wamid.in")
+            .await
+            .unwrap();
         let body: serde_json::Value =
             serde_json::from_slice(&server.received_requests().await.unwrap()[0].body).unwrap();
         assert_eq!(body["status"], "read");
         assert!(body.get("typing_indicator").is_none());
-        assert!(Channel::mark_read(&channel, &conversation(), " ").await.is_err());
+        assert!(
+            Channel::mark_read(&channel, &conversation(), " ")
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1117,9 +1171,21 @@ mod v2 {
         let channel = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![]);
         let receipt = tinychannels_bus::channel::MessageReceipt::default();
         let intent = tinychannels_bus::ChannelOutboundIntent::default();
-        assert!(channel.edit(&receipt, intent.clone()).await.unwrap_err().unsupported);
+        assert!(
+            channel
+                .edit(&receipt, intent.clone())
+                .await
+                .unwrap_err()
+                .unsupported
+        );
         assert!(channel.delete(&receipt).await.unwrap_err().unsupported);
-        assert!(channel.upsert_draft(None, intent).await.unwrap_err().unsupported);
+        assert!(
+            channel
+                .upsert_draft(None, intent)
+                .await
+                .unwrap_err()
+                .unsupported
+        );
         assert!(channel.start(&NoSink).await.is_ok());
         assert!(channel.stop().await.is_ok());
         let status = channel.status().await.unwrap();
@@ -1150,13 +1216,19 @@ mod v2 {
             payload: tinychannels_bus::OutboundPayload::Text { text: "hi".into() },
             ..Default::default()
         };
-        let outcome = crate::channel::ChannelAdapter::send(&channel, intent.clone()).await.unwrap();
+        let outcome = crate::channel::ChannelAdapter::send(&channel, intent.clone())
+            .await
+            .unwrap();
         assert_eq!(outcome.receipt.platform_message_ids, ["wamid.ok"]);
         let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
-        let typed = crate::channel::ChannelTypedSend::send_typed(&channel, &message).await.unwrap();
+        let typed = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+            .await
+            .unwrap();
         assert_eq!(typed.receipt.platform_message_ids, ["wamid.ok"]);
         Channel::send_typed(&channel, &message).await.unwrap();
-        let receipt = Channel::send_typed_with_receipt(&channel, &message).await.unwrap();
+        let receipt = Channel::send_typed_with_receipt(&channel, &message)
+            .await
+            .unwrap();
         assert!(!receipt.receipt.platform_message_ids.is_empty());
 
         let mut threaded = intent;
@@ -1172,17 +1244,27 @@ mod v2 {
         .await
         .unwrap_err();
         assert!(typed_error.unsupported);
-        assert!(Channel::send_typed(&channel, &tinychannels_bus::ChannelOutboundMessage::from_intent(&threaded))
+        assert!(
+            Channel::send_typed(
+                &channel,
+                &tinychannels_bus::ChannelOutboundMessage::from_intent(&threaded)
+            )
             .await
-            .is_err());
+            .is_err()
+        );
     }
 
     #[tokio::test]
     async fn webhooks_are_authenticated_and_refusals_are_marked_as_client_errors() {
         let sink = Arc::new(CollectingSink::new());
-        let channel = WhatsAppChannel::new("t".into(), "123".into(), "verify-me".into(), vec!["*".into()])
-            .with_app_secret(Some("secret".into()))
-            .with_events(sink.clone());
+        let channel = WhatsAppChannel::new(
+            "t".into(),
+            "123".into(),
+            "verify-me".into(),
+            vec!["*".into()],
+        )
+        .with_app_secret(Some("secret".into()))
+        .with_events(sink.clone());
         let body = serde_json::to_vec(&json!({
             "object": "whatsapp_business_account",
             "entry": [{"changes": [{"field": "messages", "value": {
@@ -1194,10 +1276,18 @@ mod v2 {
         let mut mac = Hmac::<Sha256>::new_from_slice(b"secret").unwrap();
         mac.update(&body);
         let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
-        let outcome = Channel::deliver_webhook(&channel, Some(&signature), &body).await.unwrap();
+        let outcome = Channel::deliver_webhook(&channel, Some(&signature), &body)
+            .await
+            .unwrap();
         assert_eq!(outcome.messages, 1);
-        let refused = Channel::deliver_webhook(&channel, Some("sha256=00"), &body).await.unwrap_err();
-        assert!(refused.downcast_ref::<tinychannels_runtime::WebhookRejected>().is_some());
+        let refused = Channel::deliver_webhook(&channel, Some("sha256=00"), &body)
+            .await
+            .unwrap_err();
+        assert!(
+            refused
+                .downcast_ref::<tinychannels_runtime::WebhookRejected>()
+                .is_some()
+        );
         // A host failure after authentication is not a client error.
         let failing = WhatsAppChannel::new("t".into(), "123".into(), "v".into(), vec!["*".into()])
             .with_app_secret(Some("secret".into()))
@@ -1205,13 +1295,22 @@ mod v2 {
                 fail: true,
                 ..CollectingSink::new()
             }));
-        let error = Channel::deliver_webhook(&failing, Some(&signature), &body).await.unwrap_err();
-        assert!(error.downcast_ref::<tinychannels_runtime::WebhookRejected>().is_none());
+        let error = Channel::deliver_webhook(&failing, Some(&signature), &body)
+            .await
+            .unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<tinychannels_runtime::WebhookRejected>()
+                .is_none()
+        );
         assert_eq!(
             Channel::verify_webhook(&channel, "subscribe", "verify-me", "c1").as_deref(),
             Some("c1")
         );
-        assert_eq!(Channel::verify_webhook(&channel, "subscribe", "nope", "c1"), None);
+        assert_eq!(
+            Channel::verify_webhook(&channel, "subscribe", "nope", "c1"),
+            None
+        );
     }
 
     #[test]
@@ -1224,7 +1323,12 @@ mod v2 {
 
     #[tokio::test]
     async fn the_listener_holds_the_legacy_sink_only_while_it_runs() {
-        let channel = Arc::new(WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![]));
+        let channel = Arc::new(WhatsAppChannel::new(
+            "t".into(),
+            "1".into(),
+            "v".into(),
+            vec![],
+        ));
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         #[allow(deprecated, reason = "the legacy listener seam is under test")]
         let listener = {
@@ -1238,7 +1342,10 @@ mod v2 {
         })
         .await
         .expect("the listener stored its sink");
-        assert!(!listener.is_finished(), "the listener parks until cancelled");
+        assert!(
+            !listener.is_finished(),
+            "the listener parks until cancelled"
+        );
         listener.abort();
         assert!(listener.await.unwrap_err().is_cancelled());
         // Once the listener is gone nothing keeps the module's inbound
