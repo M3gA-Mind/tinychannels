@@ -24,7 +24,8 @@ impl NativeProvider for YuanbaoChannel {
         Limits {
             text_chars: self.config.max_message_length,
             file_bytes: u64::from(self.config.max_media_mb)
-                .saturating_mul(1024 * 1024),
+                .saturating_mul(1024 * 1024)
+                .min(u64::from(u32::MAX)),
             voice_bytes: 0,
         }
     }
