@@ -96,6 +96,64 @@ fn lacks_module_ingress(name: &str) -> bool {
     name == "linq"
 }
 
+/// The concrete WhatsApp adapter a configuration selects. The two backends
+/// share one provider name, so only the shape of the stanza separates them.
+enum WhatsAppNative {
+    Cloud(Arc<tinychannels::WhatsAppChannel>),
+    Web(Arc<tinychannels::WhatsAppWebChannel>),
+}
+
+impl WhatsAppNative {
+    fn select(
+        name: &str,
+        config: &ChannelsConfig,
+        host: &Arc<dyn ChannelHost>,
+        http: &dyn HttpClientFactory,
+    ) -> Option<Self> {
+        if tinychannels_bus::provider_id(name) != "whatsapp" {
+            return None;
+        }
+        match config.whatsapp.as_ref()?.backend_type() {
+            "cloud" => {
+                tinychannels::build_whatsapp_cloud_channel(config, host, http).map(Self::Cloud)
+            }
+            "web" => tinychannels::build_whatsapp_web_channel(config, host).map(Self::Web),
+            _ => None,
+        }
+    }
+
+    fn channel(&self) -> Arc<dyn tinychannels::Channel> {
+        match self {
+            Self::Cloud(channel) => channel.clone(),
+            Self::Web(channel) => channel.clone(),
+        }
+    }
+
+    /// Web learns its account from the linked session; bind the media scope to it.
+    fn bind_media_authority(&self, scope: &crate::provider::MediaScope) {
+        if let Self::Web(channel) = self {
+            scope.bind_source(channel.clone());
+        }
+    }
+
+    fn start(
+        self,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: Option<tinychannels_bus::ChannelSupervisionPolicy>,
+        outbound_only: bool,
+    ) -> Arc<Running> {
+        match self {
+            Self::Cloud(channel) => {
+                Running::start_native("WhatsApp", channel, hooks, host, supervision, outbound_only)
+            }
+            Self::Web(channel) => {
+                Running::start_native("WhatsApp", channel, hooks, host, supervision, outbound_only)
+            }
+        }
+    }
+}
+
 async fn configured_capabilities(
     running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
     name: &str,
@@ -226,29 +284,15 @@ impl Channels {
         } else {
             None
         };
-        let whatsapp_backend = (tinychannels_bus::provider_id(&name) == "whatsapp")
-            .then(|| config.whatsapp.as_ref().map(|wa| wa.backend_type()))
-            .flatten();
-        let whatsapp_cloud = if whatsapp_backend == Some("cloud") {
-            tinychannels::build_whatsapp_cloud_channel(&config, &owner_host, http)
-        } else {
-            None
-        };
-        let whatsapp_web = if whatsapp_backend == Some("web") {
-            tinychannels::build_whatsapp_web_channel(&config, &owner_host)
-        } else {
-            None
-        };
+        let whatsapp = WhatsAppNative::select(&name, &config, &owner_host, http);
         let channel: Arc<dyn tinychannels::Channel> = if let Some(telegram) = &telegram {
             telegram.clone()
         } else if let Some(slack) = &slack {
             slack.clone()
-        } else if let Some(cloud) = &whatsapp_cloud {
-            cloud.clone()
-        } else if let Some(web) = &whatsapp_web {
-            // The linked session, not its mutable label, is the media authority.
-            media_account_scope.bind_source(web.clone());
-            web.clone()
+        } else if let Some(native) = &whatsapp {
+            // A linked session, not its mutable label, is the media authority.
+            native.bind_media_authority(&media_account_scope);
+            native.channel()
         } else {
             build_channels(&config, &owner_host, http)
                 .into_iter()
@@ -285,24 +329,8 @@ impl Channels {
             )
         } else if let Some(slack) = slack {
             Running::start_slack(slack, hooks, self.host.clone(), supervision, outbound_only)
-        } else if let Some(cloud) = whatsapp_cloud {
-            Running::start_native(
-                "WhatsApp",
-                cloud,
-                hooks,
-                self.host.clone(),
-                supervision,
-                outbound_only,
-            )
-        } else if let Some(web) = whatsapp_web {
-            Running::start_native(
-                "WhatsApp",
-                web,
-                hooks,
-                self.host.clone(),
-                supervision,
-                outbound_only,
-            )
+        } else if let Some(native) = whatsapp {
+            native.start(hooks, self.host.clone(), supervision, outbound_only)
         } else {
             match supervision {
                 Some(policy) => {

@@ -3607,3 +3607,75 @@ async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus(
     ));
     service.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn whatsapp_selection_follows_the_stanza_shape_and_web_binds_its_media_authority() {
+    use tinychannels::host::ChannelHost;
+    let host: Arc<dyn ChannelHost> = tinychannels::NoopHost::arc();
+    let select = |name: &str, config: &ChannelsConfig| {
+        super::WhatsAppNative::select(name, config, &host, &tinychannels::DefaultHttpClients)
+    };
+    let cloud_config = ChannelsConfig {
+        whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
+            access_token: Some("token".into()),
+            phone_number_id: Some("123".into()),
+            verify_token: Some("verify".into()),
+            app_secret: None,
+            session_path: None,
+            pair_phone: None,
+            pair_code: None,
+            allowed_numbers: Vec::new(),
+        }),
+        ..Default::default()
+    };
+    let web_config = whatsapp(false);
+    assert!(select("telegram", &cloud_config).is_none());
+    assert!(select("whatsapp", &ChannelsConfig::default()).is_none());
+    let unusable = ChannelsConfig {
+        whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
+            access_token: None,
+            phone_number_id: None,
+            verify_token: None,
+            app_secret: None,
+            session_path: None,
+            pair_phone: None,
+            pair_code: None,
+            allowed_numbers: Vec::new(),
+        }),
+        ..Default::default()
+    };
+    assert!(select("whatsapp", &unusable).is_none());
+
+    let cloud =
+        select("whatsapp", &cloud_config).expect("a Cloud stanza selects the Cloud adapter");
+    let web = select("whatsapp", &web_config).expect("a session stanza selects the Web adapter");
+    assert!(matches!(cloud, super::WhatsAppNative::Cloud(_)));
+    assert_eq!(cloud.channel().name(), "whatsapp");
+    assert_eq!(web.channel().name(), "whatsapp");
+
+    // Only Web learns its media authority from the session; before the device
+    // is linked that authority is unknown, and Cloud's is its configuration.
+    let scope = crate::provider::MediaScope::fixed(None);
+    cloud.bind_media_authority(&scope);
+    assert_eq!(scope.current(), None);
+    web.bind_media_authority(&scope);
+    assert_eq!(
+        scope.current(),
+        None,
+        "an unlinked device has no account yet"
+    );
+
+    // An outbound-only start is network-free and still yields the native adapter.
+    let service = inbound_preparation_service().await;
+    let running = web.start(Arc::new(Hooks::default()), service.host.clone(), None, true);
+    assert_eq!(
+        running
+            .adapter_handle()
+            .descriptor()
+            .metadata
+            .get("adapterMode")
+            .map(String::as_str),
+        Some("native-v2")
+    );
+    running.stop().await.unwrap();
+}
