@@ -52,7 +52,7 @@ pub(super) trait OutboundClient: Send + Sync {
         context: Option<wa::ContextInfo>,
     ) -> Result<wa::Message>;
     /// Download and decrypt one inbound attachment.
-    async fn download(&self, media: &(dyn Downloadable)) -> Result<Vec<u8>>;
+    async fn download(&self, media: &dyn Downloadable) -> Result<Vec<u8>>;
     /// React to `key` in `chat`; an empty `emoji` removes the reaction.
     async fn send_reaction(&self, chat: Jid, key: wa::MessageKey, emoji: &str) -> Result<String>;
     /// Replace the text of one of our messages.
@@ -184,7 +184,7 @@ impl OutboundClient for whatsapp_rust::Client {
         })
     }
 
-    async fn download(&self, media: &(dyn Downloadable)) -> Result<Vec<u8>> {
+    async fn download(&self, media: &dyn Downloadable) -> Result<Vec<u8>> {
         whatsapp_rust::Client::download(self, media).await
     }
 

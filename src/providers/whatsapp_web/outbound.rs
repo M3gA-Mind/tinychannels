@@ -14,6 +14,7 @@ use crate::providers::whatsapp_shared::vcard::{self, ContactCard};
 use std::sync::Arc;
 use tinychannels_bus::ChannelOutboundMessage;
 use tinychannels_bus::channel::MessageReceiptSourceResult;
+use wacore_binary::JidExt as _;
 use whatsapp_rust::Jid;
 use whatsapp_rust::waproto::whatsapp as wa;
 
