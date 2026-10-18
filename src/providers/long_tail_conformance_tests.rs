@@ -13,7 +13,11 @@ use crate::channel::{
     ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
     ChannelTyping,
 };
-use crate::factory::{DefaultHttpClients, build_long_tail_channel};
+use crate::factory::{DefaultHttpClients, build_long_tail_channel, build_long_tail_channel_with_host};
+use crate::host::{
+    MediaMetadata, MediaRepository, MediaScope, MediaStoreRequest, StoredMedia, VoiceMediaRequest,
+    VoiceMediaStore,
+};
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -32,6 +36,7 @@ use tinychannels_bus::{
     ChannelOutboundIntent, ChannelsConfig, ContentPart, MediaKind, MediaReference,
     OutboundContentPart, OutboundPayload,
 };
+use async_trait::async_trait;
 use tinychannels_conformance::{
     AdapterFixture, ConformanceFeature as Feature, ExpectedScope, WireObservation,
     check_all_features, check_feature,
@@ -41,6 +46,76 @@ use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 const CHANNEL: &str = "chan1";
 const ROOT: &str = "root9";
+
+struct ConformanceMedia;
+
+#[async_trait]
+impl MediaRepository for ConformanceMedia {
+    async fn store_media(
+        &self,
+        _request: MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        anyhow::bail!("conformance fixture only reads scoped media")
+    }
+
+    async fn read_media(
+        &self,
+        _scope: MediaScope,
+        opaque_id: String,
+        _max_bytes: u64,
+    ) -> anyhow::Result<StoredMedia> {
+        let (kind, content_type, file_name, bytes) = match opaque_id.as_str() {
+            "media-Image" => (
+                MediaKind::Image,
+                "image/png",
+                "diagram.png",
+                b"conformance-image".as_slice(),
+            ),
+            "media-Document" => (
+                MediaKind::Document,
+                "application/pdf",
+                "document.pdf",
+                b"conformance-file".as_slice(),
+            ),
+            _ => anyhow::bail!("unexpected conformance media id"),
+        };
+        Ok(StoredMedia {
+            media: MediaReference {
+                opaque_id: Some(opaque_id),
+                kind,
+                ..Default::default()
+            },
+            content_type: content_type.into(),
+            file_name: Some(file_name.into()),
+            bytes: bytes.to_vec(),
+        })
+    }
+}
+
+struct ConformanceVoice;
+
+#[async_trait]
+impl VoiceMediaStore for ConformanceVoice {
+    async fn store_voice(
+        &self,
+        _request: VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        anyhow::bail!("conformance fixture only reads scoped voice")
+    }
+
+    async fn read_voice(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        _opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        use base64::Engine as _;
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(b"conformance-audio"),
+            mime_type: "audio/mp4".into(),
+            file_name: Some("voice.m4a".into()),
+        })
+    }
+}
 
 fn account(id: &str) -> ChannelRef {
     ChannelRef {
@@ -91,6 +166,13 @@ impl LongTailFixture {
             .mount(&server)
             .await;
         Mock::given(method("POST"))
+            .and(path("/api/v4/files"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "file_infos": [{"id": "uploaded-file"}]
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
             .and(path("/api/v4/users/me/typing"))
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
@@ -106,9 +188,19 @@ impl LongTailFixture {
             }),
             ..Default::default()
         };
+        let host: Arc<dyn crate::host::ChannelHost> = crate::ChannelHostBuilder::new()
+            .media_repository(Arc::new(ConformanceMedia))
+            .voice_media_store(Arc::new(ConformanceVoice))
+            .build();
         Self {
             id,
-            channel: build_long_tail_channel(&config, &DefaultHttpClients, id).unwrap(),
+            channel: build_long_tail_channel_with_host(
+                &config,
+                &host,
+                &DefaultHttpClients,
+                id,
+            )
+            .unwrap(),
             server: Some(server),
             response_ids,
             observed: Mutex::new(Vec::new()),
@@ -162,14 +254,33 @@ impl LongTailFixture {
         let Some(server) = &self.server else { return };
         let requests = server.received_requests().await.unwrap();
         let mut ids = std::mem::take(&mut *self.response_ids.lock()).into_iter();
+        let mut uploaded_kind = None;
         for request in &requests[before..] {
             let url_path = request.url.path();
+            if url_path == "/api/v4/files" {
+                let multipart = String::from_utf8_lossy(&request.body).to_ascii_lowercase();
+                uploaded_kind = if multipart.contains("image/png") {
+                    Some("image")
+                } else if multipart.contains("application/pdf") {
+                    Some("file")
+                } else if multipart.contains("audio/mp4") {
+                    Some("audio")
+                } else {
+                    None
+                };
+                continue;
+            }
             let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
             let (operation, message_ids, kinds) = if url_path == "/api/v4/posts" {
+                let kinds = if body.get("file_ids").is_some() {
+                    uploaded_kind.take().into_iter().map(str::to_owned).collect()
+                } else {
+                    vec!["text".to_owned()]
+                };
                 (
                     "send",
                     ids.next().into_iter().collect(),
-                    vec!["text".to_owned()],
+                    kinds,
                 )
             } else {
                 ("typing", Vec::new(), Vec::new())
@@ -218,7 +329,7 @@ fn rich(part: ContentPart) -> OutboundPayload {
 
 fn media(kind: MediaKind) -> MediaReference {
     MediaReference {
-        opaque_id: Some("media-1".into()),
+        opaque_id: Some(format!("media-{kind:?}")),
         kind,
         ..Default::default()
     }
