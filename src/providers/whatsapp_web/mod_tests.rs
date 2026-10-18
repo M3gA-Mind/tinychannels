@@ -321,13 +321,7 @@ const HANG_GUARD: Duration = Duration::from_secs(30);
 
 fn inbound_state(allowed: &[&str]) -> (InboundState, mpsc::Receiver<ChannelMessage>) {
     let (tx, rx) = mpsc::channel(16);
-    let state = InboundState {
-        tx,
-        allowed_numbers: allowed.iter().map(|s| s.to_string()).collect(),
-        connected: Arc::new(AtomicBool::new(false)),
-        allowed_groups: Arc::new(Mutex::new(HashSet::new())),
-    };
-    (state, rx)
+    (super::fakes::base_state(tx, allowed), rx)
 }
 
 struct Inbound {

@@ -58,7 +58,7 @@ pub(super) struct RecordingClient {
     /// Inbound media by `direct_path`.
     pub downloads: Mutex<HashMap<String, Vec<u8>>>,
     pub account: Mutex<Option<Jid>>,
-    sent: AtomicUsize,
+    pub sent: AtomicUsize,
 }
 
 impl RecordingClient {
@@ -231,5 +231,28 @@ impl OutboundClient for RecordingClient {
 
     fn linked_account(&self) -> Option<Jid> {
         self.account.lock().clone()
+    }
+}
+
+/// An inbound state with no typed ingress, sending to a fresh channel.
+pub(super) fn base_state(
+    tx: tokio::sync::mpsc::Sender<crate::traits::ChannelMessage>,
+    allowed: &[&str],
+) -> super::InboundState {
+    use crate::providers::whatsapp_shared::window::{BoundedMap, SeenSet};
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+    super::InboundState {
+        tx,
+        allowed_numbers: allowed.iter().map(|value| (*value).to_owned()).collect(),
+        connected: Arc::new(AtomicBool::new(false)),
+        allowed_groups: Arc::new(Mutex::new(std::collections::HashSet::new())),
+        events: None,
+        media_repository: None,
+        voice_media_store: None,
+        client: Arc::new(Mutex::new(None)),
+        seen: Arc::new(Mutex::new(SeenSet::new(64))),
+        authors: Arc::new(Mutex::new(BoundedMap::new(64))),
+        identity: Arc::new(super::identity::LinkedIdentity::default()),
     }
 }
