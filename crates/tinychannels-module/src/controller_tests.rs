@@ -1056,3 +1056,163 @@ async fn backend_preserves_host_owned_operations_and_default_selection() {
     );
     host.shutdown().await.unwrap();
 }
+
+fn telegram_config(chat_id: Option<&str>) -> ChannelsConfig {
+    ChannelsConfig {
+        telegram: Some(tinychannels::config::TelegramConfig {
+            bot_token: "tok".into(),
+            chat_id: chat_id.map(str::to_owned),
+            allowed_users: vec!["*".into()],
+            stream_mode: Default::default(),
+            draft_update_interval_ms: 1000,
+            silent_streaming: true,
+            mention_only: false,
+        }),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn bot_token_telegram_reactions_and_threads_never_reach_the_host_backend() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    for (name, body) in [
+        (
+            "setMessageReaction",
+            serde_json::json!({"ok": true, "result": true}),
+        ),
+        (
+            "createForumTopic",
+            serde_json::json!({"ok": true, "result": {"message_thread_id": 9, "name": "Plan"}}),
+        ),
+        (
+            "closeForumTopic",
+            serde_json::json!({"ok": true, "result": true}),
+        ),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(format!("/bottok/{name}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let (host, fixture, _server) = connected_host().await;
+    let mut backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    backend.telegram_api_base = Some(server.uri());
+    let config = telegram_config(Some("-100"));
+
+    let reaction = backend
+        .send_reaction(
+            &config,
+            "telegram",
+            serde_json::json!({"chatId":"-100","messageId":4,"emoji":"👍"}),
+        )
+        .await
+        .unwrap();
+    assert!(reaction.success);
+    let created = backend
+        .create_thread(&config, "telegram", "Plan")
+        .await
+        .unwrap();
+    assert_eq!(
+        (created.thread_id.as_str(), created.title.as_deref()),
+        ("9", Some("Plan"))
+    );
+    let closed = backend
+        .update_thread(&config, "telegram", "9", "close")
+        .await
+        .unwrap();
+    assert_eq!(closed.thread_id, "9");
+    assert!(
+        backend
+            .list_threads(&config, "telegram", None)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("cannot list")
+    );
+    assert!(
+        backend
+            .update_thread(&config, "telegram", "9", "bogus")
+            .await
+            .is_err()
+    );
+    assert!(
+        backend
+            .send_reaction(&config, "telegram", serde_json::json!({"emoji":"x"}))
+            .await
+            .is_err()
+    );
+    assert!(
+        fixture.0.lock().await.is_empty(),
+        "native telegram must not call the host backend"
+    );
+
+    let no_chat = telegram_config(None);
+    assert!(
+        backend
+            .create_thread(&no_chat, "telegram", "x")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("chat_id")
+    );
+    assert!(
+        backend
+            .update_thread(&no_chat, "telegram", "9", "close")
+            .await
+            .is_err()
+    );
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn bot_token_channels_without_native_port_fail_explicitly_not_via_host() {
+    let (host, fixture, _server) = connected_host().await;
+    let backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    let config = ChannelsConfig {
+        discord: Some(tinychannels::config::DiscordConfig {
+            bot_token: "d".into(),
+            guild_id: None,
+            channel_id: None,
+            allowed_users: vec![],
+            listen_to_bots: false,
+            mention_only: false,
+        }),
+        ..Default::default()
+    };
+    for error in [
+        backend
+            .send_reaction(&config, "discord", serde_json::json!({}))
+            .await
+            .map(|_| ()),
+        backend
+            .create_thread(&config, "discord", "t")
+            .await
+            .map(|_| ()),
+        backend
+            .update_thread(&config, "discord", "1", "close")
+            .await
+            .map(|_| ()),
+        backend
+            .list_threads(&config, "discord", None)
+            .await
+            .map(|_| ()),
+    ] {
+        assert!(error.unwrap_err().to_string().contains("no native"));
+    }
+    assert!(fixture.0.lock().await.is_empty());
+    host.shutdown().await.unwrap();
+}
