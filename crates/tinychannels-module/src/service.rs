@@ -452,10 +452,11 @@ impl Channels {
         &self,
         request: tinychannels_bus::BeginWebTurn,
     ) -> BusResult<tinychannels_bus::WebTurnHandle> {
+        let mut web_turns = self.web_turns.lock().await;
         if self.terminal.load(Ordering::SeqCst) {
             return Err(BusError::failed("module is shutting down"));
         }
-        self.web_turns.lock().await.begin(request)
+        web_turns.begin(request)
     }
 
     /// Project one canonical output and return its ordered web wire events.
@@ -464,10 +465,11 @@ impl Channels {
         &self,
         request: tinychannels_bus::ProjectWebOutput,
     ) -> BusResult<tinychannels_bus::WebOutputEvents> {
+        let mut web_turns = self.web_turns.lock().await;
         if self.terminal.load(Ordering::SeqCst) {
             return Err(BusError::failed("module is shutting down"));
         }
-        self.web_turns.lock().await.project(request)
+        web_turns.project(request)
     }
 
     /// End a projection turn; terminal events may already have closed it.

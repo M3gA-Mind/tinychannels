@@ -13,6 +13,7 @@ use tinychannels_runtime::adapters::web::WebTurnProjector;
 const MAX_ACTIVE_WEB_TURNS: usize = 256;
 const MAX_WEB_TURN_CONTEXT_FIELD_BYTES: usize = 1024;
 const MAX_WEB_TURN_SCOPE_BYTES: usize = 2048;
+const MAX_WEB_TURN_HANDLE_BYTES: usize = 64;
 const MAX_WEB_TURN_RETAINED_BYTES: usize = 1024 * 1024;
 
 struct WebTurn {
@@ -91,6 +92,7 @@ impl WebTurnRegistry {
     }
 
     pub(crate) fn project(&mut self, request: ProjectWebOutput) -> BusResult<WebOutputEvents> {
+        validate_handle(&request.handle)?;
         let turn = self
             .turns
             .get_mut(&request.handle)
@@ -103,6 +105,7 @@ impl WebTurnRegistry {
     }
 
     pub(crate) fn end(&mut self, request: EndWebTurn) -> BusResult<()> {
+        validate_handle(&request.handle)?;
         // Terminal projection may already have removed the entry; explicit
         // host cleanup is idempotent, while Project still fails closed.
         self.remove(&request.handle);
@@ -119,6 +122,13 @@ impl WebTurnRegistry {
         self.retained_bytes = self.retained_bytes.saturating_sub(turn.retained_bytes);
         Some(turn)
     }
+}
+
+fn validate_handle(handle: &str) -> BusResult<()> {
+    if handle.is_empty() || handle.len() > MAX_WEB_TURN_HANDLE_BYTES {
+        return Err(BusError::failed("web turn handle is invalid"));
+    }
+    Ok(())
 }
 
 fn unix_ms() -> u64 {

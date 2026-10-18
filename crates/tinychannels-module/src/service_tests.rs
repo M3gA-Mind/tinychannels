@@ -26,6 +26,55 @@ fn whatsapp(cloud: bool) -> ChannelsConfig {
     }
 }
 
+#[tokio::test]
+async fn shutdown_closes_web_turn_admission_before_clearing_projection_state() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channels = Arc::new(Channels::new(HostChannels::new(connection), None));
+    let request = tinychannels_bus::BeginWebTurn {
+        scope_key: "tenant-a".into(),
+        context: tinychannels_bus::WebEventContext {
+            client_id: "client".into(),
+            thread_id: "thread".into(),
+            request_id: "request".into(),
+            turn_request_id: None,
+            seq: None,
+            ts: None,
+        },
+    };
+
+    // Queue admission before shutdown while holding the shared registry lock.
+    // Shutdown closes the atomic gate first, then waits for this lock to clear
+    // state. Admission must recheck the gate after it gets the lock.
+    let held = channels.web_turns.lock().await;
+    let begin_channels = channels.clone();
+    let begin = tokio::spawn(async move { begin_channels.begin_web_turn(request).await });
+    tokio::task::yield_now().await;
+    let shutdown_channels = channels.clone();
+    let shutdown = tokio::spawn(async move { shutdown_channels.shutdown().await });
+    tokio::task::yield_now().await;
+    drop(held);
+
+    assert!(begin.await.unwrap().is_err());
+    shutdown.await.unwrap().unwrap();
+    assert!(channels.web_turns.lock().await.turns.is_empty());
+    let late = tinychannels_bus::BeginWebTurn {
+        scope_key: "tenant-a".into(),
+        context: tinychannels_bus::WebEventContext {
+            client_id: "client".into(),
+            thread_id: "thread".into(),
+            request_id: "late-request".into(),
+            turn_request_id: None,
+            seq: None,
+            ts: None,
+        },
+    };
+    assert!(channels.begin_web_turn(late).await.is_err());
+}
+
 #[test]
 fn linq_is_refused_because_its_inbound_path_is_a_webhook() {
     assert!(webhook_backed("linq", &ChannelsConfig::default()));

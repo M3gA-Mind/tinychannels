@@ -18,6 +18,20 @@ fn begin(scope: &str) -> BeginWebTurn {
     }
 }
 
+fn large_begin() -> BeginWebTurn {
+    BeginWebTurn {
+        scope_key: "s".repeat(MAX_WEB_TURN_SCOPE_BYTES),
+        context: WebEventContext {
+            client_id: "c".repeat(MAX_WEB_TURN_CONTEXT_FIELD_BYTES),
+            thread_id: "t".repeat(MAX_WEB_TURN_CONTEXT_FIELD_BYTES),
+            request_id: "r".repeat(MAX_WEB_TURN_CONTEXT_FIELD_BYTES),
+            turn_request_id: Some("u".repeat(MAX_WEB_TURN_CONTEXT_FIELD_BYTES)),
+            seq: None,
+            ts: None,
+        },
+    }
+}
+
 fn text(handle: &WebTurnHandle, value: &str) -> ProjectWebOutput {
     ProjectWebOutput {
         handle: handle.handle.clone(),
@@ -73,6 +87,43 @@ fn context_and_scope_strings_are_bounded_before_retention() {
     let mut request = begin("tenant-a");
     request.context.client_id = "c".repeat(MAX_WEB_TURN_CONTEXT_FIELD_BYTES + 1);
     assert!(registry.begin(request).is_err());
+    assert!(registry.turns.is_empty());
+}
+
+#[test]
+fn retained_context_byte_budget_rejects_new_turn_without_evicting_active_turns() {
+    let mut registry = WebTurnRegistry::default();
+    let mut first = None;
+    loop {
+        match registry.begin(large_begin()) {
+            Ok(handle) => first.get_or_insert(handle),
+            Err(_) => break,
+        };
+    }
+    let first = first.expect("one maximum-sized context fits");
+    let retained_bytes = registry.retained_bytes;
+    assert!(retained_bytes > MAX_WEB_TURN_RETAINED_BYTES - 6144);
+    assert!(retained_bytes <= MAX_WEB_TURN_RETAINED_BYTES);
+    assert!(registry.begin(large_begin()).is_err());
+    assert_eq!(registry.retained_bytes, retained_bytes);
+    assert_eq!(sequence(&registry.project(text(&first, "still active")).unwrap()), 1);
+}
+
+#[test]
+fn malformed_project_and_end_handles_are_rejected_before_lookup() {
+    let mut registry = WebTurnRegistry::default();
+    for handle in [String::new(), "h".repeat(MAX_WEB_TURN_HANDLE_BYTES + 1)] {
+        assert!(registry
+            .project(ProjectWebOutput {
+                handle: handle.clone(),
+                event: ChannelOutputEvent::TextDelta {
+                    text: "ignored".into(),
+                    iteration: Some(1),
+                },
+            })
+            .is_err());
+        assert!(registry.end(EndWebTurn { handle }).is_err());
+    }
     assert!(registry.turns.is_empty());
 }
 
