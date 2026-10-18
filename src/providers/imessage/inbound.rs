@@ -5,7 +5,7 @@ use super::IMessageChannel;
 use super::db::{self, AttachmentRow, InboundRow, ReadRow};
 use super::native::{IMESSAGE_MAX_FILE_BYTES, IMESSAGE_MAX_VOICE_BYTES};
 use crate::providers::native::inbound::{
-    Ingest, Ingested, InboundFile, assemble, channel_event, media_of, publish, publish_event,
+    InboundFile, Ingest, Ingested, assemble, channel_event, media_of, publish, publish_event,
 };
 use crate::traits::ChannelMessage;
 use serde_json::json;
@@ -25,11 +25,19 @@ fn imessage_ref() -> ChannelRef {
 
 /// Messages.app marks an attachment's position in the text with U+FFFC.
 fn clean_text(text: Option<&str>) -> String {
-    text.unwrap_or_default().replace('\u{FFFC}', "").trim().to_owned()
+    text.unwrap_or_default()
+        .replace('\u{FFFC}', "")
+        .trim()
+        .to_owned()
 }
 
 fn mime_from_name(name: &str) -> &'static str {
-    match name.rsplit('.').next().map(str::to_ascii_lowercase).as_deref() {
+    match name
+        .rsplit('.')
+        .next()
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("gif") => "image/gif",
@@ -152,7 +160,9 @@ impl IMessageChannel {
         };
         for attachment in &row.attachments {
             if let Some(file) = self.file_of(row, attachment).await {
-                ingest.add(&mut ingested, conversation, message_id, file).await;
+                ingest
+                    .add(&mut ingested, conversation, message_id, file)
+                    .await;
             }
         }
         ingested

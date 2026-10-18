@@ -47,13 +47,16 @@ pub(super) fn rig() -> Rig {
     let db_path = dir.path().join("chat.db");
     let conn = Connection::open(&db_path).unwrap();
     db::tests::create_schema(&conn);
+    conn.execute("UPDATE handle SET id = ?1 WHERE ROWID = 1", [PEER])
+        .unwrap();
     std::fs::create_dir_all(dir.path().join("Attachments")).unwrap();
     let out = dir.path().join("scripts.txt");
     let media = Arc::new(StubMedia::default());
     let voice = Arc::new(StubVoice::default());
-    *voice.audio_base64.lock().unwrap() = Some(
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"voice"),
-    );
+    *voice.audio_base64.lock().unwrap() = Some(base64::Engine::encode(
+        &base64::engine::general_purpose::STANDARD,
+        b"voice",
+    ));
     let events = Arc::new(RecordingEvents::delivering());
     let mut channel = IMessageChannel::new(vec!["*".into()])
         .with_media_repository(media.clone())
@@ -117,15 +120,6 @@ impl Rig {
         })
     }
 
-    pub(super) fn add_handle(&self) {
-        self.conn()
-            .execute(
-                "INSERT OR IGNORE INTO handle (ROWID, id) VALUES (1, ?1)",
-                [PEER],
-            )
-            .unwrap();
-    }
-
     /// Write `bytes` under the attachments folder and return its path.
     pub(super) fn attachment(&self, name: &str, bytes: &[u8]) -> PathBuf {
         let path = self.dir.path().join("Attachments").join(name);
@@ -141,7 +135,6 @@ impl Rig {
         audio: bool,
         attachments: &[(&Path, &str)],
     ) -> db::InboundRow {
-        self.add_handle();
         let conn = self.conn();
         conn.execute(
             "INSERT INTO message (ROWID, guid, handle_id, text, is_from_me, date, is_audio_message) \

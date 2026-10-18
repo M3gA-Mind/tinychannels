@@ -116,9 +116,12 @@ end tell"#
 
     /// The newest sent ROWID, so the new row can be told apart afterwards.
     async fn sent_baseline(&self) -> Result<i64, ChannelSendError> {
-        let path = self.messages_db_path().filter(|p| p.exists()).ok_or_else(|| {
-            pre_dispatch("iMessage sends need the Messages database to confirm delivery")
-        })?;
+        let path = self
+            .messages_db_path()
+            .filter(|p| p.exists())
+            .ok_or_else(|| {
+                pre_dispatch("iMessage sends need the Messages database to confirm delivery")
+            })?;
         tokio::task::spawn_blocking(move || {
             super::open_read_only(&path).and_then(|conn| super::db::max_sent_rowid(&conn))
         })

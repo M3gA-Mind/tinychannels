@@ -66,7 +66,10 @@ const READ_SQL: &str = "SELECT m.guid, h.id, m.date_read \
      ORDER BY m.date_read ASC LIMIT 20";
 
 /// Inbound messages newer than `since_rowid`, oldest first, at most 20.
-pub(crate) fn inbound_since(conn: &Connection, since_rowid: i64) -> anyhow::Result<Vec<InboundRow>> {
+pub(crate) fn inbound_since(
+    conn: &Connection,
+    since_rowid: i64,
+) -> anyhow::Result<Vec<InboundRow>> {
     let mut stmt = conn.prepare(INBOUND_SQL)?;
     let mut rows = stmt
         .query_map([since_rowid], |row| {
@@ -134,7 +137,10 @@ pub(crate) fn newest_sent_after(
     )?;
     let found = stmt
         .query_map([baseline], |row| {
-            Ok((row.get(0)?, row.get::<_, Option<String>>(1)?.unwrap_or_default()))
+            Ok((
+                row.get(0)?,
+                row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            ))
         })?
         .next()
         .transpose()?;
@@ -143,10 +149,11 @@ pub(crate) fn newest_sent_after(
 
 /// The newest ROWID among messages we sent, or 0.
 pub(crate) fn max_sent_rowid(conn: &Connection) -> anyhow::Result<i64> {
-    let value: Option<i64> =
-        conn.query_row("SELECT MAX(ROWID) FROM message WHERE is_from_me = 1", [], |row| {
-            row.get(0)
-        })?;
+    let value: Option<i64> = conn.query_row(
+        "SELECT MAX(ROWID) FROM message WHERE is_from_me = 1",
+        [],
+        |row| row.get(0),
+    )?;
     Ok(value.unwrap_or(0))
 }
 

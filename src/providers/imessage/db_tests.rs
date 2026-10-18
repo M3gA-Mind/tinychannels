@@ -55,7 +55,10 @@ fn inbound_rows_carry_attachments_audio_and_group_chats() {
     assert_eq!(rows[0].text.as_deref(), Some("hello"));
     assert!(!rows[0].audio_message && rows[0].attachments.is_empty());
     assert!(rows[1].audio_message && rows[1].group_guid.is_none());
-    assert_eq!(rows[1].attachments[0].mime_type.as_deref(), Some("audio/x-caf"));
+    assert_eq!(
+        rows[1].attachments[0].mime_type.as_deref(),
+        Some("audio/x-caf")
+    );
     assert_eq!(rows[1].attachments[0].bytes, 9);
     assert_eq!(inbound_since(&conn, 1).unwrap().len(), 1);
     assert!(inbound_since(&conn, 2).unwrap().is_empty());
@@ -88,7 +91,10 @@ fn sent_messages_are_found_after_a_baseline() {
     insert(&conn, 4, 1, Some("sent"));
     insert(&conn, 5, 0, Some("received"));
     assert_eq!(max_sent_rowid(&conn).unwrap(), 4);
-    assert_eq!(newest_sent_after(&conn, 0).unwrap(), Some((4, "G4".to_owned())));
+    assert_eq!(
+        newest_sent_after(&conn, 0).unwrap(),
+        Some((4, "G4".to_owned()))
+    );
     assert!(newest_sent_after(&conn, 4).unwrap().is_none());
 }
 
