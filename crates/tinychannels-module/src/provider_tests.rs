@@ -3135,10 +3135,10 @@ impl Channel for IdentityChannel {
     fn name(&self) -> &str {
         "whatsapp"
     }
-    async fn send(&self, _: &SendMessage) -> Result<()> {
+    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
         Ok(())
     }
-    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> Result<()> {
+    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
         std::future::pending().await
     }
     fn media_account_identity(&self) -> Option<String> {
