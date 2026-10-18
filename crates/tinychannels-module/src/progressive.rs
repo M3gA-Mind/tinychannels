@@ -579,6 +579,7 @@ async fn send_typed_part(
                                     audio_base64: None,
                                     codec: note.codec,
                                     duration_ms: note.duration_ms,
+                                    waveform: note.waveform,
                                 },
                             });
                         } else if audio_file {
@@ -1030,7 +1031,12 @@ impl Replies {
             )
         } else {
             running.get(provider_id).map_or_else(
-                || (tinychannels_bus::ChannelCapabilities::unknown(), None),
+                || {
+                    (
+                        tinychannels_bus::ChannelCapabilities::unknown(),
+                        crate::provider::MediaScope::default(),
+                    )
+                },
                 |provider| {
                     (
                         provider.channel.capabilities(),

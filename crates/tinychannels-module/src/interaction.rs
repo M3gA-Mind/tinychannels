@@ -30,6 +30,35 @@ pub(crate) fn configured_capabilities(
     capabilities
 }
 
+/// The error message of a refused webhook; hosts treat it as a client error.
+pub(crate) const WEBHOOK_REJECTED: &str = "webhook delivery was rejected";
+/// The error message of a delivery that failed after it was authenticated.
+pub(crate) const WEBHOOK_FAILED: &str = "webhook delivery could not be ingested";
+
+/// Decode and ingest one raw webhook POST. Bodies are bounded before the
+/// provider sees them; the provider authenticates the exact bytes.
+async fn deliver_webhook(
+    provider: &dyn Channel,
+    signature: Option<&str>,
+    body_base64: &str,
+) -> tinybus::Result<ChannelInteractionResult> {
+    use base64::Engine as _;
+    // 4 base64 characters carry 3 bytes; refuse anything over 4 MiB decoded.
+    if body_base64.len() > 4 * 1024 * 1024 * 4 / 3 + 4 {
+        return Err(tinybus::Error::failed(WEBHOOK_REJECTED));
+    }
+    let body = base64::engine::general_purpose::STANDARD
+        .decode(body_base64.as_bytes())
+        .map_err(|_| tinybus::Error::failed(WEBHOOK_REJECTED))?;
+    match provider.deliver_webhook(signature, &body).await {
+        Ok(outcome) => Ok(ChannelInteractionResult::WebhookAccepted(outcome)),
+        Err(error) if error.downcast_ref::<tinychannels::WebhookRejected>().is_some() => {
+            Err(tinybus::Error::failed(WEBHOOK_REJECTED))
+        }
+        Err(_) => Err(tinybus::Error::failed(WEBHOOK_FAILED)),
+    }
+}
+
 pub(crate) async fn dispatch(
     provider: &dyn Channel,
     interaction: ChannelInteraction,
@@ -121,6 +150,31 @@ pub(crate) async fn dispatch(
                 .await
                 .map(|()| ChannelInteractionResult::Completed)
                 .map_err(|_| tinybus::Error::failed("provider message deletion failed"));
+        }
+        Op::MarkRead {
+            conversation,
+            provider_message_id,
+            ..
+        } => {
+            return provider
+                .mark_read(&conversation, &provider_message_id)
+                .await
+                .map(|()| ChannelInteractionResult::Completed)
+                .map_err(|_| tinybus::Error::failed("provider read receipt failed"));
+        }
+        Op::DeliverWebhook {
+            signature,
+            body_base64,
+        } => return deliver_webhook(provider, signature.as_deref(), &body_base64).await,
+        Op::VerifyWebhook {
+            mode,
+            verify_token,
+            challenge,
+        } => {
+            return provider
+                .verify_webhook(&mode, &verify_token, &challenge)
+                .map(ChannelInteractionResult::WebhookChallenge)
+                .ok_or_else(|| tinybus::Error::failed(WEBHOOK_REJECTED));
         }
     };
     result
