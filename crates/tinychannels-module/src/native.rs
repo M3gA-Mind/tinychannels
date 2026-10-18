@@ -93,6 +93,8 @@ pub(crate) fn build_native_v2(
     http: &dyn HttpClientFactory,
 ) -> Option<NativeLaunch> {
     match tinychannels_bus::provider_id(name) {
+        "discord" => tinychannels::factory::build_discord_channel(config, host, http)
+            .map(|channel| NativeLaunch::new("Discord", channel)),
         "signal" => tinychannels::factory::build_signal_channel(config, host, http)
             .map(|channel| NativeLaunch::new("Signal", channel)),
         "imessage" => tinychannels::factory::build_imessage_channel(config, host)

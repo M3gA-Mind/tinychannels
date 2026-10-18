@@ -1208,6 +1208,7 @@ pub(crate) struct Running {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AdapterMode {
     LegacyBacked,
+    DiscordNativeV2,
     TelegramNativeV2,
     SlackNativeV2,
     SignalNativeV2,
@@ -1533,6 +1534,14 @@ impl ConfiguredAdapterFactory {
         )
     }
 
+    pub(crate) fn discord(running: Arc<Running>) -> ConfiguredAdapterHandle {
+        Self::native(
+            running,
+            #[cfg(test)]
+            AdapterMode::DiscordNativeV2,
+        )
+    }
+
     pub(crate) fn whatsapp(running: Arc<Running>) -> ConfiguredAdapterHandle {
         Self::native(
             running,
@@ -1579,6 +1588,7 @@ impl Running {
     pub(crate) fn adapter_handle(self: &Arc<Self>) -> ConfiguredAdapterHandle {
         if let Some(ports) = &self.native_ports {
             match ports.provider {
+                "Discord" => ConfiguredAdapterFactory::discord(self.clone()),
                 "Slack" => ConfiguredAdapterFactory::slack(self.clone()),
                 "Signal" => ConfiguredAdapterFactory::native(
                     self.clone(),
