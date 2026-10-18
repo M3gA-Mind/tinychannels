@@ -13,6 +13,7 @@
 
 mod adapter;
 mod api;
+mod blocks;
 mod capabilities;
 mod events;
 mod inbound;

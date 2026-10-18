@@ -23,12 +23,15 @@ pub(crate) fn text_message(recipient: &str, thread_ts: Option<&str>, content: &s
     ChannelOutboundMessage {
         channel_id: "slack".into(),
         conversation_id: recipient.to_owned(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
         thread_id: thread_ts.map(str::to_owned),
+        turn_id: None,
         idempotency_key: format!("slack-legacy-{}", uuid::Uuid::new_v4()),
         parts: vec![OutboundContentPart::Content {
             part: ContentPart::Text { text: content.to_owned(), markdown_dialect: None },
         }],
-        ..Default::default()
     }
 }
 
