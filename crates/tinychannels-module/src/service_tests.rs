@@ -2004,6 +2004,7 @@ async fn configured_catalog_reports_webhook_mode_without_starting_a_listener() {
             api_token: "fixture-token".into(),
             from_phone: "+15550000001".into(),
             allowed_senders: vec![],
+            webhook_secret: None,
         }),
         ..Default::default()
     };

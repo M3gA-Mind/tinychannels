@@ -171,6 +171,7 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
                     api_token: "secret".into(),
                     from_phone: "+15550001".into(),
                     allowed_senders: vec![],
+                    webhook_secret: None,
                 }),
                 ..Default::default()
             },
