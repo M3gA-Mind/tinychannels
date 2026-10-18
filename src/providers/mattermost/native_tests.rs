@@ -1,6 +1,7 @@
 use super::*;
 use crate::channel::ChannelTypedSend;
 use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
+use crate::providers::native::fixtures::RecordingEvents;
 use serde_json::json;
 use tinychannels_bus::channel::ConversationRef;
 use tinychannels_bus::{
@@ -241,4 +242,88 @@ fn media_capabilities_require_host_scoped_storage() {
     assert!(!capabilities.content.video.outbound);
     assert!(!capabilities.content.audio.outbound);
     assert!(!capabilities.content.file.outbound);
+}
+
+#[tokio::test]
+async fn inbound_file_is_downloaded_bounded_and_published_as_scoped_typed_media() {
+    use tinychannels_bus::{ChannelIngress, ContentPart};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/files/file-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"incoming-image-bytes"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let media = Arc::new(StubMedia::default());
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        None,
+        vec!["*".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    )
+    .with_media_repository(media.clone())
+    .with_events(events.clone());
+    let post = json!({
+        "id": "post-7",
+        "user_id": "user-2",
+        "message": "look",
+        "create_at": 1_700_000_000_123_i64,
+        "root_id": "root-3",
+        "file_ids": ["file-1"],
+        "metadata": {"files": [{
+            "id": "file-1", "mime_type": "image/png", "name": "chart.png", "size": 20
+        }]}
+    });
+    let message = channel
+        .parse_mattermost_post(&post, "bot-1", "bot", 1_600_000_000_000_i64, "channel-9")
+        .unwrap();
+    let envelope = channel
+        .inbound_envelope(&post, "channel-9", &message)
+        .await
+        .unwrap();
+    assert!(crate::providers::native::inbound::publish(
+        "mattermost",
+        channel.events.as_ref(),
+        envelope,
+    )
+    .await);
+
+    let inbound = events.inbound();
+    assert_eq!(inbound.len(), 1);
+    assert_eq!(inbound[0].message_id, "post-7");
+    assert_eq!(inbound[0].timestamp_unix_ms, Some(1_700_000_000_123));
+    assert_eq!(inbound[0].conversation.id, "channel-9");
+    assert_eq!(inbound[0].conversation.thread_id.as_deref(), Some("root-3"));
+    assert_eq!(inbound[0].reply_to_id.as_deref(), Some("root-3"));
+    assert!(matches!(inbound[0].parts[1], ContentPart::Image { .. }));
+    assert_eq!(inbound[0].media[0].opaque_id.as_deref(), Some("media-1"));
+    let stored = media.stored.lock().unwrap();
+    assert_eq!(stored[0].bytes, b"incoming-image-bytes");
+    assert_eq!(stored[0].metadata.scope.turn_id, "post-7");
+    assert_eq!(stored[0].metadata.dedupe_key.as_deref(), Some("mattermost:post-7:file-1"));
+    assert!(matches!(
+        events.ingress.lock().unwrap().first(),
+        Some(ChannelIngress::Inbound(_))
+    ));
+}
+
+#[tokio::test]
+async fn inbound_download_rejects_untrusted_file_ids_before_network_io() {
+    let server = MockServer::start().await;
+    let channel = MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        None,
+        vec!["*".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    );
+    assert!(channel.download_file("../private", MAX_FILE_BYTES).await.is_none());
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
