@@ -4,6 +4,12 @@
 //! is downloaded by the adapter, stored through the host's scoped ports, and
 //! only the host's opaque reference reaches the envelope.
 
+#![cfg_attr(
+    not(feature = "whatsapp-web"),
+    allow(dead_code, reason = "the Web adapter shares these helpers")
+)]
+
+
 use super::error::WaFailure;
 use super::plan::base_mime;
 use crate::host::{

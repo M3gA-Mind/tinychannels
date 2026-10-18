@@ -74,9 +74,6 @@ pub(super) trait OutboundClient: Send + Sync {
     fn linked_account(&self) -> Option<Jid>;
 }
 
-fn seconds(duration_ms: Option<u32>) -> Option<u32> {
-    duration_ms
-}
 
 #[async_trait]
 impl OutboundClient for whatsapp_rust::Client {
@@ -120,7 +117,7 @@ impl OutboundClient for whatsapp_rust::Client {
                 upload,
                 VideoOptions {
                     caption,
-                    duration_seconds: seconds(duration_seconds),
+                    duration_seconds,
                     context_info,
                     ..Default::default()
                 },
