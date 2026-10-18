@@ -236,8 +236,7 @@ impl EmailChannel {
                 && ct.ctype() == "text"
                 && let Ok(text) = std::str::from_utf8(part.contents())
             {
-                let name = MimeHeaders::attachment_name(part).unwrap_or("file");
-                return format!("[Attachment: {}]\n{}", name, text);
+                return text.to_string();
             }
         }
         "(no readable content)".to_string()

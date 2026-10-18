@@ -122,28 +122,6 @@ impl LinqChannel {
         &self.from_phone
     }
 
-    fn media_part_to_image_marker(part: &serde_json::Value) -> Option<String> {
-        let source = part
-            .get("url")
-            .or_else(|| part.get("value"))
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .filter(|value| !value.is_empty())?;
-
-        let mime_type = part
-            .get("mime_type")
-            .and_then(|value| value.as_str())
-            .map(str::trim)
-            .unwrap_or_default()
-            .to_ascii_lowercase();
-
-        if !mime_type.starts_with("image/") {
-            return None;
-        }
-
-        Some(format!("[IMAGE:{source}]"))
-    }
-
     /// Parse an incoming webhook payload from Linq and extract messages.
     ///
     /// Linq webhook envelope:
@@ -240,13 +218,12 @@ impl LinqChannel {
                         .get("value")
                         .and_then(|v| v.as_str())
                         .map(ToString::to_string),
+                    // Media parts are typed content on the v2 ingress path
+                    // (`ingest_webhook`); this text-only parse never encodes
+                    // them into the message body.
                     "media" | "image" => {
-                        if let Some(marker) = Self::media_part_to_image_marker(part) {
-                            Some(marker)
-                        } else {
-                            tracing::debug!("Linq: skipping unsupported {part_type} part");
-                            None
-                        }
+                        tracing::debug!("Linq: media part carried by typed ingress, not text");
+                        None
                     }
                     _ => {
                         tracing::debug!("Linq: skipping {part_type} part");

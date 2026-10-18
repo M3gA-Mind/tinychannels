@@ -131,7 +131,7 @@ fn linq_parse_empty_payload() {
 }
 
 #[test]
-fn linq_parse_media_only_translated_to_image_marker() {
+fn linq_parse_media_only_yields_no_text_message() {
     let ch = LinqChannel::new("tok".into(), "+15551234567".into(), vec!["*".into()]);
     let payload = serde_json::json!({
         "event_type": "message.received",
@@ -151,8 +151,10 @@ fn linq_parse_media_only_translated_to_image_marker() {
     });
 
     let msgs = ch.parse_webhook_payload(&payload);
-    assert_eq!(msgs.len(), 1);
-    assert_eq!(msgs[0].content, "[IMAGE:https://example.com/image.jpg]");
+    assert!(
+        msgs.is_empty(),
+        "media is typed content, never a text marker"
+    );
 }
 
 #[test]

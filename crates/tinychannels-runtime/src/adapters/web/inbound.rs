@@ -17,8 +17,7 @@ pub const WEB_CHANNEL_ID: &str = "web";
 /// `channel.web_chat` RPC, the TUI).
 ///
 /// Attachments are typed [`ContentPart`]s, so images, files, audio and voice
-/// notes arrive as structured content instead of `[IMAGE:..]` / `[FILE:..]`
-/// text markers.
+/// notes arrive as structured content instead of text markers.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct WebChatStart {
