@@ -105,25 +105,9 @@ impl MattermostChannel {
     }
 }
 
-#[async_trait]
-impl Channel for MattermostChannel {
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::long_tail::LongTail::declared(self)
-    }
-
-    fn name(&self) -> &str {
-        "mattermost"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> Result<()> {
+impl MattermostChannel {
+    /// Post one message and return the id Mattermost assigned to it.
+    async fn post_message(&self, message: &SendMessage) -> Result<Vec<String>> {
         // Mattermost supports threading via 'root_id'.
         // We pack 'channel_id:root_id' into recipient if it's a thread.
         let (channel_id, root_id) = if let Some((c, r)) = message.recipient.split_once(':') {
@@ -161,7 +145,35 @@ impl Channel for MattermostChannel {
             bail!("Mattermost post failed ({status}): {body}");
         }
 
-        Ok(())
+        let ids = resp
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|post| post.get("id").and_then(|id| id.as_str()).map(str::to_owned));
+        Ok(ids.into_iter().collect())
+    }
+}
+
+#[async_trait]
+impl Channel for MattermostChannel {
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        crate::providers::long_tail::LongTail::declared(self)
+    }
+
+    fn name(&self) -> &str {
+        "mattermost"
+    }
+
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
+    async fn send(&self, message: &SendMessage) -> Result<()> {
+        self.post_message(message).await.map(|_| ())
     }
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> Result<()> {
@@ -482,6 +494,7 @@ fn normalize_mattermost_content(
     Some(cleaned)
 }
 
+#[async_trait]
 impl crate::providers::long_tail::LongTail for MattermostChannel {
     const ID: &'static str = "mattermost";
     const DISPLAY: &'static str = "Mattermost";
@@ -497,6 +510,10 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
 
     fn typing_supported(&self) -> bool {
         true
+    }
+
+    async fn send_reporting_ids(&self, message: &SendMessage) -> Result<Vec<String>> {
+        self.post_message(message).await
     }
 
     fn address(&self, message: &mut SendMessage) {

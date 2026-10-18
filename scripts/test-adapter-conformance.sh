@@ -20,3 +20,6 @@ cargo test --locked -p tinychannels-bus unsupported_send_flag_is_additive_to_leg
 cargo test --locked -p tinychannels --lib the_cloud_adapter_passes_the_whole_conformance_matrix_against_its_wire -- --nocapture
 cargo test --locked -p tinychannels --features whatsapp-web --lib the_web_adapter_passes_the_whole_conformance_matrix_against_its_session -- --nocapture
 cargo test --locked -p tinychannels-module whatsapp_native -- --nocapture
+cargo test --locked -p tinychannels --lib the_discord_adapter_passes_the_full_conformance_matrix -- --nocapture
+cargo test --locked -p tinychannels --lib the_mattermost_adapter_passes_the_full_conformance_matrix -- --nocapture
+cargo test --locked -p tinychannels --lib offline_providers_degrade_every_undeclared_feature_gracefully -- --nocapture
