@@ -412,8 +412,17 @@ async fn send_host_scoped_image_bytes_upload_to_cos_and_return_the_platform_id()
     assert!(!id.is_empty());
     assert_eq!(frame.cmd, biz_cmd::SEND_C2C_MESSAGE);
     assert!(contains(&frame.data, "https://cdn.example/cat.png"));
-    assert!(contains(&frame.data, "asset.png"));
     assert!(contains(&frame.data, "reply-1"));
+    let image_uuid = hex::encode(sha1::Sha1::digest(&png(320, 200)));
+    assert!(contains(&frame.data, &image_uuid));
+    let requests = server.received_requests().await.unwrap();
+    let credential_request = requests
+        .iter()
+        .find(|request| request.url.path() == "/api/resource/genUploadInfo")
+        .expect("COS credential request");
+    let credential_body: serde_json::Value = serde_json::from_slice(&credential_request.body)
+        .expect("credential request JSON");
+    assert_eq!(credential_body["fileName"], "asset.png");
 }
 
 #[tokio::test]
