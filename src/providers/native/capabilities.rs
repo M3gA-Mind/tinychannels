@@ -65,3 +65,7 @@ pub(crate) fn voice_capabilities(
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+#[path = "capabilities_tests.rs"]
+mod tests;
