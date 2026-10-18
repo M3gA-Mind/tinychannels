@@ -34,6 +34,8 @@ pub struct QQChannel {
     /// Message deduplication set.
     dedup: Arc<RwLock<HashSet<String>>>,
     http_client: reqwest::Client,
+    /// Host-scoped media and voice stores used by native typed sends.
+    native: crate::providers::native::HostPorts,
 }
 
 impl QQChannel {
@@ -45,6 +47,7 @@ impl QQChannel {
             token_cache: Arc::new(RwLock::new(None)),
             dedup: Arc::new(RwLock::new(HashSet::new())),
             http_client: reqwest::Client::new(),
+            native: crate::providers::native::HostPorts::default(),
         }
     }
 
@@ -61,7 +64,26 @@ impl QQChannel {
             token_cache: Arc::new(RwLock::new(None)),
             dedup: Arc::new(RwLock::new(HashSet::new())),
             http_client,
+            native: crate::providers::native::HostPorts::default(),
         }
+    }
+
+    /// Enable scoped media uploads through the host repository.
+    pub fn with_media_repository(
+        mut self,
+        repository: Arc<dyn crate::host::MediaRepository>,
+    ) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    /// Enable native QQ voice messages through the host voice store.
+    pub fn with_voice_media_store(
+        mut self,
+        store: Arc<dyn crate::host::VoiceMediaStore>,
+    ) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
     }
 
     fn http_client(&self) -> reqwest::Client {
@@ -488,10 +510,12 @@ impl crate::providers::long_tail::LongTail for QQChannel {
     const DISPLAY: &'static str = "QQ";
 
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
-        use crate::providers::long_tail::{TextSpec, text_capabilities};
-        text_capabilities(TextSpec::default())
+        crate::providers::native::NativeProvider::declared_capabilities(self)
     }
 }
+
+#[path = "qq/native.rs"]
+mod native;
 
 crate::providers::long_tail::impl_long_tail_adapter!(QQChannel);
 
