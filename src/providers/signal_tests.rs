@@ -37,8 +37,6 @@ fn make_envelope(source_number: Option<&str>, message: Option<&str>) -> Envelope
         timestamp: Some(1_700_000_000_000),
         source_name: None,
 ..Default::default()
-},
-..Default::default()
 }
 
 #[test]
