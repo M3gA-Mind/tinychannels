@@ -817,5 +817,5 @@ impl Channel for WhatsAppWebChannel {
 // Every test is `#[cfg(feature = "whatsapp-web")]`, so gate the whole module
 // on the feature to avoid an unused `use super::*` in the feature-off build.
 #[cfg(all(test, feature = "whatsapp-web"))]
-#[path = "whatsapp_web_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
