@@ -102,32 +102,6 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
             |c| c.mattermost.as_mut().unwrap().bot_token.clear(),
         ),
         (
-            "webhook",
-            tinychannels_bus::ChannelsConfig {
-                webhook: Some(WebhookConfig {
-                    port: 8080,
-                    secret: Some("secret".into()),
-                }),
-                ..Default::default()
-            },
-            |c| c.webhook.as_mut().unwrap().secret = None,
-        ),
-        (
-            "matrix",
-            tinychannels_bus::ChannelsConfig {
-                matrix: Some(MatrixConfig {
-                    homeserver: "https://matrix.example".into(),
-                    access_token: "secret".into(),
-                    user_id: Some("@bot:example".into()),
-                    device_id: None,
-                    room_id: "!room:example".into(),
-                    allowed_users: vec![],
-                }),
-                ..Default::default()
-            },
-            |c| c.matrix.as_mut().unwrap().access_token.clear(),
-        ),
-        (
             "email",
             tinychannels_bus::ChannelsConfig {
                 email: Some(EmailConfig {
@@ -325,26 +299,6 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
     assert!(configured_media_account_scope("mattermost", &missing_authority).is_some());
     missing_authority.mattermost.as_mut().unwrap().url.clear();
     assert!(configured_media_account_scope("mattermost", &missing_authority).is_none());
-
-    let mut missing_authority = tinychannels_bus::ChannelsConfig {
-        matrix: Some(MatrixConfig {
-            homeserver: "https://matrix.example".into(),
-            access_token: "secret".into(),
-            user_id: Some("@bot:example".into()),
-            device_id: None,
-            room_id: "!room:example".into(),
-            allowed_users: vec![],
-        }),
-        ..Default::default()
-    };
-    assert!(configured_media_account_scope("matrix", &missing_authority).is_some());
-    missing_authority
-        .matrix
-        .as_mut()
-        .unwrap()
-        .homeserver
-        .clear();
-    assert!(configured_media_account_scope("matrix", &missing_authority).is_none());
 
     let mut missing_authority = tinychannels_bus::ChannelsConfig {
         irc: Some(IrcConfig {
@@ -3531,16 +3485,6 @@ mod whatsapp_native {
 #[test]
 fn media_scope_rejects_blank_secrets_and_distinguishes_credential_modes() {
     use tinychannels_bus::config::*;
-    let webhook = |secret: &str| tinychannels_bus::ChannelsConfig {
-        webhook: Some(WebhookConfig {
-            port: 8080,
-            secret: Some(secret.into()),
-        }),
-        ..Default::default()
-    };
-    assert!(configured_media_account_scope("webhook", &webhook("  ")).is_none());
-    assert!(configured_media_account_scope("webhook", &webhook("s")).is_some());
-
     let whatsapp = |phone: &str, token: &str| tinychannels_bus::ChannelsConfig {
         whatsapp: Some(WhatsAppConfig {
             access_token: Some(token.into()),

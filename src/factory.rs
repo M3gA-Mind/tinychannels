@@ -450,12 +450,6 @@ pub fn build_channels(
         channels.push(Arc::new(IMessageChannel::new(im.allowed_contacts.clone())));
     }
 
-    if config.matrix.is_some() {
-        tracing::warn!(
-            "[channels] matrix is configured but Matrix support was removed from this build; skipping"
-        );
-    }
-
     if let Some(sig) = config.signal.as_ref() {
         channels.push(Arc::new(SignalChannel::with_http_client(
             sig.http_url.clone(),

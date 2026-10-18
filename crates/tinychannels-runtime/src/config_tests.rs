@@ -84,18 +84,6 @@ fn has_listening_integrations_detects_slack() {
 }
 
 #[test]
-fn has_listening_integrations_ignores_push_webhook() {
-    let cfg = ChannelsConfig {
-        webhook: Some(WebhookConfig {
-            port: 8080,
-            secret: Some("secret".into()),
-        }),
-        ..Default::default()
-    };
-    assert!(!cfg.has_listening_integrations());
-}
-
-#[test]
 fn has_listening_integrations_ignores_incomplete_relay_config() {
     let cfg = ChannelsConfig {
         relay: Some(RelayRuntimeConfig {

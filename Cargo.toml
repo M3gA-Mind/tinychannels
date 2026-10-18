@@ -56,7 +56,6 @@ test-support = []
 # transport module is still gated on this cfg. `tokio-tungstenite` and
 # `tokio/net` are now unconditional dependencies (the ported channel providers
 # use them directly), so this feature no longer needs to pull them in.
-relay-websocket = []
 # SMTP send only (`EmailChannel::new` + `send_message` / `build_*_message`).
 #
 # Split out of `email` because sending and receiving have very different costs
