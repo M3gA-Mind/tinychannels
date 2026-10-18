@@ -2,8 +2,8 @@
 //! content, or as a voice note when the platform marks it as one.
 
 use crate::host::{
-    EventSink, MediaMetadata, MediaRepository, MediaStoreRequest, VoiceMediaRequest,
-    VoiceMediaStore,
+    EventSink, MediaMetadata, MediaRepository, MediaStoreRequest, Transcriber,
+    TranscriptionRequest, VoiceMediaRequest, VoiceMediaStore,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -11,7 +11,7 @@ use std::sync::Arc;
 use tinychannels_bus::{
     ChannelEvent, ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelRef, ContentPart, ConversationRef,
     HostVoiceMediaDirection, HostVoiceScope, MediaKind, MediaReference, VoiceNote,
-    VoiceTranscript,
+    VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
 };
 
 /// The host ports and limits inbound ingestion needs.
@@ -20,6 +20,8 @@ pub(crate) struct Ingest<'a> {
     pub(crate) channel: ChannelRef,
     pub(crate) repository: Option<&'a Arc<dyn MediaRepository>>,
     pub(crate) voice_store: Option<&'a Arc<dyn VoiceMediaStore>>,
+    /// Host speech-to-text; without one the shared ingress transcribes later.
+    pub(crate) transcriber: Option<&'a Arc<dyn Transcriber>>,
     pub(crate) file_bytes: u64,
     pub(crate) voice_bytes: u64,
 }
@@ -81,6 +83,42 @@ impl Ingest<'_> {
             channel: self.channel.clone(),
             conversation: conversation.clone(),
             turn_id: message_id.to_owned(),
+        }
+    }
+
+    /// Transcribe with the host's speech-to-text, when it has one.
+    async fn transcribe(
+        &self,
+        conversation: &ConversationRef,
+        message_id: &str,
+        bytes: &[u8],
+        mime: &str,
+        name: &Option<String>,
+    ) -> Option<VoiceTranscript> {
+        let transcriber = self.transcriber?;
+        let result = transcriber
+            .transcribe_scoped(
+                self.scope(conversation, message_id),
+                TranscriptionRequest {
+                    audio_base64: BASE64.encode(bytes),
+                    mime_type: Some(mime.to_owned()),
+                    file_name: name.clone(),
+                    language: None,
+                },
+            )
+            .await;
+        match result {
+            Ok(result) if !result.text.trim().is_empty() => Some(VoiceTranscript {
+                text: result.text,
+                language: result.language,
+                state: VoiceTranscriptState::Complete,
+                source: VoiceTranscriptSource::HostStt,
+            }),
+            Ok(_) => None,
+            Err(error) => {
+                tracing::warn!(provider = self.provider, %error, "[native] voice transcription failed");
+                None
+            }
         }
     }
 
@@ -146,13 +184,20 @@ impl Ingest<'_> {
             media.kind = MediaKind::Audio;
             media.content_type = Some(mime);
             media.codec = codec.clone();
+            let transcript = match file.transcript {
+                Some(transcript) => Some(transcript),
+                None => {
+                    self.transcribe(conversation, message_id, &file.bytes, &mime_for(&media), &file.name)
+                        .await
+                }
+            };
             into.voice = Some(VoiceNote {
                 media,
                 codec,
                 duration_ms: file.duration_ms,
                 waveform: None,
                 push_to_talk: false,
-                transcript: file.transcript,
+                transcript,
             });
             return;
         }
@@ -293,6 +338,14 @@ pub(crate) async fn publish_event(
     if let Err(error) = events.publish_ingress(ChannelIngress::Event(event)).await {
         tracing::debug!(provider, %error, "[native] failed to deliver channel event");
     }
+}
+
+
+fn mime_for(media: &MediaReference) -> String {
+    media
+        .content_type
+        .clone()
+        .unwrap_or_else(|| "audio/mp4".into())
 }
 
 #[cfg(test)]
