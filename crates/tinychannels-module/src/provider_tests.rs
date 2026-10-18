@@ -605,6 +605,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     audio_base64: None,
                     codec: Some("ogg_opus".into()),
                     duration_ms: Some(1000),
+                    waveform: None,
                 },
             },
             Feature::VoiceSynthesis => {
@@ -666,6 +667,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                         audio_base64: None,
                         codec: Some("ogg_opus".into()),
                         duration_ms: synthesized.duration_ms,
+                        waveform: None,
                     },
                 }
             }
