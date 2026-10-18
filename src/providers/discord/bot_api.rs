@@ -67,7 +67,10 @@ impl DiscordReactionRequest {
         let message_id = text(&["messageId", "message_id"]).ok_or("reaction requires messageId")?;
         let emoji = text(&["emoji", "value"]);
         let custom_emoji_id = text(&["customEmojiId", "custom_emoji_id"]);
-        let remove = value.get("remove").and_then(Value::as_bool).unwrap_or(false);
+        let remove = value
+            .get("remove")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         if emoji.is_none() {
             return Err("reaction requires emoji".into());
         }
@@ -85,7 +88,10 @@ fn thread_entry(thread: &Value) -> Option<ChannelThreadEntry> {
     let thread_id = thread.get("id").and_then(Value::as_str)?.to_owned();
     Some(ChannelThreadEntry {
         thread_id,
-        title: thread.get("name").and_then(Value::as_str).map(str::to_owned),
+        title: thread
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
         active: thread
             .pointer("/thread_metadata/archived")
             .and_then(Value::as_bool)
@@ -108,8 +114,13 @@ impl DiscordChannel {
             id: request.channel_id.clone(),
             ..Default::default()
         };
-        self.send_reaction_v2(&conversation, &request.message_id, &reaction, request.remove)
-            .await
+        self.send_reaction_v2(
+            &conversation,
+            &request.message_id,
+            &reaction,
+            request.remove,
+        )
+        .await
     }
 
     /// Start a public thread under the configured channel; returns `(id, name)`.
@@ -182,7 +193,13 @@ impl DiscordChannel {
             self.endpoint_url(&["guilds", guild_id, "threads", "active"])?
         };
         let listing = self
-            .call(reqwest::Method::GET, url, Payload::None, "list threads", true)
+            .call(
+                reqwest::Method::GET,
+                url,
+                Payload::None,
+                "list threads",
+                true,
+            )
             .await?;
         Ok(listing
             .get("threads")
@@ -190,8 +207,7 @@ impl DiscordChannel {
             .into_iter()
             .flatten()
             .filter(|thread| {
-                archived
-                    || thread.get("parent_id").and_then(Value::as_str) == Some(channel_id)
+                archived || thread.get("parent_id").and_then(Value::as_str) == Some(channel_id)
             })
             .filter_map(thread_entry)
             .collect())

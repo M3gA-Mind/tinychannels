@@ -708,10 +708,9 @@ impl ChannelBackend for HostBackend {
             });
         }
         if let Some(discord) = self.discord_native(config, channel)? {
-            let request = tinychannels::providers::discord::DiscordReactionRequest::from_value(
-                &reaction,
-            )
-            .map_err(anyhow::Error::msg)?;
+            let request =
+                tinychannels::providers::discord::DiscordReactionRequest::from_value(&reaction)
+                    .map_err(anyhow::Error::msg)?;
             discord
                 .controller_reaction(&request)
                 .await
