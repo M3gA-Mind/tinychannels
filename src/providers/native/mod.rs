@@ -304,5 +304,9 @@ macro_rules! native_v2_adapter {
 pub(crate) use native_v2_adapter;
 
 #[cfg(test)]
+#[path = "fixtures_tests.rs"]
+pub(crate) mod fixtures;
+
+#[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
