@@ -112,3 +112,46 @@ chunk transfer: it will enforce a 5 MiB maximum before upload, classify the
 actual native file type, upload with srv_send_msg=false, then send the returned
 opaque file_info in the separate message request. The declared capability
 limit must remain 5 MiB until the full chunk-upload protocol is implemented.
+
+## DingTalk App Bot
+
+DingTalk's official [bot overview](https://opensource.dingtalk.com/developerpedia/docs/learn/bot/overview/)
+distinguishes App Bots from custom webhook bots: App Bots can call OpenAPI,
+including media upload, while custom webhook bots cannot. The official
+[App Bot reply guide](https://opensource.dingtalk.com/developerpedia/docs/learn/bot/appbot/reply/)
+says session webhooks support text and Markdown, while OpenAPI supports media
+uploads and richer message forms. The current adapter is an App Bot Stream Mode
+client (`client_id` / `client_secret`) but retains only each incoming message's
+session webhook, so it does not yet have enough target state for the native
+OpenAPI media-send path.
+
+The official [received-message type reference](https://opensource.dingtalk.com/developerpedia/docs/learn/bot/message/)
+lists image, video, voice, file, and rich-text events. The official
+[Stream FAQ](https://opensource.dingtalk.com/developerpedia/docs/learn/stream/faq/)
+confirms rich image callbacks can carry `pictureDownloadCode` and `downloadCode`;
+file and video event examples carry download codes too. This establishes that
+typed inbound media is a supported platform capability, not something to
+infer from the current text-only listener.
+
+The DingTalk API reference mirrors document the robot media templates and
+upload operation: [message templates](https://dingtalk.apifox.cn/doc-3550110)
+lists `sampleFile`, `sampleVideo`, and `sampleAudio`, and
+[media upload](https://dingtalk.apifox.cn/api-9093351) describes
+`POST https://oapi.dingtalk.com/media/upload` returning a reusable `media_id`.
+The newer robot send API is
+`POST https://api.dingtalk.com/v1.0/robot/groupMessages/send` with
+`robotCode`, `openConversationId`, `msgKey`, and JSON-string `msgParam`; the
+private-chat endpoint is documented separately. These endpoints require an
+App Bot's robot code and an access token. The current adapter receives
+`robotCode` in callbacks but does not retain it, so adding this path requires
+account-scoped retention and tests for both group and direct-message targets.
+
+There is a material platform/API compatibility caveat: Hermes Agent
+[issue #30144](https://github.com/NousResearch/hermes-agent/issues/30144)
+reports `sampleFile` returning `robot not found` for internal App Bots on both
+new send endpoints. Treat this as a reported limitation, not a confirmed
+universal restriction; verify the send shape against the supported bot type
+before declaring file delivery. The docs also distinguish native image sends
+from attachments: `sampleImageMsg` takes a `photoURL`, while uploaded media IDs
+are consumed by file/video/audio templates. Do not turn an uploaded private
+image into a Markdown URL or advertise it as inline image delivery.
