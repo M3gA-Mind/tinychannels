@@ -340,10 +340,10 @@ impl WhatsAppWebChannel {
         Ok(ChannelSendOutcome { receipt, error })
     }
 
-    /// The provider message id a receipt names, if it names exactly one.
+    /// The conversation, message id and kind a single-message receipt names.
     fn receipt_target(
         receipt: &MessageReceipt,
-    ) -> Result<(Jid, String, MessageReceiptPartKind), WaFailure> {
+    ) -> Result<(String, String, MessageReceiptPartKind), WaFailure> {
         let conversation = receipt
             .conversation
             .as_ref()
@@ -355,15 +355,7 @@ impl WhatsAppWebChannel {
                 "WhatsApp can only change a single-message send",
             ));
         };
-        let jid = conversation
-            .parse::<Jid>()
-            .or_else(|_| {
-                Ok::<_, WaFailure>(Jid::pn(
-                    conversation.chars().filter(char::is_ascii_digit).collect::<String>(),
-                ))
-            })
-            .map_err(|_| WaFailure::rejected("WhatsApp receipt conversation is invalid"))?;
-        Ok((jid, part.platform_message_id.clone(), part.kind))
+        Ok((conversation, part.platform_message_id.clone(), part.kind))
     }
 
     /// Edit the text of a message we sent.
@@ -405,12 +397,7 @@ impl WhatsAppWebChannel {
 
     /// Unsend a message we sent, for everyone.
     pub(super) async fn delete_v2(&self, receipt: &MessageReceipt) -> Result<(), WaFailure> {
-        let (_, original_id, _) = Self::receipt_target(receipt)?;
-        let conversation = receipt
-            .conversation
-            .as_ref()
-            .map(|conversation| conversation.id.clone())
-            .unwrap_or_default();
+        let (conversation, original_id, _) = Self::receipt_target(receipt)?;
         let client = self.live_client()?;
         let to = self.admitted_jid(&conversation)?;
         client
