@@ -109,9 +109,14 @@ pub(crate) struct MemoryVoices {
 
 impl MemoryVoices {
     pub(crate) fn seed(&self, id: &str, mime_type: &str, bytes: &[u8]) {
+        self.served_raw(id, mime_type, &BASE64.encode(bytes));
+    }
+
+    /// Serve a payload exactly as given (it need not be valid base64).
+    pub(crate) fn served_raw(&self, id: &str, mime_type: &str, payload: &str) {
         self.served
             .lock()
-            .insert(id.to_owned(), (mime_type.to_owned(), BASE64.encode(bytes)));
+            .insert(id.to_owned(), (mime_type.to_owned(), payload.to_owned()));
     }
 }
 
