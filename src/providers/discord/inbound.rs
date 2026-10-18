@@ -7,7 +7,7 @@ use crate::traits::ChannelMessage;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 use tinychannels_bus::{
-    ChannelEvent, ChannelEventKind, ChannelIngress, ChannelInboundEnvelope, ChannelRef,
+    ChannelEvent, ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelRef,
     ContentPart, ConversationKind, ConversationRef, MediaKind, SenderRef, VoiceNote,
 };
 use uuid::Uuid;
@@ -511,7 +511,9 @@ impl DiscordChannel {
         };
         let content_type = normalized_content_type(str_field(attachment, "content_type"));
         let kind = media_kind_for(&content_type);
-        let (bytes, _) = self.download_attachment(url, MAX_INBOUND_MEDIA_BYTES).await?;
+        let (bytes, _) = self
+            .download_attachment(url, MAX_INBOUND_MEDIA_BYTES)
+            .await?;
         let file_name = str_field(attachment, "filename").map(str::to_owned);
         let duration_ms = attachment
             .get("duration_secs")

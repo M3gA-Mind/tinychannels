@@ -18,7 +18,10 @@ pub(super) struct Upload {
 pub(super) enum Payload {
     None,
     Json(Value),
-    Multipart { payload: Value, uploads: Vec<Upload> },
+    Multipart {
+        payload: Value,
+        uploads: Vec<Upload>,
+    },
 }
 
 /// Typed failure that crosses the legacy `anyhow` seam unchanged.
@@ -181,8 +184,17 @@ impl DiscordChannel {
             ..Default::default()
         })?;
         if !status.is_success() {
-            tracing::debug!(endpoint, status = status.as_u16(), "[discord] request rejected");
-            return Err(error_for_status(endpoint, status, retry_after_header, &body));
+            tracing::debug!(
+                endpoint,
+                status = status.as_u16(),
+                "[discord] request rejected"
+            );
+            return Err(error_for_status(
+                endpoint,
+                status,
+                retry_after_header,
+                &body,
+            ));
         }
         if body.trim().is_empty() {
             return Ok(Value::Null);

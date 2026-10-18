@@ -99,11 +99,14 @@ impl Acc {
 }
 
 pub(super) fn target_for(message: &ChannelOutboundMessage) -> Result<Target, ChannelSendError> {
-    let mut conversation = message.conversation_ref.clone().unwrap_or_else(|| ConversationRef {
-        id: message.conversation_id.clone(),
-        thread_id: message.thread_id.clone(),
-        ..Default::default()
-    });
+    let mut conversation = message
+        .conversation_ref
+        .clone()
+        .unwrap_or_else(|| ConversationRef {
+            id: message.conversation_id.clone(),
+            thread_id: message.thread_id.clone(),
+            ..Default::default()
+        });
     if conversation.thread_id.is_none() {
         conversation.thread_id.clone_from(&message.thread_id);
     }
@@ -166,7 +169,9 @@ pub(super) fn button_rows(rows: &[Vec<ButtonAction>]) -> Result<Vec<Value>, Chan
                 return Err(pre_dispatch("Discord button id must be 1 to 100 bytes"));
             }
             if button.label.trim().is_empty() || button.label.chars().count() > MAX_BUTTON_LABEL {
-                return Err(pre_dispatch("Discord button label must be 1 to 80 characters"));
+                return Err(pre_dispatch(
+                    "Discord button label must be 1 to 80 characters",
+                ));
             }
             components.push(json!({
                 "type": 2,
@@ -183,9 +188,7 @@ pub(super) fn button_rows(rows: &[Vec<ButtonAction>]) -> Result<Vec<Value>, Chan
 
 /// Presentation blocks become one embed; an approval also carries its
 /// choice buttons.
-pub(super) fn presentation_embed(
-    blocks: &Value,
-) -> Result<(Value, Vec<Value>), ChannelSendError> {
+pub(super) fn presentation_embed(blocks: &Value) -> Result<(Value, Vec<Value>), ChannelSendError> {
     if let Some(object) = blocks
         .as_object()
         .filter(|o| o.get("kind").and_then(Value::as_str) == Some("approval"))
@@ -195,7 +198,9 @@ pub(super) fn presentation_embed(
                 .keys()
                 .any(|key| !["kind", "id", "prompt", "choices"].contains(&key.as_str()))
         {
-            return Err(pre_dispatch("Discord approval presentation has unsupported fields"));
+            return Err(pre_dispatch(
+                "Discord approval presentation has unsupported fields",
+            ));
         }
         let request_id = object
             .get("id")
@@ -259,29 +264,38 @@ fn collect_block_text(value: &Value, out: &mut Vec<String>) -> Result<(), Channe
             }
         }
         Value::Object(object) => {
-            const ALLOWED: &[&str] = &["type", "text", "title", "heading", "caption", "description"];
+            const ALLOWED: &[&str] =
+                &["type", "text", "title", "heading", "caption", "description"];
             if object.keys().any(|key| !ALLOWED.contains(&key.as_str())) {
-                return Err(pre_dispatch("Discord presentation block has unsupported fields"));
+                return Err(pre_dispatch(
+                    "Discord presentation block has unsupported fields",
+                ));
             }
             for key in ["title", "heading", "text", "caption", "description"] {
                 if let Some(value) = object.get(key) {
-                    let text = value
-                        .as_str()
-                        .ok_or_else(|| pre_dispatch("Discord presentation text must be a string"))?;
+                    let text = value.as_str().ok_or_else(|| {
+                        pre_dispatch("Discord presentation text must be a string")
+                    })?;
                     if !text.trim().is_empty() {
                         out.push(text.to_owned());
                     }
                 }
             }
         }
-        _ => return Err(pre_dispatch("Discord presentation only accepts text blocks")),
+        _ => {
+            return Err(pre_dispatch(
+                "Discord presentation only accepts text blocks",
+            ));
+        }
     }
     Ok(())
 }
 
 fn thread_spec(data: &Value) -> Result<ThreadSpec, ChannelSendError> {
     if data.get("action").and_then(Value::as_str) != Some("create_thread") {
-        return Err(unsupported("Discord native data only supports create_thread"));
+        return Err(unsupported(
+            "Discord native data only supports create_thread",
+        ));
     }
     let name = data
         .get("name")
@@ -308,7 +322,9 @@ fn thread_spec(data: &Value) -> Result<ThreadSpec, ChannelSendError> {
         .as_deref()
         .is_some_and(|c| c.encode_utf16().count() > DISCORD_MAX_MESSAGE_LENGTH)
     {
-        return Err(pre_dispatch("Discord thread opening message exceeds 2000 characters"));
+        return Err(pre_dispatch(
+            "Discord thread opening message exceeds 2000 characters",
+        ));
     }
     Ok(ThreadSpec {
         name: name.to_owned(),
@@ -404,14 +420,23 @@ impl DiscordChannel {
                         push_caption(&mut acc.text, caption.as_deref());
                         acc.kind = MessageReceiptPartKind::Media;
                     }
-                    ContentPart::Audio { media, title, transcript, .. } => {
+                    ContentPart::Audio {
+                        media,
+                        title,
+                        transcript,
+                        ..
+                    } => {
                         acc.uploads
                             .push(self.resolve_upload(message, target, media, "audio").await?);
                         push_caption(&mut acc.text, title.as_deref());
                         push_caption(&mut acc.text, transcript.as_deref());
                         acc.kind = MessageReceiptPartKind::Media;
                     }
-                    ContentPart::File { media, file_name, caption } => {
+                    ContentPart::File {
+                        media,
+                        file_name,
+                        caption,
+                    } => {
                         let mut upload =
                             self.resolve_upload(message, target, media, "file").await?;
                         if let Some(name) = file_name {
@@ -447,7 +472,9 @@ impl DiscordChannel {
                         batches.push(Batch::Thread(thread_spec(data)?));
                     }
                     ContentPart::Native { .. } => {
-                        return Err(unsupported("Discord ignores another provider's native data"));
+                        return Err(unsupported(
+                            "Discord ignores another provider's native data",
+                        ));
                     }
                     ContentPart::Sticker { .. }
                     | ContentPart::Location { .. }
@@ -461,7 +488,12 @@ impl DiscordChannel {
                 },
                 OutboundContentPart::Voice { voice } => {
                     acc.take(&mut batches);
-                    let OutboundVoice::Media { media, audio_base64, codec, duration_ms } = voice
+                    let OutboundVoice::Media {
+                        media,
+                        audio_base64,
+                        codec,
+                        duration_ms,
+                    } = voice
                     else {
                         return Err(pre_dispatch(
                             "voice synthesis must be prepared by the shared module runtime",
@@ -486,9 +518,14 @@ impl DiscordChannel {
             return Err(pre_dispatch("Discord send has no content"));
         }
         for batch in &batches {
-            if let Batch::Message { uploads, embeds, .. } = batch {
+            if let Batch::Message {
+                uploads, embeds, ..
+            } = batch
+            {
                 if uploads.len() > MAX_FILES || embeds.len() > MAX_EMBEDS {
-                    return Err(pre_dispatch("Discord allows 10 files and 10 embeds per message"));
+                    return Err(pre_dispatch(
+                        "Discord allows 10 files and 10 embeds per message",
+                    ));
                 }
                 let total: usize = uploads.iter().map(|u| u.bytes.len()).sum();
                 if total as u64 > MAX_UPLOAD_BYTES {
@@ -516,10 +553,23 @@ impl DiscordChannel {
         let mut failure = None;
         for batch in batches {
             let result = match batch {
-                Batch::Message { text, uploads, embeds, components, kind } => {
+                Batch::Message {
+                    text,
+                    uploads,
+                    embeds,
+                    components,
+                    kind,
+                } => {
                     self.send_message_batch(
-                        message, &target, text, uploads, embeds, components, kind,
-                        &mut next_nonce, &mut sent,
+                        message,
+                        &target,
+                        text,
+                        uploads,
+                        embeds,
+                        components,
+                        kind,
+                        &mut next_nonce,
+                        &mut sent,
                     )
                     .await
                 }
@@ -580,10 +630,17 @@ impl DiscordChannel {
         let last = chunks.pop();
         let url = self.endpoint_url(&["channels", &target.post_channel, "messages"])?;
         for chunk in chunks {
-            let body = self.message_body(message, target, Some(chunk), sent.is_empty(), *next_nonce);
+            let body =
+                self.message_body(message, target, Some(chunk), sent.is_empty(), *next_nonce);
             *next_nonce += 1;
             let response = self
-                .call(reqwest::Method::POST, url.clone(), Payload::Json(body), "send message", nonce_enabled(message))
+                .call(
+                    reqwest::Method::POST,
+                    url.clone(),
+                    Payload::Json(body),
+                    "send message",
+                    nonce_enabled(message),
+                )
                 .await?;
             sent.push((response_id(&response)?, MessageReceiptPartKind::Text, None));
             tokio::time::sleep(std::time::Duration::from_millis(250)).await;
@@ -606,10 +663,19 @@ impl DiscordChannel {
                     .map(|(index, u)| json!({"id": index, "filename": u.file_name}))
                     .collect(),
             );
-            Payload::Multipart { payload: body, uploads }
+            Payload::Multipart {
+                payload: body,
+                uploads,
+            }
         };
         let response = self
-            .call(reqwest::Method::POST, url, payload, "send message", nonce_enabled(message))
+            .call(
+                reqwest::Method::POST,
+                url,
+                payload,
+                "send message",
+                nonce_enabled(message),
+            )
             .await?;
         sent.push((response_id(&response)?, kind, None));
         Ok(())
@@ -685,7 +751,13 @@ impl DiscordChannel {
     ) -> Result<(), ChannelSendError> {
         let (url, body) = match spec.message_id.as_deref() {
             Some(message_id) => (
-                self.endpoint_url(&["channels", &target.post_channel, "messages", message_id, "threads"])?,
+                self.endpoint_url(&[
+                    "channels",
+                    &target.post_channel,
+                    "messages",
+                    message_id,
+                    "threads",
+                ])?,
                 json!({"name": spec.name, "auto_archive_duration": spec.auto_archive_minutes}),
             ),
             None => (
@@ -694,18 +766,38 @@ impl DiscordChannel {
             ),
         };
         let thread = self
-            .call(reqwest::Method::POST, url, Payload::Json(body), "create thread", false)
+            .call(
+                reqwest::Method::POST,
+                url,
+                Payload::Json(body),
+                "create thread",
+                false,
+            )
             .await?;
         let thread_id = response_id(&thread)?;
-        sent.push((thread_id.clone(), MessageReceiptPartKind::Card, Some(thread_id.clone())));
+        sent.push((
+            thread_id.clone(),
+            MessageReceiptPartKind::Card,
+            Some(thread_id.clone()),
+        ));
         if let Some(content) = spec.content {
             let body = self.message_body(message, target, Some(content), false, *next_nonce);
             *next_nonce += 1;
             let url = self.endpoint_url(&["channels", &thread_id, "messages"])?;
             let response = self
-                .call(reqwest::Method::POST, url, Payload::Json(body), "send message", nonce_enabled(message))
+                .call(
+                    reqwest::Method::POST,
+                    url,
+                    Payload::Json(body),
+                    "send message",
+                    nonce_enabled(message),
+                )
                 .await?;
-            sent.push((response_id(&response)?, MessageReceiptPartKind::Text, Some(thread_id)));
+            sent.push((
+                response_id(&response)?,
+                MessageReceiptPartKind::Text,
+                Some(thread_id),
+            ));
         }
         Ok(())
     }
@@ -783,7 +875,10 @@ fn build_receipt(
         channel: Some(target.channel.clone()),
         conversation: Some(target.conversation.clone()),
         primary_platform_message_id: parts.first().map(|p| p.platform_message_id.clone()),
-        platform_message_ids: parts.iter().map(|p| p.platform_message_id.clone()).collect(),
+        platform_message_ids: parts
+            .iter()
+            .map(|p| p.platform_message_id.clone())
+            .collect(),
         parts,
         thread_id,
         reply_to_id: target.reply_to.clone(),

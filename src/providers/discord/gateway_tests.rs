@@ -33,15 +33,44 @@ async fn dispatch_routes_each_gateway_event_to_its_handler() {
         "author": {"id": "42"}, "attachments": []
     });
 
-    assert!(channel.handle_dispatch("MESSAGE_CREATE", &message, BOT_ID, &tx).await);
+    assert!(
+        channel
+            .handle_dispatch("MESSAGE_CREATE", &message, BOT_ID, &tx)
+            .await
+    );
     let mut edit = message.clone();
     edit["edited_timestamp"] = json!("2026-01-02T03:04:05+00:00");
-    assert!(channel.handle_dispatch("MESSAGE_UPDATE", &edit, BOT_ID, &tx).await);
-    assert!(channel.handle_dispatch("MESSAGE_DELETE", &json!({"id": "11", "channel_id": CHANNEL, "guild_id": GUILD}), BOT_ID, &tx).await);
+    assert!(
+        channel
+            .handle_dispatch("MESSAGE_UPDATE", &edit, BOT_ID, &tx)
+            .await
+    );
+    assert!(
+        channel
+            .handle_dispatch(
+                "MESSAGE_DELETE",
+                &json!({"id": "11", "channel_id": CHANNEL, "guild_id": GUILD}),
+                BOT_ID,
+                &tx
+            )
+            .await
+    );
     let reaction = json!({"user_id": "42", "message_id": "11", "channel_id": CHANNEL, "guild_id": GUILD, "emoji": {"name": "x"}});
-    assert!(channel.handle_dispatch("MESSAGE_REACTION_ADD", &reaction, BOT_ID, &tx).await);
-    assert!(channel.handle_dispatch("MESSAGE_REACTION_REMOVE", &reaction, BOT_ID, &tx).await);
-    assert!(channel.handle_dispatch("TYPING_START", &json!({}), BOT_ID, &tx).await);
+    assert!(
+        channel
+            .handle_dispatch("MESSAGE_REACTION_ADD", &reaction, BOT_ID, &tx)
+            .await
+    );
+    assert!(
+        channel
+            .handle_dispatch("MESSAGE_REACTION_REMOVE", &reaction, BOT_ID, &tx)
+            .await
+    );
+    assert!(
+        channel
+            .handle_dispatch("TYPING_START", &json!({}), BOT_ID, &tx)
+            .await
+    );
 
     assert_eq!(events.inbound().len(), 1);
     let kinds: Vec<_> = events
@@ -56,7 +85,10 @@ async fn dispatch_routes_each_gateway_event_to_its_handler() {
         })
         .collect();
     assert_eq!(kinds, vec!["updated", "deleted", "added", "removed"]);
-    assert!(rx.try_recv().is_err(), "module ingress consumed the message");
+    assert!(
+        rx.try_recv().is_err(),
+        "module ingress consumed the message"
+    );
 }
 
 #[tokio::test]
@@ -71,8 +103,16 @@ async fn dispatch_reports_a_gone_receiver_only_for_messages() {
     drop(rx);
     let message = json!({"id": "11", "channel_id": CHANNEL, "guild_id": GUILD, "content": "hi", "author": {"id": "42"}});
 
-    assert!(!channel.handle_dispatch("MESSAGE_CREATE", &message, BOT_ID, &tx).await);
-    assert!(channel.handle_dispatch("READY", &json!({}), BOT_ID, &tx).await);
+    assert!(
+        !channel
+            .handle_dispatch("MESSAGE_CREATE", &message, BOT_ID, &tx)
+            .await
+    );
+    assert!(
+        channel
+            .handle_dispatch("READY", &json!({}), BOT_ID, &tx)
+            .await
+    );
 }
 
 #[tokio::test]
@@ -81,8 +121,22 @@ async fn thread_events_prime_the_cache_so_no_lookup_is_needed() {
     let channel = channel_for(&server);
     let (tx, _rx) = mpsc::channel(1);
 
-    channel.handle_dispatch("THREAD_CREATE", &json!({"id": THREAD, "type": 11, "parent_id": CHANNEL}), BOT_ID, &tx).await;
-    channel.handle_dispatch("THREAD_UPDATE", &json!({"id": "5", "type": 12, "parent_id": CHANNEL}), BOT_ID, &tx).await;
+    channel
+        .handle_dispatch(
+            "THREAD_CREATE",
+            &json!({"id": THREAD, "type": 11, "parent_id": CHANNEL}),
+            BOT_ID,
+            &tx,
+        )
+        .await;
+    channel
+        .handle_dispatch(
+            "THREAD_UPDATE",
+            &json!({"id": "5", "type": 12, "parent_id": CHANNEL}),
+            BOT_ID,
+            &tx,
+        )
+        .await;
     channel
         .handle_dispatch(
             "GUILD_CREATE",
@@ -91,10 +145,19 @@ async fn thread_events_prime_the_cache_so_no_lookup_is_needed() {
             &tx,
         )
         .await;
-    channel.handle_dispatch("GUILD_CREATE", &json!({"id": GUILD}), BOT_ID, &tx).await;
+    channel
+        .handle_dispatch("GUILD_CREATE", &json!({"id": GUILD}), BOT_ID, &tx)
+        .await;
 
     for id in [THREAD, "5", "6"] {
-        assert_eq!(channel.channel_info(id, true).await.thread_parent.as_deref(), Some(CHANNEL));
+        assert_eq!(
+            channel
+                .channel_info(id, true)
+                .await
+                .thread_parent
+                .as_deref(),
+            Some(CHANNEL)
+        );
     }
     assert!(server.received_requests().await.unwrap().is_empty());
 }
@@ -103,14 +166,19 @@ async fn thread_events_prime_the_cache_so_no_lookup_is_needed() {
 async fn button_interactions_dispatch_to_the_interaction_handler() {
     let server = MockServer::start().await;
     let (channel, events) = guild_channel(&server).await;
-    Mock::given(method("POST")).respond_with(ResponseTemplate::new(204)).mount(&server).await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
     let (tx, _rx) = mpsc::channel(1);
     let press = json!({
         "id": "77", "token": "tok", "type": 3, "channel_id": CHANNEL, "guild_id": GUILD,
         "data": {"custom_id": "go"}, "member": {"user": {"id": "42"}}
     });
 
-    channel.handle_dispatch("INTERACTION_CREATE", &press, BOT_ID, &tx).await;
+    channel
+        .handle_dispatch("INTERACTION_CREATE", &press, BOT_ID, &tx)
+        .await;
 
     assert_eq!(events.events().len(), 1);
 }

@@ -1,9 +1,9 @@
 use super::*;
 use crate::providers::discord::support::*;
+use crate::providers::discord::voice::encode_waveform;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use crate::providers::discord::voice::encode_waveform;
 use tinychannels_bus::{HostVoiceScope, MediaKind};
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -217,18 +217,29 @@ async fn text_send_posts_json_with_a_nonce_and_returns_the_receipt() {
     assert_eq!(receipt.conversation, Some(conversation()));
     assert_eq!(receipt.reply_to_id.as_deref(), Some("42"));
     assert_eq!(receipt.edit_token.as_deref(), Some("1000"));
-    assert_eq!(receipt.parts[0].raw.as_ref().unwrap().channel_id.as_deref(), Some(CHANNEL));
+    assert_eq!(
+        receipt.parts[0].raw.as_ref().unwrap().channel_id.as_deref(),
+        Some(CHANNEL)
+    );
 
     let sent = requests(&server, "POST").await;
     assert_eq!(sent.len(), 1);
     let body = body_json(&sent[0]);
     assert_eq!(body["content"], "hello\nworld");
-    assert_eq!(body["message_reference"], json!({"message_id": "42", "fail_if_not_exists": false}));
+    assert_eq!(
+        body["message_reference"],
+        json!({"message_id": "42", "fail_if_not_exists": false})
+    );
     assert_eq!(body["allowed_mentions"], json!({"parse": ["users"]}));
     assert_eq!(body["enforce_nonce"], true);
     assert_eq!(body["nonce"].as_str().unwrap().len(), 24);
     assert_eq!(
-        sent[0].headers.get("authorization").unwrap().to_str().unwrap(),
+        sent[0]
+            .headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap(),
         format!("Bot {BOT_TOKEN}")
     );
 }
@@ -240,7 +251,10 @@ async fn a_send_without_an_idempotency_key_carries_no_nonce() {
     let mut msg = message(vec![text_part("hi")]);
     msg.idempotency_key.clear();
 
-    channel_for(&server).send_v2_with_receipt(&msg).await.unwrap();
+    channel_for(&server)
+        .send_v2_with_receipt(&msg)
+        .await
+        .unwrap();
 
     let body = body_json(&requests(&server, "POST").await[0]);
     assert!(body.get("nonce").is_none() && body.get("enforce_nonce").is_none());
@@ -254,7 +268,10 @@ async fn long_text_is_split_and_only_the_first_message_replies() {
     let mut msg = message(vec![text_part(&long)]);
     msg.reply_to_id = Some("42".into());
 
-    let outcome = channel_for(&server).send_v2_with_receipt(&msg).await.unwrap();
+    let outcome = channel_for(&server)
+        .send_v2_with_receipt(&msg)
+        .await
+        .unwrap();
 
     let sent = requests(&server, "POST").await;
     assert_eq!(sent.len(), 2);
@@ -277,14 +294,22 @@ async fn thread_addressing_posts_into_the_thread_channel() {
     let mut msg = message(vec![text_part("in thread")]);
     msg.conversation_ref = Some(thread_conversation());
 
-    let outcome = channel_for(&server).send_v2_with_receipt(&msg).await.unwrap();
+    let outcome = channel_for(&server)
+        .send_v2_with_receipt(&msg)
+        .await
+        .unwrap();
 
     let sent = requests(&server, "POST").await;
     assert_eq!(sent[0].url.path(), format!("/channels/{THREAD}/messages"));
     assert_eq!(outcome.receipt.thread_id.as_deref(), Some(THREAD));
     assert_eq!(outcome.receipt.parts[0].thread_id.as_deref(), Some(THREAD));
     assert_eq!(
-        outcome.receipt.parts[0].raw.as_ref().unwrap().channel_id.as_deref(),
+        outcome.receipt.parts[0]
+            .raw
+            .as_ref()
+            .unwrap()
+            .channel_id
+            .as_deref(),
         Some(THREAD)
     );
 }
@@ -296,7 +321,13 @@ async fn an_image_uploads_as_multipart_with_its_caption() {
     let server = MockServer::start().await;
     mount_message_post(&server, 20).await;
     let (channel, _, media, _) = full_channel(&server);
-    let reference = media.seed(&media_scope(), MediaKind::Image, "image/png", "pic.png", png_bytes());
+    let reference = media.seed(
+        &media_scope(),
+        MediaKind::Image,
+        "image/png",
+        "pic.png",
+        png_bytes(),
+    );
     let msg = message(vec![content(ContentPart::Image {
         media: reference,
         caption: Some("look".into()),
@@ -326,10 +357,21 @@ async fn video_audio_and_file_attachments_share_one_message_with_overrides() {
     let scope = media_scope();
     let video = media.seed(&scope, MediaKind::Video, "video/mp4", "v.mp4", vec![1; 8]);
     let audio = media.seed(&scope, MediaKind::Audio, "audio/mpeg", "a.mp3", vec![2; 8]);
-    let file = media.seed(&scope, MediaKind::Document, "text/plain", "f.txt", b"hi".to_vec());
+    let file = media.seed(
+        &scope,
+        MediaKind::Document,
+        "text/plain",
+        "f.txt",
+        b"hi".to_vec(),
+    );
     let msg = message(vec![
         text_part("bundle"),
-        content(ContentPart::Video { media: video, caption: Some("vc".into()), duration_ms: None, thumbnail: None }),
+        content(ContentPart::Video {
+            media: video,
+            caption: Some("vc".into()),
+            duration_ms: None,
+            thumbnail: None,
+        }),
         content(ContentPart::Audio {
             media: audio,
             codec: None,
@@ -363,7 +405,11 @@ async fn video_audio_and_file_attachments_share_one_message_with_overrides() {
 async fn attachments_need_host_storage_and_a_scoped_reference() {
     let server = MockServer::start().await;
     let image = |media: MediaReference| {
-        message(vec![content(ContentPart::Image { media, caption: None, alt_text: None })])
+        message(vec![content(ContentPart::Image {
+            media,
+            caption: None,
+            alt_text: None,
+        })])
     };
 
     // No repository: an explicit unsupported result, nothing sent.
@@ -375,12 +421,23 @@ async fn attachments_need_host_storage_and_a_scoped_reference() {
 
     let (channel, _, media, _) = full_channel(&server);
     // URL-only references are never fetched on the adapter's behalf.
-    let url_only = MediaReference { url: Some("https://x/y.png".into()), ..Default::default() };
-    assert!(channel.send_v2_with_receipt(&image(url_only)).await.is_err());
+    let url_only = MediaReference {
+        url: Some("https://x/y.png".into()),
+        ..Default::default()
+    };
+    assert!(
+        channel
+            .send_v2_with_receipt(&image(url_only))
+            .await
+            .is_err()
+    );
 
     // The reference must belong to the conversation it is sent to.
     let other = HostVoiceScope {
-        conversation: ConversationRef { id: "1".into(), ..conversation() },
+        conversation: ConversationRef {
+            id: "1".into(),
+            ..conversation()
+        },
         ..media_scope()
     };
     let foreign = media.seed(&other, MediaKind::Image, "image/png", "p.png", png_bytes());
@@ -394,7 +451,13 @@ async fn attachments_need_host_storage_and_a_scoped_reference() {
     );
 
     // A turn id is required for scoped reads.
-    let own = media.seed(&media_scope(), MediaKind::Image, "image/png", "p.png", png_bytes());
+    let own = media.seed(
+        &media_scope(),
+        MediaKind::Image,
+        "image/png",
+        "p.png",
+        png_bytes(),
+    );
     let mut no_turn = image(own);
     no_turn.turn_id = None;
     assert!(
@@ -415,18 +478,58 @@ async fn too_many_files_or_bytes_are_rejected_before_any_request() {
     let scope = media_scope();
     let many: Vec<_> = (0..11)
         .map(|_| {
-            let r = media.seed(&scope, MediaKind::Document, "text/plain", "f.txt", b"x".to_vec());
-            content(ContentPart::File { media: r, file_name: None, caption: None })
+            let r = media.seed(
+                &scope,
+                MediaKind::Document,
+                "text/plain",
+                "f.txt",
+                b"x".to_vec(),
+            );
+            content(ContentPart::File {
+                media: r,
+                file_name: None,
+                caption: None,
+            })
         })
         .collect();
-    assert!(channel.send_v2_with_receipt(&message(many)).await.unwrap_err().message.contains("10 files"));
+    assert!(
+        channel
+            .send_v2_with_receipt(&message(many))
+            .await
+            .unwrap_err()
+            .message
+            .contains("10 files")
+    );
 
-    let big = |n| media.seed(&scope, MediaKind::Document, "text/plain", "b.txt", vec![0; n]);
+    let big = |n| {
+        media.seed(
+            &scope,
+            MediaKind::Document,
+            "text/plain",
+            "b.txt",
+            vec![0; n],
+        )
+    };
     let two_big = vec![
-        content(ContentPart::File { media: big(6 * 1024 * 1024), file_name: None, caption: None }),
-        content(ContentPart::File { media: big(6 * 1024 * 1024), file_name: None, caption: None }),
+        content(ContentPart::File {
+            media: big(6 * 1024 * 1024),
+            file_name: None,
+            caption: None,
+        }),
+        content(ContentPart::File {
+            media: big(6 * 1024 * 1024),
+            file_name: None,
+            caption: None,
+        }),
     ];
-    assert!(channel.send_v2_with_receipt(&message(two_big)).await.unwrap_err().message.contains("upload limit"));
+    assert!(
+        channel
+            .send_v2_with_receipt(&message(two_big))
+            .await
+            .unwrap_err()
+            .message
+            .contains("upload limit")
+    );
     assert!(requests(&server, "POST").await.is_empty());
 }
 
@@ -438,13 +541,18 @@ async fn buttons_and_presentations_ride_with_the_final_message() {
     mount_message_post(&server, 40).await;
     let msg = message(vec![
         text_part("choose"),
-        content(ContentPart::Buttons { rows: vec![vec![button("go", "Go")]] }),
+        content(ContentPart::Buttons {
+            rows: vec![vec![button("go", "Go")]],
+        }),
         content(ContentPart::Presentation {
             blocks: json!({"kind":"approval","id":"r1","prompt":"ok?","choices":["Yes"]}),
         }),
     ]);
 
-    let outcome = channel_for(&server).send_v2_with_receipt(&msg).await.unwrap();
+    let outcome = channel_for(&server)
+        .send_v2_with_receipt(&msg)
+        .await
+        .unwrap();
 
     let body = body_json(&requests(&server, "POST").await[0]);
     assert_eq!(body["content"], "choose");
@@ -459,7 +567,11 @@ async fn buttons_and_presentations_ride_with_the_final_message() {
 #[tokio::test]
 async fn more_than_five_button_rows_are_rejected() {
     let server = MockServer::start().await;
-    let rows = || content(ContentPart::Buttons { rows: vec![vec![button("a", "A")]; 3] });
+    let rows = || {
+        content(ContentPart::Buttons {
+            rows: vec![vec![button("a", "A")]; 3],
+        })
+    };
     let error = channel_for(&server)
         .send_v2_with_receipt(&message(vec![rows(), rows()]))
         .await
@@ -497,10 +609,16 @@ async fn native_create_thread_from_a_message_opens_it_and_posts_the_first_messag
         data: json!({"action":"create_thread","name":"Plan","messageId":"42","autoArchiveDuration":60,"content":"kickoff"}),
     })]);
 
-    let outcome = channel_for(&server).send_v2_with_receipt(&msg).await.unwrap();
+    let outcome = channel_for(&server)
+        .send_v2_with_receipt(&msg)
+        .await
+        .unwrap();
 
     let sent = requests(&server, "POST").await;
-    assert_eq!(body_json(&sent[0]), json!({"name":"Plan","auto_archive_duration":60}));
+    assert_eq!(
+        body_json(&sent[0]),
+        json!({"name":"Plan","auto_archive_duration":60})
+    );
     assert_eq!(body_json(&sent[1])["content"], "kickoff");
     assert_eq!(outcome.receipt.thread_id.as_deref(), Some(THREAD));
     assert_eq!(outcome.receipt.platform_message_ids, vec![THREAD, "9001"]);
@@ -520,7 +638,10 @@ async fn native_create_thread_without_a_message_makes_a_public_thread() {
         data: json!({"action":"create_thread","name":"Solo"}),
     })]);
 
-    let outcome = channel_for(&server).send_v2_with_receipt(&msg).await.unwrap();
+    let outcome = channel_for(&server)
+        .send_v2_with_receipt(&msg)
+        .await
+        .unwrap();
 
     let body = body_json(&requests(&server, "POST").await[0]);
     assert_eq!(body["type"], 11);
@@ -538,7 +659,10 @@ async fn native_data_must_be_discord_and_stand_alone() {
             data: json!({"action":"create_thread","name":"n"}),
         })
     };
-    let other = channel.send_v2_with_receipt(&message(vec![native("slack")])).await.unwrap_err();
+    let other = channel
+        .send_v2_with_receipt(&message(vec![native("slack")]))
+        .await
+        .unwrap_err();
     assert!(other.unsupported);
     let mixed = channel
         .send_v2_with_receipt(&message(vec![text_part("x"), native("discord")]))
@@ -584,7 +708,10 @@ async fn a_voice_message_uploads_with_the_voice_flag_duration_and_waveform() {
         payload["attachments"][0]["waveform"],
         encode_waveform(&[0.0, 0.25, 0.5, 1.0])
     );
-    assert!(payload.get("message_reference").is_none(), "reply belongs to the first message");
+    assert!(
+        payload.get("message_reference").is_none(),
+        "reply belongs to the first message"
+    );
     let raw = String::from_utf8_lossy(&sent[1].body);
     assert!(raw.contains("Content-Type: audio/ogg"));
     assert_eq!(
@@ -598,7 +725,10 @@ async fn synthesis_requests_must_be_prepared_by_the_runtime() {
     let server = MockServer::start().await;
     let (channel, ..) = full_channel(&server);
     let msg = message(vec![OutboundContentPart::Voice {
-        voice: OutboundVoice::Synthesize { text: "hi".into(), voice: None },
+        voice: OutboundVoice::Synthesize {
+            text: "hi".into(),
+            voice: None,
+        },
     }]);
     let error = channel.send_v2_with_receipt(&msg).await.unwrap_err();
     assert!(error.message.contains("shared module runtime"));
@@ -611,13 +741,40 @@ async fn unsupported_content_reports_unsupported_without_touching_the_network() 
     let server = MockServer::start().await;
     let (channel, ..) = full_channel(&server);
     let parts = [
-        ContentPart::Sticker { media: MediaReference::default(), pack_id: None, sticker_id: None, emoji: None, alt_text: None },
-        ContentPart::Location { latitude: 1.0, longitude: 1.0, label: None, address: None, accuracy_meters: None, live_until_unix_ms: None },
-        ContentPart::Contact { display_name: "a".into(), phone_numbers: vec![], emails: vec![], organization: None },
-        ContentPart::Poll { question: "q".into(), options: vec![], multiple_choice: false, closes_at_unix_ms: None, provider_poll_id: None },
+        ContentPart::Sticker {
+            media: MediaReference::default(),
+            pack_id: None,
+            sticker_id: None,
+            emoji: None,
+            alt_text: None,
+        },
+        ContentPart::Location {
+            latitude: 1.0,
+            longitude: 1.0,
+            label: None,
+            address: None,
+            accuracy_meters: None,
+            live_until_unix_ms: None,
+        },
+        ContentPart::Contact {
+            display_name: "a".into(),
+            phone_numbers: vec![],
+            emails: vec![],
+            organization: None,
+        },
+        ContentPart::Poll {
+            question: "q".into(),
+            options: vec![],
+            multiple_choice: false,
+            closes_at_unix_ms: None,
+            provider_poll_id: None,
+        },
     ];
     for part in parts {
-        let error = channel.send_v2_with_receipt(&message(vec![content(part)])).await.unwrap_err();
+        let error = channel
+            .send_v2_with_receipt(&message(vec![content(part)]))
+            .await
+            .unwrap_err();
         assert!(error.unsupported && !error.retryable && !error.sent_before_error);
     }
     let note = ContentPart::VoiceNote {
@@ -630,7 +787,13 @@ async fn unsupported_content_reports_unsupported_without_touching_the_network() 
             transcript: None,
         },
     };
-    assert!(channel.send_v2_with_receipt(&message(vec![content(note)])).await.unwrap_err().unsupported);
+    assert!(
+        channel
+            .send_v2_with_receipt(&message(vec![content(note)]))
+            .await
+            .unwrap_err()
+            .unsupported
+    );
     assert!(requests(&server, "POST").await.is_empty());
 }
 
@@ -638,8 +801,20 @@ async fn unsupported_content_reports_unsupported_without_touching_the_network() 
 async fn empty_sends_and_bad_addressing_are_rejected_before_dispatch() {
     let server = MockServer::start().await;
     let channel = channel_for(&server);
-    assert!(channel.send_v2_with_receipt(&message(vec![])).await.unwrap_err().message.contains("no content"));
-    assert!(channel.send_v2_with_receipt(&message(vec![text_part("")])).await.is_err());
+    assert!(
+        channel
+            .send_v2_with_receipt(&message(vec![]))
+            .await
+            .unwrap_err()
+            .message
+            .contains("no content")
+    );
+    assert!(
+        channel
+            .send_v2_with_receipt(&message(vec![text_part("")]))
+            .await
+            .is_err()
+    );
     let mut bad = message(vec![text_part("x")]);
     bad.conversation_ref.as_mut().unwrap().id = "nope".into();
     assert!(channel.send_v2_with_receipt(&bad).await.is_err());
@@ -651,7 +826,10 @@ async fn empty_sends_and_bad_addressing_are_rejected_before_dispatch() {
 async fn a_rate_limited_first_message_is_a_retryable_error_with_no_receipt() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
-        .respond_with(ResponseTemplate::new(429).set_body_json(json!({"retry_after": 1.5, "message": "slow"})))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .set_body_json(json!({"retry_after": 1.5, "message": "slow"})),
+        )
         .mount(&server)
         .await;
 

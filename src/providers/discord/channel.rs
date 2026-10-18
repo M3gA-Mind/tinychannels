@@ -132,7 +132,10 @@ impl DiscordChannel {
 
     /// Attach scoped media storage (attachments in and out).
     #[must_use]
-    pub fn with_media_repository(mut self, repository: Arc<dyn crate::host::MediaRepository>) -> Self {
+    pub fn with_media_repository(
+        mut self,
+        repository: Arc<dyn crate::host::MediaRepository>,
+    ) -> Self {
         self.media_repository = Some(repository);
         self
     }

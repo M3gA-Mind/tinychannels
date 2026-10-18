@@ -40,7 +40,10 @@ pub(super) fn ogg_opus_duration_ms(bytes: &[u8]) -> Option<u64> {
         return None;
     }
     let head = bytes.windows(8).position(|window| window == b"OpusHead")?;
-    let pre_skip = u64::from(u16::from_le_bytes([*bytes.get(head + 10)?, *bytes.get(head + 11)?]));
+    let pre_skip = u64::from(u16::from_le_bytes([
+        *bytes.get(head + 10)?,
+        *bytes.get(head + 11)?,
+    ]));
     let last_page = bytes.windows(4).rposition(|window| window == b"OggS")?;
     let granule: [u8; 8] = bytes.get(last_page + 6..last_page + 14)?.try_into().ok()?;
     let granule = u64::from_le_bytes(granule);

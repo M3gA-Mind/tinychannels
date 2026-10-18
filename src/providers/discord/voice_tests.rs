@@ -60,7 +60,14 @@ fn mime_types_map_to_codec_names() {
 async fn voice_needs_host_voice_storage() {
     let server = MockServer::start().await;
     let error = channel_for(&server)
-        .prepare_voice(&voice_message(), &target(), &MediaReference::default(), None, None, None)
+        .prepare_voice(
+            &voice_message(),
+            &target(),
+            &MediaReference::default(),
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap_err();
     assert!(error.unsupported);
@@ -77,14 +84,27 @@ async fn an_ogg_reference_is_measured_by_the_codec_but_uploaded_untouched() {
     let media = reference(&voice, OGG_FIXTURE, "audio/ogg");
 
     let upload = channel
-        .prepare_voice(&voice_message(), &target(), &media, None, Some("ogg_opus"), Some(900))
+        .prepare_voice(
+            &voice_message(),
+            &target(),
+            &media,
+            None,
+            Some("ogg_opus"),
+            Some(900),
+        )
         .await
         .unwrap();
 
     assert_eq!(upload.bytes, OGG_FIXTURE);
     assert_eq!(upload.duration_secs, 2.5, "codec duration wins");
-    assert_eq!(upload.waveform_base64, encode_waveform(&[0.0, 0.25, 0.5, 1.0]));
-    assert_eq!(codec.calls.lock()[0], ("ogg_opus".to_owned(), "ogg_opus".to_owned()));
+    assert_eq!(
+        upload.waveform_base64,
+        encode_waveform(&[0.0, 0.25, 0.5, 1.0])
+    );
+    assert_eq!(
+        codec.calls.lock()[0],
+        ("ogg_opus".to_owned(), "ogg_opus".to_owned())
+    );
 }
 
 #[tokio::test]
@@ -167,13 +187,27 @@ async fn inline_audio_skips_the_store_read() {
     let inline = BASE64.encode(OGG_FIXTURE);
 
     let upload = channel
-        .prepare_voice(&voice_message(), &target(), &MediaReference::default(), Some(&inline), None, Some(1200))
+        .prepare_voice(
+            &voice_message(),
+            &target(),
+            &MediaReference::default(),
+            Some(&inline),
+            None,
+            Some(1200),
+        )
         .await
         .unwrap();
     assert_eq!(upload.duration_secs, 1.2);
 
     let bad = channel
-        .prepare_voice(&voice_message(), &target(), &MediaReference::default(), Some("***"), None, Some(1))
+        .prepare_voice(
+            &voice_message(),
+            &target(),
+            &MediaReference::default(),
+            Some("***"),
+            None,
+            Some(1),
+        )
         .await
         .unwrap_err();
     assert!(bad.message.contains("base64"));
@@ -188,23 +222,65 @@ async fn invalid_voice_inputs_are_rejected_before_dispatch() {
         let channel = &channel;
         async move {
             channel
-                .prepare_voice(&voice_message(), &target(), &media, inline.as_deref(), None, duration)
+                .prepare_voice(
+                    &voice_message(),
+                    &target(),
+                    &media,
+                    inline.as_deref(),
+                    None,
+                    duration,
+                )
                 .await
         }
     };
 
-    assert!(prepare(MediaReference::default(), None, Some(1)).await.unwrap_err().message.contains("host-owned"));
-    let unknown = MediaReference { opaque_id: Some("nope".into()), kind: MediaKind::Audio, ..Default::default() };
-    assert!(prepare(unknown, None, Some(1)).await.unwrap_err().message.contains("could not be resolved"));
+    assert!(
+        prepare(MediaReference::default(), None, Some(1))
+            .await
+            .unwrap_err()
+            .message
+            .contains("host-owned")
+    );
+    let unknown = MediaReference {
+        opaque_id: Some("nope".into()),
+        kind: MediaKind::Audio,
+        ..Default::default()
+    };
+    assert!(
+        prepare(unknown, None, Some(1))
+            .await
+            .unwrap_err()
+            .message
+            .contains("could not be resolved")
+    );
     let empty = reference(&voice, b"", "audio/ogg");
-    assert!(prepare(empty, None, Some(1)).await.unwrap_err().message.contains("size limit"));
+    assert!(
+        prepare(empty, None, Some(1))
+            .await
+            .unwrap_err()
+            .message
+            .contains("size limit")
+    );
     let huge = BASE64.encode(vec![0u8; 8 * 1024 * 1024 + 1]);
-    assert!(prepare(MediaReference::default(), Some(huge), Some(1)).await.unwrap_err().message.contains("size limit"));
+    assert!(
+        prepare(MediaReference::default(), Some(huge), Some(1))
+            .await
+            .unwrap_err()
+            .message
+            .contains("size limit")
+    );
     // Ogg magic is required even when the caller claims a codec.
     let fake = BASE64.encode(b"not ogg");
     assert!(
         channel
-            .prepare_voice(&voice_message(), &target(), &MediaReference::default(), Some(&fake), Some("ogg_opus"), Some(1))
+            .prepare_voice(
+                &voice_message(),
+                &target(),
+                &MediaReference::default(),
+                Some(&fake),
+                Some("ogg_opus"),
+                Some(1)
+            )
             .await
             .unwrap_err()
             .message
@@ -226,7 +302,14 @@ async fn invalid_voice_inputs_are_rejected_before_dispatch() {
     let unmeasurable = BASE64.encode(b"OggS........");
     assert!(
         channel
-            .prepare_voice(&voice_message(), &target(), &MediaReference::default(), Some(&unmeasurable), None, None)
+            .prepare_voice(
+                &voice_message(),
+                &target(),
+                &MediaReference::default(),
+                Some(&unmeasurable),
+                None,
+                None
+            )
             .await
             .unwrap_err()
             .message

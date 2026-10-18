@@ -127,12 +127,36 @@ impl DiscordChannel {
                     &["video/mp4", "video/quicktime", "video/webm"],
                 ),
                 audio: media_capability(
-                    &["audio/ogg", "audio/mpeg", "audio/mp4", "audio/wav", "audio/webm"],
-                    &["audio/ogg", "audio/mpeg", "audio/mp4", "audio/wav", "audio/webm"],
+                    &[
+                        "audio/ogg",
+                        "audio/mpeg",
+                        "audio/mp4",
+                        "audio/wav",
+                        "audio/webm",
+                    ],
+                    &[
+                        "audio/ogg",
+                        "audio/mpeg",
+                        "audio/mp4",
+                        "audio/wav",
+                        "audio/webm",
+                    ],
                 ),
                 file: media_capability(
-                    &["application/pdf", "text/plain", "text/csv", "application/json", "application/zip"],
-                    &["application/pdf", "text/plain", "text/csv", "application/json", "application/zip"],
+                    &[
+                        "application/pdf",
+                        "text/plain",
+                        "text/csv",
+                        "application/json",
+                        "application/zip",
+                    ],
+                    &[
+                        "application/pdf",
+                        "text/plain",
+                        "text/csv",
+                        "application/json",
+                        "application/zip",
+                    ],
                 ),
                 buttons: ContentCapability {
                     outbound: true,
@@ -311,7 +335,11 @@ impl ChannelStreamingDraft for DiscordChannel {
         previous: Option<&MessageReceipt>,
         intent: ChannelOutboundIntent,
     ) -> Result<MessageReceipt, ChannelSendError> {
-        if intent.channel_ref.as_ref().is_some_and(|c| tinychannels_bus::provider_id(&c.id) != "discord") {
+        if intent
+            .channel_ref
+            .as_ref()
+            .is_some_and(|c| tinychannels_bus::provider_id(&c.id) != "discord")
+        {
             return Err(wrong_channel("draft"));
         }
         self.upsert_draft_v2(previous, intent).await

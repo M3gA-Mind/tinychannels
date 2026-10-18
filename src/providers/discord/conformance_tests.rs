@@ -18,7 +18,8 @@ use tinychannels_bus::{
     OutboundContentPart, OutboundPayload, OutboundVoice,
 };
 use tinychannels_conformance::{
-    AdapterFixture, ConformanceFeature as Feature, ExpectedScope, WireObservation, check_all_features,
+    AdapterFixture, ConformanceFeature as Feature, ExpectedScope, WireObservation,
+    check_all_features,
 };
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
@@ -55,7 +56,8 @@ impl DiscordFixture {
         Mock::given(method("POST"))
             .and(path_regex(r"^/channels/\d+/threads$"))
             .respond_with(move |request: &Request| {
-                ids.lock().push((request.url.path().to_owned(), THREAD.to_owned()));
+                ids.lock()
+                    .push((request.url.path().to_owned(), THREAD.to_owned()));
                 ResponseTemplate::new(201).set_body_json(json!({"id": THREAD}))
             })
             .mount(&server)
@@ -83,14 +85,17 @@ impl DiscordFixture {
         }
         Mock::given(method("GET"))
             .and(path(format!("/channels/{THREAD}")))
-            .respond_with(ResponseTemplate::new(200).set_body_json(
-                json!({"id": THREAD, "type": 11, "parent_id": CHANNEL}),
-            ))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"id": THREAD, "type": 11, "parent_id": CHANNEL})),
+            )
             .mount(&server)
             .await;
         Mock::given(method("GET"))
             .and(path("/cdn/voice-message.ogg"))
-            .respond_with(ResponseTemplate::new(200).set_body_raw(OGG_FIXTURE.to_vec(), "audio/ogg"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(OGG_FIXTURE.to_vec(), "audio/ogg"),
+            )
             .mount(&server)
             .await;
         let (channel, events, media, voice) = full_channel(&server);
@@ -118,7 +123,11 @@ impl DiscordFixture {
             channel_id: "discord".into(),
             conversation_id: CHANNEL.into(),
             channel_ref: Some(account()),
-            conversation_ref: Some(if native { conversation() } else { self.target() }),
+            conversation_ref: Some(if native {
+                conversation()
+            } else {
+                self.target()
+            }),
             reply_to_id: (!native).then(|| "42".to_owned()),
             thread_id: (!native).then(|| THREAD.to_owned()),
             turn_id: Some("turn-1".into()),
@@ -141,11 +150,12 @@ impl DiscordFixture {
         for request in &requests[start..] {
             let url_path = request.url.path().to_owned();
             let segments: Vec<&str> = url_path.split('/').collect();
-            let is_reaction = request.method.to_string() == "PUT" && url_path.contains("/reactions/");
+            let is_reaction =
+                request.method.to_string() == "PUT" && url_path.contains("/reactions/");
             let is_typing = url_path.ends_with("/typing");
             let is_threads = url_path.ends_with("/threads");
-            let bears_id = matches!(request.method.to_string().as_str(), "POST" | "PATCH")
-                && !is_typing;
+            let bears_id =
+                matches!(request.method.to_string().as_str(), "POST" | "PATCH") && !is_typing;
             let message_ids = if bears_id {
                 ids.next().map(|(_, id)| vec![id]).unwrap_or_default()
             } else if request.method.to_string() == "DELETE" {
@@ -155,7 +165,11 @@ impl DiscordFixture {
             };
             let channel_id = segments[2];
             let in_thread = channel_id == THREAD;
-            let conversation = if in_thread { thread_conversation() } else { conversation() };
+            let conversation = if in_thread {
+                thread_conversation()
+            } else {
+                conversation()
+            };
             let payload = if request.method.to_string() == "POST" && !is_typing {
                 parse_payload(request)
             } else {
@@ -191,7 +205,13 @@ impl DiscordFixture {
         Ok(Some(outcome))
     }
 
-    fn media_in_scope(&self, kind: MediaKind, content_type: &str, name: &str, bytes: Vec<u8>) -> tinychannels_bus::MediaReference {
+    fn media_in_scope(
+        &self,
+        kind: MediaKind,
+        content_type: &str,
+        name: &str,
+        bytes: Vec<u8>,
+    ) -> tinychannels_bus::MediaReference {
         let scope = tinychannels_bus::HostVoiceScope {
             conversation: self.target(),
             ..media_scope()
@@ -217,13 +237,25 @@ fn payload_kinds(request: &Request, payload: &Value, is_threads: bool) -> Vec<St
     if payload.get("flags").and_then(Value::as_u64) == Some(8192) {
         kinds.push("voice".to_owned());
     }
-    if payload.get("content").and_then(Value::as_str).is_some_and(|c| !c.is_empty()) {
+    if payload
+        .get("content")
+        .and_then(Value::as_str)
+        .is_some_and(|c| !c.is_empty())
+    {
         kinds.push("text".into());
     }
-    if payload.get("components").and_then(Value::as_array).is_some_and(|c| !c.is_empty()) {
+    if payload
+        .get("components")
+        .and_then(Value::as_array)
+        .is_some_and(|c| !c.is_empty())
+    {
         kinds.push("buttons".into());
     }
-    if payload.get("embeds").and_then(Value::as_array).is_some_and(|c| !c.is_empty()) {
+    if payload
+        .get("embeds")
+        .and_then(Value::as_array)
+        .is_some_and(|c| !c.is_empty())
+    {
         kinds.push("presentation".into());
     }
     let raw = String::from_utf8_lossy(&request.body);
@@ -236,13 +268,15 @@ fn payload_kinds(request: &Request, payload: &Value, is_threads: bool) -> Vec<St
         if payload.get("flags").and_then(Value::as_u64) == Some(8192) {
             continue;
         }
-        kinds.push(match content_type.split('/').next().unwrap_or_default() {
-            "image" => "image",
-            "video" => "video",
-            "audio" => "audio",
-            _ => "file",
-        }
-        .into());
+        kinds.push(
+            match content_type.split('/').next().unwrap_or_default() {
+                "image" => "image",
+                "video" => "video",
+                "audio" => "audio",
+                _ => "file",
+            }
+            .into(),
+        );
     }
     kinds
 }
@@ -271,8 +305,14 @@ impl AdapterFixture for DiscordFixture {
                 thread_id: None,
             },
             Feature::InboundReactions | Feature::VoiceIn => ExpectedScope {
-                channel: ChannelRef { id: "discord".into(), account_id: None },
-                conversation: ConversationRef { scope_id: Some(GUILD.into()), ..thread_conversation() },
+                channel: ChannelRef {
+                    id: "discord".into(),
+                    account_id: None,
+                },
+                conversation: ConversationRef {
+                    scope_id: Some(GUILD.into()),
+                    ..thread_conversation()
+                },
                 reply_to_id: None,
                 thread_id: None,
             },
@@ -293,8 +333,13 @@ impl AdapterFixture for DiscordFixture {
         self.observed.lock().clone()
     }
 
-    async fn exercise(&self, feature: Feature) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
-        let part = |part: ContentPart| OutboundPayload::Parts { parts: vec![OutboundContentPart::Content { part }] };
+    async fn exercise(
+        &self,
+        feature: Feature,
+    ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+        let part = |part: ContentPart| OutboundPayload::Parts {
+            parts: vec![OutboundContentPart::Content { part }],
+        };
         match feature {
             Feature::Text | Feature::ReplyAddressing | Feature::ThreadAddressing => {
                 self.send_and_record(feature, OutboundPayload::Text { text: "conformance".into() }).await
@@ -457,7 +502,10 @@ impl AdapterFixture for DiscordFixture {
 
 impl DiscordFixture {
     /// Send content the adapter must refuse without touching the network.
-    async fn reject(&self, payload: OutboundPayload) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+    async fn reject(
+        &self,
+        payload: OutboundPayload,
+    ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         let before = self.server.received_requests().await.unwrap().len();
         let result = self.channel.send(self.intent(Feature::Text, payload)).await;
         assert_eq!(self.server.received_requests().await.unwrap().len(), before);
@@ -482,6 +530,10 @@ async fn an_account_without_host_storage_declares_only_text_and_structured_featu
     let server = MockServer::start().await;
     let channel = channel_for(&server);
     let capabilities = ChannelAdapter::declared_capabilities(&channel);
-    assert!(!capabilities.content.image.outbound && !capabilities.voice_in.supported && !capabilities.voice_out.supported);
+    assert!(
+        !capabilities.content.image.outbound
+            && !capabilities.voice_in.supported
+            && !capabilities.voice_out.supported
+    );
     assert!(capabilities.content.buttons.outbound && capabilities.content.presentation.outbound);
 }

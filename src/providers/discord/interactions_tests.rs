@@ -50,15 +50,26 @@ fn parts_intent(parts: Vec<OutboundContentPart>) -> ChannelOutboundIntent {
 
 #[test]
 fn intent_text_accepts_only_plain_text() {
-    assert_eq!(intent_text(&OutboundPayload::Text { text: "a".into() }).as_deref(), Some("a"));
-    let two = OutboundPayload::Parts { parts: vec![text_part("a"), text_part("b")] };
+    assert_eq!(
+        intent_text(&OutboundPayload::Text { text: "a".into() }).as_deref(),
+        Some("a")
+    );
+    let two = OutboundPayload::Parts {
+        parts: vec![text_part("a"), text_part("b")],
+    };
     assert_eq!(intent_text(&two).as_deref(), Some("a\nb"));
     assert_eq!(intent_text(&OutboundPayload::Parts { parts: vec![] }), None);
     let mixed = OutboundPayload::Parts {
         parts: vec![content(ContentPart::Buttons { rows: vec![] })],
     };
     assert_eq!(intent_text(&mixed), None);
-    assert_eq!(intent_text(&OutboundPayload::Poll { question: "q".into(), options: vec![] }), None);
+    assert_eq!(
+        intent_text(&OutboundPayload::Poll {
+            question: "q".into(),
+            options: vec![]
+        }),
+        None
+    );
 }
 
 #[test]
@@ -67,7 +78,10 @@ fn receipt_targets_prefer_part_then_receipt_then_conversation_threads() {
     r.parts[0].thread_id = Some("80".into());
     r.thread_id = Some("90".into());
     let targets = part_targets(&r).unwrap();
-    assert_eq!(targets, vec![("80".into(), "10".into()), ("90".into(), "11".into())]);
+    assert_eq!(
+        targets,
+        vec![("80".into(), "10".into()), ("90".into(), "11".into())]
+    );
 
     let mut by_conversation = receipt(&["10"]);
     by_conversation.conversation = Some(thread_conversation());
@@ -76,20 +90,41 @@ fn receipt_targets_prefer_part_then_receipt_then_conversation_threads() {
     let mut primary_only = receipt(&[]);
     primary_only.primary_platform_message_id = Some("77".into());
     primary_only.thread_id = Some("90".into());
-    assert_eq!(part_targets(&primary_only).unwrap(), vec![("90".into(), "77".into())]);
+    assert_eq!(
+        part_targets(&primary_only).unwrap(),
+        vec![("90".into(), "77".into())]
+    );
 }
 
 #[test]
 fn receipt_targets_reject_foreign_unaddressed_and_non_numeric_receipts() {
     let mut foreign = receipt(&["10"]);
-    foreign.channel = Some(ChannelRef { id: "slack".into(), account_id: None });
-    assert!(part_targets(&foreign).unwrap_err().message.contains("Discord"));
+    foreign.channel = Some(ChannelRef {
+        id: "slack".into(),
+        account_id: None,
+    });
+    assert!(
+        part_targets(&foreign)
+            .unwrap_err()
+            .message
+            .contains("Discord")
+    );
 
     let mut unscoped = receipt(&["10"]);
     unscoped.conversation = None;
     assert!(part_targets(&unscoped).is_err());
-    assert!(part_targets(&receipt(&[])).unwrap_err().message.contains("no provider message id"));
-    assert!(part_targets(&receipt(&["x1"])).unwrap_err().message.contains("numeric"));
+    assert!(
+        part_targets(&receipt(&[]))
+            .unwrap_err()
+            .message
+            .contains("no provider message id")
+    );
+    assert!(
+        part_targets(&receipt(&["x1"]))
+            .unwrap_err()
+            .message
+            .contains("numeric")
+    );
     let mut bad_primary = receipt(&[]);
     bad_primary.primary_platform_message_id = Some("zz".into());
     assert!(part_targets(&bad_primary).is_err());
@@ -97,13 +132,37 @@ fn receipt_targets_reject_foreign_unaddressed_and_non_numeric_receipts() {
 
 #[test]
 fn emoji_segments_cover_unicode_and_custom_emoji() {
-    let unicode = ChannelReaction { value: "👍".into(), custom_emoji_id: None };
+    let unicode = ChannelReaction {
+        value: "👍".into(),
+        custom_emoji_id: None,
+    };
     assert_eq!(emoji_segment(&unicode).unwrap(), "👍");
-    let custom = ChannelReaction { value: ":party:".into(), custom_emoji_id: Some("123".into()) };
+    let custom = ChannelReaction {
+        value: ":party:".into(),
+        custom_emoji_id: Some("123".into()),
+    };
     assert_eq!(emoji_segment(&custom).unwrap(), "party:123");
-    assert!(emoji_segment(&ChannelReaction { value: " ".into(), custom_emoji_id: None }).is_err());
-    assert!(emoji_segment(&ChannelReaction { value: "x".into(), custom_emoji_id: Some("a".into()) }).is_err());
-    assert!(emoji_segment(&ChannelReaction { value: "".into(), custom_emoji_id: Some("1".into()) }).is_err());
+    assert!(
+        emoji_segment(&ChannelReaction {
+            value: " ".into(),
+            custom_emoji_id: None
+        })
+        .is_err()
+    );
+    assert!(
+        emoji_segment(&ChannelReaction {
+            value: "x".into(),
+            custom_emoji_id: Some("a".into())
+        })
+        .is_err()
+    );
+    assert!(
+        emoji_segment(&ChannelReaction {
+            value: "".into(),
+            custom_emoji_id: Some("1".into())
+        })
+        .is_err()
+    );
 }
 
 // ── edit ──────────────────────────────────────────────────────
@@ -118,12 +177,18 @@ async fn edit_patches_the_message_content_and_returns_the_receipt() {
         .await;
     let original = receipt(&["10"]);
 
-    let edited = channel_for(&server).edit_message_v2(&original, &intent("new text")).await.unwrap();
+    let edited = channel_for(&server)
+        .edit_message_v2(&original, &intent("new text"))
+        .await
+        .unwrap();
 
     assert_eq!(edited, original);
     let sent = requests(&server, "PATCH").await;
     assert_eq!(body_json(&sent[0])["content"], "new text");
-    assert_eq!(body_json(&sent[0])["allowed_mentions"], json!({"parse": ["users"]}));
+    assert_eq!(
+        body_json(&sent[0])["allowed_mentions"],
+        json!({"parse": ["users"]})
+    );
 }
 
 #[tokio::test]
@@ -134,25 +199,64 @@ async fn edit_rejects_mismatched_scope_oversize_and_non_text_before_dispatch() {
 
     let mut other_conversation = intent("x");
     other_conversation.conversation_id = "42".into();
-    assert!(channel.edit_message_v2(&original, &other_conversation).await.unwrap_err().message.contains("scope"));
+    assert!(
+        channel
+            .edit_message_v2(&original, &other_conversation)
+            .await
+            .unwrap_err()
+            .message
+            .contains("scope")
+    );
 
     let mut other_ref = intent("x");
-    other_ref.conversation_ref = Some(ConversationRef { id: CHANNEL.into(), kind: ConversationKind::Dm, ..Default::default() });
-    assert!(channel.edit_message_v2(&original, &other_ref).await.is_err());
+    other_ref.conversation_ref = Some(ConversationRef {
+        id: CHANNEL.into(),
+        kind: ConversationKind::Dm,
+        ..Default::default()
+    });
+    assert!(
+        channel
+            .edit_message_v2(&original, &other_ref)
+            .await
+            .is_err()
+    );
 
     let mut other_account = intent("x");
-    other_account.channel_ref = Some(ChannelRef { id: "discord".into(), account_id: Some("other".into()) });
-    assert!(channel.edit_message_v2(&original, &other_account).await.is_err());
+    other_account.channel_ref = Some(ChannelRef {
+        id: "discord".into(),
+        account_id: Some("other".into()),
+    });
+    assert!(
+        channel
+            .edit_message_v2(&original, &other_account)
+            .await
+            .is_err()
+    );
 
-    let too_long = channel.edit_message_v2(&original, &intent(&"a".repeat(2001))).await.unwrap_err();
+    let too_long = channel
+        .edit_message_v2(&original, &intent(&"a".repeat(2001)))
+        .await
+        .unwrap_err();
     assert_eq!(too_long.kind, SendErrorKind::TooLong);
 
     let buttons = parts_intent(vec![content(ContentPart::Buttons { rows: vec![] })]);
-    assert!(channel.edit_message_v2(&original, &buttons).await.unwrap_err().message.contains("plain text"));
+    assert!(
+        channel
+            .edit_message_v2(&original, &buttons)
+            .await
+            .unwrap_err()
+            .message
+            .contains("plain text")
+    );
 
     let mut unscoped = receipt(&["10"]);
     unscoped.conversation = None;
-    assert!(channel.edit_message_v2(&unscoped, &intent("x")).await.is_err());
+    assert!(
+        channel
+            .edit_message_v2(&unscoped, &intent("x"))
+            .await
+            .is_err()
+    );
     assert!(requests(&server, "PATCH").await.is_empty());
 }
 
@@ -172,7 +276,10 @@ async fn delete_removes_every_message_of_the_receipt_and_tolerates_missing_ones(
         .mount(&server)
         .await;
 
-    channel_for(&server).delete_message_v2(&receipt(&["10", "11"])).await.unwrap();
+    channel_for(&server)
+        .delete_message_v2(&receipt(&["10", "11"]))
+        .await
+        .unwrap();
 
     assert_eq!(requests(&server, "DELETE").await.len(), 2);
 }
@@ -185,10 +292,18 @@ async fn delete_surfaces_real_failures() {
         .mount(&server)
         .await;
 
-    let error = channel_for(&server).delete_message_v2(&receipt(&["10"])).await.unwrap_err();
+    let error = channel_for(&server)
+        .delete_message_v2(&receipt(&["10"]))
+        .await
+        .unwrap_err();
 
     assert_eq!(error.kind, SendErrorKind::Forbidden);
-    assert!(channel_for(&server).delete_message_v2(&receipt(&[])).await.is_err());
+    assert!(
+        channel_for(&server)
+            .delete_message_v2(&receipt(&[]))
+            .await
+            .is_err()
+    );
 }
 
 // ── reactions and typing ──────────────────────────────────────
@@ -201,30 +316,72 @@ async fn reactions_use_put_to_add_and_delete_to_remove() {
         .mount(&server)
         .await;
     let channel = channel_for(&server);
-    let thumbs = ChannelReaction { value: "👍".into(), custom_emoji_id: None };
+    let thumbs = ChannelReaction {
+        value: "👍".into(),
+        custom_emoji_id: None,
+    };
 
-    channel.send_reaction_v2(&conversation(), "42", &thumbs, false).await.unwrap();
-    channel.send_reaction_v2(&conversation(), "42", &thumbs, true).await.unwrap();
-    let custom = ChannelReaction { value: "party".into(), custom_emoji_id: Some("555".into()) };
-    channel.send_reaction_v2(&thread_conversation(), "43", &custom, false).await.unwrap();
+    channel
+        .send_reaction_v2(&conversation(), "42", &thumbs, false)
+        .await
+        .unwrap();
+    channel
+        .send_reaction_v2(&conversation(), "42", &thumbs, true)
+        .await
+        .unwrap();
+    let custom = ChannelReaction {
+        value: "party".into(),
+        custom_emoji_id: Some("555".into()),
+    };
+    channel
+        .send_reaction_v2(&thread_conversation(), "43", &custom, false)
+        .await
+        .unwrap();
 
     let all = server.received_requests().await.unwrap();
     assert_eq!(all[0].method.to_string(), "PUT");
-    assert_eq!(all[0].url.path(), format!("/channels/{CHANNEL}/messages/42/reactions/%F0%9F%91%8D/@me"));
+    assert_eq!(
+        all[0].url.path(),
+        format!("/channels/{CHANNEL}/messages/42/reactions/%F0%9F%91%8D/@me")
+    );
     assert_eq!(all[1].method.to_string(), "DELETE");
-    assert_eq!(all[2].url.path(), format!("/channels/{THREAD}/messages/43/reactions/party:555/@me"));
+    assert_eq!(
+        all[2].url.path(),
+        format!("/channels/{THREAD}/messages/43/reactions/party:555/@me")
+    );
 }
 
 #[tokio::test]
 async fn reactions_reject_non_numeric_targets_and_empty_emoji() {
     let server = MockServer::start().await;
     let channel = channel_for(&server);
-    let ok = ChannelReaction { value: "👍".into(), custom_emoji_id: None };
-    assert!(channel.send_reaction_v2(&conversation(), "x", &ok, false).await.is_err());
-    let bad_channel = ConversationRef { id: "c".into(), ..conversation() };
-    assert!(channel.send_reaction_v2(&bad_channel, "1", &ok, false).await.is_err());
+    let ok = ChannelReaction {
+        value: "👍".into(),
+        custom_emoji_id: None,
+    };
+    assert!(
+        channel
+            .send_reaction_v2(&conversation(), "x", &ok, false)
+            .await
+            .is_err()
+    );
+    let bad_channel = ConversationRef {
+        id: "c".into(),
+        ..conversation()
+    };
+    assert!(
+        channel
+            .send_reaction_v2(&bad_channel, "1", &ok, false)
+            .await
+            .is_err()
+    );
     let empty = ChannelReaction::default();
-    assert!(channel.send_reaction_v2(&conversation(), "1", &empty, false).await.is_err());
+    assert!(
+        channel
+            .send_reaction_v2(&conversation(), "1", &empty, false)
+            .await
+            .is_err()
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -257,7 +414,10 @@ async fn a_draft_is_created_then_edited_in_place_and_clipped() {
         .await;
     let channel = channel_for(&server);
 
-    let created = channel.upsert_draft_v2(None, intent("start")).await.unwrap();
+    let created = channel
+        .upsert_draft_v2(None, intent("start"))
+        .await
+        .unwrap();
     assert_eq!(created.platform_message_ids, vec!["300"]);
     let updated = channel
         .upsert_draft_v2(Some(&created), intent(&"long ".repeat(700)))
@@ -275,15 +435,41 @@ async fn invalid_drafts_are_rejected_before_dispatch() {
     let server = MockServer::start().await;
     let channel = channel_for(&server);
     let buttons = parts_intent(vec![content(ContentPart::Buttons { rows: vec![] })]);
-    assert!(channel.upsert_draft_v2(None, buttons).await.unwrap_err().message.contains("text"));
-    assert!(channel.upsert_draft_v2(None, intent("  ")).await.unwrap_err().message.contains("requires text"));
+    assert!(
+        channel
+            .upsert_draft_v2(None, buttons)
+            .await
+            .unwrap_err()
+            .message
+            .contains("text")
+    );
+    assert!(
+        channel
+            .upsert_draft_v2(None, intent("  "))
+            .await
+            .unwrap_err()
+            .message
+            .contains("requires text")
+    );
 
     let mut unscoped = receipt(&["10"]);
     unscoped.conversation = None;
-    assert!(channel.upsert_draft_v2(Some(&unscoped), intent("x")).await.is_err());
+    assert!(
+        channel
+            .upsert_draft_v2(Some(&unscoped), intent("x"))
+            .await
+            .is_err()
+    );
     let mut elsewhere = intent("x");
     elsewhere.conversation_id = "99".into();
-    assert!(channel.upsert_draft_v2(Some(&receipt(&["10"])), elsewhere).await.unwrap_err().message.contains("scope"));
+    assert!(
+        channel
+            .upsert_draft_v2(Some(&receipt(&["10"])), elsewhere)
+            .await
+            .unwrap_err()
+            .message
+            .contains("scope")
+    );
     let mut bad_target = intent("x");
     bad_target.conversation_id = "nope".into();
     bad_target.conversation_ref = None;
@@ -298,7 +484,10 @@ async fn a_failed_draft_create_is_an_error_not_a_receipt() {
         .respond_with(ResponseTemplate::new(403))
         .mount(&server)
         .await;
-    let error = channel_for(&server).upsert_draft_v2(None, intent("x")).await.unwrap_err();
+    let error = channel_for(&server)
+        .upsert_draft_v2(None, intent("x"))
+        .await
+        .unwrap_err();
     assert_eq!(error.kind, SendErrorKind::Forbidden);
 }
 
@@ -320,7 +509,10 @@ async fn legacy_drafts_create_update_with_throttling_and_finalize_with_overflow(
         .unwrap()
         .expect("draft id");
     assert_eq!(id, "400");
-    assert_eq!(body_json(&requests(&server, "POST").await[0])["content"], "...");
+    assert_eq!(
+        body_json(&requests(&server, "POST").await[0])["content"],
+        "..."
+    );
 
     // The create just marked the channel, so an immediate edit is skipped.
     channel.update_draft(CHANNEL, &id, "partial").await.unwrap();
@@ -340,7 +532,10 @@ async fn legacy_drafts_create_update_with_throttling_and_finalize_with_overflow(
         .unwrap();
     assert_eq!(requests(&server, "PATCH").await.len(), 2);
     assert_eq!(requests(&server, "POST").await.len(), 2);
-    channel.finalize_draft(CHANNEL, &id, " ", None).await.unwrap();
+    channel
+        .finalize_draft(CHANNEL, &id, " ", None)
+        .await
+        .unwrap();
     assert_eq!(requests(&server, "PATCH").await.len(), 2);
 }
 
@@ -357,11 +552,26 @@ async fn legacy_draft_errors_carry_the_typed_discord_error() {
         .await;
     let channel = channel_for(&server);
 
-    let error = channel.finalize_draft(CHANNEL, "1", "x", None).await.unwrap_err();
-    let typed = error.downcast_ref::<DiscordError>().expect("typed error survives anyhow");
+    let error = channel
+        .finalize_draft(CHANNEL, "1", "x", None)
+        .await
+        .unwrap_err();
+    let typed = error
+        .downcast_ref::<DiscordError>()
+        .expect("typed error survives anyhow");
     assert_eq!(typed.0.kind, SendErrorKind::NotFound);
-    assert!(channel.send_draft(&SendMessage::new("x", "bad id")).await.is_err());
-    assert!(channel.send_draft(&SendMessage::new("x", CHANNEL)).await.is_err());
+    assert!(
+        channel
+            .send_draft(&SendMessage::new("x", "bad id"))
+            .await
+            .is_err()
+    );
+    assert!(
+        channel
+            .send_draft(&SendMessage::new("x", CHANNEL))
+            .await
+            .is_err()
+    );
     channel.last_draft_edit.lock().clear();
     assert!(channel.update_draft(CHANNEL, "1", "x").await.is_err());
 }

@@ -26,7 +26,12 @@ fn pre_dispatch_and_unsupported_errors_never_claim_a_send() {
 #[test]
 fn status_codes_map_to_the_shared_error_taxonomy() {
     use reqwest::StatusCode as S;
-    let limited = error_for_status("send", S::TOO_MANY_REQUESTS, None, r#"{"retry_after": 2.5}"#);
+    let limited = error_for_status(
+        "send",
+        S::TOO_MANY_REQUESTS,
+        None,
+        r#"{"retry_after": 2.5}"#,
+    );
     assert_eq!(limited.kind, SendErrorKind::RateLimited);
     assert!(limited.retryable && !limited.sent_before_error);
     assert_eq!(limited.retry_after, Some(2.5));
@@ -117,7 +122,13 @@ async fn call_returns_null_for_empty_bodies_and_errors_for_garbage() {
     let url = channel.endpoint_url(&["x"]).unwrap();
 
     let empty = channel
-        .call(reqwest::Method::DELETE, url.clone(), Payload::None, "delete", true)
+        .call(
+            reqwest::Method::DELETE,
+            url.clone(),
+            Payload::None,
+            "delete",
+            true,
+        )
         .await
         .unwrap();
     assert_eq!(empty, serde_json::Value::Null);
@@ -136,12 +147,18 @@ async fn call_reports_whether_a_transport_failure_may_have_reached_discord() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let dead = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
-    let channel = DiscordChannel::new("t".into(), None, None, vec![], false, false)
-        .with_api_base(dead);
+    let channel =
+        DiscordChannel::new("t".into(), None, None, vec![], false, false).with_api_base(dead);
     let url = channel.endpoint_url(&["x"]).unwrap();
 
     let refused = channel
-        .call(reqwest::Method::POST, url, Payload::Json(json!({})), "send", false)
+        .call(
+            reqwest::Method::POST,
+            url,
+            Payload::Json(json!({})),
+            "send",
+            false,
+        )
         .await
         .unwrap_err();
 

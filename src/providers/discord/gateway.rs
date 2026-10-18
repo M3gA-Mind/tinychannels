@@ -8,7 +8,8 @@ use tokio_tungstenite::tungstenite::Message;
 
 /// GUILDS | GUILD_MESSAGES | GUILD_MESSAGE_REACTIONS | DIRECT_MESSAGES |
 /// DIRECT_MESSAGE_REACTIONS | MESSAGE_CONTENT.
-pub(super) const GATEWAY_INTENTS: u64 = 1 | (1 << 9) | (1 << 10) | (1 << 12) | (1 << 13) | (1 << 15);
+pub(super) const GATEWAY_INTENTS: u64 =
+    1 | (1 << 9) | (1 << 10) | (1 << 12) | (1 << 13) | (1 << 15);
 
 impl DiscordChannel {
     /// Run one gateway session until the socket closes or the receiver drops.

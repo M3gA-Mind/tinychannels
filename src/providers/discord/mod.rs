@@ -1,5 +1,5 @@
-pub mod api;
 mod adapter;
+pub mod api;
 pub mod channel;
 mod gateway;
 mod http;

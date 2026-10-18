@@ -84,7 +84,9 @@ fn part_targets(receipt: &MessageReceipt) -> Result<Vec<(String, String)>, Chann
 fn emoji_segment(reaction: &ChannelReaction) -> Result<String, ChannelSendError> {
     if let Some(id) = reaction.custom_emoji_id.as_deref() {
         if !is_snowflake(id) || reaction.value.trim().is_empty() {
-            return Err(pre_dispatch("Discord custom emoji needs a name and numeric id"));
+            return Err(pre_dispatch(
+                "Discord custom emoji needs a name and numeric id",
+            ));
         }
         return Ok(format!("{}:{id}", reaction.value.trim_matches(':')));
     }
@@ -136,7 +138,9 @@ impl DiscordChannel {
                 .zip(receipt.channel.as_ref())
                 .is_some_and(|(a, b)| a != b)
         {
-            return Err(pre_dispatch("Discord edit scope does not match the receipt"));
+            return Err(pre_dispatch(
+                "Discord edit scope does not match the receipt",
+            ));
         }
         if text.encode_utf16().count() > MAX_EDIT_UTF16_UNITS {
             return Err(ChannelSendError {
@@ -161,7 +165,13 @@ impl DiscordChannel {
         for (channel_id, message_id) in targets {
             let url = self.endpoint_url(&["channels", &channel_id, "messages", &message_id])?;
             match self
-                .call(reqwest::Method::DELETE, url, Payload::None, "delete message", true)
+                .call(
+                    reqwest::Method::DELETE,
+                    url,
+                    Payload::None,
+                    "delete message",
+                    true,
+                )
                 .await
             {
                 Ok(_) => {}
@@ -244,7 +254,9 @@ impl DiscordChannel {
                     .as_ref()
                     .ok_or_else(|| pre_dispatch("Discord draft receipt has no conversation"))?;
                 if intent.conversation_id != conversation.id {
-                    return Err(pre_dispatch("Discord draft scope does not match the receipt"));
+                    return Err(pre_dispatch(
+                        "Discord draft scope does not match the receipt",
+                    ));
                 }
                 let (channel_id, message_id) = part_targets(previous)?
                     .into_iter()
@@ -263,7 +275,8 @@ impl DiscordChannel {
                 }];
                 // Validate addressing early so the error names the draft.
                 target_for(&message)?;
-                let ChannelSendOutcome { receipt, error } = self.send_v2_with_receipt(&message).await?;
+                let ChannelSendOutcome { receipt, error } =
+                    self.send_v2_with_receipt(&message).await?;
                 match error {
                     Some(error) => Err(error),
                     None => Ok(receipt),
@@ -275,9 +288,8 @@ impl DiscordChannel {
     /// Legacy draft rate limit: `true` when an edit for `key` should be skipped.
     pub(super) fn draft_edit_throttled(&self, key: &str) -> bool {
         let last = self.last_draft_edit.lock();
-        last.get(key).is_some_and(|at| {
-            at.elapsed() < Duration::from_millis(self.draft_update_interval_ms)
-        })
+        last.get(key)
+            .is_some_and(|at| at.elapsed() < Duration::from_millis(self.draft_update_interval_ms))
     }
 
     pub(super) fn mark_draft_edit(&self, key: &str) {

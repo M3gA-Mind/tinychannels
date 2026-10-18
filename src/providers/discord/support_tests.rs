@@ -23,7 +23,8 @@ pub(super) const THREAD: &str = "777000222";
 pub(super) const GUILD: &str = "999000333";
 
 pub(super) const OGG_FIXTURE: &[u8] = include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg");
-pub(super) const PNG: &str = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=";
+pub(super) const PNG: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=";
 
 pub(super) fn png_bytes() -> Vec<u8> {
     BASE64.decode(PNG).unwrap()
