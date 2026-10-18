@@ -1,7 +1,6 @@
 use super::*;
 use crate::channel::ChannelTypedSend;
 use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
-use crate::traits::Channel;
 use serde_json::json;
 use tinychannels_bus::channel::ConversationRef;
 use tinychannels_bus::{
@@ -133,7 +132,11 @@ async fn typed_voice_upload_uses_host_audio_and_returns_voice_receipt() {
     *voice.audio_base64.lock().unwrap() =
         Some(base64::engine::general_purpose::STANDARD.encode(b"host-audio-bytes"));
     let channel = channel(&server, Arc::new(StubMedia::default())).with_voice_media_store(voice);
-    assert!(channel.capabilities().voice_out.supported);
+    assert!(
+        NativeProvider::declared_capabilities(&channel)
+            .voice_out
+            .supported
+    );
     let mut message = image_message("channel-1");
     message.parts = vec![OutboundContentPart::Voice {
         voice: OutboundVoice::Media {
@@ -183,6 +186,7 @@ fn media_capabilities_require_host_scoped_storage() {
         true,
         false,
     );
-    assert!(!bare.capabilities().content.image.outbound);
-    assert!(!bare.capabilities().content.file.outbound);
+    let capabilities = NativeProvider::declared_capabilities(&bare);
+    assert!(!capabilities.content.image.outbound);
+    assert!(!capabilities.content.file.outbound);
 }
