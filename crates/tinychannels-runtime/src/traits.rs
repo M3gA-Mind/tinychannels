@@ -213,6 +213,31 @@ pub trait Channel: Send + Sync {
         anyhow::bail!("provider does not support native reactions")
     }
 
+    /// Mark one inbound provider message as read by this account.
+    async fn mark_read(
+        &self,
+        _conversation: &tinychannels_bus::channel::ConversationRef,
+        _provider_message_id: &str,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("provider does not support read receipts")
+    }
+
+    /// Authenticate and ingest one raw provider webhook POST. `body` is the
+    /// exact received bytes; the provider owns signature policy and payload
+    /// semantics.
+    async fn deliver_webhook(
+        &self,
+        _signature: Option<&str>,
+        _body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        anyhow::bail!("provider has no webhook ingress")
+    }
+
+    /// Answer the provider's webhook subscription handshake. `None` rejects it.
+    fn verify_webhook(&self, _mode: &str, _verify_token: &str, _challenge: &str) -> Option<String> {
+        None
+    }
+
     /// Edit a previously sent message using its provider receipt.
     async fn edit_message(
         &self,
