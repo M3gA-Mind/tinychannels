@@ -78,10 +78,7 @@ impl QQChannel {
     }
 
     /// Enable native QQ voice messages through the host voice store.
-    pub fn with_voice_media_store(
-        mut self,
-        store: Arc<dyn crate::host::VoiceMediaStore>,
-    ) -> Self {
+    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
         self.native.voice_media_store = Some(store);
         self
     }
