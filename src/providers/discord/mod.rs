@@ -13,3 +13,7 @@ pub use channel::DiscordChannel;
 #[cfg(test)]
 #[path = "support_tests.rs"]
 mod support;
+
+#[cfg(test)]
+#[path = "conformance_tests.rs"]
+mod conformance;
