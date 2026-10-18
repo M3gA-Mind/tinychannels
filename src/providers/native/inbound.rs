@@ -9,9 +9,9 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 use tinychannels_bus::{
-    ChannelEvent, ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelRef, ContentPart, ConversationRef,
-    HostVoiceMediaDirection, HostVoiceScope, MediaKind, MediaReference, VoiceNote,
-    VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
+    ChannelEvent, ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelRef,
+    ContentPart, ConversationRef, HostVoiceMediaDirection, HostVoiceScope, MediaKind,
+    MediaReference, VoiceNote, VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
 };
 
 /// The host ports and limits inbound ingestion needs.
@@ -135,7 +135,10 @@ impl Ingest<'_> {
         let mime = normalize_mime(&file.mime);
         let kind = kind_for_mime(&mime);
         if !crate::host::is_allowed_content_type(kind, &mime) {
-            tracing::debug!(provider, "[native] skipping an attachment with an unsupported type");
+            tracing::debug!(
+                provider,
+                "[native] skipping an attachment with an unsupported type"
+            );
             return;
         }
         let voice_clip = file.voice && kind == MediaKind::Audio && self.voice_store.is_some();
@@ -145,7 +148,10 @@ impl Ingest<'_> {
             self.file_bytes
         };
         if file.bytes.is_empty() || file.bytes.len() as u64 > limit {
-            tracing::warn!(provider, "[native] skipping an empty or oversized attachment");
+            tracing::warn!(
+                provider,
+                "[native] skipping an empty or oversized attachment"
+            );
             return;
         }
         if voice_clip && let Some(store) = self.voice_store {
@@ -187,8 +193,14 @@ impl Ingest<'_> {
             let transcript = match file.transcript {
                 Some(transcript) => Some(transcript),
                 None => {
-                    self.transcribe(conversation, message_id, &file.bytes, &mime_for(&media), &file.name)
-                        .await
+                    self.transcribe(
+                        conversation,
+                        message_id,
+                        &file.bytes,
+                        &mime_for(&media),
+                        &file.name,
+                    )
+                    .await
                 }
             };
             into.voice = Some(VoiceNote {
@@ -202,7 +214,10 @@ impl Ingest<'_> {
             return;
         }
         let Some(repository) = self.repository else {
-            tracing::debug!(provider, "[native] no media repository; skipping attachment");
+            tracing::debug!(
+                provider,
+                "[native] no media repository; skipping attachment"
+            );
             return;
         };
         let stored = repository
@@ -222,7 +237,10 @@ impl Ingest<'_> {
             })
             .await;
         let Ok(media) = stored else {
-            tracing::warn!(provider, "[native] attachment could not be stored as typed media");
+            tracing::warn!(
+                provider,
+                "[native] attachment could not be stored as typed media"
+            );
             return;
         };
         into.parts.push(match kind {
@@ -339,7 +357,6 @@ pub(crate) async fn publish_event(
         tracing::debug!(provider, %error, "[native] failed to deliver channel event");
     }
 }
-
 
 fn mime_for(media: &MediaReference) -> String {
     media

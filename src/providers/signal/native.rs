@@ -11,10 +11,10 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
 use std::sync::Arc;
+use tinychannels_bus::ChannelCapabilities;
 use tinychannels_bus::channel::{
     ChannelReaction, ChannelSendError, ConversationRef, MessageReceiptPartKind, SendErrorKind,
 };
-use tinychannels_bus::ChannelCapabilities;
 
 /// Signal's attachment ceiling is far higher; stay inside the 16 MiB bus frame.
 pub(crate) const SIGNAL_MAX_FILE_BYTES: u64 = 12 * 1024 * 1024;
@@ -221,7 +221,11 @@ impl NativeProvider for SignalChannel {
             }
         };
         let id = self.send_params(target, params, operation).await?;
-        Ok(vec![Sent::new(id, kind).editable(matches!(step, Step::Text(_))).deletable(true)])
+        Ok(vec![
+            Sent::new(id, kind)
+                .editable(matches!(step, Step::Text(_)))
+                .deletable(true),
+        ])
     }
 
     async fn set_typing(&self, conversation: &str, on: bool) -> Result<(), ChannelSendError> {

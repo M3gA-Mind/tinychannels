@@ -19,8 +19,10 @@ pub(crate) use outbound::{Sent, Step, Target, to_anyhow};
 
 use async_trait::async_trait;
 use std::sync::Arc;
-use tinychannels_bus::channel::{ChannelReaction, ChannelSendError, ConversationRef, SendErrorKind};
-use tinychannels_bus::{ChannelCapabilities, ChannelRef};
+use tinychannels_bus::ChannelCapabilities;
+use tinychannels_bus::channel::{
+    ChannelReaction, ChannelSendError, ConversationRef, SendErrorKind,
+};
 
 use crate::host::{MediaRepository, VoiceMediaStore};
 pub(crate) use outbound::{FileStep, Limits};
@@ -130,13 +132,6 @@ pub(crate) trait NativeProvider: Send + Sync {
     }
 }
 
-pub(crate) fn channel_ref(id: &str) -> ChannelRef {
-    ChannelRef {
-        id: id.into(),
-        account_id: None,
-    }
-}
-
 /// Implement the v2 adapter trait family for a [`NativeProvider`].
 macro_rules! native_v2_adapter {
     ($ty:ty) => {
@@ -147,7 +142,8 @@ macro_rules! native_v2_adapter {
                     "adapterMode".to_owned(),
                     "native-v2".to_owned(),
                 )]);
-                for (key, value) in $crate::providers::native::NativeProvider::descriptor_extra(self)
+                for (key, value) in
+                    $crate::providers::native::NativeProvider::descriptor_extra(self)
                 {
                     metadata.insert(key.to_owned(), value.to_owned());
                 }

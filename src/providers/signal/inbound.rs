@@ -5,7 +5,7 @@
 use super::native::{SIGNAL_MAX_FILE_BYTES, SIGNAL_MAX_VOICE_BYTES};
 use super::{DataMessage, Envelope, SignalChannel};
 use crate::providers::native::inbound::{
-    Ingest, Ingested, InboundFile, assemble, channel_event, media_of, publish, publish_event,
+    InboundFile, Ingest, Ingested, assemble, channel_event, media_of, publish, publish_event,
 };
 use crate::traits::ChannelMessage;
 use base64::Engine as _;
@@ -82,10 +82,7 @@ impl SignalChannel {
         if !self.is_sender_allowed(&sender) || !self.matches_group(data) {
             return None;
         }
-        let timestamp = data
-            .timestamp
-            .or(envelope.timestamp)
-            .unwrap_or_else(now_ms);
+        let timestamp = data.timestamp.or(envelope.timestamp).unwrap_or_else(now_ms);
         let target = self.reply_target(data, &sender);
         Some(Accepted {
             data,
@@ -173,7 +170,12 @@ impl SignalChannel {
         ingested
     }
 
-    async fn dispatch_reaction(&self, envelope: &Envelope, accepted: &Accepted<'_>, reaction: &Value) {
+    async fn dispatch_reaction(
+        &self,
+        envelope: &Envelope,
+        accepted: &Accepted<'_>,
+        reaction: &Value,
+    ) {
         let emoji = reaction
             .get("emoji")
             .and_then(Value::as_str)
@@ -314,7 +316,7 @@ impl SignalChannel {
 
     /// Handle one SSE envelope. False when the legacy receiver is gone and the
     /// listener should stop.
-    pub(crate) async fn dispatch_envelope(
+    pub(super) async fn dispatch_envelope(
         &self,
         envelope: &Envelope,
         tx: &mpsc::Sender<ChannelMessage>,
@@ -346,7 +348,8 @@ impl SignalChannel {
         let message_id = format!("sig_{}", accepted.timestamp);
         let conversation = Self::conversation_of(&accepted.target);
         let ingested = if has_attachments && !self.ignore_attachments {
-            self.ingest_attachments(data, &message_id, &conversation).await
+            self.ingest_attachments(data, &message_id, &conversation)
+                .await
         } else {
             Ingested::default()
         };

@@ -33,7 +33,6 @@ pub(crate) struct Limits {
 
 /// One file ready to upload.
 pub(crate) struct FileStep {
-    pub(crate) kind: MediaKind,
     pub(crate) bytes: Vec<u8>,
     pub(crate) mime: String,
     pub(crate) name: String,
@@ -236,7 +235,6 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                     )));
                 }
                 steps.push(Step::File(FileStep {
-                    kind,
                     mime: stored.content_type,
                     name: stored.file_name.unwrap_or_else(|| name.to_owned()),
                     bytes: stored.bytes,
@@ -290,7 +288,6 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                         pre_dispatch(&format!("{display} voice media failed upload validation"))
                     })?;
                 steps.push(Step::Voice(FileStep {
-                    kind: MediaKind::Audio,
                     mime: resolved.mime_type,
                     name: resolved.file_name.unwrap_or_else(|| "voice.m4a".into()),
                     bytes: audio,
@@ -321,12 +318,7 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn receipt_part(
-    provider: &str,
-    sent: Sent,
-    index: usize,
-    target: &Target,
-) -> MessageReceiptPart {
+fn receipt_part(provider: &str, sent: Sent, index: usize, target: &Target) -> MessageReceiptPart {
     MessageReceiptPart {
         edit_token: sent.editable.then(|| sent.id.clone()),
         delete_token: sent.deletable.then(|| sent.id.clone()),
