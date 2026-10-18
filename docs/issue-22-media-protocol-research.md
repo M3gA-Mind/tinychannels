@@ -113,6 +113,14 @@ actual native file type, upload with srv_send_msg=false, then send the returned
 opaque file_info in the separate message request. The declared capability
 limit must remain 5 MiB until the full chunk-upload protocol is implemented.
 
+Tencent's own [Node.js bot SDK](https://github.com/tencent-connect/qqbot-nodejs/blob/main/USAGE.md)
+documents inbound `attachments` with `content_type`, `url`, and optional
+filename on C2C/group event objects, and the official
+[botpy C2C file example](https://github.com/tencent-connect/botpy/blob/master/examples/demo_c2c_reply_file.py)
+shows native upload followed by a msg_type=7 response. This confirms that the
+existing QQ listener's text-only projection drops supported inbound
+attachments; it is an implementation gap, not a protocol limitation.
+
 ## DingTalk App Bot
 
 DingTalk's official [bot overview](https://opensource.dingtalk.com/developerpedia/docs/learn/bot/overview/)
