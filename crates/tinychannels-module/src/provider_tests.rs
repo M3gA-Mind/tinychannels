@@ -4405,7 +4405,8 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         .with_voice_media_store(provider_host.voice_media_store().unwrap())
         .with_transcriber(provider_host.transcriber().unwrap()),
     );
-    let running = Running::start_native("Discord", channel, hooks, host, None, false);
+    let launch = crate::native::NativeLaunch::new("Discord", channel);
+    let running = launch.start(hooks, host, None, false);
     let adapter = running.adapter_handle();
     assert_eq!(adapter.mode, AdapterMode::DiscordNativeV2);
     let descriptor = adapter.descriptor();
