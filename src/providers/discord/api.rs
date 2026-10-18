@@ -55,7 +55,11 @@ fn auth_header(token: &str) -> String {
 /// Other non-2xx statuses (400 / 404 / 5xx) pass through with a
 /// `Discord API error` prefix — they don't match the
 /// `is_session_expired_error` predicate even when verbatim.
-fn format_discord_http_error(endpoint: &str, status: reqwest::StatusCode, body: &str) -> String {
+pub(super) fn format_discord_http_error(
+    endpoint: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+) -> String {
     if status == reqwest::StatusCode::UNAUTHORIZED || status == reqwest::StatusCode::FORBIDDEN {
         let kind = if status == reqwest::StatusCode::UNAUTHORIZED {
             "bot token was rejected"

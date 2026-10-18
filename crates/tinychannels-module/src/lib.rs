@@ -30,6 +30,7 @@ mod health;
 pub mod host;
 mod interaction;
 mod media;
+mod native;
 mod prepare_connect;
 mod progressive;
 #[allow(

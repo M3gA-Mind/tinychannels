@@ -266,6 +266,54 @@ pub fn build_telegram_channel(
     Some(Arc::new(telegram))
 }
 
+/// Build the configured Discord channel as its concrete provider type,
+/// wired to whatever media, voice and event services the host supplies.
+#[must_use]
+pub fn build_discord_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<DiscordChannel>> {
+    let dc = config.discord.as_ref()?;
+    tracing::info!(
+        channel = "discord",
+        allowed_users_count = dc.allowed_users.len(),
+        mention_only = dc.mention_only,
+        "[channels] discord enabled (bot token not logged)"
+    );
+    let mut discord = DiscordChannel::with_http_client(
+        dc.bot_token.clone(),
+        dc.guild_id.clone(),
+        dc.channel_id.clone(),
+        dc.allowed_users.clone(),
+        dc.listen_to_bots,
+        dc.mention_only,
+        http.client_for("channel.discord"),
+    );
+    // Each is optional; Discord degrades to text without them.
+    if let Some(transcriber) = host.transcriber() {
+        discord = discord.with_transcriber(transcriber);
+    }
+    if let Some(store) = host.voice_media_store() {
+        discord = discord.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        discord = discord.with_media_repository(repository);
+    }
+    if let Some(codec) = host.voice_codec() {
+        discord = discord.with_voice_codec(codec);
+    }
+    discord = discord.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        discord = discord.with_events(events);
+    }
+    Some(Arc::new(discord))
+}
+
 /// Build the configured WhatsApp Business Cloud channel as its concrete type.
 ///
 /// The module uses this to retain the same object as the webhook ingress owner
@@ -473,6 +521,43 @@ pub fn build_long_tail_channel(
     }
 }
 
+/// Build the Signal provider with the host ports it can use: scoped media and
+/// voice storage, speech-to-text, synthesis and the ordered event sink.
+pub fn build_signal_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<SignalChannel>> {
+    let sig = config.signal.as_ref()?;
+    let mut signal = SignalChannel::with_http_client(
+        sig.http_url.clone(),
+        sig.account.clone(),
+        sig.group_id.clone(),
+        sig.allowed_from.clone(),
+        sig.ignore_attachments,
+        sig.ignore_stories,
+        http.signal_client(),
+    );
+    if let Some(store) = host.voice_media_store() {
+        signal = signal.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        signal = signal.with_media_repository(repository);
+    }
+    if let Some(transcriber) = host.transcriber() {
+        signal = signal.with_transcriber(transcriber);
+    }
+    signal = signal.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        signal = signal.with_events(events);
+    }
+    Some(Arc::new(signal))
+}
+
 /// Build every provider that `config` enables.
 ///
 /// Order is stable and matches the declaration order below, so a caller that
@@ -493,16 +578,8 @@ pub fn build_channels(
         channels.push(telegram);
     }
 
-    if let Some(dc) = config.discord.as_ref() {
-        channels.push(Arc::new(DiscordChannel::with_http_client(
-            dc.bot_token.clone(),
-            dc.guild_id.clone(),
-            dc.channel_id.clone(),
-            dc.allowed_users.clone(),
-            dc.listen_to_bots,
-            dc.mention_only,
-            http.client_for("channel.discord"),
-        )));
+    if let Some(discord) = build_discord_channel(config, host, http) {
+        channels.push(discord);
     }
 
     if let Some(slack) = build_slack_channel(config, host, http) {
@@ -517,16 +594,8 @@ pub fn build_channels(
         channels.push(Arc::new(IMessageChannel::new(im.allowed_contacts.clone())));
     }
 
-    if let Some(sig) = config.signal.as_ref() {
-        channels.push(Arc::new(SignalChannel::with_http_client(
-            sig.http_url.clone(),
-            sig.account.clone(),
-            sig.group_id.clone(),
-            sig.allowed_from.clone(),
-            sig.ignore_attachments,
-            sig.ignore_stories,
-            http.signal_client(),
-        )));
+    if let Some(signal) = build_signal_channel(config, host, http) {
+        channels.push(signal);
     }
 
     if let Some(wa) = config.whatsapp.as_ref() {

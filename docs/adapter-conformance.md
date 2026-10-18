@@ -65,6 +65,52 @@ See the [Telegram Bot API](https://core.telegram.org/bots/api#sendphoto),
 [sendAudio](https://core.telegram.org/bots/api#sendaudio), and
 [sendVideo](https://core.telegram.org/bots/api#sendvideo) limits.
 
+## Discord
+
+`DiscordChannel` implements the v2 contract natively (`ChannelAdapter`,
+`ChannelTypedSend`, `ChannelTyping`, `ChannelReaction`, `ChannelEdit`,
+`ChannelDelete`, `ChannelStreamingDraft`) and mirrors it on the legacy
+`Channel` trait, so the module's legacy-backed bridge reaches the same code.
+`src/providers/discord/conformance_tests.rs` runs the whole 24-case matrix
+against a wiremock Discord. Observations are parsed from the requests the mock
+received and message ids from the responses it returned.
+
+- **Addressing.** `ConversationRef.id` is the parent channel and `thread_id`
+  the thread channel; a send posts to the thread when one is set, and replies
+  use `message_reference`. Threads are resolved from `THREAD_CREATE`,
+  `GUILD_CREATE` or one cached `GET /channels/{id}`.
+- **Attachments.** Image, video, audio and file parts upload as multipart
+  `files[n]` from host media references (10 MiB budget, 10 files). Inbound
+  attachments are downloaded unauthenticated from the CDN, bounded, and stored
+  through the host media repository. Both directions are declared only when the
+  host supplied a repository.
+- **Voice messages.** Inbound messages with flag 8192 are stored through the
+  host voice store, transcribed with the host STT, and delivered as a
+  `VoiceNote` carrying duration and the decoded waveform. Outbound voice is
+  sent alone with flag 8192, `duration_secs` and a base64 `waveform`; the
+  TinyVoice codec measures both, and a missing codec falls back to the Ogg
+  granule position and a flat waveform. Non-Ogg audio is transcoded or
+  rejected.
+- **Presentation.** Buttons and approvals become action rows (5x5, custom ids
+  up to 100 bytes); presentation text becomes an embed. A button press is
+  acknowledged with a deferred update and published as an opaque
+  `ButtonCallback`. Mentions are limited to users, so model output cannot
+  ping `@everyone`.
+- **Threads, edits, streaming.** A `Native` part
+  `{"action":"create_thread","name":...}` creates a thread (from a message or
+  standalone). Edits, deletes and reactions use the receipt; streaming drafts
+  edit the first 2000 characters in place and the final edit posts the rest,
+  rate limited per channel.
+- **Idempotency.** Every created message carries a deterministic `nonce` with
+  `enforce_nonce`, so a retried send cannot duplicate a message.
+- **Events.** `MESSAGE_UPDATE`, `MESSAGE_DELETE` and reaction add/remove are
+  published as `message_updated`, `message_deleted`, `reaction_added` and
+  `reaction_removed`, filtered by the same guild, channel and allowlist scope
+  as messages.
+
+Not supported through the bot API, and reported as explicit unsupported
+results: stickers, locations, contacts, polls and read receipts.
+
 General host-to-module media ingestion is still missing from the TinyChannels
 bus. Host consumers must wait for the owning bus/module extension rather than
 linking TinyChannels implementation code or duplicating its metadata schema.
@@ -101,6 +147,37 @@ result without any request.
 - **Receipts:** every text, Block Kit and draft message returns Slack's `ts`.
   An upload whose message timestamp Slack does not report returns the file ID,
   which can be deleted (`files.delete`) but not edited.
+
+## Signal
+
+`SignalChannel` is a native v2 adapter (`adapterMode=native-v2`) built on the
+shared `providers::native` plumbing that Signal, iMessage, Linq and Email use:
+a provider implements `NativeProvider` (deliver one resolved step, optionally
+typing, reactions, edits and deletes) and `native_v2_adapter!` supplies the whole
+adapter trait family. Anything a provider does not implement answers an
+explicit, non-retryable `unsupported` result before any platform I/O. The module
+runs it through `Running::start_native`. Its conformance test
+(`signal_adapter_passes_the_full_conformance_matrix_against_the_mock_daemon`)
+runs all 24 kit features against a mock signal-cli daemon.
+
+- **Inbound:** the daemon's SSE stream. Messages (with attachments), reactions,
+  remote deletes and read/delivery receipts are normalized onto the ordered
+  ingress path; a message the sink does not take falls back to the legacy
+  receiver. A repeated `sender:timestamp` is dropped.
+- **Attachments and voice:** inbound bytes come from signal-cli's
+  `getAttachment` JSON-RPC method into the scoped media repository; audio the
+  daemon flags `voiceNote` becomes a voice note transcribed with the host's
+  speech to text. Outbound attachments are `data:` URIs in the `send` call.
+  signal-cli has no voice-note flag on send, so outbound voice is an audio
+  attachment captioned with the transcript (descriptor `voiceOut=attachment`).
+- **Reactions, edits, deletes, typing:** `sendReaction`, `send` with
+  `editTimestamp`, `remoteDelete` and `sendTyping` (`stop` to clear). Message
+  ids are Signal millisecond timestamps. A reaction in a group needs the target
+  author (`author:timestamp`); a bare timestamp means the peer in a direct chat.
+- **Declared unsupported:** threads, buttons, presentations, stickers,
+  locations, contacts, polls, native data and streaming drafts.
+- **Media scope:** Signal has no secret, so the media account scope is derived
+  from the daemon URL and the registered account.
 
 | Behavior | Foundation status | Final provider coverage |
 | --- | --- | --- |

@@ -489,9 +489,16 @@ pub(crate) fn configured_media_account_scope(
             }
             vec![c.url.clone(), c.bot_token.clone()]
         }
-        // Signal exposes no configured authentication secret or attested
-        // account identifier in the current contract.
-        "signal" => return None,
+        // Signal has no secret. The daemon URL and the registered account it
+        // serves together identify the account that owns media, so two
+        // accounts (or two daemons) never share a scope.
+        "signal" => {
+            let c = config.signal.as_ref()?;
+            if c.http_url.trim().is_empty() || c.account.trim().is_empty() {
+                return None;
+            }
+            vec![c.http_url.clone(), c.account.clone()]
+        }
         "email" => {
             let c = config.email.as_ref()?;
             if c.imap_host.trim().is_empty()
@@ -1126,7 +1133,7 @@ async fn listen_with_supervision(
 
 /// A resource is retained until its owning task acknowledges cleanup.
 #[derive(Clone)]
-struct NativePorts {
+pub(crate) struct NativePorts {
     /// Display name used in operation errors ("Telegram", "Slack").
     provider: &'static str,
     adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
@@ -1139,7 +1146,7 @@ struct NativePorts {
 }
 
 impl NativePorts {
-    fn native<T>(channel: Arc<T>, provider: &'static str) -> Self
+    pub(crate) fn native<T>(channel: Arc<T>, provider: &'static str) -> Self
     where
         T: tinychannels::channel::ChannelAdapter
             + tinychannels::channel::ChannelTypedSend
@@ -1203,6 +1210,10 @@ pub(crate) enum AdapterMode {
     LegacyBacked,
     TelegramNativeV2,
     SlackNativeV2,
+    SignalNativeV2,
+    IMessageNativeV2,
+    LinqNativeV2,
+    EmailNativeV2,
     WhatsAppNativeV2,
     LongTailNativeV2,
 }
@@ -1546,7 +1557,10 @@ impl ConfiguredAdapterFactory {
         )
     }
 
-    fn native(running: Arc<Running>, #[cfg(test)] mode: AdapterMode) -> ConfiguredAdapterHandle {
+    pub(crate) fn native(
+        running: Arc<Running>,
+        #[cfg(test)] mode: AdapterMode,
+    ) -> ConfiguredAdapterHandle {
         let configured_instance = running.configured_instance.clone();
         let native = Arc::new(NativeAdapter { running });
         let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = native.clone();
@@ -1564,14 +1578,31 @@ impl ConfiguredAdapterFactory {
 impl Running {
     pub(crate) fn adapter_handle(self: &Arc<Self>) -> ConfiguredAdapterHandle {
         if let Some(ports) = &self.native_ports {
-            if ports.provider == "Slack" {
-                ConfiguredAdapterFactory::slack(self.clone())
-            } else if ports.provider == "WhatsApp" {
-                ConfiguredAdapterFactory::whatsapp(self.clone())
-            } else if ports.provider != "Telegram" {
-                ConfiguredAdapterFactory::long_tail(self.clone())
-            } else {
-                ConfiguredAdapterFactory::telegram(self.clone())
+            match ports.provider {
+                "Slack" => ConfiguredAdapterFactory::slack(self.clone()),
+                "Signal" => ConfiguredAdapterFactory::native(
+                    self.clone(),
+                    #[cfg(test)]
+                    AdapterMode::SignalNativeV2,
+                ),
+                "iMessage" => ConfiguredAdapterFactory::native(
+                    self.clone(),
+                    #[cfg(test)]
+                    AdapterMode::IMessageNativeV2,
+                ),
+                "Linq" => ConfiguredAdapterFactory::native(
+                    self.clone(),
+                    #[cfg(test)]
+                    AdapterMode::LinqNativeV2,
+                ),
+                "Email" => ConfiguredAdapterFactory::native(
+                    self.clone(),
+                    #[cfg(test)]
+                    AdapterMode::EmailNativeV2,
+                ),
+                "WhatsApp" => ConfiguredAdapterFactory::whatsapp(self.clone()),
+                "Telegram" => ConfiguredAdapterFactory::telegram(self.clone()),
+                _ => ConfiguredAdapterFactory::long_tail(self.clone()),
             }
         } else {
             ConfiguredAdapterFactory::legacy(self.clone())

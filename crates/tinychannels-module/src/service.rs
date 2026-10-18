@@ -96,20 +96,6 @@ fn lacks_module_ingress(name: &str) -> bool {
     name == "linq"
 }
 
-/// Display name of a long-tail text provider that serves the v2 adapter
-/// traits itself, or `None` for every other provider.
-fn long_tail_display(provider: &str) -> Option<&'static str> {
-    match provider {
-        "lark" => Some("Lark"),
-        "mattermost" => Some("Mattermost"),
-        "irc" => Some("IRC"),
-        "qq" => Some("QQ"),
-        "dingtalk" => Some("DingTalk"),
-        "yuanbao" => Some("Yuanbao"),
-        _ => None,
-    }
-}
-
 /// The concrete WhatsApp adapter a configuration selects. The two backends
 /// share one provider name, so only the shape of the stanza separates them.
 enum WhatsAppNative {
@@ -299,23 +285,21 @@ impl Channels {
             None
         };
         let whatsapp = WhatsAppNative::select(&name, &config, &owner_host, http);
-        let long_tail = long_tail_display(tinychannels_bus::provider_id(&name)).and_then(|_| {
-            tinychannels::build_long_tail_channel(
-                &config,
-                http,
-                tinychannels_bus::provider_id(&name),
-            )
-        });
+        let native = if whatsapp.is_none() {
+            crate::native::build_native_v2(&name, &config, &owner_host, http)
+        } else {
+            None
+        };
         let channel: Arc<dyn tinychannels::Channel> = if let Some(telegram) = &telegram {
             telegram.clone()
         } else if let Some(slack) = &slack {
             slack.clone()
-        } else if let Some(long_tail) = &long_tail {
-            long_tail.clone()
         } else if let Some(native) = &whatsapp {
             // A linked session, not its mutable label, is the media authority.
             native.bind_media_authority(&media_account_scope);
             native.channel()
+        } else if let Some(native) = &native {
+            native.channel.clone()
         } else {
             build_channels(&config, &owner_host, http)
                 .into_iter()
@@ -352,18 +336,9 @@ impl Channels {
             )
         } else if let Some(slack) = slack {
             Running::start_slack(slack, hooks, self.host.clone(), supervision, outbound_only)
-        } else if let Some(long_tail) = long_tail {
-            let display =
-                long_tail_display(tinychannels_bus::provider_id(&name)).unwrap_or("Provider");
-            Running::start_long_tail(
-                display,
-                long_tail,
-                hooks,
-                self.host.clone(),
-                supervision,
-                outbound_only,
-            )
         } else if let Some(native) = whatsapp {
+            native.start(hooks, self.host.clone(), supervision, outbound_only)
+        } else if let Some(native) = native {
             native.start(hooks, self.host.clone(), supervision, outbound_only)
         } else {
             match supervision {

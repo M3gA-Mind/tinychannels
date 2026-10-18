@@ -3680,25 +3680,6 @@ async fn whatsapp_selection_follows_the_stanza_shape_and_web_binds_its_media_aut
     running.stop().await.unwrap();
 }
 
-#[test]
-fn long_tail_providers_have_a_display_name_and_nothing_else_does() {
-    for (id, display) in [
-        ("lark", "Lark"),
-        ("mattermost", "Mattermost"),
-        ("irc", "IRC"),
-        ("qq", "QQ"),
-        ("dingtalk", "DingTalk"),
-        ("yuanbao", "Yuanbao"),
-    ] {
-        assert_eq!(super::long_tail_display(id), Some(display));
-    }
-    for id in [
-        "telegram", "slack", "whatsapp", "discord", "email", "unknown",
-    ] {
-        assert_eq!(super::long_tail_display(id), None, "{id}");
-    }
-}
-
 #[tokio::test]
 async fn a_long_tail_provider_starts_as_a_native_adapter_and_is_listed() {
     let service = inbound_preparation_service().await;
