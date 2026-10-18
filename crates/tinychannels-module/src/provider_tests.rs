@@ -3359,3 +3359,85 @@ async fn configured_telegram_native_adapter_owns_polling_typing_drafts_and_scope
         .await;
     assert!(after_stop.is_err(), "a stopped runtime accepts no work");
 }
+
+#[tokio::test]
+async fn legacy_running_routes_reaction_edit_delete_and_refuses_native_drafts() {
+    use tinychannels_bus::ChannelInteraction;
+    let connection = tinybus::Connection::connect({
+        let bus = tinybus::transport::memory::MemoryBus::new();
+        tinybus::broker::Broker::new().spawn(bus.clone());
+        bus.connect().await.unwrap()
+    })
+    .await
+    .unwrap();
+    let running = Running::start(
+        Arc::new(InteractionChannel::default()),
+        Arc::new(Hooks::default()),
+        HostChannels::new(connection),
+    );
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: tinychannels_bus::provider_id("interaction-fixture").to_owned(),
+        account_id: Some(running.configured_instance.clone()),
+    };
+    let conversation = ConversationRef {
+        id: "room".into(),
+        ..Default::default()
+    };
+    let receipt = tinychannels_bus::channel::MessageReceipt {
+        channel: Some(channel_ref.clone()),
+        conversation: Some(conversation.clone()),
+        primary_platform_message_id: Some("m1".into()),
+        parts: vec![tinychannels_bus::channel::MessageReceiptPart {
+            platform_message_id: "m1".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "legacy-op".into(),
+        channel_id: channel_ref.id.clone(),
+        conversation_id: "room".into(),
+        channel_ref: Some(channel_ref.clone()),
+        conversation_ref: Some(conversation.clone()),
+        payload: tinychannels_bus::OutboundPayload::Text { text: "x".into() },
+        ..Default::default()
+    };
+    // The fixture implements none of these optional operations; each request
+    // must still travel through the ordered worker and come back as a typed
+    // provider error rather than being silently dropped.
+    let reaction = running
+        .interact(ChannelInteraction::SendReaction {
+            channel: channel_ref.clone(),
+            conversation,
+            provider_message_id: "m1".into(),
+            reaction: tinychannels_bus::ChannelReaction {
+                value: "👍".into(),
+                ..Default::default()
+            },
+            remove: false,
+        })
+        .await;
+    assert!(matches!(reaction, Err(RunningSendError::AfterDispatch(_))));
+    let edit = running
+        .interact(ChannelInteraction::EditMessage {
+            receipt: receipt.clone(),
+            intent: intent.clone(),
+        })
+        .await;
+    assert!(matches!(edit, Err(RunningSendError::AfterDispatch(_))));
+    let delete = running
+        .interact(ChannelInteraction::DeleteMessage {
+            receipt: receipt.clone(),
+        })
+        .await;
+    assert!(matches!(delete, Err(RunningSendError::AfterDispatch(_))));
+
+    let draft = running
+        .interact(ChannelInteraction::UpsertDraft {
+            previous: None,
+            intent,
+        })
+        .await;
+    assert!(matches!(draft, Err(RunningSendError::NotDispatched(_))));
+    running.stop().await.unwrap();
+}
