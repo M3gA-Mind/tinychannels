@@ -9,6 +9,8 @@ cargo test --locked -p tinychannels-module configured_slack_native_adapter_route
 cargo test --locked -p tinychannels --lib slack_adapter_passes_the_full_conformance_matrix_against_the_mock_platform -- --nocapture
 cargo test --locked -p tinychannels-module configured_signal_native_adapter_routes_every_port_through_the_ordered_queue -- --nocapture
 cargo test --locked -p tinychannels --lib signal_adapter_passes_the_full_conformance_matrix_against_the_mock_daemon -- --nocapture
+cargo test --locked -p tinychannels-module a_built_imessage_launch_starts_as_the_native_imessage_adapter -- --nocapture
+cargo test --locked -p tinychannels --lib imessage_adapter_passes_the_full_conformance_matrix_against_a_fake_messages_folder -- --nocapture
 cargo test --locked -p tinychannels-module a_built_linq_launch_starts_as_the_native_linq_adapter -- --nocapture
 cargo test --locked -p tinychannels --lib linq_adapter_passes_the_full_conformance_matrix_against_the_mock_api -- --nocapture
 cargo test --locked -p tinychannels-module a_built_email_launch_starts_as_the_native_email_adapter -- --nocapture

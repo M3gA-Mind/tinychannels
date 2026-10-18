@@ -65,6 +65,52 @@ See the [Telegram Bot API](https://core.telegram.org/bots/api#sendphoto),
 [sendAudio](https://core.telegram.org/bots/api#sendaudio), and
 [sendVideo](https://core.telegram.org/bots/api#sendvideo) limits.
 
+## Discord
+
+`DiscordChannel` implements the v2 contract natively (`ChannelAdapter`,
+`ChannelTypedSend`, `ChannelTyping`, `ChannelReaction`, `ChannelEdit`,
+`ChannelDelete`, `ChannelStreamingDraft`) and mirrors it on the legacy
+`Channel` trait, so the module's legacy-backed bridge reaches the same code.
+`src/providers/discord/conformance_tests.rs` runs the whole 24-case matrix
+against a wiremock Discord. Observations are parsed from the requests the mock
+received and message ids from the responses it returned.
+
+- **Addressing.** `ConversationRef.id` is the parent channel and `thread_id`
+  the thread channel; a send posts to the thread when one is set, and replies
+  use `message_reference`. Threads are resolved from `THREAD_CREATE`,
+  `GUILD_CREATE` or one cached `GET /channels/{id}`.
+- **Attachments.** Image, video, audio and file parts upload as multipart
+  `files[n]` from host media references (10 MiB budget, 10 files). Inbound
+  attachments are downloaded unauthenticated from the CDN, bounded, and stored
+  through the host media repository. Both directions are declared only when the
+  host supplied a repository.
+- **Voice messages.** Inbound messages with flag 8192 are stored through the
+  host voice store, transcribed with the host STT, and delivered as a
+  `VoiceNote` carrying duration and the decoded waveform. Outbound voice is
+  sent alone with flag 8192, `duration_secs` and a base64 `waveform`; the
+  TinyVoice codec measures both, and a missing codec falls back to the Ogg
+  granule position and a flat waveform. Non-Ogg audio is transcoded or
+  rejected.
+- **Presentation.** Buttons and approvals become action rows (5x5, custom ids
+  up to 100 bytes); presentation text becomes an embed. A button press is
+  acknowledged with a deferred update and published as an opaque
+  `ButtonCallback`. Mentions are limited to users, so model output cannot
+  ping `@everyone`.
+- **Threads, edits, streaming.** A `Native` part
+  `{"action":"create_thread","name":...}` creates a thread (from a message or
+  standalone). Edits, deletes and reactions use the receipt; streaming drafts
+  edit the first 2000 characters in place and the final edit posts the rest,
+  rate limited per channel.
+- **Idempotency.** Every created message carries a deterministic `nonce` with
+  `enforce_nonce`, so a retried send cannot duplicate a message.
+- **Events.** `MESSAGE_UPDATE`, `MESSAGE_DELETE` and reaction add/remove are
+  published as `message_updated`, `message_deleted`, `reaction_added` and
+  `reaction_removed`, filtered by the same guild, channel and allowlist scope
+  as messages.
+
+Not supported through the bot API, and reported as explicit unsupported
+results: stickers, locations, contacts, polls and read receipts.
+
 General host-to-module media ingestion is still missing from the TinyChannels
 bus. Host consumers must wait for the owning bus/module extension rather than
 linking TinyChannels implementation code or duplicating its metadata schema.
@@ -133,6 +179,34 @@ runs all 24 kit features against a mock signal-cli daemon.
 - **Media scope:** Signal has no secret, so the media account scope is derived
   from the daemon URL and the registered account.
 
+## iMessage
+
+`IMessageChannel` is a native v2 adapter on the same `providers::native`
+plumbing as Signal (macOS only: `chat.db` in, `osascript` out). Its conformance
+test (`imessage_adapter_passes_the_full_conformance_matrix_against_a_fake_messages_folder`)
+runs all 24 kit features against a scratch Messages folder: a `chat.db` with the
+real table layout, a recording AppleScript runner, and a stand-in that records a
+sent row for every script, the way Messages does.
+
+- **Inbound:** the database is polled read-only. Text, attachments and group
+  chats (addressed by chat guid) are published on the ordered ingress path;
+  a tapback becomes `reaction_added` or `reaction_removed`; a message of ours the
+  recipient read becomes `read_receipt`. A repeated guid is dropped, and a
+  message the sink does not take falls back to the legacy receiver.
+- **Audio messages:** Apple's CAF voice messages are converted to AAC with
+  `afconvert`, stored as voice notes and transcribed with the host's speech to
+  text. Outbound voice is an audio attachment (descriptor `voiceOut=attachment`).
+- **Outbound ids:** AppleScript returns none, so the new row is read back from
+  `chat.db`. A send Messages never records is an uncertain outcome
+  (`sent_before_error`), not a failure to retry.
+- **Declared unsupported:** AppleScript cannot tapback, edit, unsend, show typing
+  or thread, so reactions out, edits, deletes, typing, replies and threads answer
+  `unsupported` before any script runs.
+- **One reader or two:** the shell's `imessage_scanner` also reads `chat.db`, but
+  in the desktop process, to ingest history into memory. This reader runs inside
+  the channels module and follows new messages for a live conversation; the
+  module cannot depend on the app, so each keeps a small reader over the same
+  documented schema.
 ## Linq
 
 `LinqChannel` is a native v2 adapter (iMessage, RCS and SMS through the Linq
