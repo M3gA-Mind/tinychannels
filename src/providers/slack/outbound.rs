@@ -238,7 +238,7 @@ impl SlackChannel {
         &self,
         step: &Step,
         target: &Target,
-        scope: &dyn Fn() -> Result<HostVoiceScope, ChannelSendError>,
+        scope: &Result<HostVoiceScope, ChannelSendError>,
     ) -> Result<Vec<(String, MessageReceiptPartKind)>, ChannelSendError> {
         match step {
             Step::Text(text) => {
@@ -262,7 +262,7 @@ impl SlackChannel {
                 Ok(vec![(ts, MessageReceiptPartKind::Card)])
             }
             Step::Media { kind, media, name, caption } => {
-                let scope = scope()?;
+                let scope = scope.clone()?;
                 let repository = self.media_repository.as_ref().ok_or_else(|| unsupported("Slack media needs scoped host storage"))?;
                 let opaque = media.opaque_id.as_deref().filter(|id| !id.trim().is_empty()).ok_or_else(|| pre_dispatch("Slack media has no host-owned opaque reference"))?;
                 let stored = repository
@@ -291,7 +291,7 @@ impl SlackChannel {
                 Ok(vec![(uploaded.message_ts.unwrap_or(uploaded.file_id), MessageReceiptPartKind::Media)])
             }
             Step::Voice { media, caption } => {
-                let scope = scope()?;
+                let scope = scope.clone()?;
                 let store = self.voice_media_store.as_ref().ok_or_else(|| unsupported("Slack voice needs host voice storage"))?;
                 let opaque = media.opaque_id.as_deref().filter(|id| !id.trim().is_empty()).ok_or_else(|| pre_dispatch("Slack voice media has no host-owned opaque reference"))?;
                 let resolved = store
@@ -326,7 +326,7 @@ impl SlackChannel {
     ) -> Result<ChannelSendOutcome, ChannelSendError> {
         let target = target_of(message)?;
         let steps = plan(message, self)?;
-        let scope = || Self::voice_scope(message, &target);
+        let scope = Self::voice_scope(message, &target);
         let mut parts: Vec<MessageReceiptPart> = Vec::new();
         let mut failure = None;
         for step in &steps {

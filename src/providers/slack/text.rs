@@ -92,11 +92,15 @@ pub(crate) fn chunk_text(text: &str, max_chars: usize) -> Vec<String> {
             .map(|(index, _)| index)
             .unwrap_or(remaining.len());
         let window = &remaining[..hard];
-        let cut = window
-            .rfind('\n')
-            .or_else(|| window.rfind(' '))
-            .filter(|index| *index > 0)
-            .unwrap_or(hard);
+        let cut = if remaining[hard..].starts_with(char::is_whitespace) {
+            hard
+        } else {
+            window
+                .rfind('\n')
+                .or_else(|| window.rfind(' '))
+                .filter(|index| *index > 0)
+                .unwrap_or(hard)
+        };
         let (head, tail) = remaining.split_at(cut);
         if !head.trim().is_empty() {
             chunks.push(head.trim().to_owned());

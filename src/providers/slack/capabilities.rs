@@ -45,7 +45,7 @@ impl SlackChannel {
         let mut parts: Vec<String> = ["text", "buttons", "presentation"]
             .map(String::from)
             .into();
-        let mut actions: Vec<String> = [
+        let actions: Vec<String> = [
             "send",
             "typing",
             "draft-update",

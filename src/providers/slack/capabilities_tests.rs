@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 #[test]
 fn bare_account_declares_text_buttons_threads_and_interactions_only() {
-    let caps = SlackChannel::new("xoxb".into(), None, vec![]).declared();
+    let caps = SlackChannel::new("bot-token".into(), None, vec![]).declared();
     assert!(caps.content.text.outbound && caps.content.buttons.outbound);
     assert!(caps.content.presentation.outbound);
     assert!(!caps.content.image.outbound && !caps.content.file.outbound);
@@ -19,7 +19,7 @@ fn bare_account_declares_text_buttons_threads_and_interactions_only() {
 
 #[test]
 fn media_and_voice_ports_enable_their_content_kinds() {
-    let caps = SlackChannel::new("xoxb".into(), None, vec![])
+    let caps = SlackChannel::new("bot-token".into(), None, vec![])
         .with_media_repository(Arc::new(StubMedia::default()))
         .with_voice_media_store(Arc::new(StubVoice::default()))
         .with_voice_synthesis(true)
