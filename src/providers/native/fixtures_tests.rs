@@ -218,6 +218,8 @@ pub(crate) struct FakeProvider {
     pub(crate) drafts: bool,
     pub(crate) caps: tinychannels_bus::ChannelCapabilities,
     pub(crate) fail_after: Option<usize>,
+    /// Deliver every step as one platform message.
+    pub(crate) bundle: bool,
     pub(crate) delivered: Mutex<Vec<String>>,
     pub(crate) edited: Mutex<Vec<(String, String)>>,
     pub(crate) deleted: Mutex<Vec<String>>,
@@ -236,6 +238,7 @@ impl Default for FakeProvider {
             drafts: true,
             caps,
             fail_after: None,
+            bundle: false,
             delivered: Mutex::default(),
             edited: Mutex::default(),
             deleted: Mutex::default(),
@@ -283,6 +286,25 @@ impl super::NativeProvider for FakeProvider {
 
     fn can_draft(&self) -> bool {
         self.drafts
+    }
+
+    fn bundles_steps(&self) -> bool {
+        self.bundle
+    }
+
+    async fn deliver_bundle(
+        &self,
+        _target: &super::Target,
+        steps: &[super::Step],
+    ) -> Result<Vec<super::Sent>, tinychannels_bus::channel::ChannelSendError> {
+        self.delivered
+            .lock()
+            .unwrap()
+            .push(format!("bundle:{}", steps.len()));
+        Ok(vec![super::Sent::new(
+            "bundle-1",
+            tinychannels_bus::channel::MessageReceiptPartKind::Text,
+        )])
     }
 
     async fn deliver(

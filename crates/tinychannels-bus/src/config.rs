@@ -292,6 +292,10 @@ pub struct LinqConfig {
     pub from_phone: String,
     #[serde(default)]
     pub allowed_senders: Vec<String>,
+    /// The secret Linq signs webhook deliveries with. Deliveries are refused
+    /// until it is set.
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

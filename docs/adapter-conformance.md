@@ -207,6 +207,64 @@ sent row for every script, the way Messages does.
   the channels module and follows new messages for a live conversation; the
   module cannot depend on the app, so each keeps a small reader over the same
   documented schema.
+## Linq
+
+`LinqChannel` is a native v2 adapter (iMessage, RCS and SMS through the Linq
+Partner V3 API) on the same `providers::native` plumbing. Its conformance test
+(`linq_adapter_passes_the_full_conformance_matrix_against_the_mock_api`) runs all
+24 kit features against a mock Linq API and media host.
+
+- **Inbound is a signed webhook.** The host forwards each raw POST as
+  `DeliverWebhook`; the module authenticates the exact bytes and ingests it
+  (before this the module refused Linq's inbound entirely, so nothing was ever
+  delivered). The signature argument is `t=<X-Webhook-Timestamp>,v1=<X-Webhook-Signature>`,
+  verified as HMAC-SHA256 over `"{timestamp}.{body}"` with `[linq] webhook_secret`
+  and a 300 second window. Without a secret every delivery is refused. Only
+  `message.received` is ingested; the sender allowlist and `is_from_me` filter
+  apply, and a repeated message id counts as a duplicate. A message the host
+  does not take is an error, so Linq redelivers it.
+- **Media and voice in:** `media`, `image`, `audio` and `video` parts are
+  downloaded (credential-free: the URLs are pre-signed; https, or the API origin)
+  into the scoped media repository. A part typed `voice`, `voice_memo` or
+  `audio_message`, an audio part flagged `voice_memo`, or one named
+  `Audio Message*` is stored as a voice note and transcribed with the host's
+  speech to text.
+- **Outbound:** text goes to `POST /chats/{id}/messages` (a phone number with no
+  chat yet opens one with `POST /chats`). Files and voice clips are uploaded
+  through `POST /attachments` and sent by `attachment_id`; voice is an audio
+  attachment (descriptor `voiceOut=attachment`). The receipt id is Linq's message
+  id. Typing uses `POST`/`DELETE /chats/{id}/typing`.
+- **Declared unsupported:** reactions, edits, deletes, replies, threads and
+  inbound events other than messages.
+
+## Email
+
+`EmailChannel` (feature `email`) is a native v2 adapter on the same
+`providers::native` plumbing. Its conformance test
+(`email_adapter_passes_the_full_conformance_matrix_against_a_capturing_relay`)
+runs all 24 kit features against a capturing SMTP relay, and drives inbound mail
+through the same dispatch the IMAP loop uses.
+
+- **Envelope:** an inbound message keeps its `Subject:` (the text is
+  `Subject: ...` then the body, as before), `Message-ID` (the message id),
+  `In-Reply-To` (`reply_to_id`) and the thread root (`conversation.thread_id`:
+  the first `References` id, else `In-Reply-To`, else the message itself). The
+  conversation is the sender's address.
+- **Outbound is one message per reply.** The planned text becomes the body,
+  files and voice clips become attachments (`bundles_steps`), so text plus an
+  image is one email, not two. The receipt id is the `Message-ID` the adapter
+  generated for the send. `reply_to_id` and `thread_id` become `In-Reply-To` and
+  `References`; the subject is the leading `Subject:` line if there is one, else
+  `Re:` the subject of the thread's inbound mail, else `OpenHuman Message`.
+- **Voice:** any inbound audio attachment is stored as a voice note and
+  transcribed with the host's speech to text. Outbound voice is an audio
+  attachment (descriptor `voiceOut=attachment`).
+- **Failures:** a recipient that is not a single address (whitespace, a comma,
+  angle brackets, control characters) is rejected before the relay; a relay
+  refusal or timeout is a retryable transient failure (`MailError::TimedOut` is
+  documented to mean "not accepted").
+- **Declared unsupported:** reactions, edits, deletes, typing, drafts and
+  inbound events.
 
 | Behavior | Foundation status | Final provider coverage |
 | --- | --- | --- |

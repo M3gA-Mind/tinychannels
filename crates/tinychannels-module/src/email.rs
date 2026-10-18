@@ -561,6 +561,7 @@ async fn send(request: EmailSendRequest) -> Result<ChannelSendMessageResult> {
                 bytes: part.bytes,
             })
             .collect(),
+        headers: Default::default(),
     };
     LettreMailSender::new()
         .send(&credentials, &message)

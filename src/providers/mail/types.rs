@@ -212,6 +212,20 @@ pub struct OutboundEmail {
     pub body: String,
     /// Optional MIME attachments, retained in caller order.
     pub attachments: Vec<MailAttachment>,
+    /// Threading headers; all empty for a message that starts a thread.
+    pub headers: MailHeaders,
+}
+
+/// RFC 5322 identification and threading headers of an outbound message.
+/// Ids are bare (no angle brackets), as `mail-parser` reports them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MailHeaders {
+    /// `Message-ID`; the SMTP relay assigns none when absent.
+    pub message_id: Option<String>,
+    /// `In-Reply-To`: the message this one answers.
+    pub in_reply_to: Option<String>,
+    /// `References`: the thread, oldest first.
+    pub references: Vec<String>,
 }
 
 /// One attachment passed to a mail sender.

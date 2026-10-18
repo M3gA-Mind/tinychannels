@@ -2004,6 +2004,7 @@ async fn configured_catalog_reports_webhook_mode_without_starting_a_listener() {
             api_token: "fixture-token".into(),
             from_phone: "+15550000001".into(),
             allowed_senders: vec![],
+            webhook_secret: None,
         }),
         ..Default::default()
     };
@@ -2776,23 +2777,23 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
 }
 
 #[tokio::test]
-async fn webhook_provider_requires_outbound_start_and_rejects_duplicate_ownership() {
+async fn linq_starts_with_module_ingress_and_rejects_duplicate_ownership() {
     let service = inbound_preparation_service().await;
     let config = ChannelsConfig {
         linq: Some(tinychannels_bus::config::LinqConfig {
             api_token: "fixture-token".into(),
             from_phone: "+15551234567".into(),
             allowed_senders: vec![],
+            webhook_secret: None,
         }),
         ..Default::default()
     };
-    let error = service
+    service
         .start_channel("linq".into(), config.clone())
         .await
-        .map(|_| ())
-        .expect_err("request must fail");
-    assert!(matches!(error, BusError::MethodFailed { name, .. } if name == NO_INGRESS_ERROR));
-    assert!(service.list_channels().await.unwrap().is_empty());
+        .unwrap();
+    assert_eq!(service.list_channels().await.unwrap(), ["linq"]);
+    service.stop_channel("linq".into()).await.unwrap();
     service
         .start_outbound_channel("linq".into(), config.clone(), Default::default())
         .await
@@ -3541,16 +3542,6 @@ async fn shutdown_refuses_preparation_and_execution_before_host_work() {
             .await
             .is_err()
     );
-}
-
-#[test]
-fn only_providers_without_any_module_ingress_are_refused_a_normal_start() {
-    // WhatsApp Cloud is webhook-backed, but the module authenticates and
-    // ingests the raw POSTs the host forwards, so it is not refused.
-    assert!(super::lacks_module_ingress("linq"));
-    for name in ["whatsapp", "telegram", "discord"] {
-        assert!(!super::lacks_module_ingress(name), "{name}");
-    }
 }
 
 #[tokio::test]

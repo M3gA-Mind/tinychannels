@@ -362,29 +362,37 @@ pub(crate) async fn send_typed<P: NativeProvider + ?Sized>(
     let steps = plan(provider, message, &target).await?;
     let mut parts: Vec<MessageReceiptPart> = Vec::new();
     let mut failure = None;
-    for step in &steps {
-        match provider.deliver(&target, step).await {
-            Ok(sent) => {
-                for item in sent {
-                    let index = parts.len();
-                    parts.push(receipt_part(id, item, index, &target));
+    if provider.bundles_steps() {
+        for item in provider.deliver_bundle(&target, &steps).await? {
+            let index = parts.len();
+            parts.push(receipt_part(id, item, index, &target));
+        }
+    } else {
+        for step in &steps {
+            match provider.deliver(&target, step).await {
+                Ok(sent) => {
+                    for item in sent {
+                        let index = parts.len();
+                        parts.push(receipt_part(id, item, index, &target));
+                    }
                 }
-            }
-            Err(error) if parts.is_empty() => return Err(error),
-            Err(_) => {
-                failure = Some(ChannelSendError {
-                    kind: SendErrorKind::Unknown,
-                    message: format!(
-                        "{} sent only part of the typed message; retry is unsafe",
-                        provider.display()
-                    ),
-                    sent_before_error: true,
-                    ..Default::default()
-                });
-                break;
+                Err(error) if parts.is_empty() => return Err(error),
+                Err(_) => {
+                    failure = Some(ChannelSendError {
+                        kind: SendErrorKind::Unknown,
+                        message: format!(
+                            "{} sent only part of the typed message; retry is unsafe",
+                            provider.display()
+                        ),
+                        sent_before_error: true,
+                        ..Default::default()
+                    });
+                    break;
+                }
             }
         }
     }
+
     let ids: Vec<String> = parts
         .iter()
         .map(|p| p.platform_message_id.clone())

@@ -77,6 +77,11 @@ pub(crate) struct HostPorts {
 const SEEN_WINDOW: usize = 2048;
 
 impl HostPorts {
+    /// Whether `key` was recorded earlier, without recording it.
+    pub(crate) fn has_seen(&self, key: &str) -> bool {
+        self.seen.lock().iter().any(|seen| seen == key)
+    }
+
     /// Record `key`; false when it was already seen.
     pub(crate) fn mark_seen(&self, key: String) -> bool {
         let mut seen = self.seen.lock();
@@ -118,6 +123,24 @@ pub(crate) trait NativeProvider: Send + Sync {
     }
     /// Send one resolved step and report the message ids the platform issued.
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError>;
+
+    /// Whether one reply travels as a single platform message (email), so the
+    /// planned steps are delivered together by [`Self::deliver_bundle`].
+    fn bundles_steps(&self) -> bool {
+        false
+    }
+
+    /// Deliver every planned step as one platform message.
+    async fn deliver_bundle(
+        &self,
+        _target: &Target,
+        _steps: &[Step],
+    ) -> Result<Vec<Sent>, ChannelSendError> {
+        Err(unsupported(&format!(
+            "{} does not bundle steps",
+            self.display()
+        )))
+    }
 
     async fn set_typing(&self, _conversation: &str, _on: bool) -> Result<(), ChannelSendError> {
         Err(unsupported(&format!(

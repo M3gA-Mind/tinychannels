@@ -429,6 +429,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             api_token: "fixture-token".into(),
             from_phone: "+15550000001".into(),
             allowed_senders: vec![],
+            webhook_secret: None,
         }),
         yuanbao: Some(tinychannels_bus::config::YuanbaoConfig {
             app_key: "fixture-key".into(),
