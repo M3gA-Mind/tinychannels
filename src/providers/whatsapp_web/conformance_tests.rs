@@ -7,7 +7,7 @@ use crate::providers::whatsapp_shared::fakes::{
 };
 use crate::providers::whatsapp_web::fakes::{Call, RecordingClient};
 use std::collections::HashMap;
-use tinychannels_bus::channel::{ChannelSendError, ChannelSendOutcome, SendErrorKind};
+use tinychannels_bus::channel::{ChannelSendError, ChannelSendOutcome};
 use tinychannels_bus::{
     ChannelIngress, ChannelOutboundIntent, ChannelRef, ContentPart, ConversationKind,
     ConversationRef, MediaKind, MediaReference, OutboundContentPart, OutboundPayload,
@@ -256,7 +256,7 @@ impl WebKit {
                 sender: "15550001111@s.whatsapp.net".parse().unwrap(),
                 ..Default::default()
             },
-            id: id.to_owned().into(),
+            id: id.to_owned(),
             timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             ..Default::default()
         };
@@ -491,7 +491,7 @@ impl AdapterFixture for WebKit {
                         sender: "15550001111@s.whatsapp.net".parse().unwrap(),
                         ..Default::default()
                     })
-                    .message_ids(vec!["3EB0OUT1".to_owned().into()])
+                    .message_ids(vec!["3EB0OUT1".to_owned()])
                     .timestamp(chrono::DateTime::from_timestamp(1_700_000_003, 0).unwrap())
                     .r#type(ReceiptType::Read)
                     .offline(false)
@@ -572,10 +572,7 @@ impl AdapterFixture for WebKit {
                 .map(Some),
         };
         self.observe_calls(feature);
-        match result {
-            Err(error) if error.kind == SendErrorKind::Unknown && !error.unsupported => Err(error),
-            other => other,
-        }
+        result
     }
 }
 

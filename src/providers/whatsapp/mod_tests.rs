@@ -1041,10 +1041,7 @@ mod v2 {
         Channel::stop_typing(&channel, "+15550001111")
             .await
             .unwrap();
-        assert!(matches!(
-            Channel::start_typing(&channel, "no digits").await,
-            Err(_)
-        ));
+        assert!(Channel::start_typing(&channel, "no digits").await.is_err());
         crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111")
             .await
             .unwrap();

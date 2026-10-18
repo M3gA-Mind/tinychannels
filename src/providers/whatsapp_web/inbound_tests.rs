@@ -21,7 +21,7 @@ fn info(id: &str, chat: &str, sender: &str) -> MessageInfo {
             is_group: chat.ends_with("@g.us"),
             ..Default::default()
         },
-        id: id.to_owned().into(),
+        id: id.to_owned(),
         timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
         push_name: "Ada".into(),
         ..Default::default()
@@ -689,7 +689,7 @@ fn receipt(kind: ReceiptType, from_me: bool, chat: &str) -> Receipt {
             is_from_me: from_me,
             ..Default::default()
         })
-        .message_ids(vec!["3EB0A".to_owned().into(), "3EB0B".to_owned().into()])
+        .message_ids(vec!["3EB0A".to_owned(), "3EB0B".to_owned()])
         .timestamp(chrono::DateTime::from_timestamp(1_700_000_005, 0).unwrap())
         .r#type(kind)
         .offline(false)

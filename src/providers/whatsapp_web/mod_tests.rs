@@ -1233,7 +1233,7 @@ mod v2 {
                 sender: sender.parse().unwrap(),
                 ..Default::default()
             },
-            id: id.to_owned().into(),
+            id: id.to_owned(),
             timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
             ..Default::default()
         };
@@ -1350,7 +1350,7 @@ mod v2 {
                 sender: "15550001111@s.whatsapp.net".parse().unwrap(),
                 ..Default::default()
             })
-            .message_ids(vec!["3EB0OUT".to_owned().into()])
+            .message_ids(vec!["3EB0OUT".to_owned()])
             .timestamp(chrono::DateTime::from_timestamp(1_700_000_001, 0).unwrap())
             .r#type(ReceiptType::Delivered)
             .offline(false)
