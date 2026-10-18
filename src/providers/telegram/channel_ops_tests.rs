@@ -3989,10 +3989,8 @@ fn typed_error_mapping_distinguishes_preflight_partial_and_ambiguous_failures() 
     assert!(uncertain.sent_before_error);
     assert!(!uncertain.message.contains("disconnected"));
 
-    let interaction_preflight = typed_interaction_error(
-        anyhow::Error::new(TelegramPreDispatchError),
-        "edit",
-    );
+    let interaction_preflight =
+        typed_interaction_error(anyhow::Error::new(TelegramPreDispatchError), "edit");
     assert_eq!(interaction_preflight.kind, SendErrorKind::Forbidden);
     assert!(!interaction_preflight.sent_before_error);
     let interaction_uncertain =
@@ -4034,7 +4032,10 @@ fn presentation_blocks_and_vcards_keep_only_supported_safe_content() {
         serde_json::json!({"kind":"approval", "id":"r", "prompt":"Run?", "choices":[""]}),
         serde_json::json!({"kind":"approval", "id":"r", "prompt":"Run?", "choices":["Allow"], "extra":true}),
     ] {
-        assert!(presentation_content(&invalid).is_err(), "accepted {invalid}");
+        assert!(
+            presentation_content(&invalid).is_err(),
+            "accepted {invalid}"
+        );
     }
 
     assert_eq!(safe_vcard_type(Some(" cell "), "VOICE"), "cell");
@@ -4043,7 +4044,11 @@ fn presentation_blocks_and_vcards_keep_only_supported_safe_content() {
     assert_eq!(safe_vcard_type(None, "VOICE"), "VOICE");
     assert_eq!(vcard_escape("a\\b;c,d\ne\r"), "a\\\\b\\;c\\,d\\ne");
     assert!(response_status_ok(&serde_json::json!({"ok": true})));
-    for invalid in [serde_json::json!({}), serde_json::json!({"ok": false}), serde_json::json!({"ok": 1})] {
+    for invalid in [
+        serde_json::json!({}),
+        serde_json::json!({"ok": false}),
+        serde_json::json!({"ok": 1}),
+    ] {
         assert!(!response_status_ok(&invalid));
     }
 }
