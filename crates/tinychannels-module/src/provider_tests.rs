@@ -4318,11 +4318,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     };
     let media_scope = configured_media_account_scope("discord", &config)
         .expect("configured Discord auth binds module media to the account");
-    let provider_host = hooks.host(
-        host.clone(),
-        instance.clone(),
-        Some(media_scope),
-    );
+    let provider_host = hooks.host(host.clone(), instance.clone(), Some(media_scope));
     let rest_url = rest.uri();
     let gateway_ready = tokio::spawn(async move {
         let (socket, _) = websocket.accept().await.unwrap();
@@ -4416,7 +4412,9 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
 
     let ingress = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if !callbacks.inbound.lock().await.is_empty() && !callbacks.events.lock().await.is_empty() {
+            if !callbacks.inbound.lock().await.is_empty()
+                && !callbacks.events.lock().await.is_empty()
+            {
                 break;
             }
             callbacks.ingress_changed.notified().await;
@@ -4487,7 +4485,10 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         .read_media(voice_scope.clone(), media_id, 8 * 1024 * 1024)
         .await
         .unwrap();
-    assert_eq!(retained.bytes, include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg"));
+    assert_eq!(
+        retained.bytes,
+        include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")
+    );
     assert_eq!(retained.content_type, "audio/ogg");
     assert_eq!(voice_scope.conversation.id, CHANNEL);
     assert_eq!(voice_scope.conversation.scope_id.as_deref(), Some(GUILD));
@@ -4498,9 +4499,15 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     assert_eq!(stt_scope.conversation, voice_scope.conversation);
     assert_eq!(stt_scope.turn_id, "discord_1111111111111111111");
     let reaction = callbacks.events.lock().await[0].clone();
-    assert_eq!(reaction.channel.account_id.as_deref(), Some("discord:account-a"));
+    assert_eq!(
+        reaction.channel.account_id.as_deref(),
+        Some("discord:account-a")
+    );
     assert_eq!(reaction.conversation.as_ref().unwrap().id, CHANNEL);
-    assert_eq!(reaction.conversation.as_ref().unwrap().scope_id.as_deref(), Some(GUILD));
+    assert_eq!(
+        reaction.conversation.as_ref().unwrap().scope_id.as_deref(),
+        Some(GUILD)
+    );
     match reaction.event {
         tinychannels_bus::ChannelEventKind::ReactionAdded {
             message_id,
@@ -4565,16 +4572,18 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     edit.payload = OutboundPayload::Text {
         text: "edited through Running".into(),
     };
-    let edited = adapter.edits().unwrap().edit(&sent.receipt, edit).await.unwrap();
+    let edited = adapter
+        .edits()
+        .unwrap()
+        .edit(&sent.receipt, edit)
+        .await
+        .unwrap();
     assert_eq!(edited.channel.as_ref(), Some(&channel_ref));
     assert_eq!(edited.conversation.as_ref(), Some(&conversation));
     adapter.deletes().unwrap().delete(&edited).await.unwrap();
-    tinychannels::channel::ChannelTyping::start_typing(
-        adapter.native.as_deref().unwrap(),
-        THREAD,
-    )
-    .await
-    .unwrap();
+    tinychannels::channel::ChannelTyping::start_typing(adapter.native.as_deref().unwrap(), THREAD)
+        .await
+        .unwrap();
 
     let requests = rest.received_requests().await.unwrap();
     let sent_request = requests
@@ -4598,7 +4607,10 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     assert_eq!(edit_body["content"], "edited through Running");
     assert!(requests.iter().any(|request| {
         request.method == "PUT"
-            && request.url.path().contains(&format!("/messages/{message_id}/reactions/"))
+            && request
+                .url
+                .path()
+                .contains(&format!("/messages/{message_id}/reactions/"))
             && request.url.path().ends_with("/@me")
     }));
     assert!(requests.iter().any(|request| {
@@ -4647,7 +4659,12 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     assert_eq!(finalized.channel.as_ref(), Some(&channel_ref));
     assert_eq!(finalized.conversation.as_ref(), Some(&conversation));
     let requests = rest.received_requests().await.unwrap();
-    for expected_text in ["stream-start", "stream-update", "stream-final", "stream-cancel"] {
+    for expected_text in [
+        "stream-start",
+        "stream-update",
+        "stream-final",
+        "stream-cancel",
+    ] {
         assert!(
             requests
                 .iter()
