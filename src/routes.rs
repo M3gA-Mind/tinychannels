@@ -90,8 +90,10 @@ pub fn model_preview(catalog: &ModelCatalog, provider_name: &str) -> Vec<String>
         .unwrap_or_default()
 }
 
-pub fn build_models_help_response(current: &ChannelRouteSelection, workspace_dir: &Path) -> String {
-    let _ = workspace_dir;
+pub fn build_models_help_response(
+    current: &ChannelRouteSelection,
+    _workspace_dir: &Path,
+) -> String {
     models_help_from_preview(current, &[])
 }
 
