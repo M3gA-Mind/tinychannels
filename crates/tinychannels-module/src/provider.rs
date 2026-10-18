@@ -1914,13 +1914,10 @@ impl Running {
                     .iter()
                     .any(|part| part.platform_message_id.trim().is_empty())
             {
-                return Err(RunningSendError::NotDispatched(
-                    format!(
-                        "draft receipt scope does not match {} intent",
-                        self.native_provider()
-                    )
-                    .into(),
-                ));
+                return Err(RunningSendError::NotDispatched(format!(
+                    "draft receipt scope does not match {} intent",
+                    self.native_provider()
+                )));
             }
         }
         match self
