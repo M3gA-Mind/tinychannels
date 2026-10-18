@@ -11,11 +11,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use uuid::Uuid;
 
-/// `WhatsApp` channel that uses the `WhatsApp` Business Cloud API.
-///
-/// This channel operates in webhook mode (push-based) rather than polling.
-/// The `listen` method here is a no-op placeholder; inbound delivery depends on
-/// your deployment wiring Meta webhooks to the app.
+/// Refuse to transmit credentials over anything but HTTPS.
 fn ensure_https(url: &str) -> anyhow::Result<()> {
     if !url.starts_with("https://") {
         anyhow::bail!(
@@ -25,6 +21,13 @@ fn ensure_https(url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// `WhatsApp` channel that uses the `WhatsApp` Business Cloud API.
+///
+/// Native v2 adapter. Outbound goes to the Graph API (text, media, voice,
+/// location, contacts, reactions, read receipts, typing). Inbound is
+/// webhook-driven: the host forwards each raw POST to
+/// [`Channel::deliver_webhook`], which authenticates it with the Meta app
+/// secret before anything is parsed. [`Channel::listen`] only parks.
 ///
 /// # Runtime Negotiation
 ///

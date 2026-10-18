@@ -204,11 +204,18 @@ mod defaults {
         let reaction = tinychannels_bus::channel::ChannelReaction::default();
         let receipt = tinychannels_bus::channel::MessageReceipt::default();
         let intent = tinychannels_bus::channel::ChannelOutboundIntent::default();
-        assert!(Bare.send_reaction(&conversation, "m", &reaction, false).await.is_err());
+        assert!(
+            Bare.send_reaction(&conversation, "m", &reaction, false)
+                .await
+                .is_err()
+        );
         assert!(Bare.edit_message(&receipt, &intent).await.is_err());
         assert!(Bare.delete_message(&receipt).await.is_err());
         assert!(Bare.mark_read(&conversation, "m").await.is_err());
-        let webhook = Bare.deliver_webhook(Some("sha256=00"), b"{}").await.unwrap_err();
+        let webhook = Bare
+            .deliver_webhook(Some("sha256=00"), b"{}")
+            .await
+            .unwrap_err();
         assert!(webhook.to_string().contains("no webhook ingress"));
     }
 
