@@ -275,11 +275,9 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
         }),
         ..Default::default()
     };
-    let first = configured_media_account_scope(
-        "signal",
-        &signal("http://signal.example", "+15550001"),
-    )
-    .unwrap();
+    let first =
+        configured_media_account_scope("signal", &signal("http://signal.example", "+15550001"))
+            .unwrap();
     assert_eq!(
         configured_media_account_scope("signal", &signal("http://signal.example", "+15550001"))
             .as_deref(),
@@ -3732,6 +3730,146 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
         assert!(
             paths.iter().any(|path| path == expected),
             "{expected}: {paths:?}"
+        );
+    }
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_queue() {
+    use tinychannels_bus::{ChannelInteraction, ChannelOutboundIntent, OutboundPayload};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/rpc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"jsonrpc": "2.0", "result": {"timestamp": 1_700_000_000_123u64}, "id": "x"}),
+        ))
+        .mount(&server)
+        .await;
+    let instance = "signal:account-a".to_owned();
+    let channel = Arc::new(tinychannels::SignalChannel::new(
+        server.uri(),
+        "+15550000".into(),
+        None,
+        vec!["*".into()],
+        false,
+        false,
+    ));
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let ports = NativePorts::native(channel.clone(), "Signal");
+    let running = Running::start_native(channel, ports, hooks, host, None, true);
+    let handle = running.adapter_handle();
+    assert_eq!(handle.mode, AdapterMode::SignalNativeV2);
+    let descriptor = handle.descriptor();
+    assert_eq!(descriptor.id, "signal");
+    assert_eq!(descriptor.account_id.as_deref(), Some("signal:account-a"));
+    assert_eq!(
+        descriptor.metadata.get("adapterMode").map(String::as_str),
+        Some("native-v2")
+    );
+
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: "signal".into(),
+        account_id: Some(instance.clone()),
+    };
+    let conversation = ConversationRef {
+        kind: ConversationKind::Dm,
+        id: "+15551111".into(),
+        ..Default::default()
+    };
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "signal-native-op".into(),
+        channel_id: "signal".into(),
+        conversation_id: conversation.id.clone(),
+        channel_ref: Some(channel_ref.clone()),
+        conversation_ref: Some(conversation.clone()),
+        payload: OutboundPayload::Text {
+            text: "native send".into(),
+        },
+        ..Default::default()
+    };
+    let sent = handle.send(intent.clone()).await.unwrap();
+    assert_eq!(
+        sent.receipt.primary_platform_message_id.as_deref(),
+        Some("1700000000123")
+    );
+    assert_eq!(sent.receipt.conversation.as_ref(), Some(&conversation));
+
+    handle
+        .reactions()
+        .unwrap()
+        .send_reaction(
+            &channel_ref,
+            &conversation,
+            "1700000000001",
+            &tinychannels_bus::ChannelReaction {
+                value: "👍".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .await
+        .unwrap();
+    let receipt = sent.receipt.clone();
+    handle
+        .edits()
+        .unwrap()
+        .edit(&receipt, intent.clone())
+        .await
+        .unwrap();
+    handle.deletes().unwrap().delete(&receipt).await.unwrap();
+    running
+        .interact(ChannelInteraction::StartTyping {
+            recipient: conversation.id.clone(),
+        })
+        .await
+        .unwrap();
+    // Signal declares no streaming drafts.
+    assert!(
+        running
+            .interact(ChannelInteraction::UpsertDraft {
+                previous: None,
+                intent: intent.clone(),
+            })
+            .await
+            .is_err()
+    );
+
+    let before = server.received_requests().await.unwrap().len();
+    let mut wrong_scope = receipt.clone();
+    wrong_scope.conversation.as_mut().unwrap().id = "+15559999".into();
+    assert!(
+        handle
+            .edits()
+            .unwrap()
+            .edit(&wrong_scope, intent)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        before,
+        "a mismatched receipt must be rejected before provider I/O"
+    );
+    let methods: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|request| {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
+            body["method"].as_str().map(str::to_owned)
+        })
+        .collect();
+    for expected in ["send", "sendReaction", "remoteDelete", "sendTyping"] {
+        assert!(
+            methods.iter().any(|m| m == expected),
+            "{expected}: {methods:?}"
         );
     }
     running.stop().await.unwrap();
