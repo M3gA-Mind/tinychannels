@@ -1,6 +1,5 @@
 use super::*;
 use crate::channel::ChannelTypedSend;
-use crate::host::MediaRepository;
 use crate::providers::native::fixtures::{StubMedia, stored_media};
 use serde_json::json;
 use tinychannels_bus::channel::ConversationRef;
