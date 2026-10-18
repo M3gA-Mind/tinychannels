@@ -27,11 +27,14 @@ struct BotApiFakeState {
 
 impl BotApiFake {
     pub(super) async fn start() -> Self {
-        use axum::{body::Bytes, extract::State, http::StatusCode, routing::post, Json, Router};
+        use axum::{
+            body::Bytes, extract::State, http::StatusCode, routing::post, Json, Router,
+        };
 
         async fn handle(
             State(state): State<Arc<BotApiFakeState>>,
             uri: axum::http::Uri,
+            headers: axum::http::HeaderMap,
             body: Bytes,
         ) -> (StatusCode, Json<serde_json::Value>) {
             let method = uri.path().rsplit('/').next().unwrap_or_default().to_string();
@@ -46,7 +49,14 @@ impl BotApiFake {
                 );
             }
 
-            let request = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+            let request = serde_json::from_slice(&body).unwrap_or_else(|_| {
+                serde_json::json!({
+                    "content_type": headers
+                        .get(axum::http::header::CONTENT_TYPE)
+                        .and_then(|value| value.to_str().ok()),
+                    "raw_body": String::from_utf8_lossy(&body).into_owned()
+                })
+            });
             state.sent.lock().unwrap().push((method, request));
             (
                 StatusCode::OK,
