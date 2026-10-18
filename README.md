@@ -23,8 +23,12 @@ the OpenHuman application crate.
 Configured provider discovery, legacy intent normalization, and external-webhook
 outbound startup are confidential module operations. The catalog returns provider
 facts without listening; outbound-only startup preserves Linq and WhatsApp Cloud
-sends while keeping their ingress explicitly external. Existing listener start
-methods retain their refusal when no webhook ingress is available (Linq).
+sends while keeping their ingress explicitly external. Linq webhooks work like
+WhatsApp Cloud's: the host forwards each raw POST through `DeliverWebhook` with
+`t=<X-Webhook-Timestamp>,v1=<X-Webhook-Signature>` as the signature, and the
+module verifies it against the configured `webhook_secret` (a channel without
+one refuses every delivery) before it downloads media and publishes typed
+envelopes.
 
 WhatsApp Cloud webhooks are the exception: the host serves the HTTP route, but
 the module owns everything that decides whether a POST is believed. The host
