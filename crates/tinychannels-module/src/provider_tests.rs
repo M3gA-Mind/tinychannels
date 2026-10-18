@@ -3168,7 +3168,10 @@ fn media_scope_rejects_blank_secrets_and_distinguishes_credential_modes() {
     };
     let sasl = configured_media_account_scope("irc", &irc(Some("pw"), None)).unwrap();
     let nickserv = configured_media_account_scope("irc", &irc(None, Some("pw"))).unwrap();
-    assert_ne!(sasl, nickserv, "principal differs between SASL and NickServ");
+    assert_ne!(
+        sasl, nickserv,
+        "principal differs between SASL and NickServ"
+    );
     assert!(configured_media_account_scope("irc", &irc(Some(" "), None)).is_none());
 
     let lark = |feishu: bool| tinychannels_bus::ChannelsConfig {
@@ -3218,10 +3221,7 @@ async fn legacy_running_adapter_reports_status_and_refuses_second_start() {
     let adapter: &dyn tinychannels::channel::ChannelAdapter = running.as_ref();
     assert_eq!(adapter.proactive_target(), None);
     let error = adapter.start(&NullSink).await.unwrap_err();
-    assert_eq!(
-        error.kind,
-        tinychannels::channel::SendErrorKind::Forbidden
-    );
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Forbidden);
     let status = adapter.status().await.unwrap();
     assert_eq!(
         status.account_id.as_deref(),
@@ -3239,7 +3239,10 @@ async fn configured_telegram_native_adapter_owns_polling_typing_drafts_and_scope
 
     let server = MockServer::start().await;
     for (endpoint, result) in [
-        ("sendMessage", serde_json::json!({"message_id": 9, "chat": {"id": -100}})),
+        (
+            "sendMessage",
+            serde_json::json!({"message_id": 9, "chat": {"id": -100}}),
+        ),
         ("sendChatAction", serde_json::json!(true)),
     ] {
         Mock::given(method("POST"))

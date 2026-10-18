@@ -4133,7 +4133,9 @@ async fn draft_creation_reports_each_failure_with_the_right_error_kind() {
         ResponseTemplate::new(200).set_body_string("not json"),
     )
     .await;
-    let error = upsert(&channel, None, draft_intent(None)).await.unwrap_err();
+    let error = upsert(&channel, None, draft_intent(None))
+        .await
+        .unwrap_err();
     assert_eq!(error.kind, SendErrorKind::Transient);
     assert!(error.message.contains("response"));
 
@@ -4172,9 +4174,13 @@ async fn draft_edit_validates_receipt_ids_and_reports_wire_failures() {
     let server = mock_api().await;
     let channel = channel_for(&server, &["*"]);
 
-    let error = upsert(&channel, Some(&draft_receipt(None, None)), draft_intent(None))
-        .await
-        .unwrap_err();
+    let error = upsert(
+        &channel,
+        Some(&draft_receipt(None, None)),
+        draft_intent(None),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.kind, SendErrorKind::BadFormat);
     assert!(error.message.contains("no provider message ID"));
 
@@ -4254,7 +4260,12 @@ async fn adapter_start_stop_and_stop_typing_are_noops_without_provider_io() {
 #[tokio::test]
 async fn native_reaction_removal_clears_reactions_and_surfaces_rejection() {
     let server = mock_api().await;
-    mount_post(&server, "setMessageReaction", ok_with(serde_json::json!(true))).await;
+    mount_post(
+        &server,
+        "setMessageReaction",
+        ok_with(serde_json::json!(true)),
+    )
+    .await;
     let ch = channel_for(&server, &["*"]);
     let conversation = tinychannels_bus::channel::ConversationRef {
         id: "100".into(),
