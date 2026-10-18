@@ -4242,6 +4242,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     const GUILD: &str = "999000333";
 
     let rest = MockServer::start().await;
+    let message_sequence = Arc::new(AtomicU64::new(1));
     let websocket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let websocket_url = format!("ws://{}", websocket.local_addr().unwrap());
     Mock::given(method("GET"))
@@ -4251,11 +4252,13 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         })))
         .mount(&rest)
         .await;
+    let sequence = message_sequence.clone();
     Mock::given(method("POST"))
         .and(path_regex(r"^/channels/\d+/messages$"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "1234567890123456789",
-        })))
+        .respond_with(move |_request: &wiremock::Request| {
+            let id = format!("1234567890123456{:03}", sequence.fetch_add(1, Ordering::SeqCst));
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": id}))
+        })
         .mount(&rest)
         .await;
     Mock::given(method("POST"))
@@ -4267,9 +4270,10 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         .await;
     Mock::given(method("PATCH"))
         .and(path_regex(r"^/channels/\d+/messages/\d+$"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "id": "1234567890123456789",
-        })))
+        .respond_with(|request: &wiremock::Request| {
+            let id = request.url.path().rsplit('/').next().unwrap();
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": id}))
+        })
         .mount(&rest)
         .await;
     for (verb, route) in [
