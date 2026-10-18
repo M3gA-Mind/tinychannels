@@ -106,22 +106,27 @@ fn retained_context_byte_budget_rejects_new_turn_without_evicting_active_turns()
     assert!(retained_bytes <= MAX_WEB_TURN_RETAINED_BYTES);
     assert!(registry.begin(large_begin()).is_err());
     assert_eq!(registry.retained_bytes, retained_bytes);
-    assert_eq!(sequence(&registry.project(text(&first, "still active")).unwrap()), 1);
+    assert_eq!(
+        sequence(&registry.project(text(&first, "still active")).unwrap()),
+        1
+    );
 }
 
 #[test]
 fn malformed_project_and_end_handles_are_rejected_before_lookup() {
     let mut registry = WebTurnRegistry::default();
     for handle in [String::new(), "h".repeat(MAX_WEB_TURN_HANDLE_BYTES + 1)] {
-        assert!(registry
-            .project(ProjectWebOutput {
-                handle: handle.clone(),
-                event: ChannelOutputEvent::TextDelta {
-                    text: "ignored".into(),
-                    iteration: Some(1),
-                },
-            })
-            .is_err());
+        assert!(
+            registry
+                .project(ProjectWebOutput {
+                    handle: handle.clone(),
+                    event: ChannelOutputEvent::TextDelta {
+                        text: "ignored".into(),
+                        iteration: Some(1),
+                    },
+                })
+                .is_err()
+        );
         assert!(registry.end(EndWebTurn { handle }).is_err());
     }
     assert!(registry.turns.is_empty());

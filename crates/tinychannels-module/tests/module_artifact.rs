@@ -295,7 +295,10 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
     assert_eq!(projected_text_context(&tenant_a_first).seq, Some(1));
     assert_eq!(projected_text_context(&tenant_a_second).seq, Some(2));
     assert_eq!(projected_text_context(&tenant_b_first).seq, Some(1));
-    assert_eq!(projected_text_context(&tenant_a_first).client_id, "same-client");
+    assert_eq!(
+        projected_text_context(&tenant_a_first).client_id,
+        "same-client"
+    );
     assert!(projected_text_context(&tenant_a_first).ts.is_some());
     let project_concurrently = |text: &'static str| {
         let connection = connection.clone();
@@ -316,17 +319,11 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
                 },
             };
             proxy
-                .call_confidential::<tinychannels_bus::WebOutputEvents>(
-                    "ProjectWebOutput",
-                    request,
-                )
+                .call_confidential::<tinychannels_bus::WebOutputEvents>("ProjectWebOutput", request)
                 .await
         }
     };
-    let (left, right) = tokio::join!(
-        project_concurrently("left"),
-        project_concurrently("right")
-    );
+    let (left, right) = tokio::join!(project_concurrently("left"), project_concurrently("right"));
     let left = left.unwrap();
     let right = right.unwrap();
     let mut concurrent_sequences = [
@@ -401,13 +398,15 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         terminal.events.as_slice(),
         [tinychannels_bus::WebChannelEvent::ChatDone { .. }]
     ));
-    assert!(proxy
-        .call_confidential::<tinychannels_bus::WebOutputEvents>(
-            "ProjectWebOutput",
-            project(&tenant_b, "late after terminal"),
-        )
-        .await
-        .is_err());
+    assert!(
+        proxy
+            .call_confidential::<tinychannels_bus::WebOutputEvents>(
+                "ProjectWebOutput",
+                project(&tenant_b, "late after terminal"),
+            )
+            .await
+            .is_err()
+    );
     proxy
         .call_confidential::<()>(
             "EndWebTurn",
