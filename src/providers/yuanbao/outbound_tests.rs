@@ -413,7 +413,7 @@ async fn send_host_scoped_image_bytes_upload_to_cos_and_return_the_platform_id()
     assert!(!id.is_empty());
     assert_eq!(frame.cmd, biz_cmd::SEND_C2C_MESSAGE);
     assert!(contains(&frame.data, "https://cdn.example/cat.png"));
-    let image_uuid = hex::encode(sha1::Sha1::digest(&png(320, 200)));
+    let image_uuid = hex::encode(sha1::Sha1::digest(png(320, 200)));
     assert!(contains(&frame.data, &image_uuid));
     let requests = server.received_requests().await.unwrap();
     let credential_request = requests

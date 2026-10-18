@@ -65,6 +65,24 @@ fn media_is_advertised_only_when_scoped_host_storage_is_injected() {
     assert!(!caps.voice_out.supported);
 }
 
+#[test]
+fn configured_media_limit_does_not_exceed_yuanbao_wire_size() {
+    let mut config = crate::providers::yuanbao::YuanbaoConfig::default();
+    config.app_key = "app".into();
+    config.token = "token".into();
+    config.ws_domain = "wss://example.invalid".into();
+    config.max_media_mb = u32::MAX;
+    let channel = YuanbaoChannel::new(config)
+        .unwrap()
+        .with_media_repository(Arc::new(MediaRepo::default()));
+
+    let limits = NativeProvider::limits(&channel);
+    assert_eq!(limits.file_bytes, u64::from(u32::MAX));
+    let caps = NativeProvider::declared_capabilities(&channel);
+    assert_eq!(caps.content.image.max_size_bytes, Some(u64::from(u32::MAX)));
+    assert_eq!(caps.content.file.max_size_bytes, Some(u64::from(u32::MAX)));
+}
+
 #[tokio::test]
 async fn media_planning_reads_the_exact_host_scope_and_opaque_reference() {
     let repository = Arc::new(MediaRepo::default());
