@@ -249,6 +249,13 @@ struct MediaScopeInner {
     source: std::sync::OnceLock<Arc<dyn Channel>>,
 }
 
+impl std::fmt::Debug for MediaScope {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The scope names an account authority; never print it.
+        formatter.write_str("MediaScope(..)")
+    }
+}
+
 impl MediaScope {
     pub(crate) fn fixed(scope: Option<String>) -> Self {
         Self(Arc::new(MediaScopeInner {
@@ -277,7 +284,19 @@ impl MediaScope {
 }
 
 fn media_scope_digest(provider: &str, identity: &[String]) -> Option<String> {
-    media_scope_digest(provider, &identity)
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"tinychannels-media-account-v1\0");
+    digest.update((provider.len() as u64).to_le_bytes());
+    digest.update(provider.as_bytes());
+    for part in identity {
+        digest.update((part.len() as u64).to_le_bytes());
+        digest.update(part.as_bytes());
+    }
+    Some(format!(
+        "{provider}:media-v1:{}",
+        hex::encode(digest.finalize())
+    ))
 }
 
 /// Native hooks registered while the selected provider starts.

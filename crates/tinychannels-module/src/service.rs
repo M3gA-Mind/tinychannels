@@ -118,7 +118,7 @@ pub(crate) struct Channels {
     delivery_admission: Arc<Mutex<()>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 struct ProviderActivation {
     generation: String,
     media_account_scope: crate::provider::MediaScope,
@@ -195,7 +195,9 @@ impl Channels {
         }
 
         let hooks = Arc::new(Hooks::default());
-        let media_account_scope = crate::provider::configured_media_account_scope(&name, &config);
+        let media_account_scope = crate::provider::MediaScope::fixed(
+            crate::provider::configured_media_account_scope(&name, &config),
+        );
         let owner_host: Arc<dyn ChannelHost> =
             hooks.host(self.host.clone(), name.clone(), media_account_scope.clone());
         let telegram = if tinychannels_bus::provider_id(&name) == "telegram" {
