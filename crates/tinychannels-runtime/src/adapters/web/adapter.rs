@@ -9,20 +9,19 @@ use crate::channel::{
 };
 use crate::controllers::{ChannelAccountSnapshot, ChannelAccountState};
 use async_trait::async_trait;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
-use parking_lot::Mutex;
 use tinychannels_bus::channel::{
-    ChannelIngress, ChannelRef, ContentPart, ConversationRef, OutboundContentPart, OutboundPayload,
-    SendErrorKind,
+    ChannelRef, ContentPart, ConversationRef, OutboundContentPart, OutboundPayload, SendErrorKind,
 };
 use tinychannels_bus::module_progressive::ChannelOutputEvent;
 use tinychannels_bus::web::{WebChannelEvent, WebEventContext};
 use tinychannels_bus::{
-    ActionCapabilities, ChannelCapabilities, ContentCapabilities, ContentCapability,
-    EventCapabilities, VoiceCapabilities, VoiceTranscriptSource,
+    ActionCapabilities, ChannelCapabilities, ChannelIngress, ContentCapabilities,
+    ContentCapability, EventCapabilities, VoiceCapabilities, VoiceTranscriptSource,
 };
 
 /// `client_id` stamped on events that no browser client originated.
@@ -146,7 +145,11 @@ impl WebChannelAdapter {
         inbound: &(dyn ChannelInboundSink + Send + Sync),
     ) -> Result<(), ChannelSendError> {
         if !self.running.load(Ordering::SeqCst) {
-            return Err(err(SendErrorKind::Transient, "web adapter is not running", true));
+            return Err(err(
+                SendErrorKind::Transient,
+                "web adapter is not running",
+                true,
+            ));
         }
         let envelope = normalize_chat_start(start, self.descriptor.account_id.as_deref())?;
         tracing::debug!(
@@ -200,7 +203,10 @@ impl WebChannelAdapter {
         self.sink.publish(&self.scope, event).await
     }
 
-    fn proactive_event(&self, intent: &ChannelOutboundIntent) -> Result<WebChannelEvent, ChannelSendError> {
+    fn proactive_event(
+        &self,
+        intent: &ChannelOutboundIntent,
+    ) -> Result<WebChannelEvent, ChannelSendError> {
         let mut text = String::new();
         let parts: Vec<OutboundContentPart> = match &intent.payload {
             OutboundPayload::Text { text: body } => {

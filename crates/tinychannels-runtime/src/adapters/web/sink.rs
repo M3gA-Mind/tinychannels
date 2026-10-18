@@ -37,6 +37,9 @@ impl WebScope {
 #[async_trait]
 pub trait WebEventSink: Send + Sync {
     /// Publish one event to subscribers visible to `scope`.
-    async fn publish(&self, scope: &WebScope, event: WebChannelEvent)
-    -> Result<(), ChannelSendError>;
+    async fn publish(
+        &self,
+        scope: &WebScope,
+        event: WebChannelEvent,
+    ) -> Result<(), ChannelSendError>;
 }

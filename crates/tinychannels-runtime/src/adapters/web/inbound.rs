@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tinychannels_bus::channel::{
     AccessContext, ChannelInboundEnvelope, ChannelRef, ContentPart, ConversationKind,
-    ConversationRef, MediaReference, SenderDmDecision, SenderRef, SendErrorKind,
+    ConversationRef, MediaReference, SendErrorKind, SenderDmDecision, SenderRef,
 };
 use tinychannels_bus::web::QueueMode;
 
