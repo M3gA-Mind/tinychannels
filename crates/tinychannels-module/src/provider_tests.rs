@@ -4527,6 +4527,10 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     };
     let sent = adapter.send(intent.clone()).await.unwrap();
     let message_id = sent.receipt.primary_platform_message_id.clone().unwrap();
+    assert_eq!(sent.receipt.channel.as_ref(), Some(&channel_ref));
+    assert_eq!(sent.receipt.conversation.as_ref(), Some(&conversation));
+    assert_eq!(sent.receipt.platform_message_ids, vec![message_id.clone()]);
+    assert_eq!(sent.receipt.thread_id.as_deref(), Some(THREAD));
     adapter
         .reactions()
         .unwrap()
@@ -4547,7 +4551,48 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         text: "edited through Running".into(),
     };
     let edited = adapter.edits().unwrap().edit(&sent.receipt, edit).await.unwrap();
+    assert_eq!(edited.channel.as_ref(), Some(&channel_ref));
+    assert_eq!(edited.conversation.as_ref(), Some(&conversation));
     adapter.deletes().unwrap().delete(&edited).await.unwrap();
+    tinychannels::channel::ChannelTyping::start_typing(
+        adapter.native.as_deref().unwrap(),
+        THREAD,
+    )
+    .await
+    .unwrap();
+
+    let requests = rest.received_requests().await.unwrap();
+    let sent_request = requests
+        .iter()
+        .find(|request| {
+            request.method == "POST"
+                && request.url.path() == format!("/channels/{THREAD}/messages")
+                && String::from_utf8_lossy(&request.body).contains("running send")
+        })
+        .expect("Running send must reach the Discord thread message endpoint");
+    let sent_body: serde_json::Value = serde_json::from_slice(&sent_request.body).unwrap();
+    assert_eq!(sent_body["content"], "running send");
+    let edit_request = requests
+        .iter()
+        .find(|request| {
+            request.method == "PATCH"
+                && request.url.path() == format!("/channels/{THREAD}/messages/{message_id}")
+        })
+        .expect("Running edit must patch the returned Discord message id");
+    let edit_body: serde_json::Value = serde_json::from_slice(&edit_request.body).unwrap();
+    assert_eq!(edit_body["content"], "edited through Running");
+    assert!(requests.iter().any(|request| {
+        request.method == "PUT"
+            && request.url.path().contains(&format!("/messages/{message_id}/reactions/"))
+            && request.url.path().ends_with("/@me")
+    }));
+    assert!(requests.iter().any(|request| {
+        request.method == "DELETE"
+            && request.url.path() == format!("/channels/{THREAD}/messages/{message_id}")
+    }));
+    assert!(requests.iter().any(|request| {
+        request.method == "POST" && request.url.path() == format!("/channels/{THREAD}/typing")
+    }));
 
     running.stop().await.unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), gateway_ready)
