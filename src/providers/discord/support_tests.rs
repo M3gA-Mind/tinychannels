@@ -97,6 +97,13 @@ pub(super) struct MemoryMedia {
 }
 
 impl MemoryMedia {
+    pub(super) fn rejecting() -> Self {
+        Self {
+            reject_store: true,
+            ..Default::default()
+        }
+    }
+
     /// Seed a readable object for `scope` and return its reference.
     pub(super) fn seed(
         &self,
@@ -177,6 +184,13 @@ pub(super) struct MemoryVoice {
 }
 
 impl MemoryVoice {
+    pub(super) fn rejecting() -> Self {
+        Self {
+            reject_store: true,
+            ..Default::default()
+        }
+    }
+
     pub(super) fn seed(&self, bytes: &[u8], mime: &str) -> MediaReference {
         let id = format!("voice-{}", self.next.fetch_add(1, Ordering::SeqCst));
         self.audio
