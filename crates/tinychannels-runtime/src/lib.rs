@@ -243,7 +243,7 @@ pub mod text;
 #[allow(deprecated, reason = "v21 send adapter remains for one release")]
 pub mod traits;
 pub use tinychannels_bus::{capabilities, error, names, version};
-pub use traits::{Channel, ChannelSendExt, SendMessageExt};
+pub use traits::{Channel, ChannelSendExt, SendMessageExt, WebhookRejected};
 
 pub mod controllers;
 

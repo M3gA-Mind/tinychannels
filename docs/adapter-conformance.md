@@ -147,3 +147,59 @@ runs all 24 kit features against a mock signal-cli daemon.
 Provider leaves #106–#111 must add mock-platform fixtures that assert the
 actual request and receipt for each declared operation. The final matrix and
 legacy trait removal remain open until those fixtures pass for every provider.
+
+## WhatsApp (Cloud API and Web)
+
+Both WhatsApp backends are native v2 adapters (`adapterMode=native-v2`, with
+`backend=cloud` or `backend=web` on the descriptor). Each implements
+`ChannelAdapter`, `ChannelTypedSend`, `ChannelTyping`, `ChannelReaction`,
+`ChannelEdit`, `ChannelDelete` and `ChannelStreamingDraft`, and the module runs
+either through `Running::start_native` on the same ordered operation queue as
+Telegram and Slack. Capability facts are derived from the exact adapter and the
+ports it was built with (`whatsapp_shared::capabilities`): media kinds only
+with scoped host media storage, voice only with the host voice store, edit and
+unsend only on Web, a voice waveform only on Web.
+
+Each backend runs all 24 kit features, and every observation is read from what
+the platform double actually received:
+
+- `the_cloud_adapter_passes_the_whole_conformance_matrix_against_its_wire`
+  records the Graph API requests a mock server received (message bodies,
+  multipart media uploads, the `typing_indicator` read call) and feeds inbound
+  features through a signed webhook.
+- `the_web_adapter_passes_the_whole_conformance_matrix_against_its_session`
+  records the protocol messages, reactions, edits, revokes and receipts a
+  linked-session double was asked to perform and feeds inbound features through
+  the adapter's real event handler.
+
+Declared features (text, image, video, audio, file, sticker, location, contact,
+voice in and out, reply addressing, typing, reactions both ways, read receipts;
+plus edit and delete on Web) must reach the wire with the configured account
+and conversation. Undeclared ones (buttons, polls, presentations, native data,
+voice synthesis, thread addressing, streaming drafts; plus edit and delete on
+the Cloud API, which cannot do either) must fail with an explicit
+`unsupported` error before any platform call. Two tests pin the declared set
+itself, so an adapter cannot quietly stop claiming a protocol-supported
+feature.
+
+Cloud webhook ingress is authenticated before it is parsed. The module tests in
+`whatsapp_native` drive signed deliveries through `Running::webhook` and the
+`channel_interaction` method: a delivery with no signature, a wrong one, or a
+verify token in its place is refused with the client-error name; a delivery
+for another `phone_number_id` is refused rather than routed; redeliveries are
+published once; and an inbound push-to-talk note is stored, then transcribed by
+the module. `compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native_v2`
+repeats the signed-webhook and native-send path against the compiled module.
+
+Voice notes in WhatsApp are OGG/Opus. Inbound notes keep only the host's opaque
+media reference (provider URLs and handles never reach history) and, on Web,
+the sender's waveform. Outbound notes are sent as push-to-talk audio; on Web
+the waveform the shared voice pipeline produced (`OutboundVoice::Media.waveform`)
+is resampled to WhatsApp's 64 buckets. The Cloud API has no waveform field, so
+that backend reports `nativeWaveform=false`.
+
+WhatsApp Web scopes durable media by the linked account's phone-number JID,
+learned from the live session (`media_account_identity`) rather than from the
+mutable `session_path` label. Until the device is linked, media operations fail
+closed; if a later connection reports a different account the identity is
+withdrawn for the life of that runtime and inbound traffic is dropped.

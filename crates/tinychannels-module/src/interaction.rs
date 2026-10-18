@@ -30,6 +30,54 @@ pub(crate) fn configured_capabilities(
     capabilities
 }
 
+/// The error name of a refused webhook; hosts answer it with a client error.
+pub(crate) const WEBHOOK_REJECTED_ERROR: &str = "ai.tinyhumans.tinychannels.Error.WebhookRejected";
+/// The error name of a delivery that failed after it was authenticated; hosts
+/// answer it with a retryable error.
+pub(crate) const WEBHOOK_FAILED_ERROR: &str = "ai.tinyhumans.tinychannels.Error.WebhookFailed";
+
+fn webhook_rejected() -> tinybus::Error {
+    tinybus::Error::MethodFailed {
+        name: WEBHOOK_REJECTED_ERROR.to_owned(),
+        message: "webhook delivery was rejected".to_owned(),
+    }
+}
+
+fn webhook_failed() -> tinybus::Error {
+    tinybus::Error::MethodFailed {
+        name: WEBHOOK_FAILED_ERROR.to_owned(),
+        message: "webhook delivery could not be ingested".to_owned(),
+    }
+}
+
+/// Decode and ingest one raw webhook POST. Bodies are bounded before the
+/// provider sees them; the provider authenticates the exact bytes.
+async fn deliver_webhook(
+    provider: &dyn Channel,
+    signature: Option<&str>,
+    body_base64: &str,
+) -> tinybus::Result<ChannelInteractionResult> {
+    use base64::Engine as _;
+    // 4 base64 characters carry 3 bytes; refuse anything over 4 MiB decoded.
+    if body_base64.len() > 4 * 1024 * 1024 * 4 / 3 + 4 {
+        return Err(webhook_rejected());
+    }
+    let body = base64::engine::general_purpose::STANDARD
+        .decode(body_base64.as_bytes())
+        .map_err(|_| webhook_rejected())?;
+    match provider.deliver_webhook(signature, &body).await {
+        Ok(outcome) => Ok(ChannelInteractionResult::WebhookAccepted(outcome)),
+        Err(error)
+            if error
+                .downcast_ref::<tinychannels::WebhookRejected>()
+                .is_some() =>
+        {
+            Err(webhook_rejected())
+        }
+        Err(_) => Err(webhook_failed()),
+    }
+}
+
 pub(crate) async fn dispatch(
     provider: &dyn Channel,
     interaction: ChannelInteraction,
@@ -121,6 +169,31 @@ pub(crate) async fn dispatch(
                 .await
                 .map(|()| ChannelInteractionResult::Completed)
                 .map_err(|_| tinybus::Error::failed("provider message deletion failed"));
+        }
+        Op::MarkRead {
+            conversation,
+            provider_message_id,
+            ..
+        } => {
+            return provider
+                .mark_read(&conversation, &provider_message_id)
+                .await
+                .map(|()| ChannelInteractionResult::Completed)
+                .map_err(|_| tinybus::Error::failed("provider read receipt failed"));
+        }
+        Op::DeliverWebhook {
+            signature,
+            body_base64,
+        } => return deliver_webhook(provider, signature.as_deref(), &body_base64).await,
+        Op::VerifyWebhook {
+            mode,
+            verify_token,
+            challenge,
+        } => {
+            return provider
+                .verify_webhook(&mode, &verify_token, &challenge)
+                .map(ChannelInteractionResult::WebhookChallenge)
+                .ok_or_else(webhook_rejected);
         }
     };
     result

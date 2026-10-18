@@ -1,6 +1,5 @@
 use super::*;
 use crate::providers::native::fixtures::*;
-use base64::Engine as _;
 use std::sync::Arc;
 use tinychannels_bus::{ChannelOutboundMessage, MediaReference};
 
@@ -52,6 +51,7 @@ fn voice(opaque: Option<&str>) -> OutboundContentPart {
             audio_base64: None,
             codec: None,
             duration_ms: None,
+            waveform: None,
         },
     }
 }

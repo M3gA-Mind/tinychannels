@@ -13,7 +13,7 @@ mod channel_ops;
 mod channel_recv;
 mod channel_send;
 mod channel_types;
-mod text;
+pub(crate) mod text;
 
 pub use bot_api::{TelegramBotApi, TelegramReactionRequest, TopicAction};
 pub use channel_types::TelegramChannel;

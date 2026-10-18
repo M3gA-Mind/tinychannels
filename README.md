@@ -24,7 +24,32 @@ Configured provider discovery, legacy intent normalization, and external-webhook
 outbound startup are confidential module operations. The catalog returns provider
 facts without listening; outbound-only startup preserves Linq and WhatsApp Cloud
 sends while keeping their ingress explicitly external. Existing listener start
-methods retain their refusal when no webhook ingress is available.
+methods retain their refusal when no webhook ingress is available (Linq).
+
+WhatsApp Cloud webhooks are the exception: the host serves the HTTP route, but
+the module owns everything that decides whether a POST is believed. The host
+forwards the raw body and the `X-Hub-Signature-256` header through the
+`DeliverWebhook` channel interaction (and the `hub.*` subscription handshake
+through `VerifyWebhook`). The module checks the HMAC against the exact bytes with
+the configured `app_secret` (a verify token is not a POST signature, and a
+channel without an app secret refuses every delivery), binds the delivery to the
+configured `phone_number_id`, bounds the body, suppresses Meta's redeliveries,
+downloads and persists attachments through the host's scoped media ports, and
+publishes typed envelopes and events on the ordered ingress path. A refused
+delivery fails with `ai.tinyhumans.tinychannels.Error.WebhookRejected` (answer
+with a client error); a failure after authentication fails with
+`...Error.WebhookFailed` (answer with a retryable error so Meta redelivers).
+
+Both WhatsApp adapters are native v2: text, image, video, audio, document,
+sticker, location and contact cards in both directions; push-to-talk voice notes
+in (stored, then transcribed by the module) and out (OGG/Opus, with WhatsApp's
+waveform on Web); reactions both ways; quoted replies; read receipts (outbound
+`MarkRead`, inbound delivered/read events); typing. WhatsApp Web additionally
+edits and unsends. Buttons, polls, presentations, native data, thread
+addressing and streaming drafts are reported as unsupported rather than faked.
+WhatsApp Web scopes durable media by the linked account's JID, learned from the
+session once it is linked and withdrawn permanently if the session later reports
+a different account.
 
 Inbound preparation and hosted identity projection are confidential module
 operations. They return stable history, thread, client, and session keys using

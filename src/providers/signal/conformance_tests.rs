@@ -294,6 +294,7 @@ impl AdapterFixture for SignalWireFixture {
                         audio_base64: None,
                         codec: Some("m4a_aac".into()),
                         duration_ms: None,
+                        waveform: None,
                     },
                 }))
                 .await

@@ -321,13 +321,7 @@ const HANG_GUARD: Duration = Duration::from_secs(30);
 
 fn inbound_state(allowed: &[&str]) -> (InboundState, mpsc::Receiver<ChannelMessage>) {
     let (tx, rx) = mpsc::channel(16);
-    let state = InboundState {
-        tx,
-        allowed_numbers: allowed.iter().map(|s| s.to_string()).collect(),
-        connected: Arc::new(AtomicBool::new(false)),
-        allowed_groups: Arc::new(Mutex::new(HashSet::new())),
-    };
-    (state, rx)
+    (super::fakes::base_state(tx, allowed), rx)
 }
 
 struct Inbound {
@@ -590,49 +584,11 @@ async fn pairing_and_unrelated_events_change_nothing() {
 // Outbound paths over the `OutboundClient` seam
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
-enum Call {
-    Text(String, String),
-    Composing(String),
-    Paused(String),
-}
+use super::fakes::{Call, RecordingClient};
 
-#[derive(Default)]
-struct FakeClient {
-    calls: Mutex<Vec<Call>>,
-    fail: bool,
-}
-
-#[async_trait]
-impl OutboundClient for FakeClient {
-    async fn send_text(&self, to: Jid, text: String) -> Result<()> {
-        if self.fail {
-            anyhow::bail!("send boom");
-        }
-        self.calls.lock().push(Call::Text(to.to_string(), text));
-        Ok(())
-    }
-
-    async fn send_composing(&self, to: &Jid) -> Result<()> {
-        if self.fail {
-            anyhow::bail!("composing boom");
-        }
-        self.calls.lock().push(Call::Composing(to.to_string()));
-        Ok(())
-    }
-
-    async fn send_paused(&self, to: &Jid) -> Result<()> {
-        if self.fail {
-            anyhow::bail!("paused boom");
-        }
-        self.calls.lock().push(Call::Paused(to.to_string()));
-        Ok(())
-    }
-}
-
-fn connected_channel(fail: bool) -> (WhatsAppWebChannel, Arc<FakeClient>) {
+fn connected_channel(fail: bool) -> (WhatsAppWebChannel, Arc<RecordingClient>) {
     let ch = make_channel(); // allowed_numbers = ["+1234567890"]
-    let fake = Arc::new(FakeClient {
+    let fake = Arc::new(RecordingClient {
         fail,
         ..Default::default()
     });
@@ -661,11 +617,8 @@ async fn send_delivers_text_to_an_allowed_number_as_a_phone_jid() {
     let (ch, fake) = connected_channel(false);
     ch.send(&message("+1234567890", "hello")).await.unwrap();
     assert_eq!(
-        *fake.calls.lock(),
-        [Call::Text(
-            "1234567890@s.whatsapp.net".into(),
-            "hello".into()
-        )]
+        fake.texts(),
+        [("1234567890@s.whatsapp.net".to_owned(), "hello".to_owned())]
     );
 }
 
@@ -677,8 +630,8 @@ async fn send_into_a_provenanced_group_uses_the_group_jid() {
         .await
         .unwrap();
     assert_eq!(
-        *fake.calls.lock(),
-        [Call::Text("987654321@g.us".into(), "to group".into())]
+        fake.texts(),
+        [("987654321@g.us".to_owned(), "to group".to_owned())]
     );
 }
 
@@ -689,13 +642,13 @@ async fn blocked_recipients_are_skipped_silently() {
     ch.send(&message("11111@g.us", "nope")).await.unwrap();
     ch.start_typing("+9999999999").await.unwrap();
     ch.stop_typing("+9999999999").await.unwrap();
-    assert!(fake.calls.lock().is_empty());
+    assert!(fake.calls().is_empty());
 }
 
 #[tokio::test]
 async fn unparseable_recipients_are_rejected() {
     let ch = WhatsAppWebChannel::new("/tmp/t.db".into(), None, None, vec![]);
-    let fake = Arc::new(FakeClient::default());
+    let fake = Arc::new(RecordingClient::default());
     *ch.client.lock() = Some(fake.clone() as Arc<dyn OutboundClient>);
 
     let empty = ch.send(&message("   ", "x")).await.unwrap_err();
@@ -710,7 +663,7 @@ async fn unparseable_recipients_are_rejected() {
         bad_jid.to_string().contains("Invalid WhatsApp JID"),
         "{bad_jid}"
     );
-    assert!(fake.calls.lock().is_empty());
+    assert!(fake.calls().is_empty());
 }
 
 #[tokio::test]
@@ -718,13 +671,11 @@ async fn typing_states_go_to_the_recipient_jid() {
     let (ch, fake) = connected_channel(false);
     ch.start_typing("+1234567890").await.unwrap();
     ch.stop_typing("1234567890@s.whatsapp.net").await.unwrap();
-    assert_eq!(
-        *fake.calls.lock(),
-        [
-            Call::Composing("1234567890@s.whatsapp.net".into()),
-            Call::Paused("1234567890@s.whatsapp.net".into()),
-        ]
-    );
+    assert!(matches!(
+        fake.calls().as_slice(),
+        [Call::Composing(first), Call::Paused(second)]
+            if first == "1234567890@s.whatsapp.net" && second == "1234567890@s.whatsapp.net"
+    ));
 }
 
 #[tokio::test]
@@ -1022,5 +973,523 @@ async fn without_usable_host_storage_the_session_falls_back_to_memory() {
                 .await
                 .unwrap()
         );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// v2 channel behaviour (linked-session double)
+// ---------------------------------------------------------------------------
+
+mod v2 {
+    use super::*;
+    use crate::channel::ChannelAdapter as _;
+    use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices};
+    use crate::providers::whatsapp_web::fakes::{Call, RecordingClient, base_state};
+    use tinychannels_bus::channel::{ChannelRef, ConversationRef};
+    use wacore::types::events::Receipt;
+    use wacore::types::presence::ReceiptType;
+
+    fn linked() -> (WhatsAppWebChannel, Arc<RecordingClient>) {
+        let channel = WhatsAppWebChannel::new(
+            "/tmp/test.db".into(),
+            None,
+            None,
+            vec!["+15550001111".into()],
+        );
+        let client = Arc::new(RecordingClient::linked("15559998888@s.whatsapp.net"));
+        *channel.client.lock() = Some(client.clone() as Arc<dyn OutboundClient>);
+        (channel, client)
+    }
+
+    fn conversation() -> ConversationRef {
+        ConversationRef {
+            id: "+15550001111".into(),
+            ..Default::default()
+        }
+    }
+
+    fn whatsapp() -> ChannelRef {
+        ChannelRef {
+            id: "whatsapp".into(),
+            account_id: None,
+        }
+    }
+
+    fn typed(body: &str) -> tinychannels_bus::ChannelOutboundMessage {
+        tinychannels_bus::ChannelOutboundMessage::from_legacy_message(
+            "whatsapp",
+            &SendMessage::new(body, "+15550001111"),
+        )
+    }
+
+    #[test]
+    fn capabilities_follow_the_wired_ports_and_the_protocol() {
+        let (bare, _) = linked();
+        let facts = bare.capabilities();
+        assert!(facts.reactions && facts.addressing.reply_to_id && !facts.addressing.thread_id);
+        assert!(facts.actions.supported.iter().any(|a| a == "edit"));
+        assert!(!facts.content.image.outbound && !facts.voice_out.supported);
+        assert!(bare.supports_reactions() && bare.supports_edit() && bare.supports_reply_to_id());
+        assert!(bare.history_key_ignores_thread());
+        let wired = WhatsAppWebChannel::new("/tmp/t.db".into(), None, None, vec![])
+            .with_media_repository(Arc::new(MemoryMedia::default()))
+            .with_voice_media_store(Arc::new(MemoryVoices::default()))
+            .with_voice_synthesis(true);
+        let facts = wired.capabilities();
+        assert!(facts.content.sticker.outbound && facts.voice_out.native_waveform);
+        assert!(facts.voice_out.synthesis);
+        assert_eq!(wired.declared_capabilities(), wired.capabilities());
+        let descriptor = wired.descriptor();
+        assert_eq!(
+            descriptor.metadata.get("backend").map(String::as_str),
+            Some("web")
+        );
+    }
+
+    #[tokio::test]
+    async fn typed_sends_edits_deletes_reactions_and_read_receipts_run_on_the_session() {
+        let (channel, client) = linked();
+        Channel::send_typed(&channel, &typed("one")).await.unwrap();
+        let outcome = Channel::send_typed_with_receipt(&channel, &typed("two"))
+            .await
+            .unwrap();
+        let receipt = outcome.receipt;
+        let edited = Channel::edit_message(
+            &channel,
+            &receipt,
+            &tinychannels_bus::ChannelOutboundIntent {
+                conversation_id: "+15550001111".into(),
+                channel_id: "whatsapp".into(),
+                payload: tinychannels_bus::OutboundPayload::Text {
+                    text: "two!".into(),
+                },
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(edited.platform_message_ids, receipt.platform_message_ids);
+        Channel::delete_message(&channel, &receipt).await.unwrap();
+        let thumbs = tinychannels_bus::ChannelReaction {
+            value: "👍".into(),
+            custom_emoji_id: None,
+        };
+        Channel::send_reaction(&channel, &conversation(), "3EB0X", &thumbs, false)
+            .await
+            .unwrap();
+        Channel::mark_read(&channel, &conversation(), "3EB0X")
+            .await
+            .unwrap();
+        let kinds: Vec<_> = client
+            .calls()
+            .iter()
+            .map(|call| match call {
+                Call::Send { .. } => "send",
+                Call::Edit { .. } => "edit",
+                Call::Revoke { .. } => "revoke",
+                Call::Reaction { .. } => "reaction",
+                Call::Read { .. } => "read",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(
+            kinds,
+            ["send", "send", "edit", "revoke", "reaction", "read"]
+        );
+    }
+
+    #[tokio::test]
+    async fn adapter_ports_map_failures_to_structured_errors() {
+        let (channel, _client) = linked();
+        let thumbs = tinychannels_bus::ChannelReaction {
+            value: "👍".into(),
+            custom_emoji_id: None,
+        };
+        crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &whatsapp(),
+            &conversation(),
+            "3EB0X",
+            &thumbs,
+            false,
+        )
+        .await
+        .unwrap();
+        let wrong = ChannelRef {
+            id: "telegram".into(),
+            account_id: None,
+        };
+        let refused = crate::channel::ChannelReaction::send_reaction(
+            &channel,
+            &wrong,
+            &conversation(),
+            "3EB0X",
+            &thumbs,
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(!refused.unsupported && !refused.sent_before_error);
+        crate::channel::ChannelTyping::start_typing(&channel, "+15550001111")
+            .await
+            .unwrap();
+        crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111")
+            .await
+            .unwrap();
+        // Typing toward a number the account does not admit is silently skipped.
+        crate::channel::ChannelTyping::start_typing(&channel, "+19998887777")
+            .await
+            .unwrap();
+
+        let sent = crate::channel::ChannelTypedSend::send_typed(&channel, &typed("hi"))
+            .await
+            .unwrap();
+        let intent = tinychannels_bus::ChannelOutboundIntent {
+            conversation_id: "+15550001111".into(),
+            channel_id: "whatsapp".into(),
+            payload: tinychannels_bus::OutboundPayload::Text {
+                text: "edited".into(),
+            },
+            ..Default::default()
+        };
+        crate::channel::ChannelEdit::edit(&channel, &sent.receipt, intent.clone())
+            .await
+            .unwrap();
+        crate::channel::ChannelDelete::delete(&channel, &sent.receipt)
+            .await
+            .unwrap();
+        let mut orphan = sent.receipt.clone();
+        orphan.conversation = None;
+        assert!(
+            crate::channel::ChannelDelete::delete(&channel, &orphan)
+                .await
+                .is_err()
+        );
+        assert!(
+            crate::channel::ChannelStreamingDraft::upsert_draft(&channel, None, intent)
+                .await
+                .unwrap_err()
+                .unsupported
+        );
+        assert!(channel.stop().await.is_ok());
+        struct NoSink;
+        #[async_trait]
+        impl crate::channel::ChannelInboundSink for NoSink {
+            async fn push(
+                &self,
+                _ingress: tinychannels_bus::ChannelIngress,
+            ) -> Result<(), crate::channel::ChannelSendError> {
+                Ok(())
+            }
+        }
+        assert!(channel.start(&NoSink).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn status_reports_the_liveness_flag() {
+        let (channel, _client) = linked();
+        let down = channel.status().await.unwrap();
+        assert_eq!(down.health_state.as_deref(), Some("unhealthy"));
+        channel.connected.store(true, Ordering::Release);
+        assert_eq!(
+            channel.status().await.unwrap().health_state.as_deref(),
+            Some("healthy")
+        );
+    }
+
+    #[test]
+    fn failures_that_are_not_ours_are_uncertain() {
+        assert!(matches!(
+            failure_of(&anyhow!("socket reset")),
+            WaFailure::Uncertain(_)
+        ));
+        assert!(matches!(
+            failure_of(&anyhow::Error::new(WaFailure::rejected("no"))),
+            WaFailure::Rejected(_)
+        ));
+    }
+
+    // --- event handling ------------------------------------------------------
+
+    fn state_with_session() -> (
+        InboundState,
+        Arc<RecordingClient>,
+        Arc<CollectingSink>,
+        mpsc::Receiver<ChannelMessage>,
+    ) {
+        let (tx, rx) = mpsc::channel(8);
+        let client = Arc::new(RecordingClient::linked("15559998888@s.whatsapp.net"));
+        let sink = Arc::new(CollectingSink::new());
+        let mut state = base_state(tx, &["*"]);
+        state.client = Arc::new(Mutex::new(Some(client.clone() as Arc<dyn OutboundClient>)));
+        state.events = Some(sink.clone());
+        (state, client, sink, rx)
+    }
+
+    fn batch_of(id: &str, chat: &str, sender: &str, body: &str) -> Event {
+        let info = MessageInfo {
+            source: MessageSource {
+                chat: chat.parse().unwrap(),
+                sender: sender.parse().unwrap(),
+                ..Default::default()
+            },
+            id: id.to_owned(),
+            timestamp: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            ..Default::default()
+        };
+        let message = InboundMessage::builder()
+            .message(Arc::new(wa::Message {
+                conversation: Some(body.into()),
+                ..Default::default()
+            }))
+            .info(Arc::new(info))
+            .build();
+        Event::Messages(
+            MessageBatch::builder()
+                .messages(vec![message].into())
+                .origin(BatchOrigin::Live)
+                .build(),
+        )
+    }
+
+    #[tokio::test]
+    async fn connecting_binds_the_linked_account_and_typed_ingress_records_authors() {
+        let (state, _client, sink, mut rx) = state_with_session();
+        state
+            .handle_event(&Event::Connected(Connected::builder().build()))
+            .await;
+        assert_eq!(
+            state.identity.current().as_deref(),
+            Some("15559998888@s.whatsapp.net")
+        );
+        state
+            .handle_event(&batch_of(
+                "3EB0ONE",
+                "987@g.us",
+                "15550001111@s.whatsapp.net",
+                "hi group",
+            ))
+            .await;
+        assert_eq!(
+            state.authors.lock().get("3EB0ONE").as_deref(),
+            Some("15550001111@s.whatsapp.net")
+        );
+        assert_eq!(
+            sink.ingress.lock().len(),
+            1,
+            "published through the typed path"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "and not duplicated onto the legacy channel"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_linked_to_another_account_drops_inbound_traffic() {
+        let (state, client, sink, _rx) = state_with_session();
+        state
+            .handle_event(&Event::Connected(Connected::builder().build()))
+            .await;
+        *client.account.lock() = Some("15557776666@s.whatsapp.net".parse().unwrap());
+        state
+            .handle_event(&Event::Connected(Connected::builder().build()))
+            .await;
+        assert!(state.identity.is_conflicted());
+        state
+            .handle_event(&batch_of(
+                "3EB0TWO",
+                "15550001111@s.whatsapp.net",
+                "15550001111@s.whatsapp.net",
+                "hello",
+            ))
+            .await;
+        assert!(sink.ingress.lock().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_typed_delivery_failure_is_logged_and_dropped_and_declined_ingress_uses_the_legacy_path()
+     {
+        let (mut state, _client, _sink, mut rx) = state_with_session();
+        state.events = Some(Arc::new(CollectingSink {
+            fail: true,
+            ..CollectingSink::new()
+        }));
+        state
+            .handle_event(&batch_of(
+                "3EB0THREE",
+                "15550001111@s.whatsapp.net",
+                "15550001111@s.whatsapp.net",
+                "x",
+            ))
+            .await;
+        assert!(rx.try_recv().is_err());
+
+        let (mut declining, _client, _sink, mut rx) = state_with_session();
+        declining.events = Some(Arc::new(CollectingSink {
+            accept: false,
+            ..CollectingSink::new()
+        }));
+        declining
+            .handle_event(&batch_of(
+                "3EB0FOUR",
+                "15550001111@s.whatsapp.net",
+                "15550001111@s.whatsapp.net",
+                "legacy",
+            ))
+            .await;
+        assert_eq!(rx.try_recv().unwrap().content, "legacy");
+    }
+
+    #[tokio::test]
+    async fn receipt_events_are_published_for_our_messages() {
+        let (state, _client, sink, _rx) = state_with_session();
+        let receipt = Receipt::builder()
+            .source(MessageSource {
+                chat: "15550001111@s.whatsapp.net".parse().unwrap(),
+                sender: "15550001111@s.whatsapp.net".parse().unwrap(),
+                ..Default::default()
+            })
+            .message_ids(vec!["3EB0OUT".to_owned()])
+            .timestamp(chrono::DateTime::from_timestamp(1_700_000_001, 0).unwrap())
+            .r#type(ReceiptType::Delivered)
+            .offline(false)
+            .build();
+        state.handle_event(&Event::Receipt(receipt)).await;
+        assert_eq!(sink.ingress.lock().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn the_real_client_implements_every_session_operation_and_refuses_them_while_logged_out()
+    {
+        use crate::providers::whatsapp_web::media_build::MediaBuild;
+        let lifecycle = Arc::new(RecordingLifecycle::default());
+        let ch = Arc::new(make_channel().with_lifecycle(lifecycle.clone()));
+        let (tx, _rx) = mpsc::channel(4);
+        let listener = {
+            let ch = Arc::clone(&ch);
+            tokio::spawn(async move { ch.listen_with(tx, OfflineTransport, OfflineHttp).await })
+        };
+        wait_for_client(&ch).await;
+        let client = ch.client.lock().clone().expect("the real client");
+        let jid: Jid = "15551230000@s.whatsapp.net".parse().unwrap();
+        assert!(
+            client.linked_account().is_none(),
+            "no account is linked yet"
+        );
+        let text = wa::Message {
+            conversation: Some("x".into()),
+            ..Default::default()
+        };
+        let guard = |future: std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>| async {
+            tokio::time::timeout(HANG_GUARD, future)
+                .await
+                .expect("operation hung")
+        };
+        assert!(
+            guard(Box::pin({
+                let (client, jid, text) = (client.clone(), jid.clone(), text.clone());
+                async move { client.send_message(jid, text).await.is_err() }
+            }))
+            .await
+        );
+        for build in [
+            MediaBuild::Image {
+                caption: None,
+                mimetype: "image/png".into(),
+            },
+            MediaBuild::Video {
+                caption: None,
+                duration_seconds: None,
+            },
+            MediaBuild::Audio {
+                mimetype: "audio/mpeg".into(),
+                duration_seconds: None,
+            },
+            MediaBuild::Voice {
+                duration_seconds: None,
+                waveform: None,
+            },
+            MediaBuild::Document {
+                mimetype: "application/pdf".into(),
+                file_name: None,
+                caption: None,
+            },
+            MediaBuild::Sticker,
+        ] {
+            let client = client.clone();
+            assert!(
+                guard(Box::pin(async move {
+                    client
+                        .media_message(vec![1, 2, 3], build, None)
+                        .await
+                        .is_err()
+                }))
+                .await
+            );
+        }
+        let image = wa::message::ImageMessage {
+            direct_path: Some("/v/x".into()),
+            media_key: Some(vec![1; 32]),
+            ..Default::default()
+        };
+        assert!(
+            guard(Box::pin({
+                let client = client.clone();
+                async move { client.download(&image).await.is_err() }
+            }))
+            .await
+        );
+        assert!(
+            guard(Box::pin({
+                let (client, jid) = (client.clone(), jid.clone());
+                async move {
+                    client
+                        .send_reaction(jid, wa::MessageKey::default(), "👍")
+                        .await
+                        .is_err()
+                }
+            }))
+            .await
+        );
+        assert!(
+            guard(Box::pin({
+                let (client, jid, text) = (client.clone(), jid.clone(), text.clone());
+                async move {
+                    client
+                        .edit_message(jid, "3EB0X".into(), text)
+                        .await
+                        .is_err()
+                }
+            }))
+            .await
+        );
+        assert!(
+            guard(Box::pin({
+                let (client, jid) = (client.clone(), jid.clone());
+                async move { client.revoke_message(jid, "3EB0X".into()).await.is_err() }
+            }))
+            .await
+        );
+        assert!(
+            guard(Box::pin({
+                let (client, jid) = (client.clone(), jid.clone());
+                async move {
+                    client
+                        .mark_read(&jid, None, &["3EB0X".into()])
+                        .await
+                        .is_err()
+                }
+            }))
+            .await
+        );
+
+        let (_, hook) = lifecycle.hooks.lock().pop().expect("hook registered");
+        hook().await;
+        tokio::time::timeout(HANG_GUARD, listener)
+            .await
+            .expect("listen did not return")
+            .unwrap()
+            .unwrap();
     }
 }
