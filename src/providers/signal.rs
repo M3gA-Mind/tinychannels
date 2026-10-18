@@ -620,5 +620,9 @@ impl Channel for SignalChannel {
 super::native::native_v2_adapter!(SignalChannel);
 
 #[cfg(test)]
+#[path = "signal/fixtures_tests.rs"]
+mod fixtures;
+
+#[cfg(test)]
 #[path = "signal_tests.rs"]
 mod tests;
