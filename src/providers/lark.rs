@@ -652,6 +652,10 @@ impl LarkChannel {
 
 #[async_trait]
 impl Channel for LarkChannel {
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        crate::providers::long_tail::LongTail::declared(self)
+    }
+
     fn name(&self) -> &str {
         "lark"
     }
@@ -923,6 +927,18 @@ mod tests;
 #[cfg(test)]
 #[path = "lark_api_tests.rs"]
 mod api_tests;
+
+impl crate::providers::long_tail::LongTail for LarkChannel {
+    const ID: &'static str = "lark";
+    const DISPLAY: &'static str = "Lark";
+
+    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
+        use crate::providers::long_tail::{TextSpec, text_capabilities};
+        text_capabilities(TextSpec::default())
+    }
+}
+
+crate::providers::long_tail::impl_long_tail_adapter!(LarkChannel);
 
 #[cfg(test)]
 #[path = "lark_ws_tests.rs"]

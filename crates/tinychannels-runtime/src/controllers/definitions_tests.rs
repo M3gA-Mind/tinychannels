@@ -1,8 +1,8 @@
 use super::*;
 use crate::config::{
     ChannelsConfig, DingTalkConfig, DiscordConfig, EmailConfig, IMessageConfig, IrcConfig,
-    LarkConfig, MattermostConfig, QQConfig, SignalConfig, SlackConfig,
-    TelegramConfig, WhatsAppConfig, YuanbaoConfig,
+    LarkConfig, MattermostConfig, QQConfig, SignalConfig, SlackConfig, TelegramConfig,
+    WhatsAppConfig, YuanbaoConfig,
 };
 
 #[test]

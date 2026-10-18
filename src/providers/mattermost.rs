@@ -107,6 +107,10 @@ impl MattermostChannel {
 
 #[async_trait]
 impl Channel for MattermostChannel {
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        crate::providers::long_tail::LongTail::declared(self)
+    }
+
     fn name(&self) -> &str {
         "mattermost"
     }
@@ -477,6 +481,29 @@ fn normalize_mattermost_content(
 
     Some(cleaned)
 }
+
+impl crate::providers::long_tail::LongTail for MattermostChannel {
+    const ID: &'static str = "mattermost";
+    const DISPLAY: &'static str = "Mattermost";
+
+    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
+        use crate::providers::long_tail::{TextSpec, text_capabilities};
+        text_capabilities(TextSpec { typing: true, thread: true, ..Default::default() })
+    }
+
+    fn typing_supported(&self) -> bool {
+        true
+    }
+
+    fn address(&self, message: &mut SendMessage) {
+        // Mattermost packs the thread root into the recipient (`channel:root`).
+        if let Some(root) = message.thread_ts.take_if(|_| !message.recipient.contains(':')) {
+            message.recipient = format!("{}:{root}", message.recipient);
+        }
+    }
+}
+
+crate::providers::long_tail::impl_long_tail_adapter!(MattermostChannel);
 
 #[cfg(test)]
 #[path = "mattermost_tests.rs"]
