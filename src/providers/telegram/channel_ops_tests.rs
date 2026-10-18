@@ -190,6 +190,7 @@ fn outbound_voice_message(
                 audio_base64: None,
                 codec: Some("ogg_opus".into()),
                 duration_ms: Some(1000),
+                waveform: None,
             },
         }],
     }
@@ -529,6 +530,7 @@ async fn telegram_resolves_and_uploads_voice_larger_than_inline_intent_limit() {
                 audio_base64: None,
                 codec: Some("ogg_opus".into()),
                 duration_ms: Some(2_000),
+                waveform: None,
             },
         }],
     };
@@ -583,6 +585,7 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
                 audio_base64: None,
                 codec: Some("ogg_opus".into()),
                 duration_ms: Some(1000),
+                waveform: None,
             },
         }],
     };
@@ -674,6 +677,7 @@ async fn typed_voice_sends_long_transcript_as_receipted_followup_text() {
                     audio_base64: None,
                     codec: Some("ogg_opus".into()),
                     duration_ms: Some(1000),
+                    waveform: None,
                 },
             },
         ],
@@ -759,6 +763,7 @@ async fn long_voice_transcript_failure_retains_partial_receipts_without_retry() 
                     audio_base64: None,
                     codec: Some("ogg_opus".into()),
                     duration_ms: Some(1000),
+                    waveform: None,
                 },
             },
         ],
@@ -815,6 +820,7 @@ async fn typed_voice_keeps_transcript_as_caption_and_sends_one_native_receipt() 
                 audio_base64: None,
                 codec: Some("ogg_opus".into()),
                 duration_ms: Some(1000),
+                waveform: None,
             },
         }],
     };
@@ -1711,6 +1717,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
                     audio_base64: None,
                     codec: Some("ogg_opus".into()),
                     duration_ms: Some(1_000),
+                    waveform: None,
                 },
             });
     }

@@ -89,6 +89,71 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
                 .is_some_and(|wa| wa.backend_type() == "cloud"))
 }
 
+/// Whether `name` receives inbound traffic only through a webhook this module
+/// has no ingress for. WhatsApp Cloud is not one: the host forwards each raw
+/// POST and the module authenticates and ingests it.
+fn lacks_module_ingress(name: &str) -> bool {
+    name == "linq"
+}
+
+/// The concrete WhatsApp adapter a configuration selects. The two backends
+/// share one provider name, so only the shape of the stanza separates them.
+enum WhatsAppNative {
+    Cloud(Arc<tinychannels::WhatsAppChannel>),
+    Web(Arc<tinychannels::WhatsAppWebChannel>),
+}
+
+impl WhatsAppNative {
+    fn select(
+        name: &str,
+        config: &ChannelsConfig,
+        host: &Arc<dyn ChannelHost>,
+        http: &dyn HttpClientFactory,
+    ) -> Option<Self> {
+        if tinychannels_bus::provider_id(name) != "whatsapp" {
+            return None;
+        }
+        match config.whatsapp.as_ref()?.backend_type() {
+            "cloud" => {
+                tinychannels::build_whatsapp_cloud_channel(config, host, http).map(Self::Cloud)
+            }
+            "web" => tinychannels::build_whatsapp_web_channel(config, host).map(Self::Web),
+            _ => None,
+        }
+    }
+
+    fn channel(&self) -> Arc<dyn tinychannels::Channel> {
+        match self {
+            Self::Cloud(channel) => channel.clone(),
+            Self::Web(channel) => channel.clone(),
+        }
+    }
+
+    /// Web learns its account from the linked session; bind the media scope to it.
+    fn bind_media_authority(&self, scope: &crate::provider::MediaScope) {
+        if let Self::Web(channel) = self {
+            scope.bind_source(channel.clone());
+        }
+    }
+
+    fn start(
+        self,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: Option<tinychannels_bus::ChannelSupervisionPolicy>,
+        outbound_only: bool,
+    ) -> Arc<Running> {
+        match self {
+            Self::Cloud(channel) => {
+                Running::start_native("WhatsApp", channel, hooks, host, supervision, outbound_only)
+            }
+            Self::Web(channel) => {
+                Running::start_native("WhatsApp", channel, hooks, host, supervision, outbound_only)
+            }
+        }
+    }
+}
+
 async fn configured_capabilities(
     running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
     name: &str,
@@ -118,10 +183,19 @@ pub(crate) struct Channels {
     delivery_admission: Arc<Mutex<()>>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 struct ProviderActivation {
     generation: String,
-    media_account_scope: Option<String>,
+    media_account_scope: crate::provider::MediaScope,
+}
+
+/// Two activations are the same when they are the same provider generation.
+/// The media scope is read live from the provider on every use, so a scope that
+/// changed mid-session fails the next media operation rather than this check.
+impl PartialEq for ProviderActivation {
+    fn eq(&self, other: &Self) -> bool {
+        self.generation == other.generation
+    }
 }
 
 struct ModuleDeliveryHandler {
@@ -195,7 +269,9 @@ impl Channels {
         }
 
         let hooks = Arc::new(Hooks::default());
-        let media_account_scope = crate::provider::configured_media_account_scope(&name, &config);
+        let media_account_scope = crate::provider::MediaScope::fixed(
+            crate::provider::configured_media_account_scope(&name, &config),
+        );
         let owner_host: Arc<dyn ChannelHost> =
             hooks.host(self.host.clone(), name.clone(), media_account_scope.clone());
         let telegram = if tinychannels_bus::provider_id(&name) == "telegram" {
@@ -208,11 +284,20 @@ impl Channels {
         } else {
             None
         };
-        let native = crate::native::build_native_v2(&name, &config, &owner_host, http);
+        let whatsapp = WhatsAppNative::select(&name, &config, &owner_host, http);
+        let native = if whatsapp.is_none() {
+            crate::native::build_native_v2(&name, &config, &owner_host, http)
+        } else {
+            None
+        };
         let channel: Arc<dyn tinychannels::Channel> = if let Some(telegram) = &telegram {
             telegram.clone()
         } else if let Some(slack) = &slack {
             slack.clone()
+        } else if let Some(native) = &whatsapp {
+            // A linked session, not its mutable label, is the media authority.
+            native.bind_media_authority(&media_account_scope);
+            native.channel()
         } else if let Some(native) = &native {
             native.channel.clone()
         } else {
@@ -225,7 +310,7 @@ impl Channels {
                 })?
         };
 
-        if is_webhook_backed(&name, &config) && !outbound_only {
+        if lacks_module_ingress(&name) && !outbound_only {
             return Err(BusError::MethodFailed {
                 name: NO_INGRESS_ERROR.to_owned(),
                 message: format!(
@@ -251,15 +336,10 @@ impl Channels {
             )
         } else if let Some(slack) = slack {
             Running::start_slack(slack, hooks, self.host.clone(), supervision, outbound_only)
+        } else if let Some(native) = whatsapp {
+            native.start(hooks, self.host.clone(), supervision, outbound_only)
         } else if let Some(native) = native {
-            Running::start_native(
-                native.channel,
-                native.ports,
-                hooks,
-                self.host.clone(),
-                supervision,
-                outbound_only,
-            )
+            native.start(hooks, self.host.clone(), supervision, outbound_only)
         } else {
             match supervision {
                 Some(policy) => {
@@ -887,6 +967,13 @@ impl Channels {
                 name: UNKNOWN_CHANNEL_ERROR.to_owned(),
                 message: "requested channel is not running".into(),
             })?;
+        if matches!(
+            request.interaction,
+            tinychannels_bus::ChannelInteraction::DeliverWebhook { .. }
+                | tinychannels_bus::ChannelInteraction::VerifyWebhook { .. }
+        ) {
+            return entry.webhook(request.interaction).await;
+        }
         entry
             .interact(request.interaction)
             .await
@@ -1106,7 +1193,7 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let activation = self.media_activation(&request.instance).await?;
-        if activation.media_account_scope.is_none() {
+        if activation.media_account_scope.current().is_none() {
             return Err(BusError::failed(
                 "configured account has no stable media identity",
             ));
@@ -1189,7 +1276,7 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let activation = self.media_activation(&request.instance).await?;
-        if activation.media_account_scope.is_none() {
+        if activation.media_account_scope.current().is_none() {
             return Err(BusError::failed(
                 "configured account has no stable media identity",
             ));

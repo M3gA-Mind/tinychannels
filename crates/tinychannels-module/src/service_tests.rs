@@ -460,6 +460,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 codec: Some("audio/ogg".into()),
                 duration_ms: Some(700),
                 audio_base64: None,
+                waveform: None,
             },
         },
         tinychannels_bus::OutboundContentPart::Voice {
@@ -508,6 +509,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 codec: Some("audio/ogg".into()),
                 duration_ms: Some(1200),
                 audio_base64: None,
+                waveform: None,
             },
         },
         tinychannels_bus::OutboundPayload::Voice {
@@ -1308,6 +1310,7 @@ async fn large_voice_bytes_use_compact_scoped_reference_in_best_effort_and_requi
                 audio_base64,
                 codec: Some("ogg_opus".into()),
                 duration_ms: Some(1_200),
+                waveform: None,
             },
         },
         ..Default::default()
@@ -2885,7 +2888,9 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         "fixture".into(),
         super::ProviderActivation {
             generation: "activation-a".into(),
-            media_account_scope: Some("fixture:media-v1:test".into()),
+            media_account_scope: crate::provider::MediaScope::fixed(Some(
+                "fixture:media-v1:test".into(),
+            )),
         },
     );
     let bytes = base64::engine::general_purpose::STANDARD
@@ -2972,7 +2977,7 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         "fixture-no-identity".into(),
         super::ProviderActivation {
             generation: "activation-no-identity".into(),
-            media_account_scope: None,
+            media_account_scope: crate::provider::MediaScope::default(),
         },
     );
     let running_fixture = service.running.lock().await["fixture"].clone();
@@ -3060,7 +3065,9 @@ async fn service_media_upload_binds_activation_and_scoped_storage_lifecycle() {
         "fixture".into(),
         super::ProviderActivation {
             generation: "activation-b".into(),
-            media_account_scope: Some("fixture:media-v1:test".into()),
+            media_account_scope: crate::provider::MediaScope::fixed(Some(
+                "fixture:media-v1:test".into(),
+            )),
         },
     );
     assert!(
@@ -3534,4 +3541,141 @@ async fn shutdown_refuses_preparation_and_execution_before_host_work() {
             .await
             .is_err()
     );
+}
+
+#[test]
+fn only_providers_without_any_module_ingress_are_refused_a_normal_start() {
+    // WhatsApp Cloud is webhook-backed, but the module authenticates and
+    // ingests the raw POSTs the host forwards, so it is not refused.
+    assert!(super::lacks_module_ingress("linq"));
+    for name in ["whatsapp", "telegram", "discord"] {
+        assert!(!super::lacks_module_ingress(name), "{name}");
+    }
+}
+
+#[tokio::test]
+async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus() {
+    let service = inbound_preparation_service().await;
+    let config = ChannelsConfig {
+        whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
+            access_token: Some("access-token".into()),
+            phone_number_id: Some("123".into()),
+            verify_token: Some("verify-me".into()),
+            app_secret: Some("secret".into()),
+            session_path: None,
+            pair_phone: None,
+            pair_code: None,
+            allowed_numbers: vec!["*".into()],
+        }),
+        ..Default::default()
+    };
+    service
+        .start_channel("whatsapp".into(), config.clone())
+        .await
+        .expect("the module serves the Cloud webhook ingress");
+    // The subscription handshake is answered through the interaction method.
+    let challenge = service
+        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+            channel: "whatsapp".into(),
+            interaction: tinychannels_bus::ChannelInteraction::VerifyWebhook {
+                mode: "subscribe".into(),
+                verify_token: "verify-me".into(),
+                challenge: "challenge-1".into(),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        challenge,
+        tinychannels_bus::ChannelInteractionResult::WebhookChallenge(value) if value == "challenge-1"
+    ));
+    // An unsigned delivery is refused with the client-error name.
+    let refused = service
+        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+            channel: "whatsapp".into(),
+            interaction: tinychannels_bus::ChannelInteraction::DeliverWebhook {
+                signature: None,
+                body_base64: "e30=".into(),
+            },
+        })
+        .await
+        .map(|_| ())
+        .expect_err("an unsigned delivery must be refused");
+    assert!(matches!(
+        refused,
+        BusError::MethodFailed { name, .. } if name == crate::interaction::WEBHOOK_REJECTED_ERROR
+    ));
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn whatsapp_selection_follows_the_stanza_shape_and_web_binds_its_media_authority() {
+    use tinychannels::host::ChannelHost;
+    let host: Arc<dyn ChannelHost> = tinychannels::NoopHost::arc();
+    let select = |name: &str, config: &ChannelsConfig| {
+        super::WhatsAppNative::select(name, config, &host, &tinychannels::DefaultHttpClients)
+    };
+    let cloud_config = ChannelsConfig {
+        whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
+            access_token: Some("token".into()),
+            phone_number_id: Some("123".into()),
+            verify_token: Some("verify".into()),
+            app_secret: None,
+            session_path: None,
+            pair_phone: None,
+            pair_code: None,
+            allowed_numbers: Vec::new(),
+        }),
+        ..Default::default()
+    };
+    let web_config = whatsapp(false);
+    assert!(select("telegram", &cloud_config).is_none());
+    assert!(select("whatsapp", &ChannelsConfig::default()).is_none());
+    let unusable = ChannelsConfig {
+        whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
+            access_token: None,
+            phone_number_id: None,
+            verify_token: None,
+            app_secret: None,
+            session_path: None,
+            pair_phone: None,
+            pair_code: None,
+            allowed_numbers: Vec::new(),
+        }),
+        ..Default::default()
+    };
+    assert!(select("whatsapp", &unusable).is_none());
+
+    let cloud =
+        select("whatsapp", &cloud_config).expect("a Cloud stanza selects the Cloud adapter");
+    let web = select("whatsapp", &web_config).expect("a session stanza selects the Web adapter");
+    assert!(matches!(cloud, super::WhatsAppNative::Cloud(_)));
+    assert_eq!(cloud.channel().name(), "whatsapp");
+    assert_eq!(web.channel().name(), "whatsapp");
+
+    // Only Web learns its media authority from the session; before the device
+    // is linked that authority is unknown, and Cloud's is its configuration.
+    let scope = crate::provider::MediaScope::fixed(None);
+    cloud.bind_media_authority(&scope);
+    assert_eq!(scope.current(), None);
+    web.bind_media_authority(&scope);
+    assert_eq!(
+        scope.current(),
+        None,
+        "an unlinked device has no account yet"
+    );
+
+    // An outbound-only start is network-free and still yields the native adapter.
+    let service = inbound_preparation_service().await;
+    let running = web.start(Arc::new(Hooks::default()), service.host.clone(), None, true);
+    assert_eq!(
+        running
+            .adapter_handle()
+            .descriptor()
+            .metadata
+            .get("adapterMode")
+            .map(String::as_str),
+        Some("native-v2")
+    );
+    running.stop().await.unwrap();
 }

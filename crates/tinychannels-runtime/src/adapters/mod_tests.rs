@@ -318,6 +318,7 @@ async fn local_adapter_capability_gate_covers_canonical_payload_kinds() {
                 audio_base64: None,
                 codec: None,
                 duration_ms: None,
+                waveform: None,
             },
         },
         tinychannels_bus::OutboundContentPart::Voice {
@@ -382,6 +383,7 @@ async fn local_adapter_capability_gate_covers_canonical_payload_kinds() {
                 audio_base64: None,
                 codec: None,
                 duration_ms: None,
+                waveform: None,
             },
         },
         tinychannels_bus::OutboundContentPart::Voice {
@@ -415,6 +417,7 @@ async fn local_adapter_capability_gate_covers_canonical_payload_kinds() {
                 audio_base64: None,
                 codec: None,
                 duration_ms: None,
+                waveform: None,
             },
         },
         OutboundPayload::Files { file_urls: vec![] },
@@ -471,6 +474,7 @@ async fn local_adapter_rejects_unadvertised_payloads_without_calling_sink() {
                 audio_base64: None,
                 codec: None,
                 duration_ms: None,
+                waveform: None,
             },
         },
         OutboundPayload::Voice {

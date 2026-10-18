@@ -11,3 +11,6 @@ cargo test --locked -p tinychannels-module configured_signal_native_adapter_rout
 cargo test --locked -p tinychannels --lib signal_adapter_passes_the_full_conformance_matrix_against_the_mock_daemon -- --nocapture
 cargo test --locked -p tinychannels-conformance -- --nocapture
 cargo test --locked -p tinychannels-bus unsupported_send_flag_is_additive_to_legacy_error_wire_shape -- --nocapture
+cargo test --locked -p tinychannels --lib the_cloud_adapter_passes_the_whole_conformance_matrix_against_its_wire -- --nocapture
+cargo test --locked -p tinychannels --features whatsapp-web --lib the_web_adapter_passes_the_whole_conformance_matrix_against_its_session -- --nocapture
+cargo test --locked -p tinychannels-module whatsapp_native -- --nocapture

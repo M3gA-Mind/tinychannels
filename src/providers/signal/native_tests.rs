@@ -196,6 +196,7 @@ async fn voice_clips_are_audio_attachments_captioned_with_the_transcript() {
                     audio_base64: None,
                     codec: None,
                     duration_ms: None,
+                    waveform: None,
                 },
             },
         ]),

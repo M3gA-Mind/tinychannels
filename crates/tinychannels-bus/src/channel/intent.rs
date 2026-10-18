@@ -154,6 +154,10 @@ pub enum OutboundVoice {
         audio_base64: Option<String>,
         codec: Option<String>,
         duration_ms: Option<u64>,
+        /// Normalised 0.0-1.0 loudness preview for providers that draw one
+        /// (WhatsApp push-to-talk). Absent when the codec path produced none.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        waveform: Option<Vec<f32>>,
     },
     Synthesize {
         text: String,

@@ -583,6 +583,7 @@ fn voice(opaque: Option<&str>) -> OutboundContentPart {
             audio_base64: None,
             codec: Some("m4a_aac".into()),
             duration_ms: Some(1000),
+            waveform: None,
         },
     }
 }

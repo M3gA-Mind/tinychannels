@@ -68,6 +68,38 @@ pub enum ChannelInteraction {
     DeleteMessage {
         receipt: crate::channel::MessageReceipt,
     },
+    /// Tell the provider that the account has read one inbound message.
+    MarkRead {
+        channel: crate::channel::ChannelRef,
+        conversation: crate::channel::ConversationRef,
+        provider_message_id: String,
+    },
+    /// One raw provider webhook POST. The module authenticates the exact
+    /// bytes against the provider signature before it parses anything; the
+    /// host only forwards what its HTTP route received.
+    DeliverWebhook {
+        /// The provider's signature header value, verbatim.
+        signature: Option<String>,
+        /// The unmodified request body, base64 encoded.
+        body_base64: String,
+    },
+    /// The provider's webhook subscription handshake (`hub.*` query values).
+    VerifyWebhook {
+        mode: String,
+        verify_token: String,
+        challenge: String,
+    },
+}
+
+/// What the module did with one authenticated webhook delivery.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct WebhookDeliveryOutcome {
+    /// Inbound messages published to the host.
+    pub messages: u32,
+    /// Lifecycle, receipt and reaction events published to the host.
+    pub events: u32,
+    /// Items dropped because the provider redelivered them.
+    pub duplicates: u32,
 }
 
 /// Frozen v21 interaction information returned by the existing `Describe`
@@ -100,6 +132,10 @@ pub enum ChannelInteractionResult {
     TypingRefresh {
         handle: String,
     },
+    /// An authenticated webhook delivery was accepted.
+    WebhookAccepted(WebhookDeliveryOutcome),
+    /// The challenge to echo to the provider's subscription handshake.
+    WebhookChallenge(String),
 }
 
 #[cfg(test)]
