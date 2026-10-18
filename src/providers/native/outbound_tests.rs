@@ -356,3 +356,17 @@ fn typed_failures_survive_anyhow() {
     let failure = error.downcast_ref::<NativeFailure>().unwrap();
     assert!(failure.0.unsupported);
 }
+
+#[tokio::test]
+async fn a_bundling_provider_receives_every_step_in_one_delivery() {
+    let provider = FakeProvider {
+        bundle: true,
+        ..Default::default()
+    };
+    let outcome = send_typed(&provider, &message(vec![text("one"), text("two")]))
+        .await
+        .unwrap();
+    assert_eq!(outcome.receipt.platform_message_ids, ["bundle-1"]);
+    assert_eq!(provider.delivered.lock().unwrap().as_slice(), ["bundle:2"]);
+    assert!(outcome.error.is_none());
+}

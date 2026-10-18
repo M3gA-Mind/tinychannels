@@ -72,6 +72,10 @@ pub(crate) fn build_native_v2(
             .map(|channel| NativeLaunch::new("Signal", channel)),
         "imessage" => tinychannels::factory::build_imessage_channel(config, host)
             .map(|channel| NativeLaunch::new("iMessage", channel)),
+        "linq" => tinychannels::factory::build_linq_channel(config, host, http)
+            .map(|channel| NativeLaunch::new("Linq", channel)),
+        "email" => tinychannels::factory::build_email_channel(config, host)
+            .map(|channel| NativeLaunch::new("Email", channel)),
         _ => None,
     }
 }

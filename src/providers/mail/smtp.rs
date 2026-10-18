@@ -93,6 +93,24 @@ fn prepare(
             .parse()
             .map_err(|e| MailError::InvalidAddress(format!("to {:?}: {e}", email.to)))?)
         .subject(&email.subject);
+    let headers = &email.headers;
+    let mut builder = builder;
+    if let Some(id) = headers.message_id.as_deref().filter(|id| !id.is_empty()) {
+        builder = builder.message_id(Some(format!("<{id}>")));
+    }
+    if let Some(id) = headers.in_reply_to.as_deref().filter(|id| !id.is_empty()) {
+        builder = builder.in_reply_to(format!("<{id}>"));
+    }
+    if !headers.references.is_empty() {
+        builder = builder.references(
+            headers
+                .references
+                .iter()
+                .map(|id| format!("<{id}>"))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+    }
     let message = if email.attachments.is_empty() {
         builder
             .body(email.body.clone())

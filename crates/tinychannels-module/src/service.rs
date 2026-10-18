@@ -76,7 +76,6 @@ const UNKNOWN_CHANNEL_ERROR: &str = "ai.tinyhumans.tinychannels.Error.UnknownCha
 const ALREADY_RUNNING_ERROR: &str = "ai.tinyhumans.tinychannels.Error.AlreadyRunning";
 const NOT_CONFIGURED_ERROR: &str = "ai.tinyhumans.tinychannels.Error.NotConfigured";
 const SEND_FAILED_ERROR: &str = "ai.tinyhumans.tinychannels.Error.SendFailed";
-const NO_INGRESS_ERROR: &str = "ai.tinyhumans.tinychannels.Error.NoWebhookIngress";
 
 /// Whether `name`, as configured, receives inbound traffic through a webhook
 /// this module cannot serve. See the refusal in `start_channel` for why.
@@ -87,13 +86,6 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
                 .whatsapp
                 .as_ref()
                 .is_some_and(|wa| wa.backend_type() == "cloud"))
-}
-
-/// Whether `name` receives inbound traffic only through a webhook this module
-/// has no ingress for. WhatsApp Cloud is not one: the host forwards each raw
-/// POST and the module authenticates and ingests it.
-fn lacks_module_ingress(name: &str) -> bool {
-    name == "linq"
 }
 
 /// The concrete WhatsApp adapter a configuration selects. The two backends
@@ -309,17 +301,6 @@ impl Channels {
                     message: format!("channel {name} is not present in the supplied config"),
                 })?
         };
-
-        if lacks_module_ingress(&name) && !outbound_only {
-            return Err(BusError::MethodFailed {
-                name: NO_INGRESS_ERROR.to_owned(),
-                message: format!(
-                    "channel {name} receives inbound traffic through an external webhook, \
-                     and this module has no ingress for it; run this provider in-process \
-                     or serve its webhook host-side"
-                ),
-            });
-        }
 
         if outbound_only && !is_webhook_backed(&name, &config) {
             return Err(BusError::failed(

@@ -511,6 +511,69 @@ pub fn build_imessage_channel(
     Some(Arc::new(imessage))
 }
 
+/// Build the Linq provider with the host ports it can use: scoped media and
+/// voice storage, speech-to-text, synthesis and the ordered event sink.
+pub fn build_linq_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<LinqChannel>> {
+    let lq = config.linq.as_ref()?;
+    let mut linq = LinqChannel::with_http_client(
+        lq.api_token.clone(),
+        lq.from_phone.clone(),
+        lq.allowed_senders.clone(),
+        http.client_for("channel.linq"),
+    )
+    .with_webhook_secret(lq.webhook_secret.clone());
+    if let Some(store) = host.voice_media_store() {
+        linq = linq.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        linq = linq.with_media_repository(repository);
+    }
+    if let Some(transcriber) = host.transcriber() {
+        linq = linq.with_transcriber(transcriber);
+    }
+    linq = linq.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        linq = linq.with_events(events);
+    }
+    Some(Arc::new(linq))
+}
+
+/// Build the email provider with the host ports it can use: scoped media and
+/// voice storage, speech-to-text, synthesis and the ordered event sink.
+#[cfg(feature = "email")]
+pub fn build_email_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+) -> Option<Arc<crate::providers::EmailChannel>> {
+    let mut email = crate::providers::EmailChannel::new(config.email.as_ref()?.clone());
+    if let Some(store) = host.voice_media_store() {
+        email = email.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        email = email.with_media_repository(repository);
+    }
+    if let Some(transcriber) = host.transcriber() {
+        email = email.with_transcriber(transcriber);
+    }
+    email = email.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        email = email.with_events(events);
+    }
+    Some(Arc::new(email))
+}
+
 /// Build every provider that `config` enables.
 ///
 /// Order is stable and matches the declaration order below, so a caller that
@@ -584,20 +647,13 @@ pub fn build_channels(
         }
     }
 
-    if let Some(lq) = config.linq.as_ref() {
-        channels.push(Arc::new(LinqChannel::with_http_client(
-            lq.api_token.clone(),
-            lq.from_phone.clone(),
-            lq.allowed_senders.clone(),
-            http.client_for("channel.linq"),
-        )));
+    if let Some(linq) = build_linq_channel(config, host, http) {
+        channels.push(linq);
     }
 
     #[cfg(feature = "email")]
-    if let Some(email_cfg) = config.email.as_ref() {
-        channels.push(Arc::new(crate::providers::EmailChannel::new(
-            email_cfg.clone(),
-        )));
+    if let Some(email) = build_email_channel(config, host) {
+        channels.push(email);
     }
 
     if let Some(irc_cfg) = config.irc.as_ref() {
