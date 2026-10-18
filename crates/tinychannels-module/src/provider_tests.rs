@@ -4774,7 +4774,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     let request_with_payload = |method: &str, id: Option<&str>, payload: &str| {
         stream_requests.iter().any(|request| {
             request.method == method
-                && id.map_or(true, |id| request.url.path().ends_with(&format!("/{id}")))
+                && id.is_none_or(|id| request.url.path().ends_with(&format!("/{id}")))
                 && String::from_utf8_lossy(&request.body).contains(payload)
         })
     };
