@@ -3264,7 +3264,7 @@ async fn configured_telegram_native_adapter_owns_polling_typing_drafts_and_scope
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_telegram(channel, hooks, host, None, true);
     let handle = running.adapter_handle();
-    let native = handle.telegram_native.as_ref().unwrap().clone();
+    let native = handle.native.as_ref().unwrap().clone();
 
     assert_eq!(native.proactive_target(), None);
     assert_eq!(

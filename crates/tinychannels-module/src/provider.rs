@@ -1779,6 +1779,12 @@ impl Running {
             finished,
         })
     }
+    fn native_provider(&self) -> &'static str {
+        self.native_ports
+            .as_ref()
+            .map_or("Provider", |ports| ports.provider)
+    }
+
     pub(crate) fn is_finished(&self) -> bool {
         self.finished.load(Ordering::SeqCst)
     }
