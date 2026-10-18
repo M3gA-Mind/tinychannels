@@ -9,7 +9,7 @@ use async_trait::async_trait;
 use base64::Engine as _;
 use std::sync::Arc;
 use tinychannels_bus::channel::{ChannelSendError, MessageReceiptPartKind, SendErrorKind};
-use tinychannels_bus::{ChannelCapabilities, ContentCapability, ConversationKind, MediaKind};
+use tinychannels_bus::{ChannelCapabilities, ContentCapability, ConversationKind};
 
 /// QQ's direct binary upload API is limited to 5 MiB. Larger files need the
 /// multi-request chunk protocol, which this adapter does not yet implement.
@@ -47,8 +47,9 @@ impl NativeProvider for QQChannel {
     }
 
     fn declared_capabilities(&self) -> ChannelCapabilities {
-        use crate::providers::long_tail::{LongTail, TextSpec, text_capabilities};
-        let mut capabilities = text_capabilities(TextSpec::default());
+        let mut capabilities = crate::providers::long_tail::text_capabilities(
+            crate::providers::long_tail::TextSpec::default(),
+        );
         let Some(_) = self.native.media_repository else {
             return capabilities;
         };
@@ -82,7 +83,6 @@ impl NativeProvider for QQChannel {
                 &["ogg_opus", "mp3", "wav_pcm16", "silk"],
             );
         }
-        let _ = LongTail::declared(self);
         capabilities
     }
 
