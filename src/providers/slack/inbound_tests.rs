@@ -196,7 +196,7 @@ async fn files_that_cannot_be_trusted_or_stored_are_skipped_without_failing() {
     )
     .await;
     let empty = mount_file(&server, "/f/empty.png", "image/png", b"").await;
-    let big = mount_file(&server, "/f/big.png", "image/png", &vec![0u8; 64]).await;
+    let big = mount_file(&server, "/f/big.png", "image/png", &[0u8; 64]).await;
     let uri = server.uri();
     Mock::given(method("GET"))
         .and(path("/f/missing.png"))

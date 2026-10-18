@@ -21,7 +21,7 @@ pub(crate) fn slack_channel_ref() -> ChannelRef {
 /// Slack timestamps (`"1700000000.000200"`) as Unix milliseconds.
 pub(crate) fn ts_to_ms(ts: &str) -> Option<u64> {
     let seconds = ts.parse::<f64>().ok()?;
-    (seconds.is_finite() && seconds >= 0.0).then(|| (seconds * 1000.0) as u64)
+    (seconds.is_finite() && seconds >= 0.0).then_some((seconds * 1000.0) as u64)
 }
 
 fn conversation_kind(channel_id: &str, channel_type: Option<&str>) -> ConversationKind {
