@@ -74,9 +74,18 @@ fn event_context_access_preserves_every_historical_wire_shape() {
     ] {
         let historical: serde_json::Value = serde_json::from_str(fixture).unwrap();
         let mut event: WebChannelEvent = serde_json::from_value(historical.clone()).unwrap();
-        assert_eq!(event.context().client_id, historical["client_id"]);
-        assert_eq!(event.context().thread_id, historical["thread_id"]);
-        assert_eq!(event.context().request_id, historical["request_id"]);
+        assert_eq!(
+            event.context().client_id,
+            historical["client_id"].as_str().unwrap()
+        );
+        assert_eq!(
+            event.context().thread_id,
+            historical["thread_id"].as_str().unwrap()
+        );
+        assert_eq!(
+            event.context().request_id,
+            historical["request_id"].as_str().unwrap()
+        );
         event.context_mut().ts = Some(42);
         let mut with_timestamp = serde_json::to_value(event).unwrap();
         assert_eq!(with_timestamp["ts"], 42);
