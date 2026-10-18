@@ -8,12 +8,12 @@
 //! the account does not declare must answer an explicit `unsupported` result
 //! and never touch the network.
 
+use crate::LongTailNative;
 use crate::channel::{
     ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
     ChannelTyping,
 };
 use crate::factory::{DefaultHttpClients, build_long_tail_channel};
-use crate::LongTailNative;
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
@@ -199,7 +199,8 @@ impl LongTailFixture {
         payload: OutboundPayload,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         let before = self.request_count().await;
-        let outcome = self.ChannelAdapter::send(channel, self.intent(feature, payload)).await?;
+        let outcome =
+            ChannelAdapter::send(self.channel.as_ref(), self.intent(feature, payload)).await?;
         self.record(feature, before).await;
         Ok(Some(outcome))
     }
@@ -271,151 +272,185 @@ impl AdapterFixture for LongTailFixture {
                 Ok(None)
             }
             Feature::Image => {
-                self.refused(
-                    ChannelAdapter::send(channel, self.intent(
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
                         feature,
                         rich(ContentPart::Image {
                             media: media(MediaKind::Image),
                             caption: None,
                             alt_text: None,
                         }),
-                    )),
-                )
+                    ),
+                ))
                 .await
             }
             Feature::Video => {
-                self.refused(ChannelAdapter::send(channel, self.intent(
-                    feature,
-                    rich(ContentPart::Video {
-                        media: media(MediaKind::Video),
-                        caption: None,
-                        duration_ms: None,
-                        thumbnail: None,
-                    }),
-                )))
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        rich(ContentPart::Video {
+                            media: media(MediaKind::Video),
+                            caption: None,
+                            duration_ms: None,
+                            thumbnail: None,
+                        }),
+                    ),
+                ))
                 .await
             }
             Feature::Audio => {
-                self.refused(ChannelAdapter::send(channel, self.intent(
-                    feature,
-                    rich(ContentPart::Audio {
-                        media: media(MediaKind::Audio),
-                        codec: None,
-                        duration_ms: None,
-                        title: None,
-                        transcript: None,
-                    }),
-                )))
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        rich(ContentPart::Audio {
+                            media: media(MediaKind::Audio),
+                            codec: None,
+                            duration_ms: None,
+                            title: None,
+                            transcript: None,
+                        }),
+                    ),
+                ))
                 .await
             }
             Feature::File => {
-                self.refused(ChannelAdapter::send(channel, self.intent(
-                    feature,
-                    rich(ContentPart::File {
-                        media: media(MediaKind::Document),
-                        file_name: None,
-                        caption: None,
-                    }),
-                )))
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        rich(ContentPart::File {
+                            media: media(MediaKind::Document),
+                            file_name: None,
+                            caption: None,
+                        }),
+                    ),
+                ))
                 .await
             }
             Feature::Sticker => {
-                self.refused(ChannelAdapter::send(channel, self.intent(
-                    feature,
-                    rich(ContentPart::Sticker {
-                        media: Default::default(),
-                        pack_id: None,
-                        sticker_id: None,
-                        emoji: None,
-                        alt_text: None,
-                    }),
-                )))
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        rich(ContentPart::Sticker {
+                            media: Default::default(),
+                            pack_id: None,
+                            sticker_id: None,
+                            emoji: None,
+                            alt_text: None,
+                        }),
+                    ),
+                ))
                 .await
             }
             Feature::Location => {
-                self.refused(ChannelAdapter::send(channel, self.intent(
-                    feature,
-                    rich(ContentPart::Location {
-                        latitude: 1.0,
-                        longitude: 2.0,
-                        label: None,
-                        address: None,
-                        accuracy_meters: None,
-                        live_until_unix_ms: None,
-                    }),
-                )))
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        rich(ContentPart::Location {
+                            latitude: 1.0,
+                            longitude: 2.0,
+                            label: None,
+                            address: None,
+                            accuracy_meters: None,
+                            live_until_unix_ms: None,
+                        }),
+                    ),
+                ))
                 .await
             }
             Feature::Contact => {
-                self.refused(ChannelAdapter::send(channel, self.intent(
-                    feature,
-                    rich(ContentPart::Contact {
-                        display_name: "k".into(),
-                        phone_numbers: vec![],
-                        emails: vec![],
-                        organization: None,
-                    }),
-                )))
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        rich(ContentPart::Contact {
+                            display_name: "k".into(),
+                            phone_numbers: vec![],
+                            emails: vec![],
+                            organization: None,
+                        }),
+                    ),
+                ))
                 .await
             }
             Feature::Poll => {
-                self.refused(ChannelAdapter::send(channel, self.intent(
-                    feature,
-                    rich(ContentPart::Poll {
-                        question: "q".into(),
-                        options: vec!["a".into()],
-                        multiple_choice: false,
-                        closes_at_unix_ms: None,
-                        provider_poll_id: None,
-                    }),
-                )))
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        rich(ContentPart::Poll {
+                            question: "q".into(),
+                            options: vec!["a".into()],
+                            multiple_choice: false,
+                            closes_at_unix_ms: None,
+                            provider_poll_id: None,
+                        }),
+                    ),
+                ))
                 .await
             }
             Feature::Buttons => {
-                self.refused(ChannelAdapter::send(channel, self.intent(
-                    feature,
-                    rich(ContentPart::Buttons {
-                        rows: vec![vec![tinychannels_bus::ButtonAction {
-                            id: "opaque".into(),
-                            label: "Go".into(),
-                            style: None,
-                            disabled: false,
-                        }]],
-                    }),
-                )))
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        rich(ContentPart::Buttons {
+                            rows: vec![vec![tinychannels_bus::ButtonAction {
+                                id: "opaque".into(),
+                                label: "Go".into(),
+                                style: None,
+                                disabled: false,
+                            }]],
+                        }),
+                    ),
+                ))
                 .await
             }
             Feature::Presentation => {
-                self.refused(ChannelAdapter::send(channel, self.intent(
-                    feature,
-                    rich(ContentPart::Presentation {
-                        blocks: json!({"kind": "approval", "id": "kit"}),
-                    }),
-                )))
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        rich(ContentPart::Presentation {
+                            blocks: json!({"kind": "approval", "id": "kit"}),
+                        }),
+                    ),
+                ))
                 .await
             }
             Feature::NativeData => {
-                self.refused(ChannelAdapter::send(channel, self.intent(
-                    feature,
-                    OutboundPayload::NativeChannelData {
-                        data: json!({"action": "create_thread"}),
-                    },
-                )))
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        OutboundPayload::NativeChannelData {
+                            data: json!({"action": "create_thread"}),
+                        },
+                    ),
+                ))
                 .await
             }
             Feature::VoiceOut | Feature::VoiceSynthesis => {
-                self.refused(ChannelAdapter::send(channel, self.intent(
-                    feature,
-                    OutboundPayload::Voice {
-                        voice: tinychannels_bus::OutboundVoice::Media {
-                            media: media(MediaKind::Audio),
-                            audio_base64: None,
-                            codec: Some("ogg_opus".into()),
-                            duration_ms: Some(200),
-                            waveform: None,
+                self.refused(ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        OutboundPayload::Voice {
+                            voice: tinychannels_bus::OutboundVoice::Media {
+                                media: media(MediaKind::Audio),
+                                audio_base64: None,
+                                codec: Some("ogg_opus".into()),
+                                duration_ms: Some(200),
+                                waveform: None,
+                            },
                         },
-                    },
-                )))
+                    ),
+                ))
                 .await
             }
             Feature::Reactions => {
