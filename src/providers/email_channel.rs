@@ -58,10 +58,21 @@ use tracing::{debug, error, warn};
 #[cfg(feature = "email")]
 use uuid::Uuid;
 
+#[cfg(feature = "email")]
+mod capabilities;
+#[cfg(feature = "email")]
+mod inbound;
+#[cfg(feature = "email")]
+mod native;
+
 pub use crate::config::EmailConfig;
 use crate::providers::mail::{ImapCredentials, MailSecret, SmtpCredentials, SmtpSecurity};
 #[cfg(feature = "email")]
 use crate::providers::mail::{LettreMailSender, MailCredentials, MailSender, OutboundEmail};
+#[cfg(feature = "email")]
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
+#[cfg(feature = "email")]
+use crate::providers::native::HostPorts as NativeState;
 #[cfg(feature = "email")]
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 
@@ -93,6 +104,12 @@ pub struct EmailChannel {
     reconnect_backoff: Duration,
     #[cfg(feature = "email")]
     max_reconnect_backoff: Duration,
+    /// Host ports for the v2 adapter surface.
+    #[cfg(feature = "email")]
+    native: NativeState,
+    /// Subjects of inbound mail by message id, so a reply keeps its thread subject.
+    #[cfg(feature = "email")]
+    subjects: native::Subjects,
 }
 
 impl EmailChannel {
@@ -105,7 +122,47 @@ impl EmailChannel {
             reconnect_backoff: Duration::from_secs(1),
             #[cfg(feature = "email")]
             max_reconnect_backoff: Duration::from_secs(60),
+            #[cfg(feature = "email")]
+            native: NativeState::default(),
+            #[cfg(feature = "email")]
+            subjects: native::Subjects::default(),
         }
+    }
+
+    /// Scoped media storage; enables typed attachments in both directions.
+    #[cfg(feature = "email")]
+    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    /// Durable voice storage; enables voice attachments in both directions.
+    #[cfg(feature = "email")]
+    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
+    }
+
+    /// Host speech-to-text for inbound voice attachments.
+    #[cfg(feature = "email")]
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.native.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Enable shared final-turn synthesis when the host provides TTS, a codec
+    /// and durable voice storage.
+    #[cfg(feature = "email")]
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.native.voice_synthesis = enabled;
+        self
+    }
+
+    /// Ordered ingress for typed inbound messages.
+    #[cfg(feature = "email")]
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.native.events = Some(events);
+        self
     }
 
     /// Check if a sender email is in the allowlist
@@ -293,6 +350,7 @@ impl EmailChannel {
                     sender,
                     content,
                     timestamp: ts,
+                    raw: body.to_vec(),
                 });
             }
         }
@@ -462,20 +520,7 @@ impl EmailChannel {
                 continue;
             }
 
-            let msg = ChannelMessage {
-                id: email.msg_id,
-                reply_target: email.sender.clone(),
-                sender: email.sender,
-                content: email.content,
-                channel: "email".to_string(),
-                timestamp: email.timestamp,
-                topic_id: None,
-                reply_to_id: None,
-                thread_ts: None,
-                sender_name: None,
-            };
-
-            if tx.send(msg).await.is_err() {
+            if !self.dispatch_email(email, tx).await {
                 // Channel closed, exit cleanly
                 return Ok(());
             }
@@ -587,6 +632,8 @@ struct ParsedEmail {
     sender: String,
     content: String,
     timestamp: u64,
+    /// The RFC 822 bytes, for the typed inbound path.
+    raw: Vec<u8>,
 }
 
 /// Result from waiting on IDLE
@@ -614,6 +661,19 @@ impl IdleWaitResult {
 impl Channel for EmailChannel {
     fn name(&self) -> &str {
         "email"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.declared()
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<crate::channel::ChannelSendOutcome> {
+        crate::providers::native::outbound::send_typed(self, message)
+            .await
+            .map_err(crate::providers::native::to_anyhow)
     }
 
     async fn send(&self, message: &SendMessage) -> Result<()> {
@@ -687,6 +747,17 @@ impl EmailChannel {
         }
     }
 }
+
+#[cfg(feature = "email")]
+crate::providers::native::native_v2_adapter!(EmailChannel);
+
+#[cfg(all(test, feature = "email"))]
+#[path = "email_channel/fixtures_tests.rs"]
+mod fixtures;
+
+#[cfg(all(test, feature = "email"))]
+#[path = "email_channel/conformance_tests.rs"]
+mod conformance;
 
 #[cfg(all(test, feature = "email"))]
 #[path = "email_channel_tests.rs"]
