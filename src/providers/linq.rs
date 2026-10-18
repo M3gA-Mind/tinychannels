@@ -1,5 +1,20 @@
+//! Linq (iMessage, RCS and SMS through the Linq Partner V3 API) on the v2
+//! adapter contract.
+//!
+//! Outbound text, attachments and voice clips go through the REST API.
+//! Inbound traffic is a signed webhook: the host forwards each raw POST to
+//! [`Channel::deliver_webhook`], which authenticates the exact bytes, downloads
+//! media, stores voice notes and publishes on the ordered ingress path.
+
+mod capabilities;
+mod inbound;
+mod native;
+
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
+use crate::providers::native::HostPorts as NativeState;
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// Linq channel — uses the Linq Partner V3 API for iMessage, RCS, and SMS.
@@ -12,6 +27,10 @@ pub struct LinqChannel {
     from_phone: String,
     allowed_senders: Vec<String>,
     http_client: reqwest::Client,
+    api_base: String,
+    /// Signs webhooks (`X-Webhook-Signature`); deliveries are refused without it.
+    webhook_secret: Option<String>,
+    native: NativeState,
 }
 
 const LINQ_API_BASE: &str = "https://api.linqapp.com/api/partner/v3";
@@ -23,6 +42,9 @@ impl LinqChannel {
             from_phone,
             allowed_senders,
             http_client: reqwest::Client::new(),
+            api_base: LINQ_API_BASE.to_owned(),
+            webhook_secret: None,
+            native: NativeState::default(),
         }
     }
 
@@ -37,7 +59,53 @@ impl LinqChannel {
             from_phone,
             allowed_senders,
             http_client,
+            api_base: LINQ_API_BASE.to_owned(),
+            webhook_secret: None,
+            native: NativeState::default(),
         }
+    }
+
+    /// The secret Linq signs webhook deliveries with.
+    pub fn with_webhook_secret(mut self, secret: Option<String>) -> Self {
+        self.webhook_secret = secret.filter(|secret| !secret.trim().is_empty());
+        self
+    }
+
+    /// Point the client at another API origin (tests and private gateways).
+    pub fn with_api_base(mut self, base: impl Into<String>) -> Self {
+        self.api_base = base.into().trim_end_matches('/').to_owned();
+        self
+    }
+
+    /// Scoped media storage; enables typed attachments in both directions.
+    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    /// Durable voice storage; enables voice notes in both directions.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
+    }
+
+    /// Host speech-to-text for inbound voice notes.
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.native.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Enable shared final-turn synthesis when the host provides TTS, a codec
+    /// and durable voice storage.
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.native.voice_synthesis = enabled;
+        self
+    }
+
+    /// Ordered ingress for typed inbound messages.
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.native.events = Some(events);
+        self
     }
 
     fn http_client(&self) -> reqwest::Client {
@@ -244,6 +312,27 @@ impl Channel for LinqChannel {
         "linq"
     }
 
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.declared()
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
+        crate::providers::native::outbound::send_typed(self, message)
+            .await
+            .map_err(crate::providers::native::to_anyhow)
+    }
+
+    async fn deliver_webhook(
+        &self,
+        signature: Option<&str>,
+        body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        self.ingest_webhook(signature, body).await
+    }
+
     fn supports_remote_control(&self) -> bool {
         true
     }
@@ -266,7 +355,7 @@ impl Channel for LinqChannel {
         });
 
         // Try sending to existing chat (recipient is chat_id)
-        let url = format!("{LINQ_API_BASE}/chats/{recipient}/messages");
+        let url = format!("{}/chats/{recipient}/messages", self.api_base);
 
         let resp = self
             .http_client()
@@ -296,7 +385,7 @@ impl Channel for LinqChannel {
 
             let create_resp = self
                 .http_client()
-                .post(format!("{LINQ_API_BASE}/chats"))
+                .post(format!("{}/chats", self.api_base))
                 .bearer_auth(&self.api_token)
                 .header("Content-Type", "application/json")
                 .json(&new_chat_body)
@@ -334,7 +423,7 @@ impl Channel for LinqChannel {
 
     async fn health_check(&self) -> bool {
         // Check if we can reach the Linq API
-        let url = format!("{LINQ_API_BASE}/phonenumbers");
+        let url = format!("{}/phonenumbers", self.api_base);
 
         self.http_client()
             .get(&url)
@@ -346,7 +435,7 @@ impl Channel for LinqChannel {
     }
 
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        let url = format!("{LINQ_API_BASE}/chats/{recipient}/typing");
+        let url = format!("{}/chats/{recipient}/typing", self.api_base);
 
         let resp = self
             .http_client()
@@ -363,7 +452,7 @@ impl Channel for LinqChannel {
     }
 
     async fn stop_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        let url = format!("{LINQ_API_BASE}/chats/{recipient}/typing");
+        let url = format!("{}/chats/{recipient}/typing", self.api_base);
 
         let resp = self
             .http_client()
@@ -379,6 +468,16 @@ impl Channel for LinqChannel {
         Ok(())
     }
 }
+
+super::native::native_v2_adapter!(LinqChannel);
+
+#[cfg(test)]
+#[path = "linq/fixtures_tests.rs"]
+mod fixtures;
+
+#[cfg(test)]
+#[path = "linq/conformance_tests.rs"]
+mod conformance;
 
 /// Verify a Linq webhook signature.
 ///
