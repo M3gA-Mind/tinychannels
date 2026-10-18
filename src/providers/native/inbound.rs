@@ -9,7 +9,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 use tinychannels_bus::{
-    ChannelInboundEnvelope, ChannelIngress, ChannelRef, ContentPart, ConversationRef,
+    ChannelEvent, ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelRef, ContentPart, ConversationRef,
     HostVoiceMediaDirection, HostVoiceScope, MediaKind, MediaReference, VoiceNote,
     VoiceTranscript,
 };
@@ -257,6 +257,42 @@ pub(crate) async fn publish(
             tracing::debug!(provider, %error, "[native] failed to deliver inbound through ingress");
             false
         })
+}
+
+/// A v2 lifecycle event for `provider` (reactions, receipts, edits).
+pub(crate) fn channel_event(
+    provider: &str,
+    event_id: String,
+    source_timestamp: Option<u64>,
+    conversation: Option<ConversationRef>,
+    event: ChannelEventKind,
+) -> ChannelEvent {
+    ChannelEvent {
+        version: 2,
+        source_event_id: None,
+        source_timestamp,
+        event_id,
+        channel: ChannelRef {
+            id: provider.into(),
+            account_id: None,
+        },
+        conversation,
+        event,
+    }
+}
+
+/// Publish a lifecycle event; a missing or failing sink only logs.
+pub(crate) async fn publish_event(
+    provider: &str,
+    events: Option<&Arc<dyn EventSink>>,
+    event: ChannelEvent,
+) {
+    let Some(events) = events else {
+        return;
+    };
+    if let Err(error) = events.publish_ingress(ChannelIngress::Event(event)).await {
+        tracing::debug!(provider, %error, "[native] failed to deliver channel event");
+    }
 }
 
 #[cfg(test)]
