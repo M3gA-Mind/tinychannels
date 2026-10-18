@@ -4283,3 +4283,29 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
     }
     running.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_built_native_launch_starts_on_the_ordered_queue() {
+    use tinychannels::factory::DefaultHttpClients;
+    use tinychannels_bus::config::SignalConfig;
+    let config = tinychannels_bus::ChannelsConfig {
+        signal: Some(SignalConfig {
+            http_url: "http://127.0.0.1:1".into(),
+            account: "+15550000".into(),
+            group_id: None,
+            allowed_from: vec!["*".into()],
+            ignore_attachments: false,
+            ignore_stories: false,
+        }),
+        ..Default::default()
+    };
+    let noop: Arc<dyn tinychannels::host::ChannelHost> = tinychannels::host::NoopHost::arc();
+    let launch = crate::native::build_native_v2("signal", &config, &noop, &DefaultHttpClients)
+        .expect("signal is configured");
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), "signal".to_owned(), None);
+    let running = launch.start(hooks, host, None, true);
+    assert_eq!(running.adapter_handle().mode, AdapterMode::SignalNativeV2);
+    running.stop().await.unwrap();
+}
