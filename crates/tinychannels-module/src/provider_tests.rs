@@ -3459,13 +3459,25 @@ async fn voice_codec_maps_known_formats_and_surfaces_missing_module_errors() {
         target: target.into(),
     };
     let unsupported = codec.transcode(request("flac", "mp3")).await.unwrap_err();
-    assert!(unsupported.to_string().contains("unsupported TinyVoice codec"));
+    assert!(
+        unsupported
+            .to_string()
+            .contains("unsupported TinyVoice codec")
+    );
     let unsupported = codec
         .transcode(request("wav_pcm16", "opus-raw"))
         .await
         .unwrap_err();
-    assert!(unsupported.to_string().contains("unsupported TinyVoice codec"));
-    for (from, target) in [("audio/mp4", "audio/mpeg"), ("m4a_aac", "mp3"), ("audio/ogg", "audio/wav")] {
+    assert!(
+        unsupported
+            .to_string()
+            .contains("unsupported TinyVoice codec")
+    );
+    for (from, target) in [
+        ("audio/mp4", "audio/mpeg"),
+        ("m4a_aac", "mp3"),
+        ("audio/ogg", "audio/wav"),
+    ] {
         let error = codec.transcode(request(from, target)).await.unwrap_err();
         assert!(
             !error.to_string().contains("unsupported TinyVoice codec"),
@@ -3513,7 +3525,11 @@ async fn module_voice_media_reports_each_precondition_and_missing_host_storage()
         .store_voice(request("AAAA", Default::default()))
         .await
         .unwrap_err();
-    assert!(missing_identity.to_string().contains("conversation and turn"));
+    assert!(
+        missing_identity
+            .to_string()
+            .contains("conversation and turn")
+    );
     let invalid = store
         .store_voice(request("***", scope.clone()))
         .await
@@ -3524,7 +3540,11 @@ async fn module_voice_media_reports_each_precondition_and_missing_host_storage()
         .store_voice(request(&payload, scope.clone()))
         .await
         .unwrap_err();
-    assert!(no_storage.to_string().contains("scoped storage is unavailable"));
+    assert!(
+        no_storage
+            .to_string()
+            .contains("scoped storage is unavailable")
+    );
 
     let read = store
         .read_voice(scope.clone(), "tinychannels_media_v1_missing".into())
@@ -3533,6 +3553,10 @@ async fn module_voice_media_reports_each_precondition_and_missing_host_storage()
     assert!(read.to_string().contains("scoped storage is unavailable"));
 
     let repository = ModuleMediaRepository(host, instance, Some("telegram:media-v1:abc".into()));
-    let error = repository.scoped_store().await.err().expect("no storage module");
+    let error = repository
+        .scoped_store()
+        .await
+        .err()
+        .expect("no storage module");
     assert!(error.to_string().contains("scoped storage is unavailable"));
 }
