@@ -1,0 +1,15 @@
+{
+  "event": "channel_outbound",
+  "client_id": "gateway:signal:account-a",
+  "thread_id": "signal:thread-1",
+  "request_id": "delivery-1",
+  "full_response": "Hello from the assistant.",
+  "structured": {
+    "kind": "channel_outbound",
+    "channel": "signal",
+    "chat_id": "recipient-1",
+    "thread_ts": "reply-1",
+    "reply_to_message_id": "message-1",
+    "idempotency_key": "delivery-1"
+  }
+}

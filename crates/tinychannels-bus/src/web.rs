@@ -510,6 +510,14 @@ pub enum WebChannelEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         success: Option<bool>,
     },
+    ChannelOutbound {
+        #[serde(flatten)]
+        context: WebEventContext,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        full_response: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        structured: Option<serde_json::Value>,
+    },
     UserError {
         #[serde(flatten)]
         context: WebEventContext,
@@ -545,6 +553,219 @@ pub enum WebChannelEvent {
         parts: Option<Vec<crate::channel::OutboundContentPart>>,
     },
 }
+
+impl WebChannelEvent {
+    /// Historical Socket.IO discriminator for this event.
+    pub const fn event_name(&self) -> &'static str {
+        use WebChannelEvent as E;
+        match self {
+            E::ChatDone { .. } => "chat_done",
+            E::ChatInterim { .. } => "chat_interim",
+            E::ChatSuggestions { .. } => "chat_suggestions",
+            E::ChatError { .. } => "chat_error",
+            E::ChatCancelled { .. } => "chat_cancelled",
+            E::TextDelta { .. } => "text_delta",
+            E::ThinkingDelta { .. } => "thinking_delta",
+            E::ToolArgsDelta { .. } => "tool_args_delta",
+            E::InferenceStart { .. } => "inference_start",
+            E::InferenceHeartbeat { .. } => "inference_heartbeat",
+            E::IterationStart { .. } => "iteration_start",
+            E::ToolCall { .. } => "tool_call",
+            E::ToolProgress { .. } => "tool_progress",
+            E::ToolResult { .. } => "tool_result",
+            E::TurnCost { .. } => "turn_cost",
+            E::SubagentSpawned { .. } => "subagent_spawned",
+            E::SubagentCompleted { .. } => "subagent_completed",
+            E::SubagentFailed { .. } => "subagent_failed",
+            E::SubagentAwaitingUser { .. } => "subagent_awaiting_user",
+            E::SubagentIterationStart { .. } => "subagent_iteration_start",
+            E::SubagentToolCall { .. } => "subagent_tool_call",
+            E::SubagentToolResult { .. } => "subagent_tool_result",
+            E::SubagentTextDelta { .. } => "subagent_text_delta",
+            E::SubagentThinkingDelta { .. } => "subagent_thinking_delta",
+            E::ApprovalRequest { .. } => "approval_request",
+            E::ApprovalDecided { .. } => "approval_decided",
+            E::PlanReviewRequest { .. } => "plan_review_request",
+            E::PlanReviewDecided { .. } => "plan_review_decided",
+            E::QueueItemQueued { .. } => "queue_item_queued",
+            E::QueueItemDelivered { .. } => "queue_item_delivered",
+            E::QueueItemRemoved { .. } => "queue_item_removed",
+            E::ThreadGoalUpdated { .. } => "thread_goal_updated",
+            E::ThreadGoalCleared { .. } => "thread_goal_cleared",
+            E::ThreadTodosChanged { .. } => "thread_todos_changed",
+            E::RunModeChanged { .. } => "run_mode_changed",
+            E::ArtifactReady { .. } => "artifact_ready",
+            E::ArtifactFailed { .. } => "artifact_failed",
+            E::ArtifactPending { .. } => "artifact_pending",
+            E::MemoryActivity { .. } => "memory_activity",
+            E::ExternalTransferPending { .. } => "external_transfer_pending",
+            E::ProactiveMessage { .. } => "proactive_message",
+            E::VoiceSpeak { .. } => "voice_speak",
+            E::ChannelOutbound { .. } => "channel_outbound",
+            E::UserError { .. } => "user_error",
+            E::ChatMessage { .. } => "chat_message",
+            E::ChatSegment { .. } => "chat_segment",
+        }
+    }
+
+    /// Apply the historical typed-projector normalization before host delivery.
+    /// Directly-authored web events retain their serialized `null` and empty
+    /// values; only events passing through the old typed adapter used this rule.
+    pub fn normalize_projected_wire_fields(&mut self) {
+        use WebChannelEvent as E;
+        let (tool_name, args) = match self {
+            E::ToolArgsDelta { tool_name, .. } => (Some(tool_name), None),
+            E::ToolCall {
+                tool_name, args, ..
+            }
+            | E::SubagentToolCall {
+                tool_name, args, ..
+            }
+            | E::ApprovalRequest {
+                tool_name, args, ..
+            }
+            | E::PlanReviewRequest {
+                tool_name, args, ..
+            } => (Some(tool_name), Some(args)),
+            E::ToolResult {
+                tool_name, args, ..
+            }
+            | E::SubagentToolResult {
+                tool_name, args, ..
+            } => (Some(tool_name), Some(args)),
+            E::SubagentSpawned { tool_name, .. }
+            | E::SubagentCompleted { tool_name, .. }
+            | E::SubagentFailed { tool_name, .. }
+            | E::SubagentAwaitingUser { tool_name, .. }
+            | E::SubagentIterationStart { tool_name, .. }
+            | E::ApprovalDecided { tool_name, .. }
+            | E::PlanReviewDecided { tool_name, .. } => (Some(tool_name), None),
+            E::ArtifactReady { args, .. }
+            | E::ArtifactFailed { args, .. }
+            | E::ArtifactPending { args, .. }
+            | E::MemoryActivity { args, .. }
+            | E::ExternalTransferPending { args, .. } => (None, Some(args)),
+            _ => (None, None),
+        };
+        if let Some(tool_name) = tool_name
+            && tool_name.as_deref() == Some("")
+        {
+            *tool_name = None;
+        }
+        if let Some(args) = args
+            && args.as_ref().is_some_and(serde_json::Value::is_null)
+        {
+            *args = None;
+        }
+    }
+
+    /// The shared addressing and ordering context for this event.
+    pub fn context(&self) -> &WebEventContext {
+        use WebChannelEvent as E;
+        match self {
+            E::ChatDone { context, .. }
+            | E::ChatInterim { context, .. }
+            | E::ChatSuggestions { context, .. }
+            | E::ChatError { context, .. }
+            | E::ChatCancelled { context, .. }
+            | E::TextDelta { context, .. }
+            | E::ThinkingDelta { context, .. }
+            | E::ToolArgsDelta { context, .. }
+            | E::InferenceStart { context }
+            | E::InferenceHeartbeat { context }
+            | E::IterationStart { context, .. }
+            | E::ToolCall { context, .. }
+            | E::ToolProgress { context, .. }
+            | E::ToolResult { context, .. }
+            | E::TurnCost { context, .. }
+            | E::SubagentSpawned { context, .. }
+            | E::SubagentCompleted { context, .. }
+            | E::SubagentFailed { context, .. }
+            | E::SubagentAwaitingUser { context, .. }
+            | E::SubagentIterationStart { context, .. }
+            | E::SubagentToolCall { context, .. }
+            | E::SubagentToolResult { context, .. }
+            | E::SubagentTextDelta { context, .. }
+            | E::SubagentThinkingDelta { context, .. }
+            | E::ApprovalRequest { context, .. }
+            | E::ApprovalDecided { context, .. }
+            | E::PlanReviewRequest { context, .. }
+            | E::PlanReviewDecided { context, .. }
+            | E::QueueItemQueued { context, .. }
+            | E::QueueItemDelivered { context, .. }
+            | E::QueueItemRemoved { context, .. }
+            | E::ThreadGoalUpdated { context, .. }
+            | E::ThreadGoalCleared { context, .. }
+            | E::ThreadTodosChanged { context, .. }
+            | E::RunModeChanged { context, .. }
+            | E::ArtifactReady { context, .. }
+            | E::ArtifactFailed { context, .. }
+            | E::ArtifactPending { context, .. }
+            | E::MemoryActivity { context, .. }
+            | E::ExternalTransferPending { context, .. }
+            | E::ProactiveMessage { context, .. }
+            | E::VoiceSpeak { context, .. }
+            | E::ChannelOutbound { context, .. }
+            | E::UserError { context, .. }
+            | E::ChatMessage { context, .. }
+            | E::ChatSegment { context, .. } => context,
+        }
+    }
+
+    /// Mutable access to the shared addressing and ordering context.
+    pub fn context_mut(&mut self) -> &mut WebEventContext {
+        use WebChannelEvent as E;
+        match self {
+            E::ChatDone { context, .. }
+            | E::ChatInterim { context, .. }
+            | E::ChatSuggestions { context, .. }
+            | E::ChatError { context, .. }
+            | E::ChatCancelled { context, .. }
+            | E::TextDelta { context, .. }
+            | E::ThinkingDelta { context, .. }
+            | E::ToolArgsDelta { context, .. }
+            | E::InferenceStart { context }
+            | E::InferenceHeartbeat { context }
+            | E::IterationStart { context, .. }
+            | E::ToolCall { context, .. }
+            | E::ToolProgress { context, .. }
+            | E::ToolResult { context, .. }
+            | E::TurnCost { context, .. }
+            | E::SubagentSpawned { context, .. }
+            | E::SubagentCompleted { context, .. }
+            | E::SubagentFailed { context, .. }
+            | E::SubagentAwaitingUser { context, .. }
+            | E::SubagentIterationStart { context, .. }
+            | E::SubagentToolCall { context, .. }
+            | E::SubagentToolResult { context, .. }
+            | E::SubagentTextDelta { context, .. }
+            | E::SubagentThinkingDelta { context, .. }
+            | E::ApprovalRequest { context, .. }
+            | E::ApprovalDecided { context, .. }
+            | E::PlanReviewRequest { context, .. }
+            | E::PlanReviewDecided { context, .. }
+            | E::QueueItemQueued { context, .. }
+            | E::QueueItemDelivered { context, .. }
+            | E::QueueItemRemoved { context, .. }
+            | E::ThreadGoalUpdated { context, .. }
+            | E::ThreadGoalCleared { context, .. }
+            | E::ThreadTodosChanged { context, .. }
+            | E::RunModeChanged { context, .. }
+            | E::ArtifactReady { context, .. }
+            | E::ArtifactFailed { context, .. }
+            | E::ArtifactPending { context, .. }
+            | E::MemoryActivity { context, .. }
+            | E::ExternalTransferPending { context, .. }
+            | E::ProactiveMessage { context, .. }
+            | E::VoiceSpeak { context, .. }
+            | E::ChannelOutbound { context, .. }
+            | E::UserError { context, .. }
+            | E::ChatMessage { context, .. }
+            | E::ChatSegment { context, .. } => context,
+        }
+    }
+}
+
 /// Cost provenance copied as a wire enum to avoid depending on the harness.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

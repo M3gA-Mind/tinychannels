@@ -61,7 +61,7 @@ impl WebTurnProjector {
         for event in &mut projected {
             let seq = self.next_seq;
             self.next_seq += 1;
-            let context = context_mut(event);
+            let context = event.context_mut();
             context.seq = Some(seq);
             context.ts = Some(ts_ms);
         }
@@ -69,56 +69,9 @@ impl WebTurnProjector {
     }
 }
 
-/// Mutable access to the shared addressing fields of any event.
+/// Mutable access to the shared addressing fields of any projected event.
 pub fn context_mut(event: &mut WebChannelEvent) -> &mut WebEventContext {
-    use WebChannelEvent as E;
-    match event {
-        E::ChatDone { context, .. }
-        | E::ChatInterim { context, .. }
-        | E::ChatSuggestions { context, .. }
-        | E::ChatError { context, .. }
-        | E::ChatCancelled { context, .. }
-        | E::TextDelta { context, .. }
-        | E::ThinkingDelta { context, .. }
-        | E::ToolArgsDelta { context, .. }
-        | E::InferenceStart { context }
-        | E::InferenceHeartbeat { context }
-        | E::IterationStart { context, .. }
-        | E::ToolCall { context, .. }
-        | E::ToolProgress { context, .. }
-        | E::ToolResult { context, .. }
-        | E::TurnCost { context, .. }
-        | E::SubagentSpawned { context, .. }
-        | E::SubagentCompleted { context, .. }
-        | E::SubagentFailed { context, .. }
-        | E::SubagentAwaitingUser { context, .. }
-        | E::SubagentIterationStart { context, .. }
-        | E::SubagentToolCall { context, .. }
-        | E::SubagentToolResult { context, .. }
-        | E::SubagentTextDelta { context, .. }
-        | E::SubagentThinkingDelta { context, .. }
-        | E::ApprovalRequest { context, .. }
-        | E::ApprovalDecided { context, .. }
-        | E::PlanReviewRequest { context, .. }
-        | E::PlanReviewDecided { context, .. }
-        | E::QueueItemQueued { context, .. }
-        | E::QueueItemDelivered { context, .. }
-        | E::QueueItemRemoved { context, .. }
-        | E::ThreadGoalUpdated { context, .. }
-        | E::ThreadGoalCleared { context, .. }
-        | E::ThreadTodosChanged { context, .. }
-        | E::RunModeChanged { context, .. }
-        | E::ArtifactReady { context, .. }
-        | E::ArtifactFailed { context, .. }
-        | E::ArtifactPending { context, .. }
-        | E::MemoryActivity { context, .. }
-        | E::ExternalTransferPending { context, .. }
-        | E::ProactiveMessage { context, .. }
-        | E::VoiceSpeak { context, .. }
-        | E::UserError { context, .. }
-        | E::ChatMessage { context, .. }
-        | E::ChatSegment { context, .. } => context,
-    }
+    event.context_mut()
 }
 
 fn project_event(ctx: &WebEventContext, event: ChannelOutputEvent) -> Option<Vec<WebChannelEvent>> {
