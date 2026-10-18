@@ -69,6 +69,11 @@ impl WebTurnProjector {
     }
 }
 
+/// Mutable access to the shared addressing fields of any projected event.
+pub fn context_mut(event: &mut WebChannelEvent) -> &mut WebEventContext {
+    event.context_mut()
+}
+
 fn project_event(ctx: &WebEventContext, event: ChannelOutputEvent) -> Option<Vec<WebChannelEvent>> {
     use ChannelOutputEvent as O;
     let context = ctx.clone();
