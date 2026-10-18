@@ -1,5 +1,13 @@
+mod api;
+mod ingress;
+mod outbound;
+
+use crate::providers::whatsapp_shared::capabilities::{CapabilitySpec, capabilities};
+use crate::providers::whatsapp_shared::error::WaFailure;
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
+use parking_lot::Mutex;
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// `WhatsApp` channel that uses the `WhatsApp` Business Cloud API.
@@ -25,8 +33,22 @@ pub struct WhatsAppChannel {
     access_token: String,
     endpoint_id: String,
     verify_token: String,
+    /// Meta app secret; the key of the `X-Hub-Signature-256` webhook MAC.
+    /// Without it no webhook POST is accepted.
+    app_secret: Option<String>,
     allowed_numbers: Vec<String>,
     http_client: reqwest::Client,
+    api_base: String,
+    media_repository: Option<Arc<dyn crate::host::MediaRepository>>,
+    voice_media_store: Option<Arc<dyn crate::host::VoiceMediaStore>>,
+    voice_synthesis: bool,
+    events: Option<Arc<dyn crate::host::EventSink>>,
+    /// Sink of the legacy listener, used when the host cannot take typed ingress.
+    listener: Mutex<Option<tokio::sync::mpsc::Sender<ChannelMessage>>>,
+    /// Provider message ids already published (Meta redelivers).
+    seen: Mutex<ingress::SeenWindow>,
+    /// Latest inbound message per conversation, the anchor for typing indicators.
+    anchors: Mutex<ingress::AnchorWindow>,
 }
 
 impl WhatsAppChannel {
@@ -36,13 +58,13 @@ impl WhatsAppChannel {
         verify_token: String,
         allowed_numbers: Vec<String>,
     ) -> Self {
-        Self {
+        Self::with_http_client(
             access_token,
             endpoint_id,
             verify_token,
             allowed_numbers,
-            http_client: reqwest::Client::new(),
-        }
+            reqwest::Client::new(),
+        )
     }
 
     pub fn with_http_client(
@@ -56,9 +78,60 @@ impl WhatsAppChannel {
             access_token,
             endpoint_id,
             verify_token,
+            app_secret: None,
             allowed_numbers,
             http_client,
+            api_base: api::resolve_graph_base(std::env::var(api::GRAPH_BASE_ENV).ok()),
+            media_repository: None,
+            voice_media_store: None,
+            voice_synthesis: false,
+            events: None,
+            listener: Mutex::new(None),
+            seen: Mutex::new(ingress::SeenWindow::default()),
+            anchors: Mutex::new(ingress::AnchorWindow::default()),
         }
+    }
+
+    /// Set the Meta app secret that authenticates webhook deliveries.
+    #[must_use]
+    pub fn with_app_secret(mut self, app_secret: Option<String>) -> Self {
+        self.app_secret = app_secret.filter(|secret| !secret.trim().is_empty());
+        self
+    }
+
+    /// Point the adapter at another Graph origin (HTTPS, or loopback for tests).
+    #[must_use]
+    pub fn with_api_base(mut self, api_base: &str) -> Self {
+        self.api_base = api::resolve_graph_base(Some(api_base.to_owned()));
+        self
+    }
+
+    /// Scoped host media storage, which unlocks typed media in both directions.
+    #[must_use]
+    pub fn with_media_repository(mut self, store: Arc<dyn crate::host::MediaRepository>) -> Self {
+        self.media_repository = Some(store);
+        self
+    }
+
+    /// Host voice storage, which unlocks voice notes in both directions.
+    #[must_use]
+    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
+        self.voice_media_store = Some(store);
+        self
+    }
+
+    /// Whether the module can prepare synthesized voice replies for this account.
+    #[must_use]
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.voice_synthesis = enabled;
+        self
+    }
+
+    /// Where authenticated deliveries are published.
+    #[must_use]
+    pub fn with_events(mut self, events: Arc<dyn crate::host::EventSink>) -> Self {
+        self.events = Some(events);
+        self
     }
 
     fn http_client(&self) -> reqwest::Client {

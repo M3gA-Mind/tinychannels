@@ -13,7 +13,7 @@
 use super::WhatsAppChannel;
 use crate::providers::whatsapp_shared::error::WaFailure;
 use crate::providers::whatsapp_shared::inbound::{
-    self, DownloadedAttachment, InboundKind, MAX_INBOUND_MEDIA_BYTES, MAX_INBOUND_VOICE_BYTES,
+    self, InboundKind, MAX_INBOUND_MEDIA_BYTES, MAX_INBOUND_VOICE_BYTES,
 };
 use hmac::{Hmac, KeyInit, Mac};
 use serde_json::Value;
