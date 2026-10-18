@@ -638,6 +638,7 @@ impl Channel for EmailChannel {
             subject: subject.to_string(),
             body: body.to_string(),
             attachments: Vec::new(),
+            headers: Default::default(),
         };
         LettreMailSender::new()
             .send(&MailCredentials::Smtp(self.smtp_credentials()), &email)
