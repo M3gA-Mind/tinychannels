@@ -1,7 +1,8 @@
 //! The TinyBus service boundary for the channel surface.
 //!
 //! One object, `/ai/tinyhumans/tinychannels/Channels`, preserving its original
-//! five methods and adding typed intent, relay lifecycle, and shutdown members:
+//! five methods and adding typed intent, relay lifecycle, web projection, and
+//! shutdown members:
 //!
 //! ```text
 //! StartChannel(name, ChannelsConfig) -> ()
@@ -13,6 +14,9 @@
 //! StartChannelSupervised(name, config, proxy, policy) -> ()
 //! ChannelController(request) -> ChannelControllerResult
 //! SendChannelIntent(name, intent)     -> ChannelSendMessageResult
+//! BeginWebTurn(context, scope)        -> WebTurnHandle
+//! ProjectWebOutput(handle, event)     -> WebOutputEvents
+//! EndWebTurn(handle)                  -> ()
 //! ```
 //!
 //! # This module is stateful, unlike the document one
@@ -22,6 +26,9 @@
 //! listen loop that outlives every call. So this object keeps a registry of
 //! running providers, and `StopChannel` is not optional politeness: without it
 //! a provider's task and socket leak until the process exits.
+//! Web projection state is also module-owned and bounded. Each explicit begin
+//! creates a fresh opaque handle and sequence stream; terminal output closes it
+//! automatically, while the host ends nonterminal turns with `EndWebTurn`.
 //!
 //! # Config arrives per call, not at load
 //!
