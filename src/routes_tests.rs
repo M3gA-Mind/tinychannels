@@ -116,4 +116,14 @@ fn resolved_catalog_preview_preserves_first_provider_order_and_ten_item_limit() 
         )
         .contains("No cached model list found for `missing`")
     );
+    assert!(
+        build_models_help_response_from_catalog(
+            &ChannelRouteSelection {
+                provider: "missing".into(),
+                model: "configured".into()
+            },
+            &catalog,
+        )
+        .contains("Ask the operator to refresh the model list in the web UI")
+    );
 }

@@ -90,11 +90,23 @@ pub fn model_preview(catalog: &ModelCatalog, provider_name: &str) -> Vec<String>
         .unwrap_or_default()
 }
 
+/// Build model help for legacy hosts without a resolved model catalog.
+///
+/// The workspace path is retained for API compatibility but is not read. Users
+/// are directed to the web UI because refreshing its catalog cannot populate
+/// this catalog-less channel response.
 pub fn build_models_help_response(
     current: &ChannelRouteSelection,
     _workspace_dir: &Path,
 ) -> String {
-    models_help_from_preview(current, &[])
+    models_help_from_preview(
+        current,
+        &[],
+        &format!(
+            "Model catalog is unavailable in this channel for `{}`. View available models in the web UI.",
+            current.provider
+        ),
+    )
 }
 
 /// Format model help from a host-resolved catalog without reading storage.
@@ -102,10 +114,21 @@ pub fn build_models_help_response_from_catalog(
     current: &ChannelRouteSelection,
     catalog: &ModelCatalog,
 ) -> String {
-    models_help_from_preview(current, &model_preview(catalog, &current.provider))
+    models_help_from_preview(
+        current,
+        &model_preview(catalog, &current.provider),
+        &format!(
+            "No cached model list found for `{}`. Ask the operator to refresh the model list in the web UI.",
+            current.provider
+        ),
+    )
 }
 
-fn models_help_from_preview(current: &ChannelRouteSelection, cached_models: &[String]) -> String {
+fn models_help_from_preview(
+    current: &ChannelRouteSelection,
+    cached_models: &[String],
+    empty_preview_message: &str,
+) -> String {
     let mut response = String::new();
     let _ = writeln!(
         response,
@@ -115,11 +138,7 @@ fn models_help_from_preview(current: &ChannelRouteSelection, cached_models: &[St
     response.push_str("\nSwitch model with `/model <model-id>`.\n");
 
     if cached_models.is_empty() {
-        let _ = writeln!(
-            response,
-            "\nNo cached model list found for `{}`. Ask the operator to refresh the model list in the web UI.",
-            current.provider
-        );
+        let _ = writeln!(response, "\n{empty_preview_message}");
     } else {
         let _ = writeln!(
             response,
