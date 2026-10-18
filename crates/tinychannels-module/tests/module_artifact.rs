@@ -2457,22 +2457,31 @@ async fn compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native
         id: "+15550001111".into(),
         ..Default::default()
     };
-    let sent: ChannelSendMessageResult = module_proxy_send(
-        &runtime,
-        ChannelOutboundIntent {
-            idempotency_key: "artifact-whatsapp-1".into(),
-            channel_id: "whatsapp".into(),
-            conversation_id: "+15550001111".into(),
-            channel_ref: Some(scope_channel.clone()),
-            conversation_ref: Some(scope_conversation.clone()),
-            payload: OutboundPayload::Text {
-                text: "native reply".into(),
-            },
-            ..Default::default()
-        },
-    )
-    .await;
-    assert!(sent.delivered || sent.queued || !sent.id.is_empty() || true);
+    let sent: tinychannels_bus::controllers::ChannelSendMessageResult = runtime
+        .call_confidential(
+            "SendChannelIntent",
+            (
+                "whatsapp",
+                ChannelOutboundIntent {
+                    idempotency_key: "artifact-whatsapp-1".into(),
+                    channel_id: "whatsapp".into(),
+                    conversation_id: "+15550001111".into(),
+                    channel_ref: Some(scope_channel.clone()),
+                    conversation_ref: Some(scope_conversation.clone()),
+                    payload: OutboundPayload::Text {
+                        text: "native reply".into(),
+                    },
+                    ..Default::default()
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(sent.error.is_none(), "{:?}", sent.error);
+    let receipt = sent.receipt.expect("the provider's own receipt");
+    assert_eq!(receipt.platform_message_ids, ["wamid.artifact"]);
+    assert_eq!(receipt.channel.as_ref(), Some(&scope_channel));
+    assert_eq!(receipt.conversation.as_ref(), Some(&scope_conversation));
     interact(ChannelInteraction::SendReaction {
         channel: scope_channel,
         conversation: scope_conversation,
