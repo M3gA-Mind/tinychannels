@@ -15,6 +15,8 @@ use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
 use crate::traits::{Channel, ChannelMessage, SendMessage};
+use crate::host::{MediaRepository, VoiceMediaStore};
+use crate::providers::native::HostPorts as NativeState;
 
 use super::config::YuanbaoConfig;
 use super::connection::{InboundEvent, YuanbaoConnection};
@@ -65,6 +67,8 @@ pub struct YuanbaoChannel {
     /// hash, which the yuanbao gateway silently drops because no such
     /// user exists. See `register_recipient_alias` / `resolve_recipient`.
     recipient_aliases: TokioMutex<HashMap<String, String>>,
+    /// Host-scoped services used by the native typed-send adapter.
+    native: NativeState,
 }
 
 impl YuanbaoChannel {
@@ -109,7 +113,25 @@ impl YuanbaoChannel {
             inbound_rx: parking_lot::Mutex::new(Some(inbound_rx)),
             heartbeat_tasks: TokioMutex::new(HashMap::new()),
             recipient_aliases: TokioMutex::new(HashMap::new()),
+            native: NativeState::default(),
         })
+    }
+
+    /// Enable typed image and file sends through host-scoped media storage.
+    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    /// Retain the host voice store for future inbound voice support. Yuanbao
+    /// currently has no verified outbound audio element.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
+    }
+
+    pub(crate) fn native_media_enabled(&self) -> bool {
+        self.native.media_repository.is_some()
     }
 
     /// Record a `shortened → original` recipient mapping so the outbound
@@ -453,11 +475,17 @@ impl crate::providers::long_tail::LongTail for YuanbaoChannel {
 
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
-        text_capabilities(TextSpec {
+        let mut capabilities = text_capabilities(TextSpec {
             typing: true,
             thread: true,
             streaming_pipeline: true,
-        })
+        });
+        if self.native_media_enabled() {
+            capabilities.content.parts.extend(["image".into(), "file".into()]);
+            capabilities.content.image.outbound = true;
+            capabilities.content.file.outbound = true;
+        }
+        capabilities
     }
 
     fn typing_supported(&self) -> bool {
@@ -465,7 +493,8 @@ impl crate::providers::long_tail::LongTail for YuanbaoChannel {
     }
 }
 
-crate::providers::long_tail::impl_long_tail_adapter!(YuanbaoChannel);
+mod native;
+crate::providers::native::native_v2_adapter!(YuanbaoChannel);
 
 #[cfg(test)]
 #[path = "channel_tests.rs"]

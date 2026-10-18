@@ -119,6 +119,16 @@ pub(crate) trait LongTail: Channel {
     async fn send_reporting_ids(&self, message: &SendMessage) -> anyhow::Result<Vec<String>> {
         self.send(message).await.map(|()| Vec::new())
     }
+
+    /// Declared providers with canonical media support implement typed sends
+    /// through the shared scoped-media planner. Text-only providers retain the
+    /// conservative legacy projection.
+    async fn send_typed_message(
+        &self,
+        message: &ChannelOutboundMessage,
+    ) -> Result<ChannelSendOutcome, ChannelSendError> {
+        send_text_typed::<Self>(self, message).await
+    }
 }
 
 pub(crate) fn unsupported<T: LongTail + ?Sized>(operation: &str) -> ChannelSendError {
@@ -159,6 +169,13 @@ pub(crate) async fn send_typed<T: LongTail + ?Sized>(
     message: &ChannelOutboundMessage,
 ) -> Result<ChannelSendOutcome, ChannelSendError> {
     check_channel::<T>(&message.channel_id, message.channel_ref.as_ref())?;
+    provider.send_typed_message(message).await
+}
+
+async fn send_text_typed<T: LongTail + ?Sized>(
+    provider: &T,
+    message: &ChannelOutboundMessage,
+) -> Result<ChannelSendOutcome, ChannelSendError> {
     if message.conversation_id.trim().is_empty() {
         return Err(ChannelSendError {
             kind: SendErrorKind::BadFormat,
