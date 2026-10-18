@@ -262,10 +262,12 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
         );
     }
 
-    let unauthenticated_signal = tinychannels_bus::ChannelsConfig {
+    // Signal has no secret: the daemon and the account it serves are the
+    // identity, so each pair gets its own scope and a blank one gets none.
+    let signal = |url: &str, account: &str| tinychannels_bus::ChannelsConfig {
         signal: Some(SignalConfig {
-            http_url: "http://signal.example".into(),
-            account: "+15550001".into(),
+            http_url: url.into(),
+            account: account.into(),
             group_id: None,
             allowed_from: vec![],
             ignore_attachments: false,
@@ -273,7 +275,31 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
         }),
         ..Default::default()
     };
-    assert!(configured_media_account_scope("signal", &unauthenticated_signal).is_none());
+    let first = configured_media_account_scope(
+        "signal",
+        &signal("http://signal.example", "+15550001"),
+    )
+    .unwrap();
+    assert_eq!(
+        configured_media_account_scope("signal", &signal("http://signal.example", "+15550001"))
+            .as_deref(),
+        Some(first.as_str())
+    );
+    for other in [
+        signal("http://signal.example", "+15550002"),
+        signal("http://other.example", "+15550001"),
+    ] {
+        assert_ne!(
+            configured_media_account_scope("signal", &other).as_deref(),
+            Some(first.as_str())
+        );
+    }
+    assert!(configured_media_account_scope("signal", &signal(" ", "+15550001")).is_none());
+    assert!(configured_media_account_scope("signal", &signal("http://s", " ")).is_none());
+    assert!(
+        configured_media_account_scope("signal", &tinychannels_bus::ChannelsConfig::default())
+            .is_none()
+    );
     let session_only_whatsapp = tinychannels_bus::ChannelsConfig {
         whatsapp: Some(WhatsAppConfig {
             access_token: None,
