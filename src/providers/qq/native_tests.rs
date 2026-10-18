@@ -184,7 +184,7 @@ async fn host_voice_store_uploads_native_voice_and_sends_its_opaque_file_info() 
         "qq",
     )
     .expect("configured QQ adapter");
-    assert!(channel.capabilities().voice_out.enabled);
+    assert!(channel.capabilities().voice_out.supported);
 
     let message = ChannelOutboundMessage {
         channel_id: "qq".into(),
