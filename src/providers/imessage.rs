@@ -1,9 +1,25 @@
+//! iMessage on the v2 adapter contract (macOS: `chat.db` in, `osascript` out).
+//!
+//! Inbound traffic is polled from the Messages database: text, attachments,
+//! Apple audio messages (converted to AAC with `afconvert`, then stored as
+//! voice notes), tapbacks (reactions) and read state of what we sent. AppleScript
+//! cannot tapback, edit, unsend, type or thread, so those are declared
+//! unsupported; sends return the message guid read back from `chat.db`.
+
+mod capabilities;
+mod db;
+mod inbound;
+mod native;
+
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
+use crate::providers::native::HostPorts as NativeState;
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use anyhow::Context as _;
 use async_trait::async_trait;
 use directories::UserDirs;
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -28,6 +44,12 @@ pub struct IMessageChannel {
     /// The program and leading arguments that run an `AppleScript`;
     /// `-e <script>` is appended.
     script_command: Vec<String>,
+    /// The program that converts an Apple audio message to AAC; it is called
+    /// as `<program> -f m4af -d aac <in> <out>` (macOS `afconvert`).
+    converter_command: Vec<String>,
+    /// How long a send waits for Messages to record the message it made.
+    resolve_timeout: Duration,
+    native: NativeState,
 }
 
 impl IMessageChannel {
@@ -37,7 +59,41 @@ impl IMessageChannel {
             poll_interval: Duration::from_secs(3),
             db_path: None,
             script_command: vec!["osascript".to_string()],
+            converter_command: vec!["afconvert".to_string()],
+            resolve_timeout: Duration::from_secs(5),
+            native: NativeState::default(),
         }
+    }
+
+    /// Scoped media storage; enables typed attachments in both directions.
+    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    /// Durable voice storage; enables audio messages in both directions.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
+    }
+
+    /// Host speech-to-text for inbound audio messages.
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.native.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Enable shared final-turn synthesis when the host provides TTS, a codec
+    /// and durable voice storage.
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.native.voice_synthesis = enabled;
+        self
+    }
+
+    /// Ordered ingress for typed inbound messages and lifecycle events.
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.native.events = Some(events);
+        self
     }
 
     /// The Messages database: the override, else under the home directory.
@@ -124,10 +180,40 @@ fn is_valid_imessage_target(target: &str) -> bool {
     false
 }
 
+/// A Messages chat guid such as `iMessage;+;chat123456789`.
+fn is_valid_chat_guid(target: &str) -> bool {
+    let mut parts = target.split(';');
+    let (Some(service), Some(style), Some(id), None) =
+        (parts.next(), parts.next(), parts.next(), parts.next())
+    else {
+        return false;
+    };
+    matches!(service, "iMessage" | "SMS" | "any")
+        && matches!(style, "+" | "-")
+        && !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@'))
+}
+
 #[async_trait]
 impl Channel for IMessageChannel {
     fn name(&self) -> &str {
         "imessage"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.declared()
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
+        crate::providers::native::outbound::send_typed(self, message)
+            .await
+            .map_err(crate::providers::native::to_anyhow)
     }
 
     fn supports_remote_control(&self) -> bool {
@@ -198,61 +284,45 @@ end tell"#
         let path = db_path.to_path_buf();
         let conn = tokio::task::spawn_blocking(move || open_read_only(&path)).await??;
 
-        // Track the last ROWID we've seen (shuttle conn in and out)
-        let (mut conn, initial_rowid) =
-            tokio::task::spawn_blocking(move || -> anyhow::Result<(Connection, i64)> {
+        // Track the newest inbound ROWID and read time already seen (shuttle
+        // conn in and out).
+        let (mut conn, initial_rowid, initial_read) =
+            tokio::task::spawn_blocking(move || -> anyhow::Result<(Connection, i64, i64)> {
                 let rowid = max_inbound_rowid(&conn)?;
-                Ok((conn, rowid))
+                let read = db::max_date_read(&conn).unwrap_or(0);
+                Ok((conn, rowid, read))
             })
             .await??;
         let mut last_rowid = initial_rowid;
+        let mut last_read = initial_read;
 
         loop {
             tokio::time::sleep(self.poll_interval).await;
 
-            let since = last_rowid;
-            let (returned_conn, poll_result) = tokio::task::spawn_blocking(
-                move || -> (Connection, anyhow::Result<Vec<(i64, String, String)>>) {
-                    let result = query_new_messages(&conn, since);
-                    (conn, result)
-                },
-            )
+            let (since, read_since) = (last_rowid, last_read);
+            let (returned_conn, rows, reads) = tokio::task::spawn_blocking(move || {
+                let rows = db::inbound_since(&conn, since);
+                let reads = db::read_since(&conn, read_since);
+                (conn, rows, reads)
+            })
             .await
             .context("iMessage poll worker join error")?;
             conn = returned_conn;
 
-            match poll_result {
-                Ok(messages) => {
-                    for (rowid, sender, text) in messages {
-                        if rowid > last_rowid {
-                            last_rowid = rowid;
-                        }
-
-                        if !self.is_contact_allowed(&sender) {
-                            continue;
-                        }
-
-                        if text.trim().is_empty() {
-                            continue;
-                        }
-
-                        let msg = ChannelMessage {
-                            id: rowid.to_string(),
-                            sender: sender.clone(),
-                            reply_target: sender.clone(),
-                            content: text,
-                            channel: "imessage".to_string(),
-                            timestamp: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_secs(),
-                            topic_id: None,
-                            reply_to_id: None,
-                            thread_ts: None,
-                            sender_name: None,
-                        };
-
-                        if tx.send(msg).await.is_err() {
+            match reads {
+                Ok(reads) => {
+                    for read in reads {
+                        last_read = last_read.max(read.date_read);
+                        self.dispatch_read(read).await;
+                    }
+                }
+                Err(e) => tracing::debug!("iMessage read-state poll error: {e}"),
+            }
+            match rows {
+                Ok(rows) => {
+                    for row in rows {
+                        last_rowid = last_rowid.max(row.rowid);
+                        if !self.dispatch_row(row, &tx).await {
                             return Ok(());
                         }
                     }
@@ -321,6 +391,16 @@ async fn fetch_new_messages(
     tokio::task::spawn_blocking(move || query_new_messages(&open_read_only(&path)?, since_rowid))
         .await?
 }
+
+crate::providers::native::native_v2_adapter!(IMessageChannel);
+
+#[cfg(test)]
+#[path = "imessage/fixtures_tests.rs"]
+mod fixtures;
+
+#[cfg(test)]
+#[path = "imessage/conformance_tests.rs"]
+mod conformance;
 
 #[cfg(test)]
 #[path = "imessage_tests.rs"]

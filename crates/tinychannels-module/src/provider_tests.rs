@@ -4255,6 +4255,28 @@ async fn a_built_native_launch_starts_on_the_ordered_queue() {
 }
 
 #[tokio::test]
+async fn a_built_imessage_launch_starts_as_the_native_imessage_adapter() {
+    use tinychannels::factory::DefaultHttpClients;
+    let config = tinychannels_bus::ChannelsConfig {
+        imessage: Some(tinychannels_bus::config::IMessageConfig {
+            allowed_contacts: vec!["*".into()],
+        }),
+        ..Default::default()
+    };
+    let noop: Arc<dyn tinychannels::host::ChannelHost> = tinychannels::host::NoopHost::arc();
+    let launch = crate::native::build_native_v2("imessage", &config, &noop, &DefaultHttpClients)
+        .expect("imessage is configured");
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), "imessage".to_owned(), None);
+    let running = launch.start(hooks, host, None, true);
+    let handle = running.adapter_handle();
+    assert_eq!(handle.mode, AdapterMode::IMessageNativeV2);
+    assert_eq!(handle.descriptor().id, "imessage");
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn configured_long_tail_adapter_sends_through_the_ordered_queue_and_refuses_the_rest() {
     use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
     use wiremock::matchers::{body_partial_json, method, path};

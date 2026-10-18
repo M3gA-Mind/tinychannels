@@ -9,6 +9,8 @@ cargo test --locked -p tinychannels-module configured_slack_native_adapter_route
 cargo test --locked -p tinychannels --lib slack_adapter_passes_the_full_conformance_matrix_against_the_mock_platform -- --nocapture
 cargo test --locked -p tinychannels-module configured_signal_native_adapter_routes_every_port_through_the_ordered_queue -- --nocapture
 cargo test --locked -p tinychannels --lib signal_adapter_passes_the_full_conformance_matrix_against_the_mock_daemon -- --nocapture
+cargo test --locked -p tinychannels-module a_built_imessage_launch_starts_as_the_native_imessage_adapter -- --nocapture
+cargo test --locked -p tinychannels --lib imessage_adapter_passes_the_full_conformance_matrix_against_a_fake_messages_folder -- --nocapture
 cargo test --locked -p tinychannels-conformance -- --nocapture
 cargo test --locked -p tinychannels-bus unsupported_send_flag_is_additive_to_legacy_error_wire_shape -- --nocapture
 cargo test --locked -p tinychannels --lib the_cloud_adapter_passes_the_whole_conformance_matrix_against_its_wire -- --nocapture

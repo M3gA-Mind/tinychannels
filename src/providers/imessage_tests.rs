@@ -281,22 +281,9 @@ fn create_test_db() -> (tempfile::TempDir, std::path::PathBuf) {
     let db_path = dir.path().join("chat.db");
 
     let conn = Connection::open(&db_path).unwrap();
-
-    // Create minimal schema matching macOS Messages.app
-    conn.execute_batch(
-        "CREATE TABLE handle (
-            ROWID INTEGER PRIMARY KEY,
-            id TEXT NOT NULL
-        );
-        CREATE TABLE message (
-            ROWID INTEGER PRIMARY KEY,
-            handle_id INTEGER,
-            text TEXT,
-            is_from_me INTEGER DEFAULT 0,
-            FOREIGN KEY (handle_id) REFERENCES handle(ROWID)
-        );",
-    )
-    .unwrap();
+    db::tests::create_schema(&conn);
+    // The adapter's own fixtures seed a handle; these tests insert their own.
+    conn.execute("DELETE FROM handle", []).unwrap();
 
     (dir, db_path)
 }
@@ -879,10 +866,10 @@ async fn listen_survives_failing_polls() {
     writer
         .execute_batch(
             "CREATE TABLE message (
-                ROWID INTEGER PRIMARY KEY,
-                handle_id INTEGER,
-                text TEXT,
-                is_from_me INTEGER DEFAULT 0
+                ROWID INTEGER PRIMARY KEY, guid TEXT, handle_id INTEGER, text TEXT,
+                is_from_me INTEGER DEFAULT 0, date INTEGER, is_audio_message INTEGER DEFAULT 0,
+                associated_message_guid TEXT, associated_message_type INTEGER DEFAULT 0,
+                date_read INTEGER DEFAULT 0
             );",
         )
         .unwrap();
@@ -899,6 +886,11 @@ async fn listen_survives_failing_polls() {
     writer
         .execute_batch(
             "CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT NOT NULL);
+             CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, style INTEGER);
+             CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
+             CREATE TABLE attachment (ROWID INTEGER PRIMARY KEY, filename TEXT, mime_type TEXT,
+                transfer_name TEXT, total_bytes INTEGER);
+             CREATE TABLE message_attachment_join (message_id INTEGER, attachment_id INTEGER);
              INSERT INTO handle (ROWID, id) VALUES (1, 'a@example.com');
              INSERT INTO handle (ROWID, id) VALUES (2, 'b@example.com');",
         )
