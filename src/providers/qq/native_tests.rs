@@ -249,3 +249,128 @@ async fn host_voice_store_uploads_native_voice_and_sends_its_opaque_file_info() 
         "opaque-qq-voice-info"
     );
 }
+
+#[tokio::test]
+async fn oversized_host_media_is_rejected_before_any_qq_request() {
+    let server =
+        HttpsServer::start(|request| panic!("unexpected QQ request: {}", request.target)).await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(
+        MediaKind::Image,
+        "image/png",
+        &vec![0; 5 * 1024 * 1024 + 1],
+    ));
+    let host = ChannelHostBuilder::new()
+        .media_repository(media.clone())
+        .build();
+    let config = tinychannels_bus::ChannelsConfig {
+        qq: Some(tinychannels_bus::config::QQConfig {
+            app_id: "app-id".into(),
+            app_secret: "app-secret".into(),
+            allowed_users: vec!["*".into()],
+        }),
+        ..Default::default()
+    };
+    let channel = build_long_tail_channel_with_host(
+        &config,
+        &host,
+        &FixtureHttpClients(server.client.clone()),
+        "qq",
+    )
+    .expect("configured QQ adapter");
+    let message = image_message("user-1", "too-large");
+
+    let error =
+        tinychannels_runtime::channel::ChannelTypedSend::send_typed(channel.as_ref(), &message)
+            .await
+            .expect_err("oversized media must be rejected during planning");
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
+    assert!(!error.sent_before_error);
+    assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn rejected_qq_upload_does_not_send_a_message_or_claim_delivery() {
+    let server = HttpsServer::start(|request| match request.target.as_str() {
+        "/app/getAppAccessToken" => (
+            200,
+            json!({"access_token": "qq-token", "expires_in": "7200"}).to_string(),
+        ),
+        "/v2/users/user-1/files" => (413, json!({"message": "too large"}).to_string()),
+        other => panic!("unexpected QQ request: {other}"),
+    })
+    .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(
+        MediaKind::Image,
+        "image/png",
+        b"exact-scoped-png-bytes",
+    ));
+    let host = ChannelHostBuilder::new().media_repository(media).build();
+    let config = tinychannels_bus::ChannelsConfig {
+        qq: Some(tinychannels_bus::config::QQConfig {
+            app_id: "app-id".into(),
+            app_secret: "app-secret".into(),
+            allowed_users: vec!["*".into()],
+        }),
+        ..Default::default()
+    };
+    let channel = build_long_tail_channel_with_host(
+        &config,
+        &host,
+        &FixtureHttpClients(server.client.clone()),
+        "qq",
+    )
+    .expect("configured QQ adapter");
+
+    let error = tinychannels_runtime::channel::ChannelTypedSend::send_typed(
+        channel.as_ref(),
+        &image_message("user-1", "upload-rejected"),
+    )
+    .await
+    .expect_err("rejected upload must stop before final send");
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
+    assert!(!error.sent_before_error);
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2, "token and upload only");
+    assert_eq!(requests[1].target, "/v2/users/user-1/files");
+}
+
+fn image_message(conversation_id: &str, idempotency_key: &str) -> ChannelOutboundMessage {
+    ChannelOutboundMessage {
+        channel_id: "qq".into(),
+        conversation_id: conversation_id.into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "qq".into(),
+            account_id: Some("qq-account".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: conversation_id.into(),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-1".into()),
+        idempotency_key: idempotency_key.into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("opaque-image-1".into()),
+                    kind: MediaKind::Image,
+                    content_type: Some("image/png".into()),
+                    file_name: Some("diagram.png".into()),
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+        }],
+    }
+}
