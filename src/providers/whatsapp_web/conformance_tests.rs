@@ -2,10 +2,6 @@
 //! observation read from what the linked-session double actually received.
 
 use super::*;
-use crate::channel::{
-    ChannelDelete as _, ChannelEdit as _, ChannelReaction as _, ChannelStreamingDraft as _,
-    ChannelTyping as _,
-};
 use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices, ogg_bytes, png_bytes};
 use crate::providers::whatsapp_web::fakes::{Call, RecordingClient};
 use std::collections::HashMap;

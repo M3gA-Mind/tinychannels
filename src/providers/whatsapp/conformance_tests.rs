@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use sha2::Sha256;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinychannels_bus::channel::{ChannelSendError, ChannelSendOutcome, SendErrorKind};
+use tinychannels_bus::channel::{ChannelSendError, ChannelSendOutcome};
 use tinychannels_bus::{
     ChannelIngress, ChannelOutboundIntent, ChannelRef, ContentPart, ConversationKind,
     ConversationRef, MediaKind, MediaReference, OutboundContentPart, OutboundPayload,
@@ -249,15 +249,6 @@ impl CloudKit {
             });
         }
         *cursor = log.len();
-    }
-}
-
-fn unsupported() -> ChannelSendError {
-    ChannelSendError {
-        kind: SendErrorKind::BadFormat,
-        message: "fixture has no such operation".into(),
-        unsupported: true,
-        ..Default::default()
     }
 }
 

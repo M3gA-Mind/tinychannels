@@ -886,8 +886,7 @@ async fn injected_cloud_client_reports_connection_failure_and_listener_stays_idl
 mod v2 {
     use super::*;
     use crate::channel::{
-        ChannelAdapter as _, ChannelDelete as _, ChannelEdit as _, ChannelReaction as _,
-        ChannelStreamingDraft as _, ChannelTypedSend as _, ChannelTyping as _,
+        ChannelAdapter as _, ChannelDelete as _, ChannelEdit as _, ChannelStreamingDraft as _,
     };
     use crate::providers::whatsapp::api::GRAPH_VERSION;
     use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices};
