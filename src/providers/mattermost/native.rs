@@ -43,6 +43,35 @@ impl NativeProvider for MattermostChannel {
         self.declared()
     }
 
+    fn normalized_target(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<Target, ChannelSendError> {
+        let mut target = crate::providers::native::outbound::target_of(
+            message,
+            self.id(),
+            self.display(),
+        )?;
+        if let Some((_, packed_root)) = target.conversation.id.split_once(':') {
+            if message
+                .conversation_ref
+                .as_ref()
+                .and_then(|conversation| conversation.thread_id.as_deref())
+                .is_some_and(|thread| thread != packed_root)
+            {
+                return Err(crate::providers::native::pre_dispatch(
+                    "Mattermost packed conversation and canonical thread addresses conflict",
+                ));
+            }
+            // Mattermost's deployed legacy address helper preserves an
+            // already-packed channel:root recipient instead of appending or
+            // replacing its root from the compatibility thread hint.
+            target.thread = Some(packed_root.to_owned());
+            target.conversation.thread_id = Some(packed_root.to_owned());
+        }
+        Ok(target)
+    }
+
     fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
         if self.voice_media_store.is_some() {
             vec![("voiceOut", "attachment")]
@@ -206,7 +235,9 @@ impl MattermostChannel {
 fn http_error(status: reqwest::StatusCode, operation: &str, final_post: bool) -> ChannelSendError {
     let server_error = status.is_server_error();
     ChannelSendError {
-        kind: if server_error {
+        kind: if final_post && server_error {
+            SendErrorKind::Unknown
+        } else if server_error {
             SendErrorKind::Transient
         } else {
             SendErrorKind::BadFormat

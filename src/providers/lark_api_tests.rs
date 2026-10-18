@@ -2,6 +2,146 @@
 //! the Feishu/Lark API hosts; the webhook receiver is served on loopback.
 
 use super::*;
+use base64::Engine as _;
+
+struct FixtureVoiceCodec;
+
+#[async_trait::async_trait]
+impl crate::host::VoiceCodec for FixtureVoiceCodec {
+    async fn transcode(
+        &self,
+        request: crate::host::VoiceCodecRequest,
+    ) -> anyhow::Result<crate::host::VoiceCodecResult> {
+        anyhow::ensure!(request.target == "ogg_opus");
+        Ok(crate::host::VoiceCodecResult {
+            audio_base64: base64::engine::general_purpose::STANDARD
+                .encode(include_bytes!("telegram/fixtures/sine-ogg-opus.ogg")),
+            duration_ms: Some(1_000),
+            waveform: None,
+        })
+    }
+}
+
+#[test]
+fn native_audio_requires_an_ogg_opus_identification_packet() {
+    let opus = include_bytes!("telegram/fixtures/sine-ogg-opus.ogg");
+    assert!(super::native::is_ogg_opus(opus));
+
+    let mut vorbis = opus.to_vec();
+    let first_segment_len = vorbis[27] as usize;
+    assert!(first_segment_len >= 8);
+    vorbis[28..36].copy_from_slice(b"vorbis\0\0");
+    assert!(!super::native::is_ogg_opus(&vorbis));
+    assert!(!super::native::is_ogg_opus(b"not an ogg stream"));
+}
+
+#[tokio::test]
+async fn native_inbound_applies_allowlist_bot_and_group_mention_filters_before_download() {
+    let server = HttpsServer::start(|_| (500, "unexpected request".into())).await;
+    let mut channel = channel_with(&server, true);
+    channel.allowed_users = vec!["ou_allowed".into()];
+    let base_event = serde_json::json!({
+        "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_allowed"}},
+        "message": {
+            "message_id": "om-1",
+            "chat_id": "oc-1",
+            "chat_type": "p2p",
+            "message_type": "image",
+            "content": "{\"image_key\":\"img-secret-ref\"}"
+        }
+    });
+    let mut forbidden = base_event.clone();
+    forbidden["sender"]["sender_id"]["open_id"] = "ou_forbidden".into();
+    assert!(channel.inbound_envelope(&forbidden).await.is_none());
+
+    let mut bot = base_event.clone();
+    bot["sender"]["sender_type"] = "bot".into();
+    assert!(channel.inbound_envelope(&bot).await.is_none());
+
+    let mut unmentioned = base_event;
+    unmentioned["message"]["chat_type"] = "group".into();
+    unmentioned["message"]["mentions"] = serde_json::json!([]);
+    assert!(channel.inbound_envelope(&unmentioned).await.is_none());
+    assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn native_inbound_downloads_and_stores_a_file_before_building_the_envelope() {
+    let file_bytes = r#"{"note":"attachment"}"#.to_owned();
+    let server = HttpsServer::start({
+        let file_bytes = file_bytes.clone();
+        move |request| {
+            if is_token_request(request) {
+                token_ok("t-1")
+            } else if request.target == "/open-apis/im/v1/messages/om-1/resources/file-1?type=file"
+            {
+                (200, file_bytes.clone())
+            } else {
+                (404, String::new())
+            }
+        }
+    })
+    .await;
+    let media = Arc::new(crate::providers::native::fixtures::StubMedia::default());
+    let channel = channel_with(&server, true)
+        .with_media_repository(media.clone())
+        .with_events(Arc::new(
+            crate::providers::native::fixtures::RecordingEvents::delivering(),
+        ));
+    let event = serde_json::json!({
+        "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_alice"}},
+        "message": {
+            "message_id": "om-1",
+            "chat_id": "oc-chat",
+            "chat_type": "p2p",
+            "message_type": "file",
+            "create_time": "1700000000000",
+            "content": "{\"file_key\":\"file-1\",\"file_name\":\"note.json\"}"
+        }
+    });
+
+    let envelope = channel.inbound_envelope(&event).await.unwrap();
+    assert_eq!(envelope.message_id, "om-1");
+    assert_eq!(envelope.conversation.id, "oc-chat");
+    assert_eq!(envelope.timestamp_unix_ms, Some(1_700_000_000_000));
+    assert_eq!(envelope.media.len(), 1);
+    assert_eq!(
+        envelope.media[0].kind,
+        tinychannels_bus::MediaKind::Document
+    );
+    let stored = media.stored.lock().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].bytes, file_bytes.as_bytes());
+    assert_eq!(stored[0].metadata.scope.turn_id, "om-1");
+    assert_eq!(stored[0].metadata.max_bytes, 30 * 1024 * 1024);
+}
+
+#[tokio::test]
+async fn webhook_ignores_non_message_events_before_media_download() {
+    let server = HttpsServer::start(|_| (500, "unexpected request".into())).await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let state = LarkWebhookState {
+        verification_token: "verify-token".into(),
+        channel: Arc::new(channel_with(&server, true)),
+        tx,
+    };
+    let payload = serde_json::json!({
+        "header": {"token": "verify-token", "event_type": "im.message.deleted_v1"},
+        "event": {
+            "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_allowed"}},
+            "message": {
+                "message_id": "om-1",
+                "chat_id": "oc-chat",
+                "chat_type": "p2p",
+                "message_type": "image",
+                "content": "{\"image_key\":\"img-1\"}"
+            }
+        }
+    });
+    let response = handle_lark_webhook(axum::extract::State(state), axum::Json(payload)).await;
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    assert!(server.requests.lock().unwrap().is_empty());
+}
 use crate::providers::http_test_support::{HttpsServer, Request};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -34,6 +174,14 @@ fn channel_with(server: &HttpsServer, use_feishu: bool) -> LarkChannel {
     channel.use_feishu = use_feishu;
     channel.http_client = fixture_client(server);
     channel
+}
+
+struct FixtureHttpClients(reqwest::Client);
+
+impl crate::factory::HttpClientFactory for FixtureHttpClients {
+    fn client_for(&self, _channel: &str) -> reqwest::Client {
+        self.0.clone()
+    }
 }
 
 fn is_token_request(request: &Request) -> bool {
@@ -109,6 +257,259 @@ async fn send_fetches_a_token_once_and_posts_a_text_message() {
         serde_json::json!({"text": "hello lark"})
     );
     assert_eq!(header(&requests[2], "authorization"), Some("Bearer t-1"));
+}
+
+#[tokio::test]
+async fn host_aware_factory_sends_typed_image_through_lark_image_upload() {
+    let server = HttpsServer::start(|request| {
+        if is_token_request(request) {
+            token_ok("t-image")
+        } else if request.target == "/open-apis/im/v1/images" {
+            (
+                200,
+                r#"{"code":0,"data":{"image_key":"img_native_1"}}"#.into(),
+            )
+        } else if request.target == "/open-apis/im/v1/files" {
+            (
+                200,
+                r#"{"code":0,"data":{"file_key":"file_native_1"}}"#.into(),
+            )
+        } else if request.target.starts_with("/open-apis/im/v1/messages?") {
+            (
+                200,
+                r#"{"code":0,"data":{"message_id":"om-image-1"}}"#.into(),
+            )
+        } else {
+            (
+                404,
+                r#"{"code":99991663,"msg":"unexpected request"}"#.into(),
+            )
+        }
+    })
+    .await;
+    let media = Arc::new(crate::providers::native::fixtures::StubMedia::default());
+    let voice = Arc::new(crate::providers::native::fixtures::StubVoice::default());
+    *voice.audio_base64.lock().unwrap() =
+        Some(base64::engine::general_purpose::STANDARD.encode(b"mock source audio"));
+    *media.read.lock().unwrap() = Some(crate::providers::native::fixtures::stored_media(
+        tinychannels_bus::MediaKind::Image,
+        "image/png",
+        b"opaque-scoped-image-bytes",
+    ));
+    let host = crate::host::ChannelHostBuilder::new()
+        .media_repository(media.clone())
+        .voice_media_store(voice)
+        .voice_codec(Arc::new(FixtureVoiceCodec))
+        .build();
+    let config = tinychannels_bus::ChannelsConfig {
+        lark: Some(tinychannels_bus::config::LarkConfig {
+            app_id: "app-id".into(),
+            app_secret: "app-secret".into(),
+            encrypt_key: None,
+            verification_token: None,
+            allowed_users: vec!["*".into()],
+            use_feishu: true,
+            receive_mode: Default::default(),
+            port: None,
+        }),
+        ..Default::default()
+    };
+    let clients = FixtureHttpClients(fixture_client(&server));
+    let channel =
+        crate::factory::build_long_tail_channel_with_host(&config, &host, &clients, "lark")
+            .expect("Lark config builds through the host-aware factory");
+    let capabilities = channel.capabilities();
+    assert!(capabilities.content.image.outbound);
+    assert!(capabilities.content.file.outbound);
+    assert!(capabilities.content.audio.outbound);
+    assert!(capabilities.voice_out.supported);
+    let result = crate::channel::ChannelTypedSend::send_typed(
+        channel.as_ref(),
+        &tinychannels_bus::ChannelOutboundMessage {
+            channel_id: "lark".into(),
+            conversation_id: "oc_chat_1".into(),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "lark".into(),
+                account_id: Some("lark:fixture".into()),
+            }),
+            conversation_ref: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Group,
+                id: "oc_chat_1".into(),
+                ..Default::default()
+            }),
+            turn_id: Some("turn-image-1".into()),
+            idempotency_key: "typed-image-1".into(),
+            reply_to_id: None,
+            thread_id: None,
+            parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("opaque-image-1".into()),
+                        kind: tinychannels_bus::MediaKind::Image,
+                        content_type: Some("image/png".into()),
+                        ..Default::default()
+                    },
+                    caption: None,
+                    alt_text: None,
+                },
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert!(result.error.is_none());
+    assert_eq!(
+        result.receipt.primary_platform_message_id.as_deref(),
+        Some("om-image-1")
+    );
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].target, "/open-apis/im/v1/images");
+    assert!(
+        requests[1]
+            .headers
+            .to_ascii_lowercase()
+            .contains("multipart/form-data")
+    );
+    assert_eq!(requests[2].body["msg_type"], "image");
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(requests[2].body["content"].as_str().unwrap())
+            .unwrap()["image_key"],
+        "img_native_1"
+    );
+
+    *media.read.lock().unwrap() = Some(crate::providers::native::fixtures::stored_media(
+        tinychannels_bus::MediaKind::Document,
+        "application/pdf",
+        b"pdf-bytes",
+    ));
+    let file_result = crate::channel::ChannelTypedSend::send_typed(
+        channel.as_ref(),
+        &tinychannels_bus::ChannelOutboundMessage {
+            channel_id: "lark".into(),
+            conversation_id: "oc_chat_1".into(),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "lark".into(),
+                account_id: Some("lark:fixture".into()),
+            }),
+            conversation_ref: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Group,
+                id: "oc_chat_1".into(),
+                ..Default::default()
+            }),
+            turn_id: Some("turn-file-1".into()),
+            idempotency_key: "typed-file-1".into(),
+            reply_to_id: None,
+            thread_id: None,
+            parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::File {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("opaque-file-1".into()),
+                        kind: tinychannels_bus::MediaKind::Document,
+                        content_type: Some("application/pdf".into()),
+                        ..Default::default()
+                    },
+                    file_name: Some("report.pdf".into()),
+                    caption: None,
+                },
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert!(file_result.error.is_none());
+
+    *media.read.lock().unwrap() = Some(crate::providers::native::fixtures::stored_media(
+        tinychannels_bus::MediaKind::Audio,
+        "audio/ogg",
+        include_bytes!("telegram/fixtures/sine-ogg-opus.ogg"),
+    ));
+    let audio_result = crate::channel::ChannelTypedSend::send_typed(
+        channel.as_ref(),
+        &tinychannels_bus::ChannelOutboundMessage {
+            channel_id: "lark".into(),
+            conversation_id: "oc_chat_1".into(),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "lark".into(),
+                account_id: Some("lark:fixture".into()),
+            }),
+            conversation_ref: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Group,
+                id: "oc_chat_1".into(),
+                ..Default::default()
+            }),
+            turn_id: Some("turn-audio-1".into()),
+            idempotency_key: "typed-audio-1".into(),
+            reply_to_id: None,
+            thread_id: None,
+            parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Audio {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("opaque-audio-1".into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        content_type: Some("audio/ogg".into()),
+                        ..Default::default()
+                    },
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: None,
+                    title: None,
+                    transcript: None,
+                },
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert!(audio_result.error.is_none());
+
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 7);
+    assert_eq!(requests[3].target, "/open-apis/im/v1/files");
+    assert_eq!(requests[4].body["msg_type"], "file");
+    assert_eq!(requests[5].target, "/open-apis/im/v1/files");
+    assert_eq!(requests[6].body["msg_type"], "audio");
+
+    let voice_result = crate::channel::ChannelTypedSend::send_typed(
+        channel.as_ref(),
+        &tinychannels_bus::ChannelOutboundMessage {
+            channel_id: "lark".into(),
+            conversation_id: "oc_chat_1".into(),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "lark".into(),
+                account_id: Some("lark:fixture".into()),
+            }),
+            conversation_ref: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Group,
+                id: "oc_chat_1".into(),
+                ..Default::default()
+            }),
+            turn_id: Some("turn-voice-1".into()),
+            idempotency_key: "typed-voice-1".into(),
+            reply_to_id: None,
+            thread_id: None,
+            parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("voice-ref-1".into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        content_type: Some("audio/mp4".into()),
+                        ..Default::default()
+                    },
+                    audio_base64: None,
+                    codec: Some("m4a_aac".into()),
+                    duration_ms: Some(500),
+                    waveform: None,
+                },
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert!(voice_result.error.is_none());
+    let requests = server.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 9);
+    assert_eq!(requests[7].target, "/open-apis/im/v1/files");
+    assert_eq!(requests[8].body["msg_type"], "audio");
 }
 
 #[tokio::test]

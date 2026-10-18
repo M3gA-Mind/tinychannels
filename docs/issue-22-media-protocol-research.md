@@ -55,9 +55,21 @@ Lark/Feishu explicitly supports native audio and other media message types:
 - [Upload image](https://open.feishu.cn/document/server-docs/im-v1/image/create)
   creates image keys; [upload file](https://open.feishu.cn/document/server-docs/im-v1/file/create)
   creates file keys, including audio/video/documents.
-- [Download message resources](https://open.feishu.cn/document/server-docs/im-v1/message-resource/get)
-  provides the message-resource retrieval surface for received media. The
-  resource URL is `/im/v1/messages/:message_id/resources/:file_key`.
+- The documented message-resource API route is
+  `GET /open-apis/im/v1/messages/:message_id/resources/:file_key` (with the
+  tenant token). The docs site currently serves “This document is not found”
+  for the guessed `message-resource/get` article path, so this note records
+  the route without linking that nonexistent page. The provider must verify
+  the event's `message_id` and resource key before download.
+
+The official upload docs specify a 10 MiB image limit and 30 MiB file limit.
+The file upload's required `file_type` accepts `opus` for OPUS audio and says
+other audio must be converted to OPUS; `duration` is optional and is measured
+in milliseconds. Unknown document types can use `stream`. The message-content
+reference gives `msg_type=audio` content as `{"file_key":"..."}`. This means
+the adapter can truthfully send native audio when it has OPUS bytes; other
+voice codecs require the shared host codec port before they can use this
+native type. Audio sent as a generic file remains a file message.
 
 The same API surface is used for Feishu and Lark with the configured regional
 API base (`open.feishu.cn` or `open.larksuite.com`). The current adapter only

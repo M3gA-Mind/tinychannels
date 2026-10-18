@@ -3,7 +3,7 @@ use crate::channel::ChannelTypedSend;
 use crate::providers::native::fixtures::RecordingEvents;
 use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
 use serde_json::json;
-use tinychannels_bus::channel::ConversationRef;
+use tinychannels_bus::channel::{ConversationRef, SendErrorKind};
 use tinychannels_bus::{
     ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind, MediaKind, MediaReference,
     OutboundContentPart, OutboundVoice,
@@ -220,6 +220,7 @@ async fn final_post_server_error_preserves_unknown_delivery_state() {
     let error = ChannelTypedSend::send_typed(&channel(&server, media), &image_message("chan"))
         .await
         .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Unknown);
     assert!(error.sent_before_error);
     assert!(!error.retryable);
     let requests = server.received_requests().await.unwrap();
@@ -463,16 +464,10 @@ async fn empty_file_only_posts_are_not_published_when_ingress_cannot_store_media
     let message = channel
         .parse_mattermost_post(&post, "bot-1", "bot", 1_600_000_000_000_i64, "channel-9")
         .unwrap();
-    let envelope = channel
-        .inbound_envelope(&post, "channel-9", &message)
-        .await;
+    let envelope = channel.inbound_envelope(&post, "channel-9", &message).await;
     if let Some(envelope) = envelope {
-        crate::providers::native::inbound::publish(
-            "mattermost",
-            channel.events.as_ref(),
-            envelope,
-        )
-        .await;
+        crate::providers::native::inbound::publish("mattermost", channel.events.as_ref(), envelope)
+            .await;
     }
     assert!(events.inbound().is_empty());
     assert!(server.received_requests().await.unwrap().is_empty());
@@ -508,16 +503,10 @@ async fn file_only_posts_with_unusable_ids_are_not_published() {
     let message = channel
         .parse_mattermost_post(&post, "bot-1", "bot", 1_600_000_000_000_i64, "channel-9")
         .unwrap();
-    let envelope = channel
-        .inbound_envelope(&post, "channel-9", &message)
-        .await;
+    let envelope = channel.inbound_envelope(&post, "channel-9", &message).await;
     if let Some(envelope) = envelope {
-        crate::providers::native::inbound::publish(
-            "mattermost",
-            channel.events.as_ref(),
-            envelope,
-        )
-        .await;
+        crate::providers::native::inbound::publish("mattermost", channel.events.as_ref(), envelope)
+            .await;
     }
     assert!(events.inbound().is_empty());
     assert!(server.received_requests().await.unwrap().is_empty());
@@ -554,16 +543,10 @@ async fn file_only_posts_with_oversized_metadata_are_not_downloaded_or_published
     let message = channel
         .parse_mattermost_post(&post, "bot-1", "bot", 1_600_000_000_000_i64, "channel-9")
         .unwrap();
-    let envelope = channel
-        .inbound_envelope(&post, "channel-9", &message)
-        .await;
+    let envelope = channel.inbound_envelope(&post, "channel-9", &message).await;
     if let Some(envelope) = envelope {
-        crate::providers::native::inbound::publish(
-            "mattermost",
-            channel.events.as_ref(),
-            envelope,
-        )
-        .await;
+        crate::providers::native::inbound::publish("mattermost", channel.events.as_ref(), envelope)
+            .await;
     }
     assert!(events.inbound().is_empty());
     assert!(server.received_requests().await.unwrap().is_empty());
@@ -608,16 +591,10 @@ async fn file_only_posts_are_not_published_when_media_storage_fails() {
     let message = channel
         .parse_mattermost_post(&post, "bot-1", "bot", 1_600_000_000_000_i64, "channel-9")
         .unwrap();
-    let envelope = channel
-        .inbound_envelope(&post, "channel-9", &message)
-        .await;
+    let envelope = channel.inbound_envelope(&post, "channel-9", &message).await;
     if let Some(envelope) = envelope {
-        crate::providers::native::inbound::publish(
-            "mattermost",
-            channel.events.as_ref(),
-            envelope,
-        )
-        .await;
+        crate::providers::native::inbound::publish("mattermost", channel.events.as_ref(), envelope)
+            .await;
     }
     assert!(events.inbound().is_empty());
 }
@@ -662,5 +639,8 @@ async fn text_post_survives_when_its_attachment_cannot_be_ingested() {
         .await
         .expect("text should remain deliverable");
     assert_eq!(envelope.text, "caption survives");
-    assert!(matches!(envelope.parts.first(), Some(ContentPart::Text { .. })));
+    assert!(matches!(
+        envelope.parts.first(),
+        Some(ContentPart::Text { .. })
+    ));
 }

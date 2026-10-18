@@ -114,6 +114,14 @@ pub(crate) trait NativeProvider: Send + Sync {
     fn voice_media_store(&self) -> Option<&Arc<dyn VoiceMediaStore>>;
     fn voice_synthesis(&self) -> bool;
     fn declared_capabilities(&self) -> ChannelCapabilities;
+    /// Resolve legacy provider-specific address projections before scoped
+    /// media is read, so delivery and media authority share one target.
+    fn normalized_target(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<Target, ChannelSendError> {
+        outbound::target_of(message, self.id(), self.display())
+    }
     /// Validate provider-specific address combinations before planning can
     /// resolve opaque host media or perform any network requests.
     fn validate_target(&self, _target: &Target) -> Result<(), ChannelSendError> {

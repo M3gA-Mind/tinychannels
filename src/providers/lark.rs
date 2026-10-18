@@ -1,3 +1,4 @@
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceCodec, VoiceMediaStore};
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
@@ -138,6 +139,7 @@ fn should_refresh_last_recv(msg: &WsMsg) -> bool {
 /// Supports two receive modes (configured via `receive_mode` in config):
 /// - **`websocket`** (default): persistent WSS long-connection; no public URL needed.
 /// - **`webhook`**: HTTP callback server; requires a public HTTPS endpoint.
+#[derive(Clone)]
 pub struct LarkChannel {
     app_id: String,
     app_secret: String,
@@ -151,6 +153,10 @@ pub struct LarkChannel {
     /// HTTP client used for all REST calls (injected so callers can thread a
     /// runtime proxy client through). Cheaply cloneable.
     http_client: reqwest::Client,
+    /// Scoped host services for native typed media and inbound ingress.
+    native: crate::providers::native::HostPorts,
+    /// Converts supported source audio into the OPUS format accepted by Lark.
+    voice_codec: Option<Arc<dyn VoiceCodec>>,
     /// Cached tenant access token
     tenant_token: Arc<RwLock<Option<String>>>,
     /// Dedup set: WS message_ids seen in last ~30 min to prevent double-dispatch
@@ -174,6 +180,8 @@ impl LarkChannel {
             use_feishu: true,
             receive_mode: crate::config::LarkReceiveMode::default(),
             http_client: reqwest::Client::new(),
+            native: crate::providers::native::HostPorts::default(),
+            voice_codec: None,
             tenant_token: Arc::new(RwLock::new(None)),
             ws_seen_ids: Arc::new(RwLock::new(HashMap::new())),
         }
@@ -191,6 +199,41 @@ impl LarkChannel {
         ch.use_feishu = config.use_feishu;
         ch.receive_mode = config.receive_mode.clone();
         ch
+    }
+
+    /// Build from config using the host-selected HTTP client.
+    pub fn from_config_with_http_client(
+        config: &crate::config::LarkConfig,
+        http_client: reqwest::Client,
+    ) -> Self {
+        let mut channel = Self::from_config(config);
+        channel.http_client = http_client;
+        channel
+    }
+
+    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
+    }
+
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.native.transcriber = Some(transcriber);
+        self
+    }
+
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.native.events = Some(events);
+        self
+    }
+
+    pub fn with_voice_codec(mut self, codec: Arc<dyn VoiceCodec>) -> Self {
+        self.voice_codec = Some(codec);
+        self
     }
 
     fn http_client(&self) -> reqwest::Client {
@@ -408,6 +451,7 @@ impl LarkChannel {
                     };
                     if event.header.event_type != "im.message.receive_v1" { continue; }
 
+                    let event_payload = event.event.clone();
                     let recv: MsgReceivePayload = match serde_json::from_value(event.event) {
                         Ok(r) => r,
                         Err(e) => { tracing::error!("Lark: payload parse: {e}"); continue; }
@@ -434,6 +478,17 @@ impl LarkChannel {
                             continue;
                         }
                         seen.insert(lark_msg.message_id.clone(), now);
+                    }
+
+                    if let Some(envelope) = self.inbound_envelope(&event_payload).await
+                        && crate::providers::native::inbound::publish(
+                            "lark",
+                            self.native.events.as_ref(),
+                            envelope,
+                        )
+                        .await
+                    {
+                        continue;
                     }
 
                     // Decode content by type (mirrors clawdbot-feishu parsing)
@@ -562,6 +617,13 @@ impl LarkChannel {
             Some(e) => e,
             None => return messages,
         };
+        if event
+            .pointer("/sender/sender_type")
+            .and_then(|kind| kind.as_str())
+            .is_some_and(|kind| kind == "app" || kind == "bot")
+        {
+            return messages;
+        }
 
         // Extract sender open_id
         let open_id = event
@@ -576,6 +638,20 @@ impl LarkChannel {
         // Check allowlist
         if !self.is_user_allowed(open_id) {
             tracing::warn!("Lark: ignoring message from unauthorized user: {open_id}");
+            return messages;
+        }
+        if event
+            .pointer("/message/chat_type")
+            .and_then(|kind| kind.as_str())
+            == Some("group")
+            && !should_respond_in_group(
+                event
+                    .pointer("/message/mentions")
+                    .and_then(serde_json::Value::as_array)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            )
+        {
             return messages;
         }
 
@@ -760,6 +836,21 @@ async fn handle_lark_webhook(
     }
 
     let messages = state.channel.parse_event_payload(&payload);
+    if payload
+        .pointer("/header/event_type")
+        .and_then(serde_json::Value::as_str)
+        == Some("im.message.receive_v1")
+        && let Some(event) = payload.get("event")
+        && let Some(envelope) = state.channel.inbound_envelope(event).await
+        && crate::providers::native::inbound::publish(
+            "lark",
+            state.channel.native.events.as_ref(),
+            envelope,
+        )
+        .await
+    {
+        return (StatusCode::OK, "ok").into_response();
+    }
     for msg in messages {
         if state.tx.send(msg).await.is_err() {
             tracing::warn!("Lark: message channel closed");
@@ -788,13 +879,7 @@ impl LarkChannel {
 
         let state = LarkWebhookState {
             verification_token: self.verification_token.clone(),
-            channel: Arc::new(LarkChannel::new(
-                self.app_id.clone(),
-                self.app_secret.clone(),
-                self.verification_token.clone(),
-                None,
-                self.allowed_users.clone(),
-            )),
+            channel: Arc::new(self.clone()),
             tx,
         };
 
@@ -928,15 +1013,117 @@ mod tests;
 #[path = "lark_api_tests.rs"]
 mod api_tests;
 
+#[async_trait]
 impl crate::providers::long_tail::LongTail for LarkChannel {
     const ID: &'static str = "lark";
     const DISPLAY: &'static str = "Lark";
 
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
-        text_capabilities(TextSpec::default())
+        self.native_declared_capabilities(text_capabilities(TextSpec::default()))
+    }
+
+    async fn send_typed_message(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        crate::providers::native::outbound::send_typed(self, message).await
     }
 }
+
+impl LarkChannel {
+    fn native_declared_capabilities(
+        &self,
+        mut capabilities: tinychannels_bus::ChannelCapabilities,
+    ) -> tinychannels_bus::ChannelCapabilities {
+        if self.native.media_repository.is_none() {
+            return capabilities;
+        }
+        use tinychannels_bus::ContentCapability;
+        const IMAGE_LIMIT: u64 = 10 * 1024 * 1024;
+        const FILE_LIMIT: u64 = 30 * 1024 * 1024;
+        capabilities
+            .content
+            .parts
+            .extend(["image", "video", "audio", "file"].map(str::to_owned));
+        let media = |types: &[&str], max_size_bytes| ContentCapability {
+            inbound: self.native.events.is_some(),
+            outbound: true,
+            accepted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
+            emitted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
+            max_size_bytes: Some(max_size_bytes),
+            ..Default::default()
+        };
+        capabilities.content.image = media(
+            &["image/jpeg", "image/png", "image/gif", "image/webp"],
+            IMAGE_LIMIT,
+        );
+        capabilities.content.video = media(&["video/mp4"], FILE_LIMIT);
+        let accepted_audio = if self.voice_codec.is_some() {
+            vec![
+                "audio/ogg",
+                "audio/opus",
+                "audio/mp4",
+                "audio/mpeg",
+                "audio/wav",
+            ]
+        } else {
+            vec!["audio/ogg", "audio/opus"]
+        };
+        capabilities.content.audio = ContentCapability {
+            inbound: self.native.events.is_some(),
+            outbound: true,
+            accepted_types: accepted_audio
+                .iter()
+                .map(|mime| (*mime).to_owned())
+                .collect(),
+            emitted_types: vec!["audio/opus".into()],
+            max_size_bytes: Some(FILE_LIMIT),
+            ..Default::default()
+        };
+        capabilities.content.file = media(
+            &[
+                "application/pdf",
+                "text/plain",
+                "text/csv",
+                "application/json",
+                "application/zip",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ],
+            FILE_LIMIT,
+        );
+        if self.native.voice_media_store.is_some() {
+            capabilities.content.parts.push("voice_note".into());
+            let accepted_codecs = if self.voice_codec.is_some() {
+                &["ogg_opus", "m4a_aac", "mp3", "wav_pcm16"][..]
+            } else {
+                &["ogg_opus"][..]
+            };
+            capabilities.voice_out = crate::providers::native::capabilities::voice_capabilities(
+                true,
+                false,
+                FILE_LIMIT,
+                accepted_codecs,
+            );
+        }
+        if self.native.voice_media_store.is_some() && self.native.events.is_some() {
+            capabilities.voice_in = crate::providers::native::capabilities::voice_capabilities(
+                true,
+                false,
+                FILE_LIMIT,
+                &["ogg_opus", "m4a_aac", "mp3"],
+            );
+        }
+        capabilities
+    }
+}
+
+#[path = "lark/native.rs"]
+mod native;
 
 crate::providers::long_tail::impl_long_tail_adapter!(LarkChannel);
 

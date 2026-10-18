@@ -520,7 +520,26 @@ fn build_long_tail_channel_inner(
         #[cfg(feature = "lark")]
         "lark" => {
             let lk = config.lark.as_ref()?;
-            Some(Arc::new(crate::providers::LarkChannel::from_config(lk)))
+            let mut channel = crate::providers::LarkChannel::from_config_with_http_client(
+                lk,
+                http.client_for("channel.lark"),
+            );
+            if let Some(repository) = host.and_then(|host| host.media_repository()) {
+                channel = channel.with_media_repository(repository);
+            }
+            if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+                channel = channel.with_voice_media_store(store);
+            }
+            if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+                channel = channel.with_transcriber(transcriber);
+            }
+            if let Some(codec) = host.and_then(|host| host.voice_codec()) {
+                channel = channel.with_voice_codec(codec);
+            }
+            if let Some(events) = host.and_then(|host| host.events()) {
+                channel = channel.with_events(events);
+            }
+            Some(Arc::new(channel))
         }
         "dingtalk" => {
             let dt = config.dingtalk.as_ref()?;

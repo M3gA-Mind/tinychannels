@@ -34,6 +34,10 @@ pub(crate) struct Limits {
 /// One file ready to upload.
 #[derive(Debug)]
 pub(crate) struct FileStep {
+    /// Semantic bus kind, retained so providers can distinguish an Audio part
+    /// from a generic file whose MIME type happens to be audio/*.
+    #[cfg(feature = "lark")]
+    pub(crate) kind: MediaKind,
     pub(crate) bytes: Vec<u8>,
     pub(crate) mime: String,
     pub(crate) name: String,
@@ -237,6 +241,8 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                     )));
                 }
                 steps.push(Step::File(FileStep {
+                    #[cfg(feature = "lark")]
+                    kind,
                     mime: stored.content_type,
                     name: stored.file_name.unwrap_or_else(|| name.to_owned()),
                     bytes: stored.bytes,
@@ -290,6 +296,8 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                         pre_dispatch(&format!("{display} voice media failed upload validation"))
                     })?;
                 steps.push(Step::Voice(FileStep {
+                    #[cfg(feature = "lark")]
+                    kind: MediaKind::Audio,
                     mime: resolved.mime_type,
                     name: resolved.file_name.unwrap_or_else(|| "voice.m4a".into()),
                     bytes: audio,
@@ -345,7 +353,7 @@ pub(crate) async fn send_typed<P: NativeProvider + ?Sized>(
     message: &ChannelOutboundMessage,
 ) -> Result<ChannelSendOutcome, ChannelSendError> {
     let id = provider.id();
-    let target = target_of(message, id, provider.display())?;
+    let target = provider.normalized_target(message)?;
     let declared = provider.declared_capabilities();
     if target.thread.is_some() && !declared.addressing.thread_id {
         return Err(unsupported(&format!(

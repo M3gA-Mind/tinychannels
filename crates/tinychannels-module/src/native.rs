@@ -105,7 +105,7 @@ pub(crate) fn build_native_v2(
             .map(|channel| NativeLaunch::new("Email", channel)),
         id => {
             let display = long_tail_display(id)?;
-            tinychannels::build_long_tail_channel(config, http, id)
+            tinychannels::factory::build_long_tail_channel_with_host(config, host, http, id)
                 .map(|channel| NativeLaunch::long_tail(display, channel))
         }
     }
