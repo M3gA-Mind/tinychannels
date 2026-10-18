@@ -98,6 +98,131 @@ async fn shutdown_closes_web_turn_admission_before_clearing_projection_state() {
     assert!(channels.begin_web_turn(late).await.is_err());
 }
 
+#[tokio::test]
+async fn service_web_projection_routes_events_and_closes_turns() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channels = Channels::new(HostChannels::new(connection), None);
+    let make_context = |request_id: &str| tinychannels_bus::WebEventContext {
+        client_id: "client".into(),
+        thread_id: "thread".into(),
+        request_id: request_id.into(),
+        turn_request_id: None,
+        seq: None,
+        ts: None,
+    };
+
+    let active = channels
+        .begin_web_turn(tinychannels_bus::BeginWebTurn {
+            scope_key: "tenant-a".into(),
+            context: make_context("active"),
+        })
+        .await
+        .unwrap();
+    let projected = channels
+        .project_web_output(tinychannels_bus::ProjectWebOutput {
+            handle: active.handle.clone(),
+            event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                text: "answer".into(),
+                iteration: Some(1),
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(projected.events.len(), 1);
+    let Some(tinychannels_bus::WebChannelEvent::TextDelta {
+        context: projected_context,
+        ..
+    }) = projected.events.first()
+    else {
+        panic!("expected one projected text event: {projected:?}");
+    };
+    assert_eq!(projected_context.request_id, "active");
+    assert_eq!(projected_context.seq, Some(1));
+    assert!(projected_context.ts.is_some());
+
+    let terminal = channels
+        .project_web_output(tinychannels_bus::ProjectWebOutput {
+            handle: active.handle.clone(),
+            event: tinychannels_bus::module_progressive::ChannelOutputEvent::FinalMessage {
+                text: "answer".into(),
+                parts: Vec::new(),
+                receipt: None,
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        terminal.events.as_slice(),
+        [tinychannels_bus::WebChannelEvent::ChatDone { context, .. }]
+            if context.request_id == "active" && context.seq == Some(2) && context.ts.is_some()
+    ));
+    assert!(
+        channels
+            .project_web_output(tinychannels_bus::ProjectWebOutput {
+                handle: active.handle,
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "late".into(),
+                    iteration: Some(1),
+                },
+            })
+            .await
+            .is_err()
+    );
+
+    let explicitly_ended = channels
+        .begin_web_turn(tinychannels_bus::BeginWebTurn {
+            scope_key: "tenant-a".into(),
+            context: make_context("explicit-end"),
+        })
+        .await
+        .unwrap();
+    channels
+        .end_web_turn(tinychannels_bus::EndWebTurn {
+            handle: explicitly_ended.handle.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        channels
+            .project_web_output(tinychannels_bus::ProjectWebOutput {
+                handle: explicitly_ended.handle,
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "after end".into(),
+                    iteration: Some(1),
+                },
+            })
+            .await
+            .is_err()
+    );
+
+    channels.shutdown().await.unwrap();
+    assert!(
+        channels
+            .begin_web_turn(tinychannels_bus::BeginWebTurn {
+                scope_key: "tenant-a".into(),
+                context: make_context("after-shutdown"),
+            })
+            .await
+            .is_err()
+    );
+    assert!(
+        channels
+            .project_web_output(tinychannels_bus::ProjectWebOutput {
+                handle: "invalid-after-shutdown".into(),
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "after shutdown".into(),
+                    iteration: Some(1),
+                },
+            })
+            .await
+            .is_err()
+    );
+}
+
 #[test]
 fn linq_is_refused_because_its_inbound_path_is_a_webhook() {
     assert!(webhook_backed("linq", &ChannelsConfig::default()));
