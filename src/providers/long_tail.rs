@@ -11,7 +11,8 @@
 use crate::traits::{Channel, SendMessage};
 use std::collections::BTreeMap;
 use tinychannels_bus::channel::{
-    ChannelDescriptor, ChannelSendError, ChannelSendOutcome, SendErrorKind,
+    ChannelDescriptor, ChannelRef, ChannelSendError, ChannelSendOutcome, ConversationRef,
+    MessageReceipt, MessageReceiptPart, MessageReceiptPartKind, SendErrorKind,
 };
 use tinychannels_bus::controllers::{ChannelAccountSnapshot, ChannelAccountState};
 use tinychannels_bus::{
@@ -93,6 +94,7 @@ impl<T> LongTailNative for T where
 }
 
 /// A provider that is also a v2 text adapter.
+#[async_trait::async_trait]
 pub(crate) trait LongTail: Channel {
     /// Stable provider id (`mattermost`).
     const ID: &'static str;
@@ -109,6 +111,14 @@ pub(crate) trait LongTail: Channel {
 
     /// Final provider-specific addressing applied to the text projection.
     fn address(&self, _message: &mut SendMessage) {}
+
+    /// Send one text message and return the platform message ids the provider
+    /// actually reported. Providers whose API answers with an id override
+    /// this; the default reports none, so the receipt stays empty rather than
+    /// guessing.
+    async fn send_reporting_ids(&self, message: &SendMessage) -> anyhow::Result<Vec<String>> {
+        self.send(message).await.map(|()| Vec::new())
+    }
 }
 
 pub(crate) fn unsupported<T: LongTail + ?Sized>(operation: &str) -> ChannelSendError {
@@ -167,10 +177,9 @@ pub(crate) async fn send_typed<T: LongTail + ?Sized>(
         chars = legacy.content.chars().count(),
         "[long-tail] sending text"
     );
-    provider
-        .send(&legacy)
+    let ids = provider
+        .send_reporting_ids(&legacy)
         .await
-        .map(|()| ChannelSendOutcome::default())
         .map_err(|error| {
             tracing::debug!(channel = T::ID, %error, "[long-tail] send failed");
             // The request may have reached the platform; never claim a retry
@@ -181,7 +190,55 @@ pub(crate) async fn send_typed<T: LongTail + ?Sized>(
                 sent_before_error: true,
                 ..Default::default()
             }
-        })
+        })?;
+    Ok(ChannelSendOutcome {
+        receipt: receipt::<T>(message, ids),
+        error: None,
+    })
+}
+
+/// The receipt for a delivered text message. It carries exactly the ids the
+/// provider reported; a provider that reports none yields an empty receipt.
+fn receipt<T: LongTail + ?Sized>(
+    message: &ChannelOutboundMessage,
+    ids: Vec<String>,
+) -> MessageReceipt {
+    if ids.is_empty() {
+        return MessageReceipt::default();
+    }
+    let channel = message.channel_ref.clone().unwrap_or(ChannelRef {
+        id: T::ID.into(),
+        account_id: None,
+    });
+    let conversation = message
+        .conversation_ref
+        .clone()
+        .unwrap_or_else(|| ConversationRef {
+            id: message.conversation_id.clone(),
+            ..Default::default()
+        });
+    MessageReceipt {
+        idempotency_key: Some(message.idempotency_key.clone()),
+        channel: Some(channel),
+        conversation: Some(conversation),
+        primary_platform_message_id: ids.first().cloned(),
+        parts: ids
+            .iter()
+            .enumerate()
+            .map(|(index, id)| MessageReceiptPart {
+                platform_message_id: id.clone(),
+                kind: MessageReceiptPartKind::Text,
+                index,
+                thread_id: message.thread_id.clone(),
+                reply_to_id: message.reply_to_id.clone(),
+                ..Default::default()
+            })
+            .collect(),
+        platform_message_ids: ids,
+        thread_id: message.thread_id.clone(),
+        reply_to_id: message.reply_to_id.clone(),
+        ..Default::default()
+    }
 }
 
 pub(crate) async fn send_intent<T: LongTail + ?Sized>(

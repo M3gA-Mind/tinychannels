@@ -124,7 +124,9 @@ impl Channel for MattermostChannel {
     }
 
     async fn send(&self, message: &SendMessage) -> Result<()> {
-        // Mattermost supports threading via 'root_id'.
+        self.post_message(message).await.map(|_| ())
+    }
+ threading via 'root_id'.
         // We pack 'channel_id:root_id' into recipient if it's a thread.
         let (channel_id, root_id) = if let Some((c, r)) = message.recipient.split_once(':') {
             (c, Some(r))
