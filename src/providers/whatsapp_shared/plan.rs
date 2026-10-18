@@ -459,19 +459,6 @@ pub(crate) async fn plan_parts(
                     organization: organization.clone(),
                 })
             }
-            OutboundContentPart::Content {
-                part: ContentPart::VoiceNote { voice_note },
-            }
-            | OutboundContentPart::Voice {
-                voice:
-                    OutboundVoice::Media {
-                        media: _,
-                        codec: _,
-                        duration_ms: _,
-                        audio_base64: _,
-                        waveform: _,
-                    },
-            } if false && voice_note_marker(part) => unreachable!("{voice_note:?}"),
             OutboundContentPart::Voice {
                 voice:
                     OutboundVoice::Media {
