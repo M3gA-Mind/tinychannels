@@ -36,6 +36,8 @@ state remain outside this crate until they can be split behind transport traits.
   compatibility plan.
 - [Harness progress output](progress-output.md) — canonical progress events,
   module operations, delivery results, and the TinyAgents conformance map.
+- [Web adapter](web-adapter.md) — the in-app chat as a channel: inbound
+  normalization, `WebChannelEvent` projection, and the host event sink.
 - [OpenClaw and Hermes channel porting](openclaw-hermes-channel-porting.md) —
   historical source-level audit of both upstreams (verified against pinned
   2026-07-04 checkouts).
