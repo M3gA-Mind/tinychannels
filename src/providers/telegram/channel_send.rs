@@ -1,7 +1,5 @@
-//! Telegram channel — outbound message sending: text chunking, media uploads, reaction sending,
-//! and attachment dispatch.
+//! Telegram channel — outbound text chunking, native media uploads, and reaction sending.
 
-use super::attachments::{TelegramAttachment, TelegramAttachmentKind, is_http_url};
 use super::channel_types::TelegramChannel;
 
 #[derive(Debug)]
@@ -18,7 +16,7 @@ impl std::fmt::Display for PartialTextSendError {
 }
 
 impl std::error::Error for PartialTextSendError {}
-use super::text::split_message_for_telegram;
+use super::text::{markdown_v2_text, split_message_for_telegram};
 use reqwest::multipart::{Form, Part};
 use std::path::Path;
 use std::time::Duration;
@@ -173,25 +171,6 @@ impl TelegramChannel {
             })
     }
 
-    pub(crate) fn parse_reaction_marker(content: &str) -> (String, Option<String>) {
-        // Marker format at the start of the message: [REACTION:😀] or [REACTION:😀|12345]
-        // The marker may be followed by a text reply: [REACTION:👍] Great point!
-        // Returns (remaining_text, Some(marker_inner)) or (original, None).
-        let trimmed = content.trim();
-        let Some(rest) = trimmed.strip_prefix("[REACTION:") else {
-            return (content.to_string(), None);
-        };
-        let Some(close_pos) = rest.find(']') else {
-            return (content.to_string(), None);
-        };
-        let inner = rest[..close_pos].trim();
-        if inner.is_empty() {
-            return (String::new(), None);
-        }
-        let remaining = rest[close_pos + 1..].trim().to_string();
-        (remaining, Some(inner.to_string()))
-    }
-
     pub(crate) async fn send_message_reaction(
         &self,
         chat_id: &str,
@@ -203,15 +182,46 @@ impl TelegramChannel {
             return Ok(false);
         }
 
+        self.send_message_reaction_type(
+            chat_id,
+            message_id,
+            serde_json::json!({ "type": "emoji", "emoji": emoji }),
+            emoji,
+        )
+        .await
+    }
+
+    pub(crate) async fn send_message_custom_reaction(
+        &self,
+        chat_id: &str,
+        message_id: i64,
+        custom_emoji_id: &str,
+    ) -> anyhow::Result<bool> {
+        let custom_emoji_id = custom_emoji_id.trim();
+        if custom_emoji_id.is_empty() {
+            return Ok(false);
+        }
+
+        self.send_message_reaction_type(
+            chat_id,
+            message_id,
+            serde_json::json!({ "type": "custom_emoji", "custom_emoji_id": custom_emoji_id }),
+            custom_emoji_id,
+        )
+        .await
+    }
+
+    async fn send_message_reaction_type(
+        &self,
+        chat_id: &str,
+        message_id: i64,
+        reaction: serde_json::Value,
+        log_value: &str,
+    ) -> anyhow::Result<bool> {
         let body = serde_json::json!({
             "chat_id": chat_id,
             "message_id": message_id,
-            "reaction": [
-                {
-                    "type": "emoji",
-                    "emoji": emoji
-                }
-            ],
+            "reaction": [reaction],
             "is_big": false
         });
         let resp = self
@@ -220,24 +230,28 @@ impl TelegramChannel {
             .json(&body)
             .send()
             .await?;
-        if resp.status().is_success() {
-            self.publish_reaction_sent(chat_id, message_id, emoji, true)
+        let status = resp.status();
+        let response = resp.json::<serde_json::Value>().await?;
+        if status.is_success() && super::channel_ops::response_status_ok(&response) {
+            self.publish_reaction_sent(chat_id, message_id, log_value, true)
                 .await;
-            tracing::info!(chat_id, message_id, emoji, "Telegram reaction sent");
+            tracing::info!(
+                chat_id,
+                message_id,
+                reaction = log_value,
+                "Telegram reaction sent"
+            );
             return Ok(true);
         }
 
-        let status = resp.status();
-        let err = resp.text().await.unwrap_or_default();
         tracing::warn!(
             chat_id,
             message_id,
-            emoji,
+            reaction = log_value,
             status = ?status,
-            error = err,
             "Telegram reaction not applied; continuing without failure"
         );
-        self.publish_reaction_sent(chat_id, message_id, emoji, false)
+        self.publish_reaction_sent(chat_id, message_id, log_value, false)
             .await;
         Ok(false)
     }
@@ -324,8 +338,8 @@ impl TelegramChannel {
 
             let mut markdown_body = serde_json::json!({
                 "chat_id": chat_id,
-                "text": text,
-                "parse_mode": "Markdown"
+                "text": markdown_v2_text(&text),
+                "parse_mode": "MarkdownV2"
             });
 
             // Add message_thread_id for forum topic support
@@ -387,7 +401,7 @@ impl TelegramChannel {
             }
             tracing::warn!(
                 status = ?markdown_status,
-                "Telegram rejected Markdown formatting; retrying once without parse_mode"
+                "Telegram rejected MarkdownV2 formatting; retrying once without parse_mode"
             );
 
             let mut plain_body = serde_json::json!({
@@ -498,55 +512,6 @@ impl TelegramChannel {
 
         tracing::info!("Telegram {method} sent to {chat_id}: {url}");
         Ok(())
-    }
-
-    pub(crate) async fn send_attachment(
-        &self,
-        chat_id: &str,
-        thread_id: Option<&str>,
-        attachment: &TelegramAttachment,
-    ) -> anyhow::Result<()> {
-        let target = attachment.target.trim();
-
-        if is_http_url(target) {
-            return match attachment.kind {
-                TelegramAttachmentKind::Image => {
-                    self.send_photo_by_url(chat_id, thread_id, target, None)
-                        .await
-                }
-                TelegramAttachmentKind::Document => {
-                    self.send_document_by_url(chat_id, thread_id, target, None)
-                        .await
-                }
-                TelegramAttachmentKind::Video => {
-                    self.send_video_by_url(chat_id, thread_id, target, None)
-                        .await
-                }
-                TelegramAttachmentKind::Audio => {
-                    self.send_audio_by_url(chat_id, thread_id, target, None)
-                        .await
-                }
-                TelegramAttachmentKind::Voice => {
-                    self.send_voice_by_url(chat_id, thread_id, target, None)
-                        .await
-                }
-            };
-        }
-
-        let path = Path::new(target);
-        if !path.exists() {
-            anyhow::bail!("Telegram attachment path not found: {target}");
-        }
-
-        match attachment.kind {
-            TelegramAttachmentKind::Image => self.send_photo(chat_id, thread_id, path, None).await,
-            TelegramAttachmentKind::Document => {
-                self.send_document(chat_id, thread_id, path, None).await
-            }
-            TelegramAttachmentKind::Video => self.send_video(chat_id, thread_id, path, None).await,
-            TelegramAttachmentKind::Audio => self.send_audio(chat_id, thread_id, path, None).await,
-            TelegramAttachmentKind::Voice => self.send_voice(chat_id, thread_id, path, None).await,
-        }
     }
 
     /// Send a document/file to a Telegram chat
@@ -974,7 +939,7 @@ fn is_markdown_parse_rejection(status: reqwest::StatusCode, body: &[u8]) -> bool
         || description.contains("entity beginning")
 }
 
-fn partial_text_send_error(
+pub(crate) fn partial_text_send_error(
     message_ids: Vec<String>,
     message: String,
     retryable: bool,

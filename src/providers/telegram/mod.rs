@@ -27,10 +27,6 @@ pub use crate::remote::{
     parse_remote_command as parse_telegram_remote_command,
 };
 
-#[cfg(any(test, debug_assertions))]
-#[path = "mod_test_support_tests.rs"]
-pub mod test_support;
-
 #[cfg(test)]
 #[path = "fixtures_tests.rs"]
 mod fixtures;

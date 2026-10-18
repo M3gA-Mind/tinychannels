@@ -186,7 +186,7 @@ async fn typing_action_retries_without_thread_when_thread_scoped_action_rejected
     mount_post(&server, "sendChatAction", ok_with(serde_json::json!(true))).await;
     let ch = channel_for(&server, &["*"]);
 
-    ch.send_typing_action_once("100:4").await;
+    assert!(ch.send_typing_action_once("100:4").await.unwrap());
 
     let bodies = json_bodies(&server, "sendChatAction").await;
     assert_eq!(bodies.len(), 2);
@@ -208,8 +208,8 @@ async fn typing_action_fallback_rejection_is_tolerated() {
     .await;
     let ch = channel_for(&server, &["*"]);
 
-    ch.send_typing_action_once("100:4").await;
-    ch.send_typing_action_once("100").await;
+    assert!(!ch.send_typing_action_once("100:4").await.unwrap());
+    assert!(!ch.send_typing_action_once("100").await.unwrap());
 
     // Thread-scoped: original + fallback; plain chat: no fallback.
     assert_eq!(json_bodies(&server, "sendChatAction").await.len(), 3);
@@ -219,7 +219,7 @@ async fn typing_action_fallback_rejection_is_tolerated() {
 async fn typing_action_transport_error_is_tolerated() {
     let mut ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
     ch.api_base = dead_base();
-    ch.send_typing_action_once("100:4").await;
+    assert!(ch.send_typing_action_once("100:4").await.is_err());
 }
 
 // ── mention parsing ──────────────────────────────────────────────────────
@@ -542,7 +542,7 @@ async fn bind_with_valid_code_but_no_identity_is_rejected() {
     .await;
 
     assert!(ch.allowlist_is_empty());
-    assert!(sent_texts(&server).await[0].contains("Could not identify your Telegram account."));
+    assert!(sent_texts(&server).await[0].contains(r"Could not identify your Telegram account\."));
 }
 
 #[tokio::test]
@@ -737,6 +737,82 @@ async fn telegram_photo_download_enters_ordered_typed_media_ingress() {
         stored[0].metadata.dedupe_key.as_deref(),
         Some("telegram:telegram_888_60:photo")
     );
+}
+
+#[tokio::test]
+async fn telegram_ingress_preserves_location_venue_and_contact_as_typed_parts() {
+    let server = mock_api().await;
+    let channel = channel_for(&server, &["alice"]);
+    let updates = [
+        serde_json::json!({
+            "update_id": 51,
+            "message": {
+                "message_id": 61,
+                "date": 1_700_000_000,
+                "chat": {"id": -100, "type": "supergroup"},
+                "message_thread_id": 7,
+                "from": {"id": 9, "username": "alice"},
+                "location": {
+                    "latitude": 29.3,
+                    "longitude": 47.9,
+                    "horizontal_accuracy": 12.5,
+                    "live_period": 60
+                }
+            }
+        }),
+        serde_json::json!({
+            "update_id": 52,
+            "message": {
+                "message_id": 62,
+                "chat": {"id": 100, "type": "private"},
+                "from": {"id": 10, "username": "alice"},
+                "venue": {
+                    "location": {"latitude": 1.0, "longitude": 2.0},
+                    "title": "Office",
+                    "address": "Main Street"
+                }
+            }
+        }),
+        serde_json::json!({
+            "update_id": 53,
+            "message": {
+                "message_id": 63,
+                "chat": {"id": 100, "type": "private"},
+                "from": {"id": 11, "username": "alice"},
+                "contact": {
+                    "phone_number": "+1234",
+                    "first_name": "Ada",
+                    "last_name": "Lovelace"
+                }
+            }
+        }),
+    ];
+
+    for (index, update) in updates.iter().enumerate() {
+        let message = channel
+            .parse_update_message_or_voice(update)
+            .await
+            .expect("structured location/contact update is accepted");
+        let envelope = TelegramChannel::inbound_envelope_from_update(update, &message, None);
+        match index {
+            0 => assert!(
+                matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Location {
+                latitude, longitude, accuracy_meters: Some(12.5), live_until_unix_ms: Some(1_700_000_060_000), ..
+            }] if *latitude == 29.3 && *longitude == 47.9)
+            ),
+            1 => assert!(
+                matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Location {
+                latitude, longitude, label: Some(label), address: Some(address), ..
+            }] if *latitude == 1.0 && *longitude == 2.0 && label == "Office" && address == "Main Street")
+            ),
+            2 => assert!(
+                matches!(envelope.parts.as_slice(), [tinychannels_bus::ContentPart::Contact {
+                display_name, phone_numbers, ..
+            }] if display_name == "Ada Lovelace" && phone_numbers[0].value == "+1234")
+            ),
+            _ => unreachable!(),
+        }
+    }
 }
 
 #[tokio::test]

@@ -212,6 +212,59 @@ impl HttpClientFactory for ConfiguredHttpClients {
     }
 }
 
+/// Build the configured Telegram channel as its concrete provider type.
+///
+/// The module uses this to retain the same Telegram object as both the polling
+/// owner and the native v2 operation executor.
+#[must_use]
+pub fn build_telegram_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<TelegramChannel>> {
+    let tg = config.telegram.as_ref()?;
+    tracing::info!(
+        channel = "telegram",
+        allowed_users_count = tg.allowed_users.len(),
+        mention_only = tg.mention_only,
+        "[channels] telegram enabled (bot token not logged)"
+    );
+    let mut telegram = TelegramChannel::new(
+        tg.bot_token.clone(),
+        tg.allowed_users.clone(),
+        tg.mention_only,
+    )
+    .with_streaming(
+        tg.stream_mode,
+        tg.draft_update_interval_ms,
+        tg.silent_streaming,
+    )
+    .with_chat_id(tg.chat_id.clone())
+    .with_http_client(http.client_for("channel.telegram"));
+    // Each is optional — telegram degrades gracefully without them.
+    if let Some(transcriber) = host.transcriber() {
+        telegram = telegram.with_transcriber(transcriber);
+    }
+    if let Some(store) = host.voice_media_store() {
+        telegram = telegram.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        telegram = telegram.with_media_repository(repository);
+    }
+    telegram = telegram.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(allowlist) = host.allowlist() {
+        telegram = telegram.with_allowlist(allowlist);
+    }
+    if let Some(events) = host.events() {
+        telegram = telegram.with_events(events);
+    }
+    Some(Arc::new(telegram))
+}
+
 /// Build every provider that `config` enables.
 ///
 /// Order is stable and matches the declaration order below, so a caller that
@@ -226,47 +279,10 @@ pub fn build_channels(
 ) -> Vec<Arc<dyn Channel>> {
     let mut channels: Vec<Arc<dyn Channel>> = Vec::new();
 
-    if let Some(tg) = config.telegram.as_ref() {
-        tracing::info!(
-            channel = "telegram",
-            allowed_users_count = tg.allowed_users.len(),
-            mention_only = tg.mention_only,
-            "[channels] telegram enabled (bot token not logged)"
-        );
-        let mut telegram = TelegramChannel::new(
-            tg.bot_token.clone(),
-            tg.allowed_users.clone(),
-            tg.mention_only,
-        )
-        .with_streaming(
-            tg.stream_mode,
-            tg.draft_update_interval_ms,
-            tg.silent_streaming,
-        )
-        .with_chat_id(tg.chat_id.clone())
-        .with_http_client(http.client_for("channel.telegram"));
-        // Each is optional — telegram degrades gracefully without them.
-        if let Some(transcriber) = host.transcriber() {
-            telegram = telegram.with_transcriber(transcriber);
-        }
-        if let Some(store) = host.voice_media_store() {
-            telegram = telegram.with_voice_media_store(store);
-        }
-        if let Some(repository) = host.media_repository() {
-            telegram = telegram.with_media_repository(repository);
-        }
-        telegram = telegram.with_voice_synthesis(
-            host.synthesizer().is_some()
-                && host.voice_codec().is_some()
-                && host.voice_media_store().is_some(),
-        );
-        if let Some(allowlist) = host.allowlist() {
-            telegram = telegram.with_allowlist(allowlist);
-        }
-        if let Some(events) = host.events() {
-            telegram = telegram.with_events(events);
-        }
-        channels.push(Arc::new(telegram));
+    if config.telegram.is_some()
+        && let Some(telegram) = build_telegram_channel(config, host, http)
+    {
+        channels.push(telegram);
     }
 
     if let Some(dc) = config.discord.as_ref() {

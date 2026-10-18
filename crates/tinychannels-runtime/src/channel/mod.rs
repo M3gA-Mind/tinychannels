@@ -13,7 +13,7 @@ pub use crate::traits::{Channel, ChannelMessage, ChannelSendExt, SendMessage, Se
 pub use adapter::{
     ChannelAdapter, ChannelDelete, ChannelDirectory, ChannelEdit, ChannelInboundSink,
     ChannelReaction, ChannelReceiveAckPolicy, ChannelResolver, ChannelSetup, ChannelStreamingDraft,
-    ChannelTyping,
+    ChannelTypedSend, ChannelTyping,
 };
 pub use capabilities::{
     CHANNEL_MESSAGE_ACTION_NAMES, ChannelPresentationCapabilities, ChannelStaticCapabilities,

@@ -59,6 +59,55 @@ impl Channel for DraftProvider {
         ));
         Ok(())
     }
+
+    async fn send_reaction(
+        &self,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> anyhow::Result<()> {
+        self.0.lock().unwrap().push(format!(
+            "reaction:{}:{provider_message_id}:{}:{remove}",
+            conversation.id, reaction.value
+        ));
+        anyhow::ensure!(reaction.value != "fail", "fixture reaction failure");
+        Ok(())
+    }
+
+    async fn edit_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: &tinychannels_bus::channel::ChannelOutboundIntent,
+    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("edit:{}", intent.idempotency_key));
+        anyhow::ensure!(
+            receipt.primary_platform_message_id.as_deref() != Some("fail"),
+            "fixture edit failure"
+        );
+        Ok(receipt.clone())
+    }
+
+    async fn delete_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> anyhow::Result<()> {
+        self.0.lock().unwrap().push(format!(
+            "delete:{}",
+            receipt
+                .primary_platform_message_id
+                .as_deref()
+                .unwrap_or_default()
+        ));
+        anyhow::ensure!(
+            receipt.primary_platform_message_id.as_deref() != Some("fail"),
+            "fixture delete failure"
+        );
+        Ok(())
+    }
 }
 
 struct NoDraftProvider;
@@ -205,4 +254,125 @@ async fn typing_refresh_requires_a_running_provider_owner() {
         assert!(error.to_string().contains("typing refresh must be owned"));
     }
     assert!(provider.0.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn native_operation_interactions_preserve_results_and_map_failures() {
+    let provider = DraftProvider::default();
+    let conversation = tinychannels_bus::channel::ConversationRef {
+        id: "room".into(),
+        ..Default::default()
+    };
+    let reaction = tinychannels_bus::channel::ChannelReaction {
+        value: "👍".into(),
+        ..Default::default()
+    };
+    let receipt = tinychannels_bus::channel::MessageReceipt {
+        primary_platform_message_id: Some("provider-id".into()),
+        ..Default::default()
+    };
+    let intent = tinychannels_bus::channel::ChannelOutboundIntent {
+        idempotency_key: "edit-key".into(),
+        ..Default::default()
+    };
+
+    assert!(matches!(
+        dispatch(
+            &provider,
+            ChannelInteraction::SendReaction {
+                channel: tinychannels_bus::ChannelRef {
+                    id: "fixture".into(),
+                    account_id: None
+                },
+                conversation: conversation.clone(),
+                provider_message_id: "provider-id".into(),
+                reaction: reaction.clone(),
+                remove: false,
+            }
+        )
+        .await
+        .unwrap(),
+        ChannelInteractionResult::Completed
+    ));
+    assert!(matches!(
+        dispatch(&provider, ChannelInteraction::EditMessage { receipt: receipt.clone(), intent }).await.unwrap(),
+        ChannelInteractionResult::Sent(outcome) if outcome.receipt == receipt && outcome.error.is_none()
+    ));
+    assert!(matches!(
+        dispatch(
+            &provider,
+            ChannelInteraction::DeleteMessage {
+                receipt: receipt.clone()
+            }
+        )
+        .await
+        .unwrap(),
+        ChannelInteractionResult::Completed
+    ));
+    assert!(
+        dispatch(
+            &provider,
+            ChannelInteraction::UpsertDraft {
+                previous: None,
+                intent: tinychannels_bus::ChannelOutboundIntent::default(),
+            }
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("configured provider queue")
+    );
+
+    let failed_reaction = dispatch(
+        &provider,
+        ChannelInteraction::SendReaction {
+            channel: tinychannels_bus::ChannelRef {
+                id: "fixture".into(),
+                account_id: None,
+            },
+            conversation,
+            provider_message_id: "provider-id".into(),
+            reaction: tinychannels_bus::channel::ChannelReaction {
+                value: "fail".into(),
+                ..Default::default()
+            },
+            remove: false,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        failed_reaction
+            .to_string()
+            .contains("provider reaction failed")
+    );
+    let failed_receipt = tinychannels_bus::channel::MessageReceipt {
+        primary_platform_message_id: Some("fail".into()),
+        ..Default::default()
+    };
+    assert!(
+        dispatch(
+            &provider,
+            ChannelInteraction::EditMessage {
+                receipt: failed_receipt.clone(),
+                intent: tinychannels_bus::ChannelOutboundIntent::default(),
+            }
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("provider message edit failed")
+    );
+    assert!(
+        dispatch(
+            &provider,
+            ChannelInteraction::DeleteMessage {
+                receipt: failed_receipt
+            }
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("provider message deletion failed")
+    );
 }

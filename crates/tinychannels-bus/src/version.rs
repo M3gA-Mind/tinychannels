@@ -1,7 +1,7 @@
 //! Wire-contract versioning for TinyChannels hosts.
 
 /// Current TinyChannels wire-contract version.
-pub const CONTRACT_VERSION: u32 = 24;
+pub const CONTRACT_VERSION: u32 = 25;
 
 /// Returns whether a host requiring `required` can bind to this contract.
 ///

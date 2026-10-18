@@ -51,6 +51,7 @@ use tinychannels::delivery::{
 };
 use tinychannels::factory::{
     ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
+    build_telegram_channel,
 };
 use tinychannels::host::ChannelHost;
 use tinychannels_bus::ChannelControllerRequest;
@@ -197,14 +198,22 @@ impl Channels {
         let media_account_scope = crate::provider::configured_media_account_scope(&name, &config);
         let owner_host: Arc<dyn ChannelHost> =
             hooks.host(self.host.clone(), name.clone(), media_account_scope.clone());
-        let built = build_channels(&config, &owner_host, http);
-        let channel = built
-            .into_iter()
-            .find(|candidate| candidate.name() == name)
-            .ok_or_else(|| BusError::MethodFailed {
-                name: NOT_CONFIGURED_ERROR.to_owned(),
-                message: format!("channel {name} is not present in the supplied config"),
-            })?;
+        let telegram = if tinychannels_bus::provider_id(&name) == "telegram" {
+            build_telegram_channel(&config, &owner_host, http)
+        } else {
+            None
+        };
+        let channel: Arc<dyn tinychannels::Channel> = if let Some(telegram) = &telegram {
+            telegram.clone()
+        } else {
+            build_channels(&config, &owner_host, http)
+                .into_iter()
+                .find(|candidate| candidate.name() == name)
+                .ok_or_else(|| BusError::MethodFailed {
+                    name: NOT_CONFIGURED_ERROR.to_owned(),
+                    message: format!("channel {name} is not present in the supplied config"),
+                })?
+        };
 
         if is_webhook_backed(&name, &config) && !outbound_only {
             return Err(BusError::MethodFailed {
@@ -222,10 +231,22 @@ impl Channels {
                 "outbound-only startup requires an external-webhook provider",
             ));
         }
-        let provider = match supervision {
-            Some(policy) => Running::start_supervised(channel, hooks, self.host.clone(), policy),
-            None if outbound_only => Running::start_outbound(channel, hooks, self.host.clone()),
-            None => Running::start(channel, hooks, self.host.clone()),
+        let provider = if let Some(telegram) = telegram {
+            Running::start_telegram(
+                telegram,
+                hooks,
+                self.host.clone(),
+                supervision,
+                outbound_only,
+            )
+        } else {
+            match supervision {
+                Some(policy) => {
+                    Running::start_supervised(channel, hooks, self.host.clone(), policy)
+                }
+                None if outbound_only => Running::start_outbound(channel, hooks, self.host.clone()),
+                None => Running::start(channel, hooks, self.host.clone()),
+            }
         };
         running.insert(name.clone(), provider);
         self.provider_activations.lock().await.insert(

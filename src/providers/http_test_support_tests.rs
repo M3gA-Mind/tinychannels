@@ -17,8 +17,7 @@ pub(super) struct Request {
 pub(super) struct HttpsServer {
     pub client: reqwest::Client,
     pub requests: Arc<Mutex<Vec<Request>>>,
-    /// Loopback address the fixture listens on, for clients that need to
-    /// resolve hosts outside the bundled certificate's names.
+    /// Loopback address used by provider fixtures that resolve fixed hosts.
     pub address: std::net::SocketAddr,
     task: tokio::task::JoinHandle<()>,
 }

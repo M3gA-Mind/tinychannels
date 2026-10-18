@@ -19,16 +19,7 @@ impl tinychannels_runtime::adapters::LocalOutboundSink for TelegramConformanceSi
         tinychannels_bus::channel::MessageReceipt,
         tinychannels_bus::channel::ChannelSendError,
     > {
-        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
-        let outcome = self
-            .0
-            .send_typed_with_receipt(&message)
-            .await
-            .map_err(|error| tinychannels_bus::channel::ChannelSendError {
-                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
-                message: error.to_string(),
-                ..Default::default()
-            })?;
+        let outcome = crate::channel::ChannelAdapter::send(self.0.as_ref(), intent).await?;
         if let Some(error) = outcome.error {
             return Err(error);
         }
@@ -149,7 +140,11 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                     reply_to_id: wire_id("reply_to_message_id"),
                     thread_id: wire_id("message_thread_id"),
                     payload_kinds,
-                    platform_message_ids: vec!["321".into()],
+                    platform_message_ids: result
+                        .as_ref()
+                        .ok()
+                        .map(|outcome| outcome.receipt.platform_message_ids.clone())
+                        .unwrap_or_default(),
                     request: body,
                 });
         }
@@ -211,7 +206,8 @@ fn telegram_voice_capabilities_require_durable_store_and_host_synthesis_ports() 
         .with_voice_media_store(Arc::new(VoiceReadFixture))
         .capabilities();
     assert!(with_storage.voice_in.supported);
-    assert_eq!(with_storage.content.parts, ["text", "voice_note"]);
+    assert!(with_storage.content.parts.contains(&"text".into()));
+    assert!(with_storage.content.parts.contains(&"voice_note".into()));
     assert!(with_storage.voice_out.supported);
     assert!(!with_storage.voice_out.synthesis);
     assert_eq!(
@@ -233,7 +229,8 @@ fn telegram_voice_capabilities_preserve_base_text_and_stream_descriptor() {
         .with_voice_media_store(Arc::new(VoiceReadFixture))
         .capabilities();
     assert!(off.content.text.inbound && off.content.text.outbound);
-    assert_eq!(off.content.parts, ["text", "voice_note"]);
+    assert!(off.content.parts.contains(&"text".into()));
+    assert!(off.content.parts.contains(&"voice_note".into()));
     assert!(off.actions.supported.contains(&"send".into()));
     assert!(!off.progressive_edits);
     assert!(!off.streaming_reply_pipeline);
@@ -261,7 +258,7 @@ fn telegram_advertises_typed_media_only_with_scoped_storage() {
     assert!(configured.content.audio.inbound && configured.content.audio.outbound);
     assert!(configured.content.file.inbound && configured.content.file.outbound);
     assert!(configured.content.sticker.inbound);
-    assert!(!configured.content.sticker.outbound);
+    assert!(configured.content.sticker.outbound);
     assert_eq!(
         configured.content.image.accepted_types,
         ["image/jpeg", "image/png", "image/gif", "image/webp"]
@@ -337,6 +334,12 @@ impl crate::host::MediaRepository for TypedMediaReadFixture {
         assert_eq!(scope.conversation.topic_id.as_deref(), Some("topic-77"));
         assert_eq!(scope.turn_id, "turn-42");
         let (kind, content_type, file_name, bytes) = match opaque_id.as_str() {
+            "stored-sticker-webp" => (
+                tinychannels_bus::MediaKind::Image,
+                "image/webp",
+                "sticker.webp",
+                include_bytes!("fixtures/sticker-512.webp").to_vec(),
+            ),
             "stored-photo-1" => (
                 tinychannels_bus::MediaKind::Image,
                 "image/png",
@@ -601,6 +604,26 @@ async fn typed_voice_resolves_opaque_media_and_sends_real_telegram_voice_receipt
     assert!(uploads[0].contains("\u{1}\u{2}\u{3}\u{4}"));
     assert!(uploads[0].contains("reply_parameters"));
     assert!(uploads[0].contains("\"message_id\":42"));
+}
+
+#[tokio::test]
+async fn typed_voice_wire_failure_keeps_remote_uncertainty() {
+    let server = mock_api().await;
+    mount_post(&server, "sendVoice", ok_with(serde_json::json!({}))).await;
+    let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
+    let message = outbound_voice_message(Some("host-media-1"), Some("turn-7"));
+
+    let error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+
+    assert_eq!(json_bodies(&server, "sendVoice").await.len(), 1);
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Unknown
+    );
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
 }
 
 #[tokio::test]
@@ -963,6 +986,418 @@ fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessag
     }
 }
 
+fn typed_parts(
+    id: &str,
+    parts: Vec<tinychannels_bus::OutboundContentPart>,
+) -> tinychannels_bus::ChannelOutboundMessage {
+    tinychannels_bus::ChannelOutboundMessage {
+        channel_id: "telegram".into(),
+        conversation_id: "-10042".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:main".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Group,
+            id: "-10042".into(),
+            topic_id: Some("77".into()),
+            ..Default::default()
+        }),
+        reply_to_id: Some("12".into()),
+        thread_id: Some("77".into()),
+        turn_id: Some("turn-1".into()),
+        idempotency_key: id.into(),
+        parts,
+    }
+}
+
+#[tokio::test]
+async fn native_location_contact_buttons_poll_and_presentation_use_bot_api_methods() {
+    use tinychannels_bus::channel::{ButtonAction, ContactMethod, ContentPart};
+    let server = mock_api().await;
+    for method_name in [
+        "sendLocation",
+        "sendVenue",
+        "sendContact",
+        "sendMessage",
+        "sendPoll",
+    ] {
+        mount_post(
+            &server,
+            method_name,
+            ok_with(serde_json::json!({"message_id": 321})),
+        )
+        .await;
+    }
+    let channel = channel_for(&server, &["*"]);
+
+    let location = typed_parts(
+        "location",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Location {
+                latitude: 29.3,
+                longitude: 47.9,
+                label: None,
+                address: None,
+                accuracy_meters: Some(15.0),
+                live_until_unix_ms: None,
+            },
+        }],
+    );
+    let outcome = crate::channel::ChannelTypedSend::send_typed(&channel, &location)
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("321")
+    );
+    let body = json_bodies(&server, "sendLocation").await.remove(0);
+    assert_eq!(body["latitude"], 29.3);
+    assert_eq!(body["longitude"], 47.9);
+    assert_eq!(body["message_thread_id"], "77");
+    assert_eq!(body["reply_parameters"]["message_id"], 12);
+
+    let venue = typed_parts(
+        "venue",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Location {
+                latitude: 29.3,
+                longitude: 47.9,
+                label: Some("Office".into()),
+                address: Some("Main Street".into()),
+                accuracy_meters: None,
+                live_until_unix_ms: None,
+            },
+        }],
+    );
+    crate::channel::ChannelTypedSend::send_typed(&channel, &venue)
+        .await
+        .unwrap();
+    let body = json_bodies(&server, "sendVenue").await.remove(0);
+    assert_eq!(body["title"], "Office");
+    assert_eq!(body["address"], "Main Street");
+
+    let contact = typed_parts(
+        "contact",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Contact {
+                display_name: "Ada Lovelace".into(),
+                phone_numbers: vec![ContactMethod {
+                    value: "+1234567".into(),
+                    label: Some("CELL".into()),
+                }],
+                emails: vec![ContactMethod {
+                    value: "ada@example.test".into(),
+                    label: None,
+                }],
+                organization: Some("Analytical Engine".into()),
+            },
+        }],
+    );
+    crate::channel::ChannelTypedSend::send_typed(&channel, &contact)
+        .await
+        .unwrap();
+    let body = json_bodies(&server, "sendContact").await.remove(0);
+    assert_eq!(body["phone_number"], "+1234567");
+    assert_eq!(body["first_name"], "Ada");
+    assert_eq!(body["last_name"], "Lovelace");
+    assert!(
+        body["vcard"]
+            .as_str()
+            .unwrap()
+            .contains("EMAIL;TYPE=INTERNET:ada@example.test")
+    );
+
+    let buttons = typed_parts(
+        "buttons",
+        vec![
+            tinychannels_bus::OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "Choose".into(),
+                    markdown_dialect: None,
+                },
+            },
+            tinychannels_bus::OutboundContentPart::Content {
+                part: ContentPart::Buttons {
+                    rows: vec![vec![ButtonAction {
+                        id: "opaque-action-17".into(),
+                        label: "Continue".into(),
+                        style: None,
+                        disabled: false,
+                    }]],
+                },
+            },
+        ],
+    );
+    crate::channel::ChannelTypedSend::send_typed(&channel, &buttons)
+        .await
+        .unwrap();
+    let body = json_bodies(&server, "sendMessage").await.remove(0);
+    assert_eq!(
+        body["reply_markup"]["inline_keyboard"][0][0]["callback_data"],
+        "opaque-action-17"
+    );
+    assert_eq!(body["text"], "Choose");
+
+    let poll = typed_parts(
+        "poll",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Poll {
+                question: "Preferred option?".into(),
+                options: vec!["A".into(), "B".into()],
+                multiple_choice: true,
+                closes_at_unix_ms: None,
+                provider_poll_id: None,
+            },
+        }],
+    );
+    crate::channel::ChannelTypedSend::send_typed(&channel, &poll)
+        .await
+        .unwrap();
+    let body = json_bodies(&server, "sendPoll").await.remove(0);
+    assert_eq!(
+        body["options"],
+        serde_json::json!([{"text":"A"},{"text":"B"}])
+    );
+    assert_eq!(body["allows_multiple_answers"], true);
+    assert_eq!(body["message_thread_id"], "77");
+
+    let presentation = typed_parts(
+        "presentation",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: ContentPart::Presentation {
+                blocks: serde_json::json!({"title":"Update", "text":"Status"}),
+            },
+        }],
+    );
+    let before_presentation = json_bodies(&server, "sendMessage").await.len();
+    crate::channel::ChannelTypedSend::send_typed(&channel, &presentation)
+        .await
+        .unwrap();
+    let message_bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(message_bodies.len(), before_presentation + 1);
+    let body = message_bodies.last().unwrap();
+    assert_eq!(body["text"], "Update\nStatus");
+    assert_eq!(body["parse_mode"], "MarkdownV2");
+}
+
+#[tokio::test]
+async fn structured_payloads_reject_invalid_bot_api_values_before_http() {
+    use tinychannels_bus::channel::{ButtonAction, ContactMethod, ContentPart};
+    let server = mock_api().await;
+    let channel = channel_for(&server, &["*"]);
+    let text = || tinychannels_bus::OutboundContentPart::Content {
+        part: ContentPart::Text {
+            text: "prompt".into(),
+            markdown_dialect: None,
+        },
+    };
+    let part = |part| tinychannels_bus::OutboundContentPart::Content { part };
+    let invalid = vec![
+        part(ContentPart::Location {
+            latitude: 91.0,
+            longitude: 0.0,
+            label: None,
+            address: None,
+            accuracy_meters: None,
+            live_until_unix_ms: None,
+        }),
+        part(ContentPart::Location {
+            latitude: 1.0,
+            longitude: 0.0,
+            label: Some("venue".into()),
+            address: None,
+            accuracy_meters: None,
+            live_until_unix_ms: None,
+        }),
+        part(ContentPart::Location {
+            latitude: 1.0,
+            longitude: 0.0,
+            label: None,
+            address: None,
+            accuracy_meters: Some(1501.0),
+            live_until_unix_ms: None,
+        }),
+        part(ContentPart::Location {
+            latitude: 1.0,
+            longitude: 0.0,
+            label: None,
+            address: None,
+            accuracy_meters: None,
+            live_until_unix_ms: Some(0),
+        }),
+        part(ContentPart::Contact {
+            display_name: "No phone".into(),
+            phone_numbers: vec![],
+            emails: vec![],
+            organization: None,
+        }),
+        part(ContentPart::Contact {
+            display_name: "Ada".into(),
+            phone_numbers: vec![ContactMethod {
+                value: "1".repeat(257),
+                label: None,
+            }],
+            emails: vec![],
+            organization: None,
+        }),
+        part(ContentPart::Contact {
+            display_name: "Ada".into(),
+            phone_numbers: vec![ContactMethod {
+                value: "+1".into(),
+                label: Some("CELL\\nINJECT".into()),
+            }],
+            emails: vec![],
+            organization: Some("x".repeat(2100)),
+        }),
+        part(ContentPart::Buttons {
+            rows: vec![vec![ButtonAction {
+                id: "action".into(),
+                label: "Disabled".into(),
+                style: None,
+                disabled: true,
+            }]],
+        }),
+        part(ContentPart::Buttons {
+            rows: vec![vec![ButtonAction {
+                id: "action".into(),
+                label: "Styled".into(),
+                style: Some(tinychannels_bus::ButtonStyle::Primary),
+                disabled: false,
+            }]],
+        }),
+        part(ContentPart::Buttons {
+            rows: vec![vec![ButtonAction {
+                id: "x".repeat(65),
+                label: "Too long".into(),
+                style: None,
+                disabled: false,
+            }]],
+        }),
+        part(ContentPart::Buttons { rows: vec![] }),
+        part(ContentPart::Poll {
+            question: "".into(),
+            options: vec!["A".into(), "B".into()],
+            multiple_choice: false,
+            closes_at_unix_ms: None,
+            provider_poll_id: None,
+        }),
+        part(ContentPart::Poll {
+            question: "Question".into(),
+            options: vec!["A".into()],
+            multiple_choice: false,
+            closes_at_unix_ms: None,
+            provider_poll_id: None,
+        }),
+        part(ContentPart::Poll {
+            question: "Question".into(),
+            options: vec!["A".into(), "B".into()],
+            multiple_choice: false,
+            closes_at_unix_ms: Some(0),
+            provider_poll_id: None,
+        }),
+        part(ContentPart::Presentation {
+            blocks: serde_json::json!({}),
+        }),
+        part(ContentPart::Native {
+            provider: "other".into(),
+            data: serde_json::json!({"x":1}),
+        }),
+    ];
+
+    for (index, structured) in invalid.into_iter().enumerate() {
+        let parts = if matches!(
+            structured,
+            tinychannels_bus::OutboundContentPart::Content {
+                part: ContentPart::Buttons { .. }
+            }
+        ) {
+            vec![text(), structured]
+        } else {
+            vec![structured]
+        };
+        let message = typed_parts(&format!("invalid-{index}"), parts);
+        let result = crate::channel::ChannelTypedSend::send_typed(&channel, &message).await;
+        assert!(
+            result.is_err(),
+            "invalid structured case {index} was accepted"
+        );
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn bridge_approval_presentation_renders_scoped_inline_choice_actions() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 991 })),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]);
+    let intent = crate::harness::translate_output_event(
+        &crate::harness::ChannelTurn::default(),
+        crate::harness::ChannelOutputEvent::ApprovalRequest {
+            id: "request-42".into(),
+            prompt: "Run the command?".into(),
+            choices: vec!["Allow once".into(), "Deny".into()],
+        },
+        &Default::default(),
+        &crate::channel::ChannelPresentationCapabilities {
+            max_actions: Some(2),
+            max_actions_per_row: Some(1),
+            ..Default::default()
+        },
+        Default::default(),
+    )
+    .unwrap()
+    .remove(0);
+    let tinychannels_bus::OutboundPayload::PresentationBlocks { blocks } = intent.payload else {
+        panic!("bridge should preserve native approval presentation blocks");
+    };
+    let message = typed_parts(
+        "approval-presentation",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Presentation { blocks },
+        }],
+    );
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert!(outcome.error.is_none());
+    assert_eq!(outcome.receipt.platform_message_ids, ["991"]);
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(bodies[0]["text"], "Run the command?");
+    let keyboard = &bodies[0]["reply_markup"]["inline_keyboard"];
+    assert_eq!(keyboard[0][0]["text"], "Allow once");
+    assert_eq!(keyboard[1][0]["text"], "Deny");
+    assert_eq!(keyboard[0][0]["callback_data"], "approval-v1:request-42:0");
+    assert_eq!(keyboard[1][0]["callback_data"], "approval-v1:request-42:1");
+}
+
+#[tokio::test]
+async fn telegram_native_data_is_explicitly_unsupported_without_provider_io() {
+    let server = mock_api().await;
+    let channel = channel_for(&server, &["*"]);
+    let message = typed_parts(
+        "native-data",
+        vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::channel::ContentPart::Native {
+                provider: "telegram".into(),
+                data: serde_json::json!({"opaque":"payload"}),
+            },
+        }],
+    );
+    let error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+    assert!(error.unsupported);
+    assert!(!error.sent_before_error);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn typed_image_upload_reads_scoped_media_and_keeps_ordered_receipts() {
     let server = mock_api().await;
@@ -1140,7 +1575,7 @@ async fn typed_media_preserves_legacy_address_and_requires_host_opaque_id() {
         .send_typed_with_receipt(&missing_reference)
         .await
         .unwrap_err();
-    assert!(error.to_string().contains("no host-owned opaque reference"));
+    assert!(error.to_string().contains("before provider dispatch"));
     assert_eq!(json_bodies(&server, "sendPhoto").await.len(), 1);
 }
 
@@ -1221,14 +1656,12 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
 
     let mut no_conversation = scoped_typed_media_message("stored-photo-1");
     no_conversation.conversation_ref.as_mut().unwrap().id = "  ".into();
-    assert!(
-        channel
-            .send_typed_with_receipt(&no_conversation)
-            .await
-            .unwrap_err()
-            .to_string()
-            .contains("conversation identity")
-    );
+    let error = channel
+        .send_typed_with_receipt(&no_conversation)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("before provider dispatch"));
+    assert!(server.received_requests().await.unwrap().is_empty());
 
     let mut no_account = scoped_typed_media_message("stored-photo-1");
     no_account.channel_ref.as_mut().unwrap().account_id = None;
@@ -1238,7 +1671,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("configured account")
+            .contains("before provider dispatch")
     );
 
     let mut no_turn = scoped_typed_media_message("stored-photo-1");
@@ -1249,8 +1682,9 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("originating turn")
+            .contains("before provider dispatch")
     );
+    assert!(server.received_requests().await.unwrap().is_empty());
 
     let mut no_reply = scoped_typed_media_message("stored-photo-1");
     no_reply.reply_to_id = Some("not-a-platform-id".into());
@@ -1260,7 +1694,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("reply_to_id")
+            .contains("before provider dispatch")
     );
 
     let mut unsupported = scoped_typed_media_message("stored-photo-1");
@@ -1286,7 +1720,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("does not support this content combination")
+            .contains("before provider dispatch")
     );
 
     let zero_dimensions = scoped_typed_media_message("zero-dimension-photo");
@@ -1296,7 +1730,7 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("dimensions exceed provider limits")
+            .contains("before provider dispatch")
     );
 
     let mut sticker = scoped_typed_media_message("stored-photo-1");
@@ -1319,10 +1753,47 @@ async fn typed_media_scope_and_provider_validation_fail_before_upload() {
             .await
             .unwrap_err()
             .to_string()
-            .contains("sticker upload is not enabled")
+            .contains("before provider dispatch")
     );
 
     assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn native_webp_sticker_uses_send_sticker_and_returns_its_message_id() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendSticker",
+        ok_with(serde_json::json!({ "message_id": 811 })),
+    )
+    .await;
+    let channel =
+        channel_for(&server, &["*"]).with_media_repository(Arc::new(TypedMediaReadFixture));
+    let mut message = scoped_typed_media_message("stored-sticker-webp");
+    message.parts = vec![tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Sticker {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("stored-sticker-webp".into()),
+                kind: tinychannels_bus::MediaKind::Image,
+                ..Default::default()
+            },
+            pack_id: None,
+            sticker_id: None,
+            emoji: Some("🌟".into()),
+            alt_text: None,
+        },
+    }];
+
+    let outcome = channel.send_typed_with_receipt(&message).await.unwrap();
+
+    assert!(outcome.error.is_none());
+    assert_eq!(outcome.receipt.platform_message_ids, ["811"]);
+    let bodies = raw_bodies(&server, "sendSticker").await;
+    assert_eq!(bodies.len(), 1);
+    assert!(bodies[0].contains("name=\"sticker\""));
+    assert!(bodies[0].contains("sticker.webp"));
+    assert!(bodies[0].contains("message_thread_id"));
 }
 
 #[tokio::test]
@@ -1762,7 +2233,11 @@ async fn telegram_rejects_wav_audio_before_native_upload() {
 
     let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
 
-    assert!(error.to_string().contains("MP3 or M4A"));
+    assert!(
+        error
+            .to_string()
+            .contains("rejected before provider dispatch")
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -1799,7 +2274,7 @@ async fn telegram_photo_over_ten_megabytes_is_rejected_before_http() {
 
     let error = channel.send_typed_with_receipt(&message).await.unwrap_err();
 
-    assert!(error.to_string().contains("upload method limit"));
+    assert!(error.to_string().contains("before provider dispatch"));
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -1907,7 +2382,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
     let scope = ExpectedScope {
         channel: tinychannels_bus::ChannelRef {
             id: "telegram".into(),
-            account_id: Some("telegram:test-account".into()),
+            account_id: None,
         },
         conversation: tinychannels_bus::ConversationRef {
             kind: tinychannels_bus::ConversationKind::Dm,
@@ -1939,7 +2414,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         .unwrap();
     let observation = fixture.observations().pop().unwrap();
     assert_eq!(observation.request["chat_id"], "100");
-    assert_eq!(observation.request["text"], "hello-kit");
+    assert_eq!(observation.request["text"], "hello\\-kit");
     assert_eq!(observation.platform_message_ids, ["321"]);
 
     check_feature(&fixture, ConformanceFeature::VoiceSynthesis)
@@ -2017,7 +2492,7 @@ async fn typed_send_receipt_applies_tool_call_tag_sanitization() {
     let bodies = json_bodies(&server, "sendMessage").await;
     assert_eq!(
         bodies[0]["text"],
-        "before[REACTION:👍|321] [IMAGE:https://example.test/image.png]"
+        r"before\[REACTION:👍\|321\] \[IMAGE:https://example\.test/image\.png\]"
     );
     assert_eq!(bodies[0]["message_id"], serde_json::Value::Null);
     let requests = server.received_requests().await.unwrap();
@@ -2458,7 +2933,7 @@ async fn finalize_draft_edits_with_markdown_and_clears_rate_limit() {
 
     let bodies = json_bodies(&server, "editMessageText").await;
     assert_eq!(bodies.len(), 1);
-    assert_eq!(bodies[0]["parse_mode"], "Markdown");
+    assert_eq!(bodies[0]["parse_mode"], "MarkdownV2");
     assert_eq!(bodies[0]["text"], "done");
     assert!(ch.last_draft_edit.lock().is_empty());
     assert!(json_bodies(&server, "sendMessage").await.is_empty());
@@ -2470,7 +2945,7 @@ async fn finalize_draft_retries_plain_edit_when_markdown_rejected() {
     Mock::given(method("POST"))
         .and(path(api_path("editMessageText")))
         .and(body_partial_json(
-            serde_json::json!({ "parse_mode": "Markdown" }),
+            serde_json::json!({ "parse_mode": "MarkdownV2" }),
         ))
         .respond_with(ResponseTemplate::new(400))
         .with_priority(1)
@@ -2553,115 +3028,197 @@ async fn finalize_draft_oversized_text_with_invalid_id_sends_chunks_only() {
 }
 
 #[tokio::test]
-async fn send_reaction_marker_targets_explicit_id_then_sends_reply_text() {
-    let server = mock_api().await;
-    mount_post(&server, "setMessageReaction", ok()).await;
-    mount_post(&server, "sendMessage", ok()).await;
-    let ch = channel_for(&server, &["*"]);
-
-    ch.send(&SendMessage::new("[REACTION:👍|99] Great point", "100:2").in_thread(Some("5".into())))
-        .await
-        .unwrap();
-
-    let reactions = json_bodies(&server, "setMessageReaction").await;
-    assert_eq!(reactions.len(), 1);
-    assert_eq!(reactions[0]["message_id"], 99);
-    assert_eq!(reactions[0]["chat_id"], "100");
-    let sent = json_bodies(&server, "sendMessage").await;
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0]["text"], "Great point");
-    assert_eq!(sent[0]["message_thread_id"], "2");
-    assert_eq!(sent[0]["reply_to_message_id"], 5);
-}
-
-#[tokio::test]
-async fn send_reaction_only_marker_uses_parent_id_and_sends_no_text() {
-    let server = mock_api().await;
-    mount_post(&server, "setMessageReaction", ok()).await;
-    let ch = channel_for(&server, &["*"]);
-
-    ch.send(&SendMessage::new("[REACTION:🔥]", "100").in_thread(Some("12".into())))
-        .await
-        .unwrap();
-
-    let reactions = json_bodies(&server, "setMessageReaction").await;
-    assert_eq!(reactions.len(), 1);
-    assert_eq!(reactions[0]["message_id"], 12);
-    assert!(json_bodies(&server, "sendMessage").await.is_empty());
-}
-
-#[tokio::test]
-async fn send_reaction_marker_without_target_is_ignored() {
-    let server = mock_api().await;
-    let ch = channel_for(&server, &["*"]);
-
-    ch.send(&SendMessage::new("[REACTION:🔥]", "100"))
-        .await
-        .unwrap();
-
-    assert!(server.received_requests().await.unwrap().is_empty());
-}
-
-#[tokio::test]
-async fn send_with_attachment_markers_sends_text_then_attachments() {
+async fn legacy_reaction_marker_is_plain_text_not_a_telegram_operation() {
     let server = mock_api().await;
     mount_post(&server, "sendMessage", ok()).await;
-    mount_post(&server, "sendPhoto", ok()).await;
-    mount_post(&server, "sendDocument", ok()).await;
     let ch = channel_for(&server, &["*"]);
 
-    ch.send(&SendMessage::new(
-        "Here you go [IMAGE:https://cdn.example/a.png] [DOCUMENT:https://cdn.example/b.pdf]",
-        "100",
-    ))
-    .await
-    .unwrap();
+    Channel::send(&ch, &SendMessage::new("[REACTION:🔥] hello", "100"))
+        .await
+        .unwrap();
 
-    assert_eq!(sent_texts(&server).await, vec!["Here you go".to_string()]);
-    assert_eq!(
-        json_bodies(&server, "sendPhoto").await[0]["photo"],
-        "https://cdn.example/a.png"
-    );
-    assert_eq!(
-        json_bodies(&server, "sendDocument").await[0]["document"],
-        "https://cdn.example/b.pdf"
-    );
+    assert!(json_bodies(&server, "setMessageReaction").await.is_empty());
+    assert_eq!(sent_texts(&server).await, ["\\[REACTION:🔥\\] hello"]);
 }
 
 #[tokio::test]
-async fn send_attachment_marker_only_skips_text_message() {
+async fn callback_ingress_acknowledges_but_drops_disallowed_identity() {
     let server = mock_api().await;
-    mount_post(&server, "sendVideo", ok()).await;
-    let ch = channel_for(&server, &["*"]);
+    mount_post(&server, "answerCallbackQuery", ok()).await;
+    mount_get_updates_once(
+        &server,
+        1,
+        updates(serde_json::json!([
+            {
+                "update_id": 40,
+                "callback_query": {
+                    "id": "spoofed-first-name", "data": "action-a",
+                    "from": {"id": 31, "first_name": "alice"},
+                    "message": {"message_id": 80, "chat": {"id": 100, "type": "private"}}
+                }
+            },
+            {
+                "update_id": 41,
+                "callback_query": {
+                    "id": "allowed-id", "data": "opaque-action",
+                    "from": {"id": 42, "username": "outsider"},
+                    "message": {"message_id": 81, "message_thread_id": 7,
+                        "chat": {"id": -100, "type": "supergroup"}}
+                }
+            },
+            {
+                "update_id": 42,
+                "callback_query": {
+                    "id": "allowed-username", "data": "other-action",
+                    "from": {"id": 43, "username": "alice"},
+                    "message": {"message_id": 84, "chat": {"id": 101, "type": "private"}}
+                }
+            },
+            {
+                "update_id": 43,
+                "message": {
+                    "message_id": 82, "chat": {"id": 100, "type": "private"},
+                    "from": {"id": 42, "username": "outsider"}, "text": "stop listener"
+                }
+            },
+            {
+                "update_id": 44,
+                "message": {
+                    "message_id": 83, "chat": {"id": 100, "type": "private"},
+                    "from": {"id": 42, "username": "outsider"}, "text": "close listener"
+                }
+            }
+        ])),
+    )
+    .await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let events = Arc::new(RecordingEvents::default());
+    let channel = Arc::new(fast_backoff(
+        channel_for(&server, &["alice", "42"]).with_events(events.clone()),
+    ));
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let listener = tokio::spawn({
+        let channel = channel.clone();
+        async move { channel.listen(tx).await }
+    });
+    tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("allowed message terminates listener")
+        .expect("message delivered");
+    drop(rx);
+    tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("listener exits after receiver closes")
+        .unwrap()
+        .unwrap();
 
-    ch.send(&SendMessage::new(
-        "[VIDEO:https://cdn.example/v.mp4]",
-        "100",
-    ))
-    .await
-    .unwrap();
+    let callbacks = events
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(_, kind, _)| kind == "button_callback")
+        .map(|(_, _, payload)| payload.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(callbacks.len(), 2);
+    assert_eq!(callbacks[0]["type"], "button_callback");
+    assert_eq!(callbacks[0]["queryId"], "allowed-id");
+    assert_eq!(callbacks[0]["actionId"], "opaque-action");
+    assert_eq!(callbacks[0]["actor"]["id"], "42");
+    assert_eq!(callbacks[0]["conversation"]["id"], "-100");
+    assert_eq!(callbacks[0]["conversation"]["topicId"], "7");
+    assert_eq!(callbacks[0]["providerMessageId"], "81");
+    assert_eq!(callbacks[1]["queryId"], "allowed-username");
+    assert_eq!(callbacks[1]["actor"]["id"], "43");
+    let acknowledgments = json_bodies(&server, "answerCallbackQuery").await;
+    assert_eq!(acknowledgments.len(), 3);
+    assert_eq!(
+        acknowledgments
+            .iter()
+            .map(|body| body["callback_query_id"].as_str().unwrap())
+            .collect::<std::collections::HashSet<_>>(),
+        ["spoofed-first-name", "allowed-id", "allowed-username"]
+            .into_iter()
+            .collect()
+    );
+}
 
-    assert!(json_bodies(&server, "sendMessage").await.is_empty());
-    assert_eq!(json_bodies(&server, "sendVideo").await.len(), 1);
+#[test]
+fn callback_event_keeps_authenticated_actor_message_and_topic_identity() {
+    let action_id = tinychannels_bus::channel::approval_action_id("request-42", 1).unwrap();
+    let update = serde_json::json!({
+        "update_id": 12,
+        "callback_query": {
+            "id": "query-5",
+            "data": action_id,
+            "from": { "id": 31, "username": "alice", "is_bot": false },
+            "message": {
+                "message_id": 81,
+                "message_thread_id": 6,
+                "chat": { "id": -100, "type": "supergroup" }
+            }
+        }
+    });
+
+    let event = TelegramChannel::callback_event(&update).unwrap();
+    assert_eq!(event.channel.id, "telegram");
+    assert_eq!(event.conversation.as_ref().unwrap().id, "-100");
+    assert_eq!(
+        event.conversation.as_ref().unwrap().topic_id.as_deref(),
+        Some("6")
+    );
+    assert!(
+        matches!(event.event, tinychannels_bus::ChannelEventKind::ButtonCallback {
+        ref query_id,
+        ref action_id,
+        provider_message_id: Some(ref message_id),
+        ref actor,
+        } if query_id == "query-5" && action_id == "approval-v1:request-42:1" && message_id == "81" && actor.id == "31" && actor.name.as_deref() == Some("alice"))
+    );
+    assert_eq!(
+        tinychannels_bus::channel::parse_approval_action_id("approval-v1:request-42:1"),
+        Some(("request-42", 1)),
+        "the host can correlate the opaque callback with its pending choice without provider policy"
+    );
+}
+
+#[test]
+fn callback_event_rejects_oversized_or_unscoped_callback_data() {
+    let oversized = serde_json::json!({
+        "callback_query": {
+            "id": "query",
+            "data": "x".repeat(65),
+            "from": { "id": 1 },
+            "message": { "message_id": 2, "chat": { "id": 3, "type": "private" } }
+        }
+    });
+    assert!(TelegramChannel::callback_event(&oversized).is_none());
+    let inline = serde_json::json!({
+        "callback_query": {
+            "id": "query", "data": "action", "from": { "id": 1 },
+            "inline_message_id": "inline"
+        }
+    });
+    assert!(TelegramChannel::callback_event(&inline).is_none());
 }
 
 #[tokio::test]
-async fn send_bare_existing_path_uploads_it_as_attachment() {
+async fn send_bare_existing_path_remains_plain_text() {
     let server = mock_api().await;
-    mount_post(&server, "sendDocument", ok()).await;
+    mount_post(&server, "sendMessage", ok()).await;
     let ch = channel_for(&server, &["*"]);
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("report.pdf");
     std::fs::write(&file, b"%PDF").unwrap();
 
-    ch.send(&SendMessage::new(file.to_str().unwrap(), "100"))
+    Channel::send(&ch, &SendMessage::new(file.to_str().unwrap(), "100"))
         .await
         .unwrap();
 
-    assert!(json_bodies(&server, "sendMessage").await.is_empty());
-    let uploads = raw_bodies(&server, "sendDocument").await;
-    assert_eq!(uploads.len(), 1);
-    assert!(uploads[0].contains("report.pdf"));
+    assert_eq!(json_bodies(&server, "sendDocument").await.len(), 0);
+    let sent = json_bodies(&server, "sendMessage").await;
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0]["text"].is_string());
 }
 
 #[tokio::test]
@@ -2756,6 +3313,21 @@ async fn typing_refresh_reports_acceptance_rejection_and_transport_error() {
 fn telegram_advertises_reaction_support() {
     let ch = TelegramChannel::new("tok".into(), vec!["*".into()], false);
     assert!(ch.supports_reactions());
+    let caps = ch.capabilities();
+    assert!(caps.actions.supported.contains(&"typing".into()));
+    assert!(caps.actions.supported.contains(&"edit".into()));
+    assert!(caps.actions.supported.contains(&"delete".into()));
+    assert!(caps.reactions);
+    assert!(caps.events.supported.contains(&"reaction_added".into()));
+    assert!(caps.events.supported.contains(&"reaction_removed".into()));
+    assert!(caps.events.supported.contains(&"button_callback".into()));
+    assert!(!caps.events.supported.contains(&"read_receipt".into()));
+    assert!(caps.content.location.outbound);
+    assert!(caps.content.contact.outbound);
+    assert!(caps.content.buttons.outbound);
+    assert!(caps.content.poll.outbound);
+    assert!(caps.content.presentation.outbound);
+    assert!(!caps.content.native.outbound);
 }
 
 fn fast_backoff(mut ch: TelegramChannel) -> TelegramChannel {
@@ -3135,4 +3707,619 @@ async fn listen_backs_off_when_webhook_delete_fails_and_on_transport_error() {
         "listen keeps retrying on transport errors"
     );
     assert!(dead.bot_username.lock().is_none());
+}
+
+#[tokio::test]
+async fn native_edit_rejects_rich_parts_and_mismatched_receipt_scope_before_io() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "editMessageText",
+        ok_with(serde_json::json!({"message_id": 7})),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]);
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: None,
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Group,
+        id: "100".into(),
+        thread_id: Some("4".into()),
+        topic_id: Some("4".into()),
+        ..Default::default()
+    };
+    let receipt = tinychannels_bus::channel::MessageReceipt {
+        channel: Some(channel_ref.clone()),
+        conversation: Some(conversation.clone()),
+        primary_platform_message_id: Some("7".into()),
+        platform_message_ids: vec!["7".into()],
+        ..Default::default()
+    };
+    let rich_intent = tinychannels_bus::ChannelOutboundIntent {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: Some(channel_ref.clone()),
+        conversation_ref: Some(conversation.clone()),
+        payload: tinychannels_bus::OutboundPayload::Parts {
+            parts: vec![
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text: "keep this text".into(),
+                        markdown_dialect: None,
+                    },
+                },
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Buttons {
+                        rows: vec![vec![tinychannels_bus::ButtonAction {
+                            id: "action".into(),
+                            label: "Continue".into(),
+                            style: None,
+                            disabled: false,
+                        }]],
+                    },
+                },
+            ],
+        },
+        ..Default::default()
+    };
+
+    let rich = crate::channel::ChannelEdit::edit(&channel, &receipt, rich_intent.clone()).await;
+    assert!(
+        rich.is_err(),
+        "native edit must reject buttons instead of silently dropping them"
+    );
+    let rich_error = rich.unwrap_err();
+    assert_eq!(
+        rich_error.kind,
+        tinychannels_bus::channel::SendErrorKind::Forbidden
+    );
+    assert!(!rich_error.sent_before_error);
+
+    let mut mismatched = rich_intent;
+    mismatched.payload = tinychannels_bus::OutboundPayload::Text {
+        text: "edited".into(),
+    };
+    mismatched.conversation_id = "200".into();
+    mismatched.conversation_ref = Some(tinychannels_bus::ConversationRef {
+        id: "200".into(),
+        ..conversation
+    });
+    let mismatch = crate::channel::ChannelEdit::edit(&channel, &receipt, mismatched).await;
+    assert!(
+        mismatch.is_err(),
+        "a receipt cannot authorize editing a different conversation"
+    );
+    assert_eq!(
+        mismatch.unwrap_err().kind,
+        tinychannels_bus::channel::SendErrorKind::Forbidden
+    );
+    assert!(
+        json_bodies(&server, "editMessageText").await.is_empty(),
+        "preflight rejection must perform no HTTP request"
+    );
+}
+
+#[tokio::test]
+async fn native_reaction_edit_and_delete_failures_preserve_attempt_uncertainty() {
+    let server = mock_api().await;
+    for endpoint in ["setMessageReaction", "editMessageText", "deleteMessage"] {
+        Mock::given(method("POST"))
+            .and(path(api_path(endpoint)))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok": false, "description": "rejected"})),
+            )
+            .mount(&server)
+            .await;
+    }
+    let channel = channel_for(&server, &["*"]);
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: None,
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Group,
+        id: "100".into(),
+        ..Default::default()
+    };
+    let receipt = tinychannels_bus::channel::MessageReceipt {
+        channel: Some(channel_ref.clone()),
+        conversation: Some(conversation.clone()),
+        primary_platform_message_id: Some("7".into()),
+        platform_message_ids: vec!["7".into()],
+        ..Default::default()
+    };
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        channel_ref: Some(channel_ref.clone()),
+        conversation_ref: Some(conversation.clone()),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "edit".into(),
+        },
+        ..Default::default()
+    };
+
+    let reaction = crate::channel::ChannelReaction::send_reaction(
+        &channel,
+        &channel_ref,
+        &conversation,
+        "7",
+        &tinychannels_bus::channel::ChannelReaction {
+            value: "👍".into(),
+            custom_emoji_id: None,
+        },
+        false,
+    )
+    .await
+    .unwrap_err();
+    let edit = crate::channel::ChannelEdit::edit(&channel, &receipt, intent)
+        .await
+        .unwrap_err();
+    let delete = crate::channel::ChannelDelete::delete(&channel, &receipt)
+        .await
+        .unwrap_err();
+    for error in [reaction, edit, delete] {
+        assert_eq!(
+            error.kind,
+            tinychannels_bus::channel::SendErrorKind::Unknown
+        );
+        assert!(
+            error.sent_before_error,
+            "the request reached Telegram before the uncertain result"
+        );
+        assert!(!error.message.contains("test-token"));
+    }
+    for endpoint in ["setMessageReaction", "editMessageText", "deleteMessage"] {
+        assert_eq!(
+            json_bodies(&server, endpoint).await.len(),
+            1,
+            "expected the native request to reach {endpoint}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn native_custom_emoji_reaction_uses_telegram_custom_emoji_type() {
+    let server = mock_api().await;
+    mount_post(&server, "setMessageReaction", ok()).await;
+    let channel = channel_for(&server, &["*"]);
+    let conversation = tinychannels_bus::channel::ConversationRef {
+        id: "100".into(),
+        ..Default::default()
+    };
+
+    channel
+        .send_reaction_v2(
+            &conversation,
+            "7",
+            &tinychannels_bus::channel::ChannelReaction {
+                value: "ignored display text".into(),
+                custom_emoji_id: Some("custom-emoji-42".into()),
+            },
+            false,
+        )
+        .await
+        .unwrap();
+
+    let bodies = json_bodies(&server, "setMessageReaction").await;
+    assert_eq!(bodies.len(), 1);
+    assert_eq!(
+        bodies[0]["reaction"],
+        serde_json::json!([{"type":"custom_emoji", "custom_emoji_id":"custom-emoji-42"}])
+    );
+}
+
+#[tokio::test]
+async fn native_typing_does_not_report_success_when_telegram_rejects_action() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendChatAction",
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": false})),
+    )
+    .await;
+    let channel = channel_for(&server, &["*"]);
+    let error = crate::channel::ChannelTyping::start_typing(&channel, "100:4")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Forbidden
+    );
+    assert!(!error.sent_before_error);
+    assert_eq!(
+        json_bodies(&server, "sendChatAction").await.len(),
+        2,
+        "thread rejection is retried once at chat scope"
+    );
+}
+
+#[tokio::test]
+async fn native_typing_transport_error_preserves_attempt_uncertainty() {
+    let server = mock_api().await;
+    mount_post(&server, "sendChatAction", ResponseTemplate::new(500)).await;
+    let channel = channel_for(&server, &["*"]);
+    let error = crate::channel::ChannelTyping::start_typing(&channel, "100")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Unknown
+    );
+    assert!(error.sent_before_error);
+    assert_eq!(json_bodies(&server, "sendChatAction").await.len(), 1);
+}
+
+#[test]
+fn typed_error_mapping_distinguishes_preflight_partial_and_ambiguous_failures() {
+    use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
+
+    let preflight = typed_send_error(anyhow::Error::new(TelegramPreDispatchError));
+    assert_eq!(preflight.kind, SendErrorKind::Forbidden);
+    assert!(!preflight.retryable);
+    assert!(!preflight.sent_before_error);
+
+    let unsupported = typed_send_error(anyhow::Error::new(TelegramUnsupportedError));
+    assert_eq!(unsupported.kind, SendErrorKind::BadFormat);
+    assert!(unsupported.unsupported);
+    assert!(!unsupported.sent_before_error);
+
+    let partial = ChannelSendError {
+        kind: SendErrorKind::RateLimited,
+        message: "partial delivery".into(),
+        retryable: true,
+        sent_before_error: true,
+        ..Default::default()
+    };
+    let mapped_partial = typed_send_error(anyhow::Error::new(
+        crate::providers::telegram::channel_send::PartialTextSendError {
+            message_ids: vec!["17".into()],
+            sent_before_error: true,
+            error: partial.clone(),
+        },
+    ));
+    assert_eq!(mapped_partial, partial);
+
+    let uncertain = typed_send_error(anyhow::anyhow!("transport disconnected"));
+    assert_eq!(uncertain.kind, SendErrorKind::Unknown);
+    assert!(!uncertain.retryable);
+    assert!(uncertain.sent_before_error);
+    assert!(!uncertain.message.contains("disconnected"));
+
+    let interaction_preflight =
+        typed_interaction_error(anyhow::Error::new(TelegramPreDispatchError), "edit");
+    assert_eq!(interaction_preflight.kind, SendErrorKind::Forbidden);
+    assert!(!interaction_preflight.sent_before_error);
+    let interaction_uncertain =
+        typed_interaction_error(anyhow::anyhow!("token-bearing URL"), "delete");
+    assert_eq!(interaction_uncertain.kind, SendErrorKind::Unknown);
+    assert!(interaction_uncertain.sent_before_error);
+    assert!(!interaction_uncertain.message.contains("token-bearing"));
+}
+
+#[test]
+fn presentation_blocks_and_vcards_keep_only_supported_safe_content() {
+    let presentation = serde_json::json!([
+        {"type":"heading", "text":"Status"},
+        [{"type":"quote", "text":"Ready"}]
+    ]);
+    assert_eq!(
+        presentation_content(&presentation).unwrap(),
+        ("Status\nReady".into(), None)
+    );
+
+    let approval = serde_json::json!({
+        "kind":"approval", "id":"request-7", "prompt":"Run this?", "choices":["Allow", "Deny"]
+    });
+    let (prompt, markup) = presentation_content(&approval).unwrap();
+    assert_eq!(prompt, "Run this?");
+    assert_eq!(
+        markup.unwrap()["inline_keyboard"][1][0]["callback_data"],
+        "approval-v1:request-7:1"
+    );
+
+    for invalid in [
+        serde_json::json!({"title":"x", "action":"shell"}),
+        serde_json::json!({"type":"button", "text":"Run"}),
+        serde_json::json!({"type":7, "text":"Run"}),
+        serde_json::json!({"type":"text", "text":{"value":"Run"}}),
+        serde_json::json!(["   ", null]),
+        serde_json::json!({"kind":"approval", "id":"r", "prompt":" ", "choices":["Allow"]}),
+        serde_json::json!({"kind":"approval", "id":"r", "prompt":"Run?", "choices":[]}),
+        serde_json::json!({"kind":"approval", "id":"r", "prompt":"Run?", "choices":[""]}),
+        serde_json::json!({"kind":"approval", "id":"r", "prompt":"Run?", "choices":["Allow"], "extra":true}),
+    ] {
+        assert!(
+            presentation_content(&invalid).is_err(),
+            "accepted {invalid}"
+        );
+    }
+
+    assert_eq!(safe_vcard_type(Some(" cell "), "VOICE"), "cell");
+    assert_eq!(safe_vcard_type(Some("internet"), "VOICE"), "internet");
+    assert_eq!(safe_vcard_type(Some("CELL\nitem1.TEL"), "VOICE"), "VOICE");
+    assert_eq!(safe_vcard_type(None, "VOICE"), "VOICE");
+    assert_eq!(vcard_escape("a\\b;c,d\ne\r"), "a\\\\b\\;c\\,d\\ne");
+    assert!(response_status_ok(&serde_json::json!({"ok": true})));
+    for invalid in [
+        serde_json::json!({}),
+        serde_json::json!({"ok": false}),
+        serde_json::json!({"ok": 1}),
+    ] {
+        assert!(!response_status_ok(&invalid));
+    }
+}
+
+fn draft_intent(reply: Option<&str>) -> tinychannels_bus::ChannelOutboundIntent {
+    tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "draft-key".into(),
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        reply_to_id: reply.map(str::to_owned),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "draft body".into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn draft_receipt(
+    primary: Option<&str>,
+    part_id: Option<&str>,
+) -> tinychannels_bus::channel::MessageReceipt {
+    tinychannels_bus::channel::MessageReceipt {
+        channel: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: None,
+        }),
+        conversation: Some(tinychannels_bus::ConversationRef {
+            id: "100".into(),
+            ..Default::default()
+        }),
+        primary_platform_message_id: primary.map(str::to_owned),
+        parts: part_id
+            .map(|id| {
+                vec![tinychannels_bus::channel::MessageReceiptPart {
+                    platform_message_id: id.into(),
+                    ..Default::default()
+                }]
+            })
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+async fn upsert(
+    channel: &TelegramChannel,
+    previous: Option<&tinychannels_bus::channel::MessageReceipt>,
+    intent: tinychannels_bus::ChannelOutboundIntent,
+) -> Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError> {
+    crate::channel::ChannelStreamingDraft::upsert_draft(channel, previous, intent).await
+}
+
+fn refused_channel() -> TelegramChannel {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    ch.api_base = format!("http://{address}");
+    ch
+}
+
+#[tokio::test]
+async fn draft_creation_reports_each_failure_with_the_right_error_kind() {
+    use tinychannels_bus::channel::SendErrorKind;
+    let error = upsert(&refused_channel(), None, draft_intent(None))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Transient);
+    assert!(error.sent_before_error);
+    assert!(!error.message.contains(TOKEN));
+
+    let server = mock_api().await;
+    let channel = channel_for(&server, &["*"]);
+    let error = upsert(&channel, None, draft_intent(Some("not-a-number")))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(json_bodies(&server, "sendMessage").await.is_empty());
+
+    mount_post(
+        &server,
+        "sendMessage",
+        ResponseTemplate::new(200).set_body_string("not json"),
+    )
+    .await;
+    let error = upsert(&channel, None, draft_intent(None))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Transient);
+    assert!(error.message.contains("response"));
+
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok_with(serde_json::json!({}))).await;
+    let error = upsert(&channel_for(&server, &["*"]), None, draft_intent(Some("9")))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Unknown);
+    assert!(error.message.contains("omitted message ID"));
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await[0]["reply_parameters"]["message_id"],
+        9
+    );
+}
+
+#[tokio::test]
+async fn draft_creation_without_channel_ref_defaults_to_the_telegram_channel() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 55 })),
+    )
+    .await;
+    let receipt = upsert(&channel_for(&server, &["*"]), None, draft_intent(None))
+        .await
+        .unwrap();
+    assert_eq!(receipt.channel.as_ref().unwrap().id, "telegram");
+    assert_eq!(receipt.primary_platform_message_id.as_deref(), Some("55"));
+}
+
+#[tokio::test]
+async fn draft_edit_validates_receipt_ids_and_reports_wire_failures() {
+    use tinychannels_bus::channel::SendErrorKind;
+    let server = mock_api().await;
+    let channel = channel_for(&server, &["*"]);
+
+    let error = upsert(
+        &channel,
+        Some(&draft_receipt(None, None)),
+        draft_intent(None),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(error.message.contains("no provider message ID"));
+
+    let error = upsert(
+        &channel,
+        Some(&draft_receipt(Some("abc"), None)),
+        draft_intent(None),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(error.message.contains("invalid provider message ID"));
+
+    let error = upsert(
+        &refused_channel(),
+        Some(&draft_receipt(None, Some("7"))),
+        draft_intent(None),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Transient);
+    assert!(error.sent_before_error);
+
+    mount_post(
+        &server,
+        "editMessageText",
+        ResponseTemplate::new(200).set_body_string("not json"),
+    )
+    .await;
+    let error = upsert(
+        &channel,
+        Some(&draft_receipt(Some("7"), None)),
+        draft_intent(None),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Transient);
+    assert!(error.message.contains("response"));
+}
+
+#[test]
+fn telegram_declares_remote_control_approvals_and_proactive_defaults() {
+    let ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    assert!(Channel::supports_remote_control(&ch));
+    assert!(Channel::supports_chat_approvals(&ch));
+    assert!(Channel::history_key_ignores_thread(&ch));
+    assert_eq!(
+        crate::channel::ChannelAdapter::proactive_target(&ch),
+        Channel::proactive_target(&ch)
+    );
+}
+
+#[tokio::test]
+async fn adapter_start_stop_and_stop_typing_are_noops_without_provider_io() {
+    struct NullSink;
+    #[async_trait::async_trait]
+    impl crate::channel::ChannelInboundSink for NullSink {
+        async fn push(
+            &self,
+            _event: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), crate::channel::ChannelSendError> {
+            Ok(())
+        }
+    }
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    crate::channel::ChannelAdapter::start(&ch, &NullSink)
+        .await
+        .unwrap();
+    crate::channel::ChannelAdapter::stop(&ch).await.unwrap();
+    crate::channel::ChannelTyping::stop_typing(&ch, "100")
+        .await
+        .unwrap();
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn native_reaction_removal_clears_reactions_and_surfaces_rejection() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "setMessageReaction",
+        ok_with(serde_json::json!(true)),
+    )
+    .await;
+    let ch = channel_for(&server, &["*"]);
+    let conversation = tinychannels_bus::channel::ConversationRef {
+        id: "100".into(),
+        ..Default::default()
+    };
+    let reaction = tinychannels_bus::channel::ChannelReaction {
+        value: "👍".into(),
+        custom_emoji_id: None,
+    };
+    ch.send_reaction_v2(&conversation, "7", &reaction, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        json_bodies(&server, "setMessageReaction").await[0]["reaction"],
+        serde_json::json!([])
+    );
+    // Invalid inputs are rejected before any HTTP request.
+    assert!(
+        ch.send_reaction_v2(&conversation, "nope", &reaction, true)
+            .await
+            .is_err()
+    );
+    let empty = tinychannels_bus::channel::ChannelReaction {
+        value: " ".into(),
+        custom_emoji_id: None,
+    };
+    assert!(
+        ch.send_reaction_v2(&conversation, "7", &empty, false)
+            .await
+            .is_err()
+    );
+    assert!(
+        ch.send_reaction_v2(
+            &tinychannels_bus::channel::ConversationRef::default(),
+            "7",
+            &reaction,
+            true
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(json_bodies(&server, "setMessageReaction").await.len(), 1);
+
+    let rejecting = mock_api().await;
+    mount_post(
+        &rejecting,
+        "setMessageReaction",
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"ok": false, "description": "nope"})),
+    )
+    .await;
+    let error = channel_for(&rejecting, &["*"])
+        .send_reaction_v2(&conversation, "7", &reaction, true)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("reaction removal failed"));
 }

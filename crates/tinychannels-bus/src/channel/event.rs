@@ -4,6 +4,31 @@ use crate::channel::{ChannelRef, ContentPart, ConversationRef, SenderRef};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// Build the stable action identifier used by native approval buttons.
+///
+/// The identifier contains only the opaque request ID and zero-based choice
+/// index; it never includes the displayed choice text. Telegram callback data
+/// is limited to 64 bytes, so callers must fall back to a non-button approval
+/// flow when this returns `None`. Hosts can use [`parse_approval_action_id`]
+/// to correlate the callback with the pending request and choice.
+pub fn approval_action_id(request_id: &str, choice_index: usize) -> Option<String> {
+    if request_id.is_empty() {
+        return None;
+    }
+    let action_id = format!("approval-v1:{request_id}:{choice_index}");
+    (action_id.len() <= 64).then_some(action_id)
+}
+
+/// Parse an action identifier produced by [`approval_action_id`].
+pub fn parse_approval_action_id(action_id: &str) -> Option<(&str, usize)> {
+    let rest = action_id.strip_prefix("approval-v1:")?;
+    let (request_id, choice_index) = rest.rsplit_once(':')?;
+    if request_id.is_empty() || action_id.len() > 64 {
+        return None;
+    }
+    Some((request_id, choice_index.parse().ok()?))
+}
+
 /// One normalized event emitted by a channel provider.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -87,6 +112,14 @@ pub enum ChannelEventKind {
         message_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         provider_message_id: Option<String>,
+    },
+    /// A user activated an opaque provider button. The host applies any
+    /// approval or business policy after validating this actor and scope.
+    ButtonCallback {
+        query_id: String,
+        action_id: String,
+        provider_message_id: Option<String>,
+        actor: SenderRef,
     },
     /// Account or user presence changed.
     Presence {

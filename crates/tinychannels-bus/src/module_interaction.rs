@@ -38,6 +38,11 @@ pub enum ChannelInteraction {
     SendDraft {
         message: SendMessage,
     },
+    /// Full-scope draft creation or edit through a configured v2 adapter.
+    UpsertDraft {
+        previous: Option<crate::channel::MessageReceipt>,
+        intent: crate::channel::ChannelOutboundIntent,
+    },
     UpdateDraft {
         recipient: String,
         message_id: String,
@@ -48,6 +53,20 @@ pub enum ChannelInteraction {
         message_id: String,
         text: String,
         thread_ts: Option<String>,
+    },
+    SendReaction {
+        channel: crate::channel::ChannelRef,
+        conversation: crate::channel::ConversationRef,
+        provider_message_id: String,
+        reaction: crate::channel::ChannelReaction,
+        remove: bool,
+    },
+    EditMessage {
+        receipt: crate::channel::MessageReceipt,
+        intent: crate::channel::ChannelOutboundIntent,
+    },
+    DeleteMessage {
+        receipt: crate::channel::MessageReceipt,
     },
 }
 

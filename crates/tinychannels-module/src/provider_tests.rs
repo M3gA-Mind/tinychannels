@@ -401,12 +401,25 @@ use tinychannels::host::EventSink as _;
 use tinychannels_bus::{ChannelInboundEnvelope, ContentPart, ConversationKind, ConversationRef};
 use tinychannels_conformance::AdapterFixture as _;
 
+type TelegramMessageContextMap =
+    Arc<std::sync::Mutex<std::collections::HashMap<String, (ConversationRef, Option<String>)>>>;
+
 struct RunningTelegramConformance {
     adapter: ConfiguredAdapterHandle,
+    running: Arc<Running>,
     server: wiremock::MockServer,
     scope: tinychannels_conformance::ExpectedScope,
+    media: std::collections::HashMap<
+        tinychannels_conformance::ConformanceFeature,
+        tinychannels_bus::MediaReference,
+    >,
+    callbacks: IngressVoiceCallback,
+    provider_host: Arc<dyn tinychannels::host::ChannelHost>,
     observed: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
     request_cursor: std::sync::Mutex<usize>,
+    response_cursor: std::sync::Mutex<usize>,
+    response_ids: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+    message_contexts: TelegramMessageContextMap,
 }
 
 #[async_trait::async_trait]
@@ -417,9 +430,26 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
 
     fn expected_scope(
         &self,
-        _feature: tinychannels_conformance::ConformanceFeature,
+        feature: tinychannels_conformance::ConformanceFeature,
     ) -> tinychannels_conformance::ExpectedScope {
-        self.scope.clone()
+        let mut scope = self.scope.clone();
+        if feature == tinychannels_conformance::ConformanceFeature::InboundReactions {
+            // MessageReactionUpdated does not carry a topic/thread field. The
+            // outbound mutation cases below resolve their actual target ID
+            // through the mock's recorded message context.
+            scope.conversation.thread_id = None;
+            scope.conversation.topic_id = None;
+            scope.thread_id = None;
+            scope.reply_to_id = None;
+        }
+        if feature == tinychannels_conformance::ConformanceFeature::VoiceIn {
+            // Telegram Message carries message_thread_id as the normalized
+            // topic_id; the shared envelope does not duplicate it in thread_id.
+            scope.conversation.thread_id = None;
+            scope.thread_id = None;
+            scope.reply_to_id = None;
+        }
+        scope
     }
 
     fn clear_observations(&self) {
@@ -437,21 +467,224 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
         Option<tinychannels_bus::channel::ChannelSendOutcome>,
         tinychannels_bus::channel::ChannelSendError,
     > {
+        use tinychannels_bus::{ContentPart as Part, OutboundContentPart as OutPart};
         use tinychannels_conformance::ConformanceFeature as Feature;
+        let media = || {
+            self.media.get(&feature).cloned().unwrap_or_else(|| {
+                let (kind, content_type, file_name) = match feature {
+                    Feature::Image => (
+                        tinychannels_bus::MediaKind::Image,
+                        "image/png",
+                        "fixture.png",
+                    ),
+                    Feature::Video => (
+                        tinychannels_bus::MediaKind::Video,
+                        "video/mp4",
+                        "fixture.mp4",
+                    ),
+                    Feature::Audio => (
+                        tinychannels_bus::MediaKind::Audio,
+                        "audio/mpeg",
+                        "fixture.mp3",
+                    ),
+                    Feature::VoiceOut => {
+                        (tinychannels_bus::MediaKind::Audio, "audio/ogg", "voice.ogg")
+                    }
+                    Feature::Sticker => (
+                        tinychannels_bus::MediaKind::Image,
+                        "image/webp",
+                        "sticker-512.webp",
+                    ),
+                    _ => (
+                        tinychannels_bus::MediaKind::Document,
+                        "text/plain",
+                        "fixture.txt",
+                    ),
+                };
+                tinychannels_bus::MediaReference {
+                    url: Some(format!("https://fixtures.invalid/{file_name}")),
+                    content_type: Some(content_type.into()),
+                    file_name: Some(file_name.into()),
+                    kind,
+                    ..Default::default()
+                }
+            })
+        };
+        let content = |part| tinychannels_bus::OutboundPayload::Parts {
+            parts: vec![OutPart::Content { part }],
+        };
         let payload = match feature {
             Feature::Text | Feature::ThreadAddressing | Feature::ReplyAddressing => {
                 tinychannels_bus::OutboundPayload::Text {
                     text: "module-kit".into(),
                 }
             }
-            Feature::Image => tinychannels_bus::OutboundPayload::Media {
-                text: None,
-                media_urls: vec!["https://example.invalid/image.png".into()],
+            Feature::Image => content(Part::Image {
+                media: media(),
+                caption: Some("image case".into()),
+                alt_text: None,
+            }),
+            Feature::Video => content(Part::Video {
+                media: media(),
+                caption: Some("video case".into()),
+                duration_ms: Some(1000),
+                thumbnail: None,
+            }),
+            Feature::Audio => content(Part::Audio {
+                media: media(),
+                codec: Some("mp3".into()),
+                duration_ms: Some(1000),
+                title: Some("audio case".into()),
+                transcript: None,
+            }),
+            Feature::File => content(Part::File {
+                media: media(),
+                file_name: Some("fixture.pdf".into()),
+                caption: Some("file case".into()),
+            }),
+            Feature::Sticker => content(Part::Sticker {
+                media: media(),
+                pack_id: None,
+                sticker_id: None,
+                emoji: Some("🙂".into()),
+                alt_text: None,
+            }),
+            Feature::Location => content(Part::Location {
+                latitude: 29.3759,
+                longitude: 47.9774,
+                label: None,
+                address: None,
+                accuracy_meters: Some(10.0),
+                live_until_unix_ms: None,
+            }),
+            Feature::Contact => content(Part::Contact {
+                display_name: "Telegram Fixture".into(),
+                phone_numbers: vec![tinychannels_bus::ContactMethod {
+                    value: "+15550123".into(),
+                    label: Some("CELL".into()),
+                }],
+                emails: Vec::new(),
+                organization: None,
+            }),
+            Feature::Buttons => tinychannels_bus::OutboundPayload::Parts {
+                parts: vec![
+                    OutPart::Content {
+                        part: Part::Text {
+                            text: "Choose an action".into(),
+                            markdown_dialect: None,
+                        },
+                    },
+                    OutPart::Content {
+                        part: Part::Buttons {
+                            rows: vec![vec![tinychannels_bus::ButtonAction {
+                                id: "opaque-action".into(),
+                                label: "Continue".into(),
+                                style: None,
+                                disabled: false,
+                            }]],
+                        },
+                    },
+                ],
             },
-            _ => {
+            Feature::Poll => content(Part::Poll {
+                question: "Choose one".into(),
+                options: vec!["First".into(), "Second".into()],
+                multiple_choice: false,
+                closes_at_unix_ms: None,
+                provider_poll_id: None,
+            }),
+            Feature::Presentation => content(Part::Presentation {
+                blocks: serde_json::json!({"kind":"approval","id":"fixture-request","prompt":"Approve this action?","choices":["Approve","Deny"]}),
+            }),
+            Feature::NativeData => tinychannels_bus::OutboundPayload::NativeChannelData {
+                data: serde_json::json!({"kind":"provider_specific"}),
+            },
+            Feature::VoiceOut => tinychannels_bus::OutboundPayload::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: media(),
+                    audio_base64: None,
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: Some(1000),
+                },
+            },
+            Feature::VoiceSynthesis => {
+                let scope = tinychannels_bus::HostVoiceScope {
+                    configured_instance: self.adapter.configured_instance.clone(),
+                    channel: self.scope.channel.clone(),
+                    conversation: self.scope.conversation.clone(),
+                    turn_id: "turn-kit".into(),
+                };
+                let synthesizer = self
+                    .provider_host
+                    .synthesizer()
+                    .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
+                let synthesized = synthesizer
+                    .synthesize_scoped(
+                        scope.clone(),
+                        tinychannels::host::SpeechRequest {
+                            text: "speak this".into(),
+                            voice: None,
+                            format: Some("ogg_opus".into()),
+                            thread_id: scope
+                                .conversation
+                                .thread_id
+                                .clone()
+                                .or_else(|| scope.conversation.topic_id.clone()),
+                        },
+                    )
+                    .await
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let audio = base64::engine::general_purpose::STANDARD
+                    .decode(&synthesized.audio_base64)
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let repository = self
+                    .provider_host
+                    .media_repository()
+                    .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
+                let stored = repository
+                    .store_media(tinychannels::host::MediaStoreRequest {
+                        metadata: tinychannels::host::MediaMetadata {
+                            scope: scope.clone(),
+                            kind: tinychannels_bus::MediaKind::Audio,
+                            content_type: synthesized.mime_type.clone(),
+                            file_name: Some("synthesized.ogg".into()),
+                            duration_ms: synthesized.duration_ms,
+                            codec: Some("ogg_opus".into()),
+                            voice_direction: Some(
+                                tinychannels_bus::HostVoiceMediaDirection::Outbound,
+                            ),
+                            dedupe_key: None,
+                            max_bytes: 8 * 1024 * 1024,
+                        },
+                        bytes: audio,
+                    })
+                    .await
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                tinychannels_bus::OutboundPayload::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media {
+                        media: stored,
+                        audio_base64: None,
+                        codec: Some("ogg_opus".into()),
+                        duration_ms: synthesized.duration_ms,
+                    },
+                }
+            }
+            Feature::VoiceIn | Feature::InboundReactions => {
+                tinychannels_bus::OutboundPayload::Text {
+                    text: "ingress observation".into(),
+                }
+            }
+            Feature::Typing
+            | Feature::Reactions
+            | Feature::Edit
+            | Feature::Delete
+            | Feature::StreamingDraft => tinychannels_bus::OutboundPayload::Text {
+                text: "operation fixture".into(),
+            },
+            Feature::ReadReceipts => {
                 return Err(tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
-                    message: "fixture does not expose this operation".into(),
+                    kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
+                    message: "Telegram Bot API has no read-receipt operation".into(),
                     unsupported: true,
                     ..Default::default()
                 });
@@ -465,53 +698,468 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
             conversation_ref: Some(self.scope.conversation.clone()),
             reply_to_id: self.scope.reply_to_id.clone(),
             thread_id: self.scope.thread_id.clone(),
+            turn_id: Some("turn-kit".into()),
             payload,
             ..Default::default()
         };
-        let result = self.adapter.send(intent).await;
+        let result: std::result::Result<
+            Option<tinychannels_bus::channel::ChannelSendOutcome>,
+            tinychannels_bus::channel::ChannelSendError,
+        > = match feature {
+            Feature::VoiceIn => {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        if !self.callbacks.inbound.lock().await.is_empty() {
+                            break;
+                        }
+                        self.callbacks.ingress_changed.notified().await;
+                    }
+                })
+                .await
+                .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let envelope = self
+                    .callbacks
+                    .inbound
+                    .lock()
+                    .await
+                    .first()
+                    .map(|(_, value)| value.clone())
+                    .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
+                let channel =
+                    serde_json::from_value(envelope.get("channel").cloned().unwrap_or_default())
+                        .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let conversation: ConversationRef = serde_json::from_value(
+                    envelope.get("conversation").cloned().unwrap_or_default(),
+                )
+                .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let parts = envelope
+                    .get("parts")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let voice = parts
+                    .iter()
+                    .find(|part| {
+                        part.get("kind").and_then(serde_json::Value::as_str) == Some("voice_note")
+                    })
+                    .and_then(|part| part.get("voiceNote"));
+                let mut payload_kinds = Vec::new();
+                if voice.and_then(|v| v.get("media")).is_some() {
+                    payload_kinds.push("audio".into());
+                }
+                if voice
+                    .and_then(|v| v.get("transcript"))
+                    .and_then(|t| t.get("text"))
+                    .and_then(serde_json::Value::as_str)
+                    .is_some()
+                {
+                    payload_kinds.push("transcript".into());
+                }
+                let thread_id = conversation
+                    .thread_id
+                    .clone()
+                    .or_else(|| conversation.topic_id.clone());
+                self.observed
+                    .lock()
+                    .unwrap()
+                    .push(tinychannels_conformance::WireObservation {
+                        feature,
+                        operation: "voice_in".into(),
+                        channel,
+                        conversation,
+                        reply_to_id: None,
+                        thread_id,
+                        payload_kinds,
+                        platform_message_ids: Vec::new(),
+                        request: envelope,
+                    });
+                return Ok(None);
+            }
+            Feature::InboundReactions => {
+                tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                    loop {
+                        if self.callbacks.events.lock().await.iter().any(|event| {
+                            matches!(
+                                event.event,
+                                tinychannels_bus::ChannelEventKind::ReactionAdded { .. }
+                                    | tinychannels_bus::ChannelEventKind::ReactionRemoved { .. }
+                            )
+                        }) {
+                            break;
+                        }
+                        self.callbacks.ingress_changed.notified().await;
+                    }
+                })
+                .await
+                .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let events = self.callbacks.events.lock().await;
+                let event = events
+                    .iter()
+                    .find(|event| {
+                        matches!(
+                            event.event,
+                            tinychannels_bus::ChannelEventKind::ReactionAdded { .. }
+                                | tinychannels_bus::ChannelEventKind::ReactionRemoved { .. }
+                        )
+                    })
+                    .expect("reaction update observed");
+                self.observed
+                    .lock()
+                    .unwrap()
+                    .push(tinychannels_conformance::WireObservation {
+                        feature,
+                        operation: "reaction_receive".into(),
+                        channel: event.channel.clone(),
+                        conversation: event.conversation.clone().unwrap_or_default(),
+                        reply_to_id: None,
+                        thread_id: None,
+                        payload_kinds: Vec::new(),
+                        platform_message_ids: Vec::new(),
+                        request: serde_json::to_value(event).unwrap(),
+                    });
+                return Ok(None);
+            }
+            Feature::Typing => {
+                self.running
+                    .interact(tinychannels_bus::ChannelInteraction::StartTyping {
+                        recipient: format!(
+                            "{}:{}",
+                            self.scope.conversation.id,
+                            self.scope.thread_id.as_deref().unwrap_or_default()
+                        ),
+                    })
+                    .await
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                Ok(None)
+            }
+            Feature::Reactions => {
+                let sent = self.adapter.send(intent.clone()).await?;
+                let provider_message_id = sent
+                    .receipt
+                    .primary_platform_message_id
+                    .clone()
+                    .ok_or_else(tinychannels_bus::channel::ChannelSendError::default)?;
+                *self.request_cursor.lock().unwrap() = self
+                    .server
+                    .received_requests()
+                    .await
+                    .unwrap_or_default()
+                    .len();
+                *self.response_cursor.lock().unwrap() = self.response_ids.lock().unwrap().len();
+                self.running
+                    .interact(tinychannels_bus::ChannelInteraction::SendReaction {
+                        channel: self.scope.channel.clone(),
+                        conversation: self.scope.conversation.clone(),
+                        provider_message_id,
+                        reaction: tinychannels_bus::channel::ChannelReaction {
+                            value: "👍".into(),
+                            custom_emoji_id: None,
+                        },
+                        remove: false,
+                    })
+                    .await
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                Ok(None)
+            }
+            Feature::Edit | Feature::Delete | Feature::StreamingDraft => {
+                let sent = if feature == Feature::StreamingDraft {
+                    None
+                } else {
+                    Some(self.adapter.send(intent.clone()).await?)
+                };
+                let receipt = sent.as_ref().map(|outcome| outcome.receipt.clone());
+                *self.request_cursor.lock().unwrap() = self
+                    .server
+                    .received_requests()
+                    .await
+                    .unwrap_or_default()
+                    .len();
+                *self.response_cursor.lock().unwrap() = self.response_ids.lock().unwrap().len();
+                match feature {
+                    Feature::Edit => {
+                        let receipt = receipt.expect("edit fixture primed a provider message");
+                        let edit = tinychannels_bus::ChannelOutboundIntent {
+                            payload: tinychannels_bus::OutboundPayload::Text {
+                                text: "edited kit".into(),
+                            },
+                            ..intent.clone()
+                        };
+                        let result = self
+                            .running
+                            .interact(tinychannels_bus::ChannelInteraction::EditMessage {
+                                receipt,
+                                intent: edit,
+                            })
+                            .await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        let tinychannels_bus::ChannelInteractionResult::Sent(outcome) = result
+                        else {
+                            return Err(tinychannels_bus::channel::ChannelSendError::default());
+                        };
+                        Ok(Some(*outcome))
+                    }
+                    Feature::Delete => {
+                        self.running
+                            .interact(tinychannels_bus::ChannelInteraction::DeleteMessage {
+                                receipt: receipt.expect("delete fixture primed a provider message"),
+                            })
+                            .await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        Ok(None)
+                    }
+                    Feature::StreamingDraft => {
+                        let created = self
+                            .running
+                            .interact(tinychannels_bus::ChannelInteraction::UpsertDraft {
+                                previous: None,
+                                intent: intent.clone(),
+                            })
+                            .await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        let tinychannels_bus::ChannelInteractionResult::Sent(created) = created
+                        else {
+                            return Err(tinychannels_bus::channel::ChannelSendError::default());
+                        };
+                        let updated_intent = tinychannels_bus::ChannelOutboundIntent {
+                            payload: tinychannels_bus::OutboundPayload::Text {
+                                text: "draft update".into(),
+                            },
+                            ..intent.clone()
+                        };
+                        let updated = self
+                            .running
+                            .interact(tinychannels_bus::ChannelInteraction::UpsertDraft {
+                                previous: Some(created.receipt),
+                                intent: updated_intent.clone(),
+                            })
+                            .await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        let tinychannels_bus::ChannelInteractionResult::Sent(updated) = updated
+                        else {
+                            return Err(tinychannels_bus::channel::ChannelSendError::default());
+                        };
+                        let finalized = self
+                            .running
+                            .interact(tinychannels_bus::ChannelInteraction::EditMessage {
+                                receipt: updated.receipt.clone(),
+                                intent: tinychannels_bus::ChannelOutboundIntent {
+                                    payload: tinychannels_bus::OutboundPayload::Text {
+                                        text: "draft final".into(),
+                                    },
+                                    ..updated_intent
+                                },
+                            })
+                            .await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        let canceled = self
+                            .running
+                            .interact(tinychannels_bus::ChannelInteraction::UpsertDraft {
+                                previous: None,
+                                intent: tinychannels_bus::ChannelOutboundIntent {
+                                    payload: tinychannels_bus::OutboundPayload::Text {
+                                        text: "draft cancel pending".into(),
+                                    },
+                                    ..intent.clone()
+                                },
+                            })
+                            .await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        let tinychannels_bus::ChannelInteractionResult::Sent(canceled) = canceled
+                        else {
+                            return Err(tinychannels_bus::channel::ChannelSendError::default());
+                        };
+                        self.running
+                            .interact(tinychannels_bus::ChannelInteraction::DeleteMessage {
+                                receipt: canceled.receipt,
+                            })
+                            .await
+                            .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                        let tinychannels_bus::ChannelInteractionResult::Sent(outcome) = finalized
+                        else {
+                            return Err(tinychannels_bus::channel::ChannelSendError::default());
+                        };
+                        Ok(Some(*outcome))
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            _ => self.adapter.send(intent).await.map(Some),
+        };
         let requests = self.server.received_requests().await.unwrap_or_default();
         let mut cursor = self.request_cursor.lock().unwrap();
         for request in requests.iter().skip(*cursor) {
-            if !request.url.path().ends_with("/sendMessage") {
+            if !request.method.to_string().eq_ignore_ascii_case("POST") {
                 continue;
             }
-            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
-            let chat = body
-                .get("chat_id")
-                .and_then(|value| value.as_str())
-                .unwrap_or_default();
-            let mut conversation = self.scope.conversation.clone();
-            conversation.id = chat.to_owned();
-            let payload_kinds = if body.get("text").is_some() {
-                vec!["text".into()]
-            } else {
-                vec![]
+            let endpoint = request.url.path().rsplit('/').next().unwrap_or_default();
+            let raw_body = String::from_utf8_lossy(&request.body);
+            let body: serde_json::Value = serde_json::from_slice(&request.body)
+                .unwrap_or_else(|_| serde_json::json!({"raw_multipart": raw_body}));
+            let field = |name: &str| -> Option<String> {
+                body.get(name)
+                    .and_then(|v| {
+                        v.as_str()
+                            .map(str::to_owned)
+                            .or_else(|| v.as_i64().map(|n| n.to_string()))
+                    })
+                    .or_else(|| {
+                        let marker = format!("name=\"{name}\"\r\n\r\n");
+                        raw_body
+                            .split_once(&marker)?
+                            .1
+                            .split("\r\n")
+                            .next()
+                            .map(str::to_owned)
+                    })
             };
-            let wire_id = |field: &str| {
-                body.get(field).map(|value| {
-                    value
-                        .as_str()
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| value.to_string())
+            let chat = field("chat_id").unwrap_or_default();
+            let message_id = field("message_id");
+            let mapped_context = message_id
+                .as_ref()
+                .and_then(|id| self.message_contexts.lock().unwrap().get(id).cloned());
+            let mut conversation = mapped_context
+                .as_ref()
+                .map(|(conversation, _)| conversation.clone())
+                .unwrap_or_else(|| self.scope.conversation.clone());
+            if !chat.is_empty() {
+                conversation.id = chat.clone();
+            }
+            let thread_id = mapped_context
+                .as_ref()
+                .and_then(|(conversation, _)| {
+                    conversation
+                        .thread_id
+                        .clone()
+                        .or_else(|| conversation.topic_id.clone())
                 })
+                .or_else(|| field("message_thread_id"));
+            conversation.thread_id = thread_id.clone();
+            conversation.topic_id = thread_id.clone();
+            let reply_to_id = mapped_context
+                .as_ref()
+                .and_then(|(_, reply)| reply.clone())
+                .or_else(|| field("reply_to_message_id"));
+            let (mut operation, endpoint_kind) = match endpoint {
+                "sendMessage" => ("send", "text"),
+                "sendPhoto" => ("send", "image"),
+                "sendVideo" => ("send", "video"),
+                "sendAudio" => ("send", "audio"),
+                "sendVoice" => ("send", "voice"),
+                "sendDocument" => ("send", "file"),
+                "sendSticker" => ("send", "sticker"),
+                "sendLocation" | "sendVenue" => ("send", "location"),
+                "sendContact" => ("send", "contact"),
+                "sendPoll" => ("send", "poll"),
+                "editMessageText" => ("edit", "text"),
+                "deleteMessage" => ("delete", ""),
+                "setMessageReaction" => ("reaction_send", ""),
+                "sendChatAction" => ("typing", ""),
+                _ => continue,
             };
+            if feature == Feature::StreamingDraft {
+                operation = match endpoint {
+                    "sendMessage" if field("text").as_deref() == Some("operation fixture") => {
+                        "draft_create"
+                    }
+                    "sendMessage" => "draft_cancel_create",
+                    "editMessageText" if field("text").as_deref() == Some("draft update") => {
+                        "draft_update"
+                    }
+                    "editMessageText" => "draft_finalize",
+                    "deleteMessage" => "draft_cancel_cleanup",
+                    _ => operation,
+                };
+            }
+            let keyboard = body
+                .get("reply_markup")
+                .and_then(|markup| markup.get("inline_keyboard"))
+                .and_then(serde_json::Value::as_array);
+            let has_action_button = keyboard.is_some_and(|rows| {
+                rows.iter().any(|row| {
+                    row.as_array().is_some_and(|buttons| {
+                        buttons.iter().any(|button| {
+                            button
+                                .get("callback_data")
+                                .and_then(serde_json::Value::as_str)
+                                .is_some_and(|data| !data.is_empty())
+                        })
+                    })
+                })
+            });
+            let payload_kind = if feature == Feature::Buttons && has_action_button {
+                "buttons"
+            } else if feature == Feature::Presentation
+                && has_action_button
+                && body
+                    .get("text")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|text| !text.is_empty())
+            {
+                "presentation"
+            } else {
+                endpoint_kind
+            };
+            let multipart_fields = [
+                "photo",
+                "video",
+                "audio",
+                "voice",
+                "document",
+                "sticker",
+                "latitude",
+                "phone_number",
+                "question",
+            ]
+            .into_iter()
+            .filter(|name| raw_body.contains(&format!("name=\"{name}\"")))
+            .collect::<Vec<_>>();
+            let request_summary = serde_json::json!({
+                "endpoint": endpoint,
+                "chat_id": chat,
+                "message_thread_id": field("message_thread_id"),
+                "reply_to_message_id": field("reply_to_message_id"),
+                "reply_parameters": body.get("reply_parameters"),
+                "message_id": field("message_id"),
+                "text": body.get("text"),
+                "reply_markup": body.get("reply_markup"),
+                "multipart_fields": multipart_fields,
+            });
+            let ids = self.response_ids.lock().unwrap();
+            let mut response_cursor = self.response_cursor.lock().unwrap();
+            let matched_response = ids
+                .iter()
+                .enumerate()
+                .skip(*response_cursor)
+                .find(|(_, (path, _))| path == endpoint);
+            let platform_message_ids = if let Some((index, (_, id))) = matched_response {
+                *response_cursor = index + 1;
+                vec![id.clone()]
+            } else {
+                message_id.clone().into_iter().collect()
+            };
+            drop(response_cursor);
+            drop(ids);
             self.observed
                 .lock()
                 .unwrap()
                 .push(tinychannels_conformance::WireObservation {
                     feature,
-                    operation: "send".into(),
+                    operation: operation.into(),
                     channel: self.scope.channel.clone(),
                     conversation,
-                    reply_to_id: wire_id("reply_to_message_id"),
-                    thread_id: wire_id("message_thread_id"),
-                    payload_kinds,
-                    platform_message_ids: vec!["321".into()],
-                    request: body,
+                    reply_to_id,
+                    thread_id,
+                    payload_kinds: if payload_kind.is_empty() {
+                        vec![]
+                    } else {
+                        vec![payload_kind.into()]
+                    },
+                    platform_message_ids,
+                    request: request_summary,
                 });
         }
         *cursor = requests.len();
-        result.map(Some)
+        result
     }
 }
 
@@ -520,6 +1168,9 @@ struct IngressVoiceCallback {
     read_requests: Arc<Mutex<Vec<tinychannels_bus::HostReadVoiceMediaRequest>>>,
     stt_requests: Arc<Mutex<Vec<tinychannels_bus::HostVoiceTranscriptionRequest>>>,
     inbound: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+    events: Arc<Mutex<Vec<tinychannels_bus::ChannelEvent>>>,
+    ingress_changed: Arc<tokio::sync::Notify>,
+    transcription_result: Arc<Mutex<Option<String>>>,
     stt_calls: Arc<AtomicUsize>,
 }
 
@@ -531,7 +1182,9 @@ impl IngressVoiceCallback {
     ) -> Result<tinychannels_bus::HostReadVoiceMediaResult> {
         self.read_requests.lock().await.push(request);
         Ok(tinychannels_bus::HostReadVoiceMediaResult {
-            audio_base64: base64::engine::general_purpose::STANDARD.encode([1_u8, 2, 3, 4]),
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+                "../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg"
+            )),
             mime_type: "audio/ogg".into(),
             file_name: Some("voice.oga".into()),
         })
@@ -543,11 +1196,58 @@ impl IngressVoiceCallback {
     ) -> Result<tinychannels_bus::HostTranscriptionResult> {
         self.stt_calls.fetch_add(1, Ordering::SeqCst);
         self.stt_requests.lock().await.push(request);
-        Err(tinybus::Error::failed("fixture STT unavailable"))
+        if let Some(text) = self.transcription_result.lock().await.clone() {
+            Ok(tinychannels_bus::HostTranscriptionResult {
+                text,
+                language: Some("en".into()),
+                duration_secs: Some(1.0),
+            })
+        } else {
+            Err(tinybus::Error::failed("fixture STT unavailable"))
+        }
+    }
+
+    async fn synthesize_speech(
+        &self,
+        _request: tinychannels_bus::HostSpeechSynthesisRequest,
+    ) -> Result<tinychannels_bus::HostSpeechSynthesisResult> {
+        Ok(tinychannels_bus::HostSpeechSynthesisResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(include_bytes!(
+                "../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg"
+            )),
+            mime_type: "audio/ogg".into(),
+            duration_ms: Some(1000),
+        })
+    }
+
+    async fn store_voice_media(
+        &self,
+        request: tinychannels_bus::HostStoreVoiceMediaRequest,
+    ) -> Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        let media = request
+            .media_reference
+            .unwrap_or(tinychannels_bus::MediaReference {
+                opaque_id: Some("fixture-voice-media".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                content_type: Some(request.mime_type),
+                file_name: request.file_name,
+                ..Default::default()
+            });
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media,
+            accessible_url: None,
+        })
     }
 
     async fn deliver_inbound(&self, channel: String, message: serde_json::Value) -> Result<()> {
         self.inbound.lock().await.push((channel, message));
+        self.ingress_changed.notify_one();
+        Ok(())
+    }
+
+    async fn deliver_event(&self, event: tinychannels_bus::ChannelEvent) -> Result<()> {
+        self.events.lock().await.push(event);
+        self.ingress_changed.notify_one();
         Ok(())
     }
 }
@@ -1395,6 +2095,7 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
             cancel,
             worker: Mutex::new(None),
             finished: Arc::new(AtomicBool::new(false)),
+            native_ports: None,
         });
         let waiter = tokio::spawn({
             let running = running.clone();
@@ -1436,6 +2137,7 @@ async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
+        native_ports: None,
     });
     let adapter = running.adapter_handle();
     let error = adapter
@@ -1469,6 +2171,7 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
+        native_ports: None,
     });
     let adapter = running.adapter_handle();
     let task = tokio::spawn(async move {
@@ -1536,6 +2239,7 @@ async fn send_configured_outcome(
         cancel,
         worker: Mutex::new(None),
         finished: Arc::new(AtomicBool::new(false)),
+        native_ports: None,
     });
     let adapter = running.adapter_handle();
     let task = tokio::spawn(async move {
@@ -1623,30 +2327,208 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     let server = MockServer::start().await;
+    let response_ids = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let response_ids_for_mock = response_ids.clone();
+    let message_contexts = Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
+    let message_contexts_for_mock = message_contexts.clone();
+    let next_id = Arc::new(AtomicUsize::new(320));
+    let next_id_for_mock = next_id.clone();
     Mock::given(method("POST"))
-        .and(path("/bottest-token/sendMessage"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "ok": true,
-            "result": { "message_id": 321 }
-        })))
+        .respond_with(move |request: &wiremock::Request| {
+            let endpoint = request.url.path().rsplit('/').next().unwrap_or_default();
+            let has_message = matches!(endpoint,
+                "sendMessage" | "sendPhoto" | "sendVideo" | "sendAudio" | "sendVoice"
+                | "sendDocument" | "sendSticker" | "sendLocation" | "sendVenue"
+                | "sendContact" | "sendPoll" | "editMessageText");
+            let mut result = serde_json::json!(true);
+            if endpoint == "getFile" {
+                result = serde_json::json!({"file_id":"voice-file","file_unique_id":"voice-unique","file_size":2575,"file_path":"voice.oga"});
+            } else if has_message {
+                let requested_edit_id = if endpoint == "editMessageText" {
+                    serde_json::from_slice::<serde_json::Value>(&request.body).ok()
+                        .and_then(|body| body.get("message_id").and_then(|value| value.as_i64()))
+                        .map(|value| value.to_string())
+                } else { None };
+                let id = requested_edit_id.unwrap_or_else(|| next_id_for_mock.fetch_add(1, Ordering::SeqCst).to_string());
+                response_ids_for_mock.lock().unwrap().push((endpoint.to_owned(), id.clone()));
+                if endpoint != "editMessageText"
+                    && let Ok(body) = serde_json::from_slice::<serde_json::Value>(&request.body)
+                {
+                        let field = |name: &str| body.get(name).and_then(|value| value.as_i64().map(|n| n.to_string()).or_else(|| value.as_str().map(str::to_owned)));
+                        let chat = field("chat_id").unwrap_or_default();
+                        let thread = field("message_thread_id");
+                        let reply = field("reply_to_message_id").or_else(|| body.get("reply_parameters")
+                            .and_then(|value| value.get("message_id"))
+                            .and_then(|value| value.as_i64().map(|n| n.to_string())));
+                        let context = ConversationRef { kind: ConversationKind::Group, id: chat, thread_id: thread.clone(), topic_id: thread, ..Default::default() };
+                        message_contexts_for_mock.lock().unwrap().insert(id.clone(), (context, reply));
+                }
+                result = serde_json::json!({});
+                result["message_id"] = serde_json::Value::Number(id.parse::<u64>().unwrap().into());
+            }
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true, "result": result}))
+        })
         .mount(&server)
         .await;
-    let channel = Arc::new(
-        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
-            .with_api_base_for_test(server.uri()),
-    );
+    let updates_sent = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let updates_sent_once = updates_sent.clone();
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/getUpdates"))
+        .respond_with(move |_request: &wiremock::Request| {
+            let result = if updates_sent_once.swap(true, Ordering::SeqCst) {
+                serde_json::json!([])
+            } else {
+                serde_json::json!([
+                    {"update_id":701,"message":{"message_id":91,"message_thread_id":77,"date":1720000000,"chat":{"id":-100,"type":"supergroup"},"from":{"id":42,"username":"alice"},"voice":{"file_id":"voice-file","file_unique_id":"voice-unique","duration":1,"mime_type":"audio/ogg","file_size":2575}}},
+                    {"update_id":702,"message_reaction":{"chat":{"id":-100,"type":"supergroup"},"message_id":92,"date":1720000001,"user":{"id":42,"username":"alice"},"old_reaction":[],"new_reaction":[{"type":"emoji","emoji":"🔥"}]}}
+                ])
+            };
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok":true,"result":result}))
+        })
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/file/bottest-token/voice.oga"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(
+            include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+        ))
+        .mount(&server)
+        .await;
     let instance = "telegram:account-a".to_owned();
     let hooks = Arc::new(Hooks::default());
-    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
-    let _provider_host = hooks.host(
+    let (host, callbacks, _server_connection, _storage) = ingress_fixture().await;
+    *callbacks.transcription_result.lock().await = Some("fixture spoken words".into());
+    let provider_host = hooks.host(
         host.clone(),
         instance.clone(),
         Some("telegram:media-v1:test".into()),
     );
-    let running = Running::start_outbound(channel, hooks, host);
+    let config = tinychannels_bus::ChannelsConfig {
+        telegram: Some(tinychannels_bus::config::TelegramConfig {
+            bot_token: "test-token".into(),
+            chat_id: None,
+            allowed_users: vec!["*".into()],
+            stream_mode: tinychannels_bus::config::StreamMode::Partial,
+            draft_update_interval_ms: 1000,
+            silent_streaming: true,
+            mention_only: false,
+        }),
+        ..Default::default()
+    };
+    let built = tinychannels::build_telegram_channel(
+        &config,
+        &provider_host,
+        &tinychannels::DefaultHttpClients,
+    )
+    .expect("configured Telegram adapter exists");
+    let channel = Arc::new(
+        Arc::try_unwrap(built)
+            .ok()
+            .expect("factory channel has no outside owners")
+            .with_api_base_for_test(server.uri()),
+    );
+    let running = Running::start_telegram(channel, hooks, host, None, false);
     let handle = running.adapter_handle();
+    let repository = provider_host
+        .media_repository()
+        .expect("configured Telegram host media repository");
+    let media_scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "telegram:account-a".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:account-a".into()),
+        },
+        conversation: ConversationRef {
+            kind: ConversationKind::Group,
+            id: "-100".into(),
+            thread_id: Some("77".into()),
+            topic_id: Some("77".into()),
+            ..Default::default()
+        },
+        turn_id: "turn-kit".into(),
+    };
+    let png = base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=").unwrap();
+    let media_inputs: [(
+        ConformanceFeature,
+        tinychannels_bus::MediaKind,
+        &str,
+        &str,
+        &[u8],
+    ); 6] = [
+        (
+            ConformanceFeature::Image,
+            tinychannels_bus::MediaKind::Image,
+            "image/png",
+            "fixture.png",
+            &png,
+        ),
+        (
+            ConformanceFeature::Video,
+            tinychannels_bus::MediaKind::Video,
+            "video/mp4",
+            "fixture.mp4",
+            include_bytes!("../../../src/providers/telegram/fixtures/cc0-flower.mp4"),
+        ),
+        (
+            ConformanceFeature::Audio,
+            tinychannels_bus::MediaKind::Audio,
+            "audio/mpeg",
+            "fixture.mp3",
+            include_bytes!("../../../src/providers/telegram/fixtures/cc0-mp3-test.mp3"),
+        ),
+        (
+            ConformanceFeature::VoiceOut,
+            tinychannels_bus::MediaKind::Audio,
+            "audio/ogg",
+            "voice.ogg",
+            include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg"),
+        ),
+        (
+            ConformanceFeature::File,
+            tinychannels_bus::MediaKind::Document,
+            "text/plain",
+            "fixture.txt",
+            b"Telegram module conformance document\n",
+        ),
+        (
+            ConformanceFeature::Sticker,
+            tinychannels_bus::MediaKind::Image,
+            "image/webp",
+            "sticker-512.webp",
+            include_bytes!("../../../src/providers/telegram/fixtures/sticker-512.webp"),
+        ),
+    ];
+    let mut media = std::collections::HashMap::new();
+    for (feature, kind, content_type, file_name, bytes) in media_inputs {
+        let reference = repository
+            .store_media(tinychannels::host::MediaStoreRequest {
+                metadata: tinychannels::host::MediaMetadata {
+                    scope: media_scope.clone(),
+                    kind,
+                    content_type: content_type.into(),
+                    file_name: Some(file_name.into()),
+                    duration_ms: Some(200),
+                    codec: Some(if content_type == "audio/ogg" {
+                        "ogg_opus".into()
+                    } else {
+                        String::new()
+                    }),
+                    voice_direction: None,
+                    dedupe_key: None,
+                    max_bytes: 20 * 1024 * 1024,
+                },
+                bytes: bytes.to_vec(),
+            })
+            .await
+            .unwrap_or_else(|error| {
+                panic!("store scoped {feature:?} conformance fixture: {error}")
+            });
+        media.insert(feature, reference);
+    }
     let fixture = RunningTelegramConformance {
         adapter: handle,
+        running: running.clone(),
         server,
         scope: ExpectedScope {
             channel: tinychannels_bus::ChannelRef {
@@ -1655,8 +2537,9 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
             },
             conversation: ConversationRef {
                 kind: ConversationKind::Group,
-                id: "100".into(),
+                id: "-100".into(),
                 thread_id: Some("77".into()),
+                topic_id: Some("77".into()),
                 ..Default::default()
             },
             reply_to_id: Some("5".into()),
@@ -1664,23 +2547,38 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
         },
         observed: std::sync::Mutex::new(Vec::new()),
         request_cursor: std::sync::Mutex::new(0),
+        response_ids,
+        media,
+        callbacks,
+        provider_host,
+        response_cursor: std::sync::Mutex::new(0),
+        message_contexts,
     };
     let descriptor = fixture.adapter.descriptor();
     assert_eq!(descriptor.id, "telegram");
     assert_eq!(descriptor.account_id.as_deref(), Some("telegram:account-a"));
-    check_feature(&fixture, ConformanceFeature::Text)
-        .await
-        .unwrap();
-    let observation = fixture.observations().pop().unwrap();
-    assert_eq!(observation.request["chat_id"], "100");
-    assert_eq!(observation.request["text"], "module-kit");
-    assert_eq!(observation.platform_message_ids, ["321"]);
-    assert_eq!(observation.reply_to_id.as_deref(), Some("5"));
-    assert_eq!(observation.thread_id.as_deref(), Some("77"));
-    check_feature(&fixture, ConformanceFeature::Image)
-        .await
-        .unwrap();
-    assert!(fixture.observations().is_empty());
+    assert_eq!(
+        descriptor.metadata.get("adapterMode").map(String::as_str),
+        Some("native-v2")
+    );
+    assert_eq!(fixture.adapter.mode, AdapterMode::TelegramNativeV2);
+    let mut results = Vec::new();
+    for feature in ConformanceFeature::ALL {
+        let result = check_feature(&fixture, feature).await;
+        println!(
+            "{feature:?}: {result:?}; observations={:?}",
+            fixture.observations()
+        );
+        results.push((feature, result));
+    }
+    for (feature, result) in &results {
+        assert!(
+            result.is_ok(),
+            "{feature:?}: {}",
+            result.as_ref().unwrap_err()
+        );
+    }
+    assert_eq!(results.len(), ConformanceFeature::ALL.len());
     running.stop().await.unwrap();
 }
 
@@ -1901,4 +2799,764 @@ async fn configured_adapter_marks_first_unknown_media_upload_non_retryable() {
     assert!(!error.unsupported);
     assert_eq!(server.received_requests().await.unwrap().len(), 1);
     running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_telegram_native_optional_ports_share_ordered_queue_and_reject_scope_mismatch() {
+    use tinychannels_bus::{ChannelInteraction, ChannelOutboundIntent, OutboundPayload};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    for endpoint in [
+        "sendMessage",
+        "editMessageText",
+        "deleteMessage",
+        "setMessageReaction",
+    ] {
+        let result = if endpoint == "deleteMessage" || endpoint == "setMessageReaction" {
+            serde_json::json!(true)
+        } else {
+            serde_json::json!({ "message_id": 321, "chat": {"id": -100} })
+        };
+        Mock::given(method("POST"))
+            .and(path(format!("/bottest-token/{endpoint}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok":true,"result":result})),
+            )
+            .mount(&server)
+            .await;
+    }
+    let instance = "telegram:account-a".to_owned();
+    let channel = Arc::new(
+        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
+            .with_api_base_for_test(server.uri()),
+    );
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let running = Running::start_telegram(channel, hooks, host, None, true);
+    let handle = running.adapter_handle();
+    assert_eq!(handle.mode, AdapterMode::TelegramNativeV2);
+
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some(instance.clone()),
+    };
+    let conversation = ConversationRef {
+        kind: ConversationKind::Group,
+        id: "-100".into(),
+        topic_id: Some("77".into()),
+        ..Default::default()
+    };
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "native-op".into(),
+        channel_id: "telegram".into(),
+        conversation_id: conversation.id.clone(),
+        channel_ref: Some(channel_ref.clone()),
+        conversation_ref: Some(conversation.clone()),
+        payload: OutboundPayload::Text {
+            text: "native send".into(),
+        },
+        ..Default::default()
+    };
+    let sent = handle.send(intent.clone()).await.unwrap();
+    assert_eq!(
+        sent.receipt.primary_platform_message_id.as_deref(),
+        Some("321")
+    );
+    assert_eq!(sent.receipt.conversation.as_ref(), Some(&conversation));
+
+    handle
+        .reactions()
+        .unwrap()
+        .send_reaction(
+            &channel_ref,
+            &conversation,
+            "321",
+            &tinychannels_bus::ChannelReaction {
+                value: "👍".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .await
+        .unwrap();
+    let receipt = sent.receipt.clone();
+    let edited = handle
+        .edits()
+        .unwrap()
+        .edit(&receipt, intent.clone())
+        .await
+        .unwrap();
+    assert_eq!(edited.conversation.as_ref(), Some(&conversation));
+    handle.deletes().unwrap().delete(&receipt).await.unwrap();
+
+    let before = server.received_requests().await.unwrap().len();
+    let mut wrong_scope = receipt.clone();
+    wrong_scope.conversation.as_mut().unwrap().topic_id = Some("other-topic".into());
+    let invalid = handle
+        .edits()
+        .unwrap()
+        .edit(&wrong_scope, intent.clone())
+        .await;
+    assert!(invalid.is_err());
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        before,
+        "mismatched receipt must be rejected before provider I/O"
+    );
+
+    let draft = running
+        .interact(ChannelInteraction::UpsertDraft {
+            previous: None,
+            intent: intent.clone(),
+        })
+        .await
+        .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::Sent(draft) = draft else {
+        panic!("native draft returned no receipt");
+    };
+    assert_eq!(
+        draft.receipt.primary_platform_message_id.as_deref(),
+        Some("321")
+    );
+    let before_bad_draft = server.received_requests().await.unwrap().len();
+    let bad = running
+        .interact(ChannelInteraction::UpsertDraft {
+            previous: Some(wrong_scope),
+            intent,
+        })
+        .await;
+    assert!(bad.is_err());
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        before_bad_draft,
+        "mismatched prior draft scope must be rejected before provider I/O"
+    );
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_scope() {
+    use tinychannels_bus::ChannelEventKind;
+    use tinychannels_bus::channel::parse_approval_action_id;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let updates = serde_json::json!([
+        {
+            "update_id": 501,
+            "callback_query": {
+                "id": "spoofed-display-name", "data": "opaque-spoof",
+                "from": {"id": 99, "first_name": "alice"},
+                "message": {"message_id": 80, "message_thread_id": 77,
+                    "chat": {"id": -100, "type": "supergroup"}}
+            }
+        },
+        {
+            "update_id": 502,
+            "callback_query": {
+                "id": "allowed-id-query", "data": "approval-v1:request-42:0",
+                "from": {"id": 42, "username": "outsider"},
+                "message": {"message_id": 81, "message_thread_id": 77,
+                    "chat": {"id": -100, "type": "supergroup"}}
+            }
+        },
+        {
+            "update_id": 503,
+            "callback_query": {
+                "id": "allowed-username-query", "data": "approval-v1:request-42:1",
+                "from": {"id": 43, "username": "alice"},
+                "message": {"message_id": 82,
+                    "chat": {"id": 100, "type": "private"}}
+            }
+        },
+        {
+            "update_id": 504,
+            "message": {"message_id": 83, "date": 1700000000,
+                "chat": {"id": -100, "type": "supergroup"},
+                "from": {"id": 42, "username": "outsider"}, "text": "ingress frontier"}
+        }
+    ]);
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true, "result": updates
+        })))
+        .up_to_n_times(1)
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/getUpdates"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true, "result": []
+        })))
+        .with_priority(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/answerCallbackQuery"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true, "result": true
+        })))
+        .mount(&server)
+        .await;
+
+    let instance = "telegram:configured-callback-account".to_owned();
+    let hooks = Arc::new(Hooks::default());
+    let (host, callback, _server_connection, _storage) = ingress_fixture().await;
+    let provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let config = tinychannels_bus::ChannelsConfig {
+        telegram: Some(tinychannels_bus::config::TelegramConfig {
+            bot_token: "test-token".into(),
+            chat_id: None,
+            allowed_users: vec!["alice".into(), "42".into()],
+            stream_mode: Default::default(),
+            draft_update_interval_ms: 1000,
+            silent_streaming: true,
+            mention_only: false,
+        }),
+        ..Default::default()
+    };
+    let built = tinychannels::build_telegram_channel(
+        &config,
+        &provider_host,
+        &tinychannels::DefaultHttpClients,
+    )
+    .expect("factory builds configured Telegram channel");
+    let channel = Arc::new(
+        Arc::try_unwrap(built)
+            .ok()
+            .expect("factory channel has no outside owners")
+            .with_api_base_for_test(server.uri()),
+    );
+    let running = Running::start_telegram(channel, hooks, host, None, false);
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let frontier_seen = callback
+                .inbound
+                .lock()
+                .await
+                .iter()
+                .any(|(_, message)| message.to_string().contains("ingress frontier"));
+            if frontier_seen {
+                break;
+            }
+            callback.ingress_changed.notified().await;
+        }
+    })
+    .await
+    .expect("ordered message after callback batch establishes ingress frontier");
+
+    let events = callback.events.lock().await.clone();
+    let callbacks = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            ChannelEventKind::ButtonCallback {
+                query_id,
+                action_id,
+                provider_message_id,
+                actor,
+            } => Some((event, query_id, action_id, provider_message_id, actor)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        callbacks.len(),
+        2,
+        "spoofed first_name must not authorize ingress"
+    );
+    let (by_id, query_id, action_id, provider_message_id, actor) = callbacks[0];
+    assert_eq!(query_id, "allowed-id-query");
+    assert_eq!(action_id, "approval-v1:request-42:0");
+    assert_eq!(parse_approval_action_id(action_id), Some(("request-42", 0)));
+    assert_eq!(provider_message_id.as_deref(), Some("81"));
+    assert_eq!(actor.id, "42");
+    assert_eq!(actor.name.as_deref(), Some("outsider"));
+    assert_eq!(by_id.channel.account_id.as_deref(), Some(instance.as_str()));
+    assert_eq!(by_id.channel.id, "telegram");
+    assert_eq!(by_id.conversation.as_ref().unwrap().id, "-100");
+    assert_eq!(
+        by_id.conversation.as_ref().unwrap().topic_id.as_deref(),
+        Some("77")
+    );
+    let (by_username, query_id, action_id, provider_message_id, actor) = callbacks[1];
+    assert_eq!(query_id, "allowed-username-query");
+    assert_eq!(action_id, "approval-v1:request-42:1");
+    assert_eq!(parse_approval_action_id(action_id), Some(("request-42", 1)));
+    assert_eq!(provider_message_id.as_deref(), Some("82"));
+    assert_eq!(actor.id, "43");
+    assert_eq!(actor.name.as_deref(), Some("alice"));
+    assert_eq!(by_username.channel.id, "telegram");
+    assert_eq!(
+        by_username.channel.account_id.as_deref(),
+        Some(instance.as_str())
+    );
+    assert_eq!(by_username.conversation.as_ref().unwrap().id, "100");
+    assert_eq!(by_username.conversation.as_ref().unwrap().topic_id, None);
+
+    let acknowledgments = server
+        .received_requests()
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|request| request.url.path() == "/bottest-token/answerCallbackQuery")
+        .map(|request| serde_json::from_slice::<serde_json::Value>(&request.body).unwrap())
+        .map(|body| body["callback_query_id"].as_str().unwrap().to_owned())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(
+        acknowledgments,
+        [
+            "spoofed-display-name".to_owned(),
+            "allowed-id-query".to_owned(),
+            "allowed-username-query".to_owned(),
+        ]
+        .into_iter()
+        .collect()
+    );
+    running.stop().await.unwrap();
+}
+
+#[test]
+fn media_scope_rejects_blank_secrets_and_distinguishes_credential_modes() {
+    use tinychannels_bus::config::*;
+    let webhook = |secret: &str| tinychannels_bus::ChannelsConfig {
+        webhook: Some(WebhookConfig {
+            port: 8080,
+            secret: Some(secret.into()),
+        }),
+        ..Default::default()
+    };
+    assert!(configured_media_account_scope("webhook", &webhook("  ")).is_none());
+    assert!(configured_media_account_scope("webhook", &webhook("s")).is_some());
+
+    let whatsapp = |phone: &str, token: &str| tinychannels_bus::ChannelsConfig {
+        whatsapp: Some(WhatsAppConfig {
+            access_token: Some(token.into()),
+            phone_number_id: Some(phone.into()),
+            verify_token: None,
+            app_secret: None,
+            session_path: None,
+            pair_phone: None,
+            pair_code: None,
+            allowed_numbers: vec![],
+        }),
+        ..Default::default()
+    };
+    assert!(configured_media_account_scope("whatsapp", &whatsapp(" ", "t")).is_none());
+    assert!(configured_media_account_scope("whatsapp", &whatsapp("p", " ")).is_none());
+
+    let irc = |sasl: Option<&str>, nickserv: Option<&str>| tinychannels_bus::ChannelsConfig {
+        irc: Some(IrcConfig {
+            server: "irc.example".into(),
+            port: 6697,
+            nickname: "bot".into(),
+            username: Some("auth-user".into()),
+            channels: vec![],
+            allowed_users: vec![],
+            server_password: None,
+            nickserv_password: nickserv.map(str::to_owned),
+            sasl_password: sasl.map(str::to_owned),
+            verify_tls: Some(true),
+        }),
+        ..Default::default()
+    };
+    let sasl = configured_media_account_scope("irc", &irc(Some("pw"), None)).unwrap();
+    let nickserv = configured_media_account_scope("irc", &irc(None, Some("pw"))).unwrap();
+    assert_ne!(
+        sasl, nickserv,
+        "principal differs between SASL and NickServ"
+    );
+    assert!(configured_media_account_scope("irc", &irc(Some(" "), None)).is_none());
+
+    let lark = |feishu: bool| tinychannels_bus::ChannelsConfig {
+        lark: Some(LarkConfig {
+            app_id: "app".into(),
+            app_secret: "secret".into(),
+            encrypt_key: None,
+            verification_token: None,
+            allowed_users: vec![],
+            use_feishu: feishu,
+            receive_mode: Default::default(),
+            port: None,
+        }),
+        ..Default::default()
+    };
+    assert_ne!(
+        configured_media_account_scope("lark", &lark(true)),
+        configured_media_account_scope("lark", &lark(false)),
+        "Feishu and Lark are distinct account authorities"
+    );
+}
+
+#[tokio::test]
+async fn legacy_running_adapter_reports_status_and_refuses_second_start() {
+    let (send, _commands) = mpsc::channel::<SendCommand>(1);
+    let (cancel, _) = watch::channel(false);
+    let running = Arc::new(Running {
+        media_account_scope: None,
+        channel: Arc::new(InteractionChannel::default()),
+        configured_instance: "interaction-fixture:account-a".into(),
+        send,
+        cancel,
+        worker: Mutex::new(None),
+        finished: Arc::new(AtomicBool::new(false)),
+        native_ports: None,
+    });
+    struct NullSink;
+    #[async_trait::async_trait]
+    impl tinychannels::channel::ChannelInboundSink for NullSink {
+        async fn push(
+            &self,
+            _event: tinychannels_bus::ChannelIngress,
+        ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+            Ok(())
+        }
+    }
+    let adapter: &dyn tinychannels::channel::ChannelAdapter = running.as_ref();
+    assert_eq!(adapter.proactive_target(), None);
+    let error = adapter.start(&NullSink).await.unwrap_err();
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Forbidden);
+    let status = adapter.status().await.unwrap();
+    assert_eq!(
+        status.account_id.as_deref(),
+        Some("interaction-fixture:account-a")
+    );
+    adapter.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_telegram_native_adapter_owns_polling_typing_drafts_and_scope_checks() {
+    use tinychannels::channel::{ChannelAdapter, ChannelStreamingDraft, ChannelTyping};
+    use tinychannels_bus::ChannelInteraction;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    for (endpoint, result) in [
+        (
+            "sendMessage",
+            serde_json::json!({"message_id": 9, "chat": {"id": -100}}),
+        ),
+        ("sendChatAction", serde_json::json!(true)),
+    ] {
+        Mock::given(method("POST"))
+            .and(path(format!("/bottest-token/{endpoint}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok":true,"result":result})),
+            )
+            .mount(&server)
+            .await;
+    }
+    let instance = "telegram:account-b".to_owned();
+    let channel = Arc::new(
+        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
+            .with_api_base_for_test(server.uri()),
+    );
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let running = Running::start_telegram(channel, hooks, host, None, true);
+    let handle = running.adapter_handle();
+    let native = handle.telegram_native.as_ref().unwrap().clone();
+
+    assert_eq!(native.proactive_target(), None);
+    assert_eq!(
+        native.receive_ack_policy(),
+        tinychannels::channel::ChannelReceiveAckPolicy::AfterReceiveRecord
+    );
+    struct NullSink;
+    #[async_trait::async_trait]
+    impl tinychannels::channel::ChannelInboundSink for NullSink {
+        async fn push(
+            &self,
+            _event: tinychannels_bus::ChannelIngress,
+        ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+            Ok(())
+        }
+    }
+    let error = native.start(&NullSink).await.unwrap_err();
+    assert_eq!(error.kind, tinychannels::channel::SendErrorKind::Forbidden);
+    let status = native.status().await.unwrap();
+    assert_eq!(status.account_id.as_deref(), Some(instance.as_str()));
+
+    native.start_typing("-100").await.unwrap();
+    native.stop_typing("-100").await.unwrap();
+    assert!(matches!(
+        running
+            .interact(ChannelInteraction::StopTyping {
+                recipient: "-100".into()
+            })
+            .await
+            .unwrap(),
+        tinychannels_bus::ChannelInteractionResult::Completed
+    ));
+
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some(instance.clone()),
+    };
+    let conversation = ConversationRef {
+        kind: ConversationKind::Group,
+        id: "-100".into(),
+        ..Default::default()
+    };
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "draft-scope".into(),
+        channel_id: "telegram".into(),
+        conversation_id: "-100".into(),
+        channel_ref: Some(channel_ref.clone()),
+        conversation_ref: Some(conversation.clone()),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "draft".into(),
+        },
+        ..Default::default()
+    };
+    let draft = native.upsert_draft(None, intent.clone()).await.unwrap();
+    assert_eq!(draft.primary_platform_message_id.as_deref(), Some("9"));
+
+    let before = server.received_requests().await.unwrap().len();
+    let foreign = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram:other".into()),
+    };
+    let reaction = running
+        .interact(ChannelInteraction::SendReaction {
+            channel: foreign.clone(),
+            conversation: conversation.clone(),
+            provider_message_id: "9".into(),
+            reaction: tinychannels_bus::ChannelReaction {
+                value: "👍".into(),
+                ..Default::default()
+            },
+            remove: false,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(reaction, RunningSendError::NotDispatched(_)));
+    let mut foreign_receipt = draft.clone();
+    foreign_receipt.channel = Some(foreign);
+    let delete = running
+        .interact(ChannelInteraction::DeleteMessage {
+            receipt: foreign_receipt,
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(delete, RunningSendError::NotDispatched(_)));
+    assert_eq!(server.received_requests().await.unwrap().len(), before);
+
+    native.stop().await.unwrap();
+    let after_stop = running
+        .interact(ChannelInteraction::StartTyping {
+            recipient: "-100".into(),
+        })
+        .await;
+    assert!(after_stop.is_err(), "a stopped runtime accepts no work");
+}
+
+#[tokio::test]
+async fn legacy_running_routes_reaction_edit_delete_and_refuses_native_drafts() {
+    use tinychannels_bus::ChannelInteraction;
+    let connection = tinybus::Connection::connect({
+        let bus = tinybus::transport::memory::MemoryBus::new();
+        tinybus::broker::Broker::new().spawn(bus.clone());
+        bus.connect().await.unwrap()
+    })
+    .await
+    .unwrap();
+    let running = Running::start(
+        Arc::new(InteractionChannel::default()),
+        Arc::new(Hooks::default()),
+        HostChannels::new(connection),
+    );
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: tinychannels_bus::provider_id("interaction-fixture").to_owned(),
+        account_id: Some(running.configured_instance.clone()),
+    };
+    let conversation = ConversationRef {
+        id: "room".into(),
+        ..Default::default()
+    };
+    let receipt = tinychannels_bus::channel::MessageReceipt {
+        channel: Some(channel_ref.clone()),
+        conversation: Some(conversation.clone()),
+        primary_platform_message_id: Some("m1".into()),
+        parts: vec![tinychannels_bus::channel::MessageReceiptPart {
+            platform_message_id: "m1".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "legacy-op".into(),
+        channel_id: channel_ref.id.clone(),
+        conversation_id: "room".into(),
+        channel_ref: Some(channel_ref.clone()),
+        conversation_ref: Some(conversation.clone()),
+        payload: tinychannels_bus::OutboundPayload::Text { text: "x".into() },
+        ..Default::default()
+    };
+    // The fixture implements none of these optional operations; each request
+    // must still travel through the ordered worker and come back as a typed
+    // provider error rather than being silently dropped.
+    let reaction = running
+        .interact(ChannelInteraction::SendReaction {
+            channel: channel_ref.clone(),
+            conversation,
+            provider_message_id: "m1".into(),
+            reaction: tinychannels_bus::ChannelReaction {
+                value: "👍".into(),
+                ..Default::default()
+            },
+            remove: false,
+        })
+        .await;
+    assert!(matches!(reaction, Err(RunningSendError::AfterDispatch(_))));
+    let edit = running
+        .interact(ChannelInteraction::EditMessage {
+            receipt: receipt.clone(),
+            intent: intent.clone(),
+        })
+        .await;
+    assert!(matches!(edit, Err(RunningSendError::AfterDispatch(_))));
+    let delete = running
+        .interact(ChannelInteraction::DeleteMessage {
+            receipt: receipt.clone(),
+        })
+        .await;
+    assert!(matches!(delete, Err(RunningSendError::AfterDispatch(_))));
+
+    let draft = running
+        .interact(ChannelInteraction::UpsertDraft {
+            previous: None,
+            intent,
+        })
+        .await;
+    assert!(matches!(draft, Err(RunningSendError::NotDispatched(_))));
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn voice_codec_maps_known_formats_and_surfaces_missing_module_errors() {
+    use tinychannels::host::{VoiceCodec, VoiceCodecRequest};
+    let connection = tinybus::Connection::connect({
+        let bus = tinybus::transport::memory::MemoryBus::new();
+        tinybus::broker::Broker::new().spawn(bus.clone());
+        bus.connect().await.unwrap()
+    })
+    .await
+    .unwrap();
+    let codec = ModuleVoiceCodec(HostChannels::new(connection));
+    let request = |from: &str, target: &str| VoiceCodecRequest {
+        audio_base64: "AAAA".into(),
+        from: from.into(),
+        target: target.into(),
+    };
+    let unsupported = codec.transcode(request("flac", "mp3")).await.unwrap_err();
+    assert!(
+        unsupported
+            .to_string()
+            .contains("unsupported TinyVoice codec")
+    );
+    let unsupported = codec
+        .transcode(request("wav_pcm16", "opus-raw"))
+        .await
+        .unwrap_err();
+    assert!(
+        unsupported
+            .to_string()
+            .contains("unsupported TinyVoice codec")
+    );
+    for (from, target) in [
+        ("audio/mp4", "audio/mpeg"),
+        ("m4a_aac", "mp3"),
+        ("audio/ogg", "audio/wav"),
+    ] {
+        let error = codec.transcode(request(from, target)).await.unwrap_err();
+        assert!(
+            !error.to_string().contains("unsupported TinyVoice codec"),
+            "{from} -> {target} parses and reaches the TinyVoice module call"
+        );
+    }
+}
+
+#[tokio::test]
+async fn module_voice_media_reports_each_precondition_and_missing_host_storage() {
+    use base64::Engine;
+    use tinychannels::host::{VoiceMediaRequest, VoiceMediaStore};
+    let connection = tinybus::Connection::connect({
+        let bus = tinybus::transport::memory::MemoryBus::new();
+        tinybus::broker::Broker::new().spawn(bus.clone());
+        bus.connect().await.unwrap()
+    })
+    .await
+    .unwrap();
+    let host = HostChannels::new(connection);
+    let instance = "telegram:account-a".to_owned();
+    let store = ModuleVoiceMediaStore(
+        host.clone(),
+        instance.clone(),
+        Some("telegram:media-v1:abc".into()),
+    );
+    let scope = tinychannels_bus::HostVoiceScope {
+        conversation: ConversationRef {
+            id: "room".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-1".into(),
+        ..Default::default()
+    };
+    let request = |audio: &str, scope: tinychannels_bus::HostVoiceScope| VoiceMediaRequest {
+        audio_base64: audio.into(),
+        mime_type: "audio/ogg".into(),
+        codec: None,
+        duration_ms: None,
+        file_name: None,
+        direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
+        scope,
+    };
+    let missing_identity = store
+        .store_voice(request("AAAA", Default::default()))
+        .await
+        .unwrap_err();
+    assert!(
+        missing_identity
+            .to_string()
+            .contains("conversation and turn")
+    );
+    let invalid = store
+        .store_voice(request("***", scope.clone()))
+        .await
+        .unwrap_err();
+    assert!(invalid.to_string().contains("payload is invalid"));
+    let payload = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]);
+    let no_storage = store
+        .store_voice(request(&payload, scope.clone()))
+        .await
+        .unwrap_err();
+    assert!(
+        no_storage
+            .to_string()
+            .contains("scoped storage is unavailable")
+    );
+
+    let read = store
+        .read_voice(scope.clone(), "tinychannels_media_v1_missing".into())
+        .await
+        .unwrap_err();
+    assert!(read.to_string().contains("scoped storage is unavailable"));
+
+    let repository = ModuleMediaRepository(host, instance, Some("telegram:media-v1:abc".into()));
+    let error = repository
+        .scoped_store()
+        .await
+        .err()
+        .expect("no storage module");
+    assert!(error.to_string().contains("scoped storage is unavailable"));
 }

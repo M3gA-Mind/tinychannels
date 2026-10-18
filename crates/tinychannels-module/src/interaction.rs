@@ -68,6 +68,11 @@ pub(crate) async fn dispatch(
                 .map(ChannelInteractionResult::Draft)
                 .map_err(|_| tinybus::Error::failed("provider draft creation failed"));
         }
+        Op::UpsertDraft { .. } => {
+            return Err(tinybus::Error::failed(
+                "typed draft requires configured provider queue",
+            ));
+        }
         Op::UpdateDraft {
             recipient,
             message_id,
@@ -82,6 +87,40 @@ pub(crate) async fn dispatch(
             provider
                 .finalize_draft(&recipient, &message_id, &text, thread_ts.as_deref())
                 .await
+        }
+        Op::SendReaction {
+            conversation,
+            provider_message_id,
+            reaction,
+            remove,
+            ..
+        } => {
+            return provider
+                .send_reaction(&conversation, &provider_message_id, &reaction, remove)
+                .await
+                .map(|()| ChannelInteractionResult::Completed)
+                .map_err(|_| tinybus::Error::failed("provider reaction failed"));
+        }
+        Op::EditMessage { receipt, intent } => {
+            return provider
+                .edit_message(&receipt, &intent)
+                .await
+                .map(|receipt| {
+                    ChannelInteractionResult::Sent(Box::new(
+                        tinychannels_bus::channel::ChannelSendOutcome {
+                            receipt,
+                            error: None,
+                        },
+                    ))
+                })
+                .map_err(|_| tinybus::Error::failed("provider message edit failed"));
+        }
+        Op::DeleteMessage { receipt } => {
+            return provider
+                .delete_message(&receipt)
+                .await
+                .map(|()| ChannelInteractionResult::Completed)
+                .map_err(|_| tinybus::Error::failed("provider message deletion failed"));
         }
     };
     result

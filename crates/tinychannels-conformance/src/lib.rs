@@ -102,7 +102,7 @@ impl ConformanceFeature {
                 .events
                 .supported
                 .iter()
-                .any(|event| event == "reaction"),
+                .any(|event| matches!(event.as_str(), "reaction_added" | "reaction_removed")),
             Self::Edit => action("edit"),
             Self::Delete => action("delete") || action("unsend"),
             Self::ReadReceipts => capabilities

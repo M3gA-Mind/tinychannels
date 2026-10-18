@@ -260,65 +260,48 @@ impl TelegramChannel {
         body
     }
 
-    pub(crate) async fn send_typing_action_once(&self, recipient: &str) {
+    pub(crate) async fn send_typing_action_once(&self, recipient: &str) -> anyhow::Result<bool> {
         tracing::info!(recipient, "Telegram typing action attempt");
         let body = Self::typing_body_for_recipient(recipient);
         let has_thread_id = body.get("message_thread_id").is_some();
-        match self
-            .http_client()
-            .post(self.api_url("sendChatAction"))
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(resp) => {
-                if Self::telegram_api_ok(resp).await {
-                    tracing::info!(recipient, "Telegram typing action sent");
-                    return;
+        let send = |body: serde_json::Value| async move {
+            let response = self
+                .http_client()
+                .post(self.api_url("sendChatAction"))
+                .json(&body)
+                .send()
+                .await
+                .map_err(|_| anyhow::Error::new(super::channel_ops::TelegramAttemptedError))?;
+            let status = response.status();
+            let value = match response.json::<serde_json::Value>().await {
+                Ok(value) => value,
+                Err(_) if status.is_client_error() => return Ok(false),
+                Err(_) => {
+                    return Err(anyhow::Error::new(
+                        super::channel_ops::TelegramAttemptedError,
+                    ));
                 }
-                tracing::warn!(recipient, "Telegram typing action rejected");
-
-                // Some chats can reject thread-scoped chat actions; retry plain chat_id once.
-                if has_thread_id {
-                    let (chat_id, _) = Self::parse_reply_target(recipient);
-                    let fallback_body = serde_json::json!({
-                        "chat_id": chat_id,
-                        "action": "typing"
-                    });
-                    match self
-                        .http_client()
-                        .post(self.api_url("sendChatAction"))
-                        .json(&fallback_body)
-                        .send()
-                        .await
-                    {
-                        Ok(fallback_resp) => {
-                            if Self::telegram_api_ok(fallback_resp).await {
-                                tracing::warn!(
-                                    recipient,
-                                    "Telegram typing action accepted after removing message_thread_id"
-                                );
-                            } else {
-                                tracing::warn!(
-                                    recipient,
-                                    "Telegram typing fallback (without message_thread_id) rejected"
-                                );
-                            }
-                        }
-                        Err(fallback_error) => {
-                            tracing::warn!(
-                                recipient,
-                                %fallback_error,
-                                "Telegram typing fallback request failed"
-                            );
-                        }
-                    }
-                }
+            };
+            if status.is_server_error() {
+                return Err(anyhow::Error::new(
+                    super::channel_ops::TelegramAttemptedError,
+                ));
             }
-            Err(error) => {
-                tracing::warn!(recipient, %error, "Telegram typing action request failed");
-            }
+            Ok(status.is_success() && super::channel_ops::response_status_ok(&value))
+        };
+        let accepted = send(body).await?;
+        if accepted {
+            tracing::info!(recipient, "Telegram typing action sent");
+            return Ok(true);
         }
+        tracing::warn!(recipient, "Telegram typing action rejected");
+        // Some chats reject thread-scoped actions; retry at chat scope once.
+        if has_thread_id {
+            let (chat_id, _) = Self::parse_reply_target(recipient);
+            let fallback_body = serde_json::json!({ "chat_id": chat_id, "action": "typing" });
+            return send(fallback_body).await;
+        }
+        Ok(false)
     }
 
     pub(crate) fn is_telegram_username_char(ch: char) -> bool {
@@ -819,9 +802,11 @@ impl TelegramChannel {
             .is_some();
         let has_voice = message.and_then(|message| message.get("voice")).is_some();
         let has_media = message.is_some_and(|message| {
-            ["photo", "document", "video", "audio", "sticker"]
-                .iter()
-                .any(|field| message.get(field).is_some())
+            [
+                "photo", "document", "video", "audio", "sticker", "location", "venue", "contact",
+            ]
+            .iter()
+            .any(|field| message.get(field).is_some())
         });
 
         tracing::debug!(
@@ -881,7 +866,12 @@ impl TelegramChannel {
         let message = update
             .get("message")
             .or_else(|| update.get("edited_message"))?;
-        Self::update_media_attachment(update)?;
+        let message_has_structured_content = ["location", "venue", "contact"]
+            .iter()
+            .any(|field| message.get(field).is_some());
+        if Self::update_media_attachment(update).is_none() && !message_has_structured_content {
+            return None;
+        }
         let caption = message.get("caption").and_then(serde_json::Value::as_str);
         let ctx = self.parse_incoming_message_context(message, caption)?;
         if self.mention_only && Self::is_group_message(message) && ctx.mention_text.is_none() {

@@ -1143,6 +1143,22 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         .mount(&telegram_api)
         .await;
     Mock::given(method("POST"))
+        .and(path_regex(".*/sendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {"message_id": 92, "date": 1, "chat": {"id": 42, "type": "group"}}
+        })))
+        .mount(&telegram_api)
+        .await;
+    Mock::given(method("POST"))
+        .and(path_regex(".*/editMessageText"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {"message_id": 92, "date": 1, "chat": {"id": 42, "type": "group"}, "text": "progress"}
+        })))
+        .mount(&telegram_api)
+        .await;
+    Mock::given(method("POST"))
         .and(path_regex(".*/sendPhoto"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "ok": true,
@@ -1178,6 +1194,149 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         )
         .await
         .unwrap();
+    let draft_scope_channel = ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("telegram".into()),
+    };
+    let draft_scope_conversation = ConversationRef {
+        kind: ConversationKind::Group,
+        id: "42".into(),
+        topic_id: Some("17".into()),
+        ..Default::default()
+    };
+    let draft_intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "artifact-draft-1".into(),
+        channel_id: "telegram".into(),
+        conversation_id: "42".into(),
+        channel_ref: Some(draft_scope_channel.clone()),
+        conversation_ref: Some(draft_scope_conversation.clone()),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "progress".into(),
+        },
+        ..Default::default()
+    };
+    let draft_result: tinychannels_bus::ChannelInteractionResult = runtime_proxy
+        .call_confidential(
+            "ChannelInteraction",
+            tinychannels_bus::ChannelInteractionRequest {
+                channel: "telegram".into(),
+                interaction: tinychannels_bus::ChannelInteraction::UpsertDraft {
+                    previous: None,
+                    intent: draft_intent.clone(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::Sent(draft_outcome) = draft_result else {
+        panic!("configured Telegram v2 draft returned no receipt")
+    };
+    assert!(
+        draft_outcome.error.is_none(),
+        "configured Telegram v2 draft should report a successful native send"
+    );
+    assert_eq!(
+        draft_outcome.receipt.channel.as_ref(),
+        Some(&draft_scope_channel)
+    );
+    assert_eq!(
+        draft_outcome.receipt.conversation.as_ref(),
+        Some(&draft_scope_conversation)
+    );
+    assert_eq!(
+        draft_outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("92")
+    );
+    let draft_requests = telegram_api.received_requests().await.unwrap();
+    let create_body: serde_json::Value = serde_json::from_slice(
+        &draft_requests
+            .iter()
+            .find(|request| request.url.path().ends_with("/sendMessage"))
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(create_body["message_thread_id"], "17");
+    assert_eq!(create_body["parse_mode"], "MarkdownV2");
+    let mut update_intent = draft_intent.clone();
+    update_intent.payload = tinychannels_bus::OutboundPayload::Text {
+        text: "updated progress".into(),
+    };
+    let update_result: tinychannels_bus::ChannelInteractionResult = runtime_proxy
+        .call_confidential(
+            "ChannelInteraction",
+            tinychannels_bus::ChannelInteractionRequest {
+                channel: "telegram".into(),
+                interaction: tinychannels_bus::ChannelInteraction::UpsertDraft {
+                    previous: Some(draft_outcome.receipt.clone()),
+                    intent: update_intent,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::Sent(update_outcome) = update_result else {
+        panic!("configured Telegram v2 draft update returned no receipt")
+    };
+    assert!(
+        update_outcome.error.is_none(),
+        "configured Telegram v2 draft update should report a successful native edit"
+    );
+    assert_eq!(
+        update_outcome
+            .receipt
+            .primary_platform_message_id
+            .as_deref(),
+        Some("92")
+    );
+    let updated_requests = telegram_api.received_requests().await.unwrap();
+    let edit_body: serde_json::Value = serde_json::from_slice(
+        &updated_requests
+            .iter()
+            .find(|request| request.url.path().ends_with("/editMessageText"))
+            .unwrap()
+            .body,
+    )
+    .unwrap();
+    assert_eq!(edit_body["parse_mode"], "MarkdownV2");
+    let mut forged_receipt = draft_outcome.receipt.clone();
+    forged_receipt.conversation.as_mut().unwrap().topic_id = Some("18".into());
+    let before_reject = updated_requests
+        .iter()
+        .filter(|request| {
+            request.url.path().ends_with("/sendMessage")
+                || request.url.path().ends_with("/editMessageText")
+        })
+        .count();
+    assert!(
+        runtime_proxy
+            .call_confidential::<tinychannels_bus::ChannelInteractionResult>(
+                "ChannelInteraction",
+                tinychannels_bus::ChannelInteractionRequest {
+                    channel: "telegram".into(),
+                    interaction: tinychannels_bus::ChannelInteraction::UpsertDraft {
+                        previous: Some(forged_receipt),
+                        intent: draft_intent
+                    },
+                }
+            )
+            .await
+            .is_err()
+    );
+    let after_reject = telegram_api
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| {
+            request.url.path().ends_with("/sendMessage")
+                || request.url.path().ends_with("/editMessageText")
+        })
+        .count();
+    assert_eq!(
+        after_reject, before_reject,
+        "forged prior draft scope must be rejected without Bot API write I/O"
+    );
     other_runtime_proxy
         .call_confidential::<()>(
             "StartChannelConfigured",
@@ -1704,8 +1863,32 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     wrong_topic.conversation_ref.as_mut().unwrap().topic_id = Some("other-topic".into());
     let mut wrong_turn = send.clone();
     wrong_turn.turn_id = Some("turn-from-another-message".into());
+    let before_account_reject = telegram_api
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path().ends_with("/sendPhoto"))
+        .count();
+    assert!(
+        runtime_proxy
+            .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                "SendChannelIntent",
+                ("telegram", wrong_account),
+            )
+            .await
+            .is_err(),
+        "account mismatch should be rejected at the module boundary"
+    );
+    let after_account_reject = telegram_api
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter(|request| request.url.path().ends_with("/sendPhoto"))
+        .count();
+    assert_eq!(after_account_reject, before_account_reject);
     let invalid_scopes = [
-        wrong_account,
         wrong_conversation,
         wrong_scope,
         wrong_parent,
@@ -1721,15 +1904,22 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
             .iter()
             .filter(|request| request.url.path().ends_with("/sendPhoto"))
             .count();
-        assert!(
-            runtime_proxy
-                .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
-                    "SendChannelIntent",
-                    ("telegram", invalid),
-                )
-                .await
-                .is_err()
+        let rejected = runtime_proxy
+            .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+                "SendChannelIntent",
+                ("telegram", invalid),
+            )
+            .await
+            .unwrap();
+        let error = rejected
+            .error
+            .expect("out-of-scope media should return a typed dispatch error");
+        assert_eq!(
+            error.kind,
+            tinychannels_bus::channel::SendErrorKind::Forbidden
         );
+        assert!(rejected.message_id.is_none());
+        assert!(rejected.receipt.is_none());
         let after = telegram_api
             .received_requests()
             .await
@@ -1858,15 +2048,23 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
         },
         ..Default::default()
     };
-    assert!(
-        runtime_proxy
-            .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
-                "SendChannelIntent",
-                ("telegram", invalid_send),
-            )
-            .await
-            .is_err()
+    let invalid_result = runtime_proxy
+        .call_confidential::<tinychannels_bus::controllers::ChannelSendMessageResult>(
+            "SendChannelIntent",
+            ("telegram", invalid_send),
+        )
+        .await
+        .unwrap();
+    let invalid_error = invalid_result
+        .error
+        .expect("missing media reference should be a typed rejection");
+    assert_eq!(
+        invalid_error.kind,
+        tinychannels_bus::channel::SendErrorKind::Forbidden
     );
+    assert!(!invalid_error.sent_before_error);
+    assert!(invalid_result.message_id.is_none());
+    assert!(invalid_result.receipt.is_none());
     let after_invalid_send = telegram_api
         .received_requests()
         .await

@@ -80,9 +80,11 @@ pub trait ChannelTyping: Send + Sync {
 pub trait ChannelReaction: Send + Sync {
     async fn send_reaction(
         &self,
-        conversation_id: &str,
-        message_id: &str,
-        reaction: &str,
+        channel: &tinychannels_bus::channel::ChannelRef,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
     ) -> Result<(), ChannelSendError>;
 }
 
@@ -115,3 +117,12 @@ pub trait ChannelStreamingDraft: Send + Sync {
 #[cfg(test)]
 #[path = "adapter_tests.rs"]
 mod tests;
+
+/// Typed send executor for providers whose rich message surface is native.
+#[async_trait]
+pub trait ChannelTypedSend: Send + Sync {
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<crate::channel::ChannelSendOutcome, ChannelSendError>;
+}
