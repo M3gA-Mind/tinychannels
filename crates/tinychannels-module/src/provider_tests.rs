@@ -4332,3 +4332,28 @@ async fn a_built_imessage_launch_starts_as_the_native_imessage_adapter() {
     assert_eq!(handle.descriptor().id, "imessage");
     running.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_built_linq_launch_starts_as_the_native_linq_adapter() {
+    use tinychannels::factory::DefaultHttpClients;
+    let config = tinychannels_bus::ChannelsConfig {
+        linq: Some(tinychannels_bus::config::LinqConfig {
+            api_token: "token".into(),
+            from_phone: "+15551234567".into(),
+            allowed_senders: vec!["*".into()],
+            webhook_secret: None,
+        }),
+        ..Default::default()
+    };
+    let noop: Arc<dyn tinychannels::host::ChannelHost> = tinychannels::host::NoopHost::arc();
+    let launch = crate::native::build_native_v2("linq", &config, &noop, &DefaultHttpClients)
+        .expect("linq is configured");
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), "linq".to_owned(), None);
+    let running = launch.start(hooks, host, None, true);
+    let handle = running.adapter_handle();
+    assert_eq!(handle.mode, AdapterMode::LinqNativeV2);
+    assert_eq!(handle.descriptor().id, "linq");
+    running.stop().await.unwrap();
+}

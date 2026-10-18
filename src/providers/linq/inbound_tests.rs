@@ -4,7 +4,7 @@ use crate::traits::Channel;
 use serde_json::json;
 use tinychannels_bus::{ContentPart, ConversationKind};
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, ResponseTemplate};
 
 async fn deliver(
     channel: &LinqChannel,

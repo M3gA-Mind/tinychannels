@@ -48,9 +48,7 @@ async fn text_is_published_on_the_ordered_ingress_path() {
     assert_eq!(inbound[0].sender.id, PEER);
     assert_eq!(
         inbound[0].timestamp_unix_ms,
-        Some(1_678_307_200_000 + 0)
-            .filter(|_| false)
-            .or(db::unix_ms(700_000_000_000_000_000))
+        db::unix_ms(700_000_000_000_000_000)
     );
     assert!(rx.try_recv().is_err());
 }

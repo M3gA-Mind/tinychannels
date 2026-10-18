@@ -1,6 +1,5 @@
 //! The shared adapter conformance matrix against a mock Linq API.
 
-use super::*;
 use crate::channel::{
     ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction as ReactionPort, ChannelTyping,
 };

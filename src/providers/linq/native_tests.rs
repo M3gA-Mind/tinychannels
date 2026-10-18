@@ -399,7 +399,7 @@ async fn the_descriptor_and_legacy_methods_use_the_native_surface() {
         descriptor.metadata.get("voiceOut").map(String::as_str),
         Some("attachment")
     );
-    assert_eq!(channel.capabilities().remote_control, true);
+    assert!(channel.capabilities().remote_control);
     let outcome = channel
         .send_typed_with_receipt(&message(CHAT, vec![text("legacy")]))
         .await
