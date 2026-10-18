@@ -18,7 +18,6 @@ use crate::providers::whatsapp_shared::inbound::{
 use hmac::{Hmac, KeyInit, Mac};
 use serde_json::Value;
 use sha2::Sha256;
-use std::collections::{HashSet, VecDeque};
 use tinychannels_bus::{
     ChannelEvent, ChannelEventKind, ChannelIngress, ChannelInboundEnvelope, ChannelReaction,
     ChannelRef, ContactMethod, ContentPart, ConversationRef, SenderRef, WebhookDeliveryOutcome,
@@ -27,62 +26,9 @@ use tinychannels_bus::{
 /// Largest webhook body accepted (Meta batches several messages per POST).
 pub(super) const MAX_WEBHOOK_BYTES: usize = 2 * 1024 * 1024;
 /// How many accepted ids are remembered for duplicate suppression.
-const SEEN_WINDOW: usize = 4096;
+pub(super) const SEEN_WINDOW: usize = 4096;
 /// How many conversations remember their latest inbound message id.
-const ANCHOR_WINDOW: usize = 512;
-
-/// Bounded first-in-first-out set of provider ids already published.
-#[derive(Default)]
-pub(super) struct SeenWindow {
-    order: VecDeque<String>,
-    ids: HashSet<String>,
-}
-
-impl SeenWindow {
-    pub(super) fn contains(&self, id: &str) -> bool {
-        self.ids.contains(id)
-    }
-
-    pub(super) fn insert(&mut self, id: String) {
-        if !self.ids.insert(id.clone()) {
-            return;
-        }
-        self.order.push_back(id);
-        while self.order.len() > SEEN_WINDOW {
-            if let Some(oldest) = self.order.pop_front() {
-                self.ids.remove(&oldest);
-            }
-        }
-    }
-}
-
-/// Latest inbound message per conversation, used to anchor typing indicators.
-#[derive(Default)]
-pub(super) struct AnchorWindow {
-    order: VecDeque<String>,
-    latest: std::collections::HashMap<String, String>,
-}
-
-impl AnchorWindow {
-    pub(super) fn record(&mut self, conversation: &str, message_id: &str) {
-        if self
-            .latest
-            .insert(conversation.to_owned(), message_id.to_owned())
-            .is_none()
-        {
-            self.order.push_back(conversation.to_owned());
-        }
-        while self.order.len() > ANCHOR_WINDOW {
-            if let Some(oldest) = self.order.pop_front() {
-                self.latest.remove(&oldest);
-            }
-        }
-    }
-
-    pub(super) fn latest(&self, conversation: &str) -> Option<String> {
-        self.latest.get(conversation).cloned()
-    }
-}
+pub(super) const ANCHOR_WINDOW: usize = 512;
 
 /// Check `X-Hub-Signature-256` against the received bytes. Missing,
 /// malformed and wrong signatures are indistinguishable to the caller.
@@ -407,7 +353,7 @@ impl WhatsAppChannel {
             });
         }
         content.extend(parts);
-        self.anchors.lock().record(&sender, id);
+        self.anchors.lock().insert(&sender, id);
         let media = inbound::envelope_media(&content);
         Ok(Some(Item::Message(Box::new(ChannelInboundEnvelope {
             channel: ChannelRef {

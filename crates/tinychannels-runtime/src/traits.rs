@@ -213,6 +213,14 @@ pub trait Channel: Send + Sync {
         anyhow::bail!("provider does not support native reactions")
     }
 
+    /// A stable identifier for the account this provider is authenticated as,
+    /// when the provider learns it at runtime (a linked device's JID, for
+    /// example). `None` until it is known or if it changed mid-session, so
+    /// callers that scope durable media by account fail closed.
+    fn media_account_identity(&self) -> Option<String> {
+        None
+    }
+
     /// Mark one inbound provider message as read by this account.
     async fn mark_read(
         &self,

@@ -4,6 +4,7 @@ mod outbound;
 
 use crate::providers::whatsapp_shared::capabilities::{CapabilitySpec, capabilities};
 use crate::providers::whatsapp_shared::error::WaFailure;
+use crate::providers::whatsapp_shared::window::{BoundedMap, SeenSet};
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -46,9 +47,9 @@ pub struct WhatsAppChannel {
     /// Sink of the legacy listener, used when the host cannot take typed ingress.
     listener: Mutex<Option<tokio::sync::mpsc::Sender<ChannelMessage>>>,
     /// Provider message ids already published (Meta redelivers).
-    seen: Mutex<ingress::SeenWindow>,
+    seen: Mutex<SeenSet>,
     /// Latest inbound message per conversation, the anchor for typing indicators.
-    anchors: Mutex<ingress::AnchorWindow>,
+    anchors: Mutex<BoundedMap>,
 }
 
 impl WhatsAppChannel {
@@ -87,8 +88,8 @@ impl WhatsAppChannel {
             voice_synthesis: false,
             events: None,
             listener: Mutex::new(None),
-            seen: Mutex::new(ingress::SeenWindow::default()),
-            anchors: Mutex::new(ingress::AnchorWindow::default()),
+            seen: Mutex::new(SeenSet::new(ingress::SEEN_WINDOW)),
+            anchors: Mutex::new(BoundedMap::new(ingress::ANCHOR_WINDOW)),
         }
     }
 
@@ -371,7 +372,7 @@ impl Channel for WhatsAppChannel {
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
         let digits = outbound::recipient_digits(recipient)?;
         // The Cloud API shows "typing" only against an inbound message.
-        let anchor = self.anchors.lock().latest(&format!("+{digits}"));
+        let anchor = self.anchors.lock().get(&format!("+{digits}"));
         let Some(anchor) = anchor else {
             return Err(anyhow::Error::new(WaFailure::rejected(
                 "WhatsApp typing needs a recent inbound message from this contact",
