@@ -3975,7 +3975,7 @@ fn typed_error_mapping_distinguishes_preflight_partial_and_ambiguous_failures() 
         ..Default::default()
     };
     let mapped_partial = typed_send_error(anyhow::Error::new(
-        super::channel_send::PartialTextSendError {
+        crate::providers::telegram::channel_send::PartialTextSendError {
             message_ids: vec!["17".into()],
             sent_before_error: true,
             error: partial.clone(),
