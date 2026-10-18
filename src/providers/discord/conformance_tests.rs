@@ -146,19 +146,17 @@ impl DiscordFixture {
         let requests = self.server.received_requests().await.unwrap();
         let start = *self.cursor.lock();
         let mut ids = self.response_ids.lock().clone().into_iter();
-        let mut index = 0;
-        for request in &requests[start..] {
+        for (index, request) in requests[start..].iter().enumerate() {
             let url_path = request.url.path().to_owned();
             let segments: Vec<&str> = url_path.split('/').collect();
-            let is_reaction =
-                request.method.to_string() == "PUT" && url_path.contains("/reactions/");
+            let is_reaction = request.method.as_str() == "PUT" && url_path.contains("/reactions/");
             let is_typing = url_path.ends_with("/typing");
             let is_threads = url_path.ends_with("/threads");
             let bears_id =
                 matches!(request.method.to_string().as_str(), "POST" | "PATCH") && !is_typing;
             let message_ids = if bears_id {
                 ids.next().map(|(_, id)| vec![id]).unwrap_or_default()
-            } else if request.method.to_string() == "DELETE" {
+            } else if request.method.as_str() == "DELETE" {
                 vec![segments[4].to_owned()]
             } else {
                 Vec::new()
@@ -170,13 +168,12 @@ impl DiscordFixture {
             } else {
                 conversation()
             };
-            let payload = if request.method.to_string() == "POST" && !is_typing {
+            let payload = if request.method.as_str() == "POST" && !is_typing {
                 parse_payload(request)
             } else {
                 Value::Null
             };
             let operation = names.get(index).copied().unwrap_or("send");
-            index += 1;
             self.observed.lock().push(WireObservation {
                 feature,
                 operation: operation.into(),
