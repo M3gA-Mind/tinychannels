@@ -291,9 +291,11 @@ impl WhatsAppWebChannel {
             let (sent, stopped) = self
                 .send_planned(client.as_ref(), &to, planned_part, context)
                 .await;
-            for (id, kind) in sent {
+            for (position, (id, kind)) in sent.into_iter().enumerate() {
                 let index = parts.len();
-                parts.push(receipt_part(&id, kind, index, &scope, reply));
+                // Only the first message of the group quotes the source.
+                let quoted = if position == 0 { reply } else { None };
+                parts.push(receipt_part(&id, kind, index, &scope, quoted));
             }
             if let Some(error) = stopped {
                 if parts.is_empty() {

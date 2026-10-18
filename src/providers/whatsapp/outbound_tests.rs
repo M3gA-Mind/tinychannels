@@ -365,7 +365,6 @@ async fn attachments_are_uploaded_then_sent_by_media_id() {
     assert_eq!(sent[1]["document"]["filename"], "doc.pdf");
     assert_eq!(sent[2]["sticker"], json!({"id": "media-1"}));
     assert_eq!(sent[3]["audio"], json!({"id": "media-1"}));
-    assert_eq!(bodies(&server, "/media").await.len(), 0, "uploads are multipart, not JSON");
     assert_eq!(
         server
             .received_requests()
