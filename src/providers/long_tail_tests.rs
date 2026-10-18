@@ -159,6 +159,7 @@ fn unconfigured_or_unknown_providers_build_nothing() {
     );
     let mut bad = config("http://x.invalid");
     bad.yuanbao.as_mut().unwrap().ws_domain.clear();
+    bad.yuanbao.as_mut().unwrap().token.clear();
     assert!(build_long_tail_channel(&bad, &DefaultHttpClients, "yuanbao").is_none());
 }
 
