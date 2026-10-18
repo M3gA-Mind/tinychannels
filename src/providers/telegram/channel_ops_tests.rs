@@ -682,3 +682,86 @@ async fn listen_backs_off_when_webhook_delete_fails_and_on_transport_error() {
     );
     assert!(dead.bot_username.lock().is_none());
 }
+
+#[tokio::test]
+async fn loopback_bot_api_retries_poll_then_routes_status_reply() {
+    let api = BotApiFake::start().await;
+    // The current poll loop retries this API error using poll_error_backoff;
+    // retry_after is part of the realistic response shape, not a delay assertion.
+    api.fail_next_poll(
+        429,
+        serde_json::json!({
+            "ok": false,
+            "error_code": 429,
+            "description": "Too Many Requests",
+            "parameters": { "retry_after": 1 }
+        }),
+    );
+    api.inject(serde_json::json!({
+        "update_id": 1,
+        "message": {
+            "message_id": 41,
+            "chat": { "id": 777, "type": "private" },
+            "from": { "id": 7, "username": "alice" },
+            "text": "/status"
+        }
+    }));
+
+    let mut channel = api.channel(&["alice"]);
+    channel.poll_error_backoff = Duration::from_millis(1);
+    let channel = Arc::new(channel);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let listener = tokio::spawn({
+        let channel = Arc::clone(&channel);
+        async move { channel.listen(tx).await }
+    });
+
+    let inbound = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("poll recovers from rate limit")
+        .expect("injected command is dispatched");
+    assert_eq!(inbound.content, "/status");
+    assert_eq!(inbound.sender, "alice");
+    assert_eq!(inbound.reply_target, "777");
+    assert_eq!(inbound.thread_ts.as_deref(), Some("41"));
+
+    // This is the channel-facing part of the host's /status handler: it
+    // turns the received command into a provider reply in the originating chat.
+    channel
+        .send(
+            &SendMessage::new("Thread: none\nProvider: openai", inbound.reply_target)
+                .in_thread(inbound.thread_ts),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        api.sent(),
+        vec![(
+            "sendMessage".to_string(),
+            serde_json::json!({
+                "chat_id": "777",
+                "text": "Thread: none\nProvider: openai",
+                "parse_mode": "Markdown",
+                "reply_to_message_id": 41
+            })
+        )]
+    );
+
+    // A second injected message lets listen exit cleanly when the receiver is
+    // dropped, proving the loop processed a subsequent poll after the 429.
+    drop(rx);
+    api.inject(serde_json::json!({
+        "update_id": 2,
+        "message": {
+            "message_id": 42,
+            "chat": { "id": 777, "type": "private" },
+            "from": { "id": 7, "username": "alice" },
+            "text": "stop"
+        }
+    }));
+    tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("listener stops after receiver closes")
+        .unwrap()
+        .unwrap();
+}
