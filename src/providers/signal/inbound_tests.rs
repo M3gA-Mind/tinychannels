@@ -1,6 +1,8 @@
 use super::*;
+use crate::providers::native::fixtures::RecordingEvents;
 use crate::providers::signal::fixtures::*;
 use serde_json::json;
+use std::sync::Arc;
 use tinychannels_bus::{ChannelEventKind, ContentPart, ConversationKind};
 
 fn channel_pair() -> (mpsc::Sender<ChannelMessage>, mpsc::Receiver<ChannelMessage>) {
