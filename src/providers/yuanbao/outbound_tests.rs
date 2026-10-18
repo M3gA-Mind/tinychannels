@@ -374,6 +374,79 @@ async fn send_image_from_url_uploads_to_cos_and_sends_resource_url() {
 }
 
 #[tokio::test]
+async fn send_host_scoped_image_bytes_upload_to_cos_and_return_the_platform_id() {
+    let server = wiremock::MockServer::start().await;
+    mount_media(&server, "image/png", png(320, 200)).await;
+    let mut h = harness("cfg-bot").await;
+    h.sender = Arc::new(
+        OutboundSender::new(h.sender.conn.clone(), None, "ak".into(), "cfg-bot".into())
+            .with_cos_endpoint(server.uri()),
+    );
+    let api = server.uri();
+    let bytes = png(320, 200);
+    let (result, frame) = round_trip(&mut h, 0, b"", move |sender| async move {
+        sender
+            .send_media_bytes(
+                "user-1",
+                &bytes,
+                "asset.png",
+                "image/png",
+                "ak",
+                "bot",
+                "tok",
+                &api,
+                "",
+                Some("reply-1"),
+            )
+            .await
+    })
+    .await;
+
+    let id = result.unwrap();
+    assert!(!id.is_empty());
+    assert_eq!(frame.cmd, biz_cmd::SEND_C2C_MESSAGE);
+    assert!(contains(&frame.data, "https://cdn.example/cat.png"));
+    assert!(contains(&frame.data, "asset.png"));
+    assert!(contains(&frame.data, "reply-1"));
+}
+
+#[tokio::test]
+async fn send_host_scoped_file_bytes_uses_the_file_message_element() {
+    let server = wiremock::MockServer::start().await;
+    mount_media(&server, "application/pdf", b"%PDF-1.7".to_vec()).await;
+    let mut h = harness("cfg-bot").await;
+    h.sender = Arc::new(
+        OutboundSender::new(h.sender.conn.clone(), None, "ak".into(), "cfg-bot".into())
+            .with_cos_endpoint(server.uri()),
+    );
+    let api = server.uri();
+    let bytes = b"%PDF-1.7".to_vec();
+    let (result, frame) = round_trip(&mut h, 0, b"", move |sender| async move {
+        sender
+            .send_media_bytes(
+                "g:room",
+                &bytes,
+                "report.pdf",
+                "application/pdf",
+                "ak",
+                "bot",
+                "tok",
+                &api,
+                "",
+                None,
+            )
+            .await
+    })
+    .await;
+
+    assert!(result.is_ok());
+    assert_eq!(frame.cmd, biz_cmd::SEND_GROUP_MESSAGE);
+    assert!(contains(&frame.data, "TIMFileElem"));
+    assert!(contains(&frame.data, "https://cdn.example/cat.png"));
+    assert!(contains(&frame.data, "report.pdf"));
+}
+
+#[tokio::test]
 async fn send_image_from_url_falls_back_to_downloaded_dimensions() {
     // A non-image content type means COS reports no dimensions, so the
     // sender keeps the ones parsed from the downloaded bytes.

@@ -231,13 +231,7 @@ impl OutboundSender {
             return Err(YuanbaoError::Media("empty upload".into()));
         }
         let creds = get_cos_credentials(
-            &self.http,
-            api_domain,
-            app_key,
-            bot_id,
-            token,
-            route_env,
-            filename,
+            &self.http, api_domain, app_key, bot_id, token, route_env, filename,
         )
         .await?;
         let upload = upload_to_cos_via(
@@ -260,7 +254,12 @@ impl OutboundSender {
                 mime_type,
             )
         } else {
-            build_file_msg_body(&upload.url, filename, Some(&upload.uuid), upload.size as u32)
+            build_file_msg_body(
+                &upload.url,
+                filename,
+                Some(&upload.uuid),
+                upload.size as u32,
+            )
         };
         self.send_body(recipient, body, ref_msg_id).await
     }

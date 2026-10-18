@@ -14,9 +14,9 @@ use tokio::sync::{Mutex as TokioMutex, mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-use crate::traits::{Channel, ChannelMessage, SendMessage};
 use crate::host::{MediaRepository, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
+use crate::traits::{Channel, ChannelMessage, SendMessage};
 
 use super::config::YuanbaoConfig;
 use super::connection::{InboundEvent, YuanbaoConnection};
@@ -481,7 +481,10 @@ impl crate::providers::long_tail::LongTail for YuanbaoChannel {
             streaming_pipeline: true,
         });
         if self.native_media_enabled() {
-            capabilities.content.parts.extend(["image".into(), "file".into()]);
+            capabilities
+                .content
+                .parts
+                .extend(["image".into(), "file".into()]);
             capabilities.content.image.outbound = true;
             capabilities.content.file.outbound = true;
         }
