@@ -460,6 +460,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 codec: Some("audio/ogg".into()),
                 duration_ms: Some(700),
                 audio_base64: None,
+                waveform: None,
             },
         },
         tinychannels_bus::OutboundContentPart::Voice {
@@ -508,6 +509,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
                 codec: Some("audio/ogg".into()),
                 duration_ms: Some(1200),
                 audio_base64: None,
+                waveform: None,
             },
         },
         tinychannels_bus::OutboundPayload::Voice {
@@ -1308,6 +1310,7 @@ async fn large_voice_bytes_use_compact_scoped_reference_in_best_effort_and_requi
                 audio_base64,
                 codec: Some("ogg_opus".into()),
                 duration_ms: Some(1_200),
+                waveform: None,
             },
         },
         ..Default::default()

@@ -3524,6 +3524,7 @@ async fn unsupported_rich_final_returns_the_unflattened_parts() {
             codec: None,
             duration_ms: Some(1200),
             audio_base64: None,
+            waveform: None,
         },
     }];
     let result = replies
@@ -3876,6 +3877,7 @@ async fn ambiguous_voice_receipt_is_retained_and_identical_final_is_not_retried(
                 codec: Some("ogg_opus".into()),
                 duration_ms: Some(1200),
                 audio_base64: None,
+                waveform: None,
             },
         }],
         receipt: None,
