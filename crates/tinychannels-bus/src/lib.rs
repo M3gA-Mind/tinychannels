@@ -32,6 +32,7 @@ pub mod module_routes;
 #[allow(deprecated, reason = "v21 module DTOs remain for one release")]
 pub mod module_runtime;
 pub mod module_supervision;
+pub mod module_web_output;
 pub mod names;
 pub mod relay;
 #[allow(
@@ -110,5 +111,7 @@ pub use module_interaction::{
 };
 
 pub use module_supervision::ChannelSupervisionPolicy;
+
+pub use module_web_output::{BeginWebTurn, EndWebTurn, ProjectWebOutput, WebOutputEvents};
 
 pub use module_runtime::{ChannelRuntimeDispatchPolicy, ChannelRuntimeReservation};
