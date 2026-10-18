@@ -4,7 +4,7 @@
 use super::*;
 use base64::Engine as _;
 
-struct FixtureVoiceCodec;
+pub(super) struct FixtureVoiceCodec;
 
 #[async_trait::async_trait]
 impl crate::host::VoiceCodec for FixtureVoiceCodec {
@@ -151,7 +151,7 @@ const GUARD: Duration = Duration::from_secs(10);
 /// A client that sends both regions' API hosts to the fixture. The fixture's
 /// certificate does not name them, so verification is disabled for this
 /// loopback-only test client.
-fn fixture_client(server: &HttpsServer) -> reqwest::Client {
+pub(super) fn fixture_client(server: &HttpsServer) -> reqwest::Client {
     reqwest::Client::builder()
         .no_proxy()
         .http1_only()
@@ -184,7 +184,7 @@ impl crate::factory::HttpClientFactory for FixtureHttpClients {
     }
 }
 
-fn is_token_request(request: &Request) -> bool {
+pub(super) fn is_token_request(request: &Request) -> bool {
     request
         .target
         .ends_with("/auth/v3/tenant_access_token/internal")
@@ -197,7 +197,7 @@ fn header<'a>(request: &'a Request, name: &str) -> Option<&'a str> {
     })
 }
 
-fn token_ok(token: &str) -> (u16, String) {
+pub(super) fn token_ok(token: &str) -> (u16, String) {
     (
         200,
         serde_json::json!({"code": 0, "tenant_access_token": token}).to_string(),
