@@ -21,7 +21,7 @@ const WEB_SCHEMA: &str = include_str!("../schema/web-channel-event.schema.json")
 fn assert_historical_fixture_round_trips(fixture: &str) {
     let historical: serde_json::Value = serde_json::from_str(fixture).unwrap();
     let event: WebChannelEvent = serde_json::from_value(historical.clone()).unwrap();
-    assert_eq!(event.event_name(), historical["event"]);
+    assert_eq!(event.event_name(), historical["event"].as_str().unwrap());
     assert_eq!(serde_json::to_value(event).unwrap(), historical);
 }
 
@@ -112,14 +112,14 @@ fn event_context_access_preserves_every_historical_wire_shape() {
 }
 
 #[test]
-fn deployed_web_serialization_omits_null_args_and_empty_tool_names() {
+fn direct_web_events_preserve_null_and_empty_values_until_projection_normalizes() {
     let context = WebEventContext {
         client_id: "client".into(),
         thread_id: "thread".into(),
         request_id: "request".into(),
         ..Default::default()
     };
-    let call = WebChannelEvent::ToolCall {
+    let mut call = WebChannelEvent::ToolCall {
         context: context.clone(),
         tool_name: Some(String::new()),
         skill_id: None,
@@ -129,11 +129,34 @@ fn deployed_web_serialization_omits_null_args_and_empty_tool_names() {
         tool_display_label: None,
         tool_display_detail: None,
     };
-    let wire = serde_json::to_value(call).unwrap();
-    assert!(wire.get("tool_name").is_none());
-    assert!(wire.get("args").is_none());
+    let direct_wire = serde_json::to_value(&call).unwrap();
+    assert_eq!(direct_wire["tool_name"], "");
+    assert_eq!(
+        direct_wire.get("args"),
+        Some(&serde_json::Value::Null),
+        "direct producer payload must retain explicit null"
+    );
+    call.normalize_projected_wire_fields();
+    let projected_wire = serde_json::to_value(call).unwrap();
+    assert!(projected_wire.get("tool_name").is_none());
+    assert!(projected_wire.get("args").is_none());
 
-    let delta = WebChannelEvent::ToolArgsDelta {
+    let approval = WebChannelEvent::ApprovalRequest {
+        context: context.clone(),
+        tool_name: Some("request_approval".into()),
+        message: None,
+        args: Some(serde_json::Value::Null),
+        tool_call_id: None,
+        expires_at: None,
+        detached: None,
+    };
+    assert_eq!(
+        serde_json::to_value(&approval).unwrap().get("args"),
+        Some(&serde_json::Value::Null),
+        "direct approval payload must retain explicit null"
+    );
+
+    let mut delta = WebChannelEvent::ToolArgsDelta {
         context,
         delta: None,
         delta_kind: None,
@@ -142,8 +165,87 @@ fn deployed_web_serialization_omits_null_args_and_empty_tool_names() {
         skill_id: None,
         round: None,
     };
-    let wire = serde_json::to_value(delta).unwrap();
+    let wire = serde_json::to_value(&delta).unwrap();
+    assert_eq!(wire["tool_name"], "");
+    delta.normalize_projected_wire_fields();
+    assert!(
+        serde_json::to_value(delta)
+            .unwrap()
+            .get("tool_name")
+            .is_none()
+    );
+}
+
+#[test]
+fn projected_legacy_normalization_covers_tool_subagent_artifact_and_other_events() {
+    let context = WebEventContext {
+        client_id: "client".into(),
+        thread_id: "thread".into(),
+        request_id: "request".into(),
+        ..Default::default()
+    };
+    let mut tool_result = WebChannelEvent::ToolResult {
+        context: context.clone(),
+        tool_name: Some(String::new()),
+        skill_id: None,
+        output: None,
+        args: Some(serde_json::Value::Null),
+        success: None,
+        round: None,
+        tool_call_id: None,
+        failure: None,
+        elapsed_ms: None,
+        tool_display_label: None,
+        tool_display_detail: None,
+        structured: None,
+    };
+    tool_result.normalize_projected_wire_fields();
+    let wire = serde_json::to_value(tool_result).unwrap();
     assert!(wire.get("tool_name").is_none());
+    assert!(wire.get("args").is_none());
+
+    let mut subagent = WebChannelEvent::SubagentSpawned {
+        context: context.clone(),
+        message: None,
+        tool_name: Some(String::new()),
+        skill_id: None,
+        round: None,
+        subagent: None,
+    };
+    subagent.normalize_projected_wire_fields();
+    assert!(
+        serde_json::to_value(subagent)
+            .unwrap()
+            .get("tool_name")
+            .is_none()
+    );
+
+    let mut artifact = WebChannelEvent::ArtifactPending {
+        context: context.clone(),
+        tool_call_id: None,
+        args: Some(serde_json::Value::Null),
+    };
+    artifact.normalize_projected_wire_fields();
+    assert!(
+        serde_json::to_value(artifact)
+            .unwrap()
+            .get("args")
+            .is_none()
+    );
+
+    let mut unrelated = WebChannelEvent::ChatDone {
+        context,
+        full_response: Some("done".into()),
+        citations: None,
+        usage: None,
+        timing: None,
+        parts: None,
+    };
+    unrelated.normalize_projected_wire_fields();
+    assert_eq!(
+        serde_json::to_value(unrelated).unwrap()["full_response"],
+        "done"
+    );
 }
 
 #[test]
