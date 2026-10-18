@@ -342,7 +342,111 @@ async fn rejected_qq_upload_does_not_send_a_message_or_claim_delivery() {
     assert_eq!(requests[1].target, "/v2/users/user-1/files");
 }
 
+#[tokio::test]
+async fn qq_uses_video_and_generic_file_upload_types() {
+    for (kind, mime, name, expected_file_type, content_part) in [
+        (
+            MediaKind::Video,
+            "video/mp4",
+            "clip.mp4",
+            2,
+            ContentPart::Video {
+                media: media_reference("video-1", MediaKind::Video, "video/mp4", "clip.mp4"),
+                caption: None,
+                duration_ms: Some(1000),
+                thumbnail: None,
+            },
+        ),
+        (
+            MediaKind::Document,
+            "application/pdf",
+            "report.pdf",
+            4,
+            ContentPart::File {
+                media: media_reference(
+                    "file-1",
+                    MediaKind::Document,
+                    "application/pdf",
+                    "report.pdf",
+                ),
+                file_name: Some("report.pdf".into()),
+                caption: None,
+            },
+        ),
+    ] {
+        let server = HttpsServer::start(|request| match request.target.as_str() {
+            "/app/getAppAccessToken" => (
+                200,
+                json!({"access_token": "qq-token", "expires_in": "7200"}).to_string(),
+            ),
+            "/v2/users/user-1/files" => (
+                200,
+                json!({"file_info": "opaque-qq-file-info", "ttl": 300}).to_string(),
+            ),
+            "/v2/users/user-1/messages" => (200, json!({"id": "qq-media-message-1"}).to_string()),
+            other => panic!("unexpected QQ request: {other}"),
+        })
+        .await;
+        let media = Arc::new(StubMedia::default());
+        let mut stored = stored_media(kind, mime, b"exact-scoped-media-bytes");
+        stored.file_name = Some(name.into());
+        *media.read.lock().unwrap() = Some(stored);
+        let host = ChannelHostBuilder::new().media_repository(media).build();
+        let config = tinychannels_bus::ChannelsConfig {
+            qq: Some(tinychannels_bus::config::QQConfig {
+                app_id: "app-id".into(),
+                app_secret: "app-secret".into(),
+                allowed_users: vec!["*".into()],
+            }),
+            ..Default::default()
+        };
+        let channel = build_long_tail_channel_with_host(
+            &config,
+            &host,
+            &FixtureHttpClients(server.client.clone()),
+            "qq",
+        )
+        .expect("configured QQ adapter");
+        let result = tinychannels_runtime::channel::ChannelTypedSend::send_typed(
+            channel.as_ref(),
+            &content_message("user-1", "media-1", content_part),
+        )
+        .await
+        .expect("native QQ media send");
+        assert!(result.error.is_none());
+        let requests = server.requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[1].body["file_type"], expected_file_type);
+        assert_eq!(requests[1].body["file_name"], name);
+        assert_eq!(
+            requests[2].body["media"]["file_info"],
+            "opaque-qq-file-info"
+        );
+    }
+}
+
 fn image_message(conversation_id: &str, idempotency_key: &str) -> ChannelOutboundMessage {
+    content_message(
+        conversation_id,
+        idempotency_key,
+        ContentPart::Image {
+            media: media_reference(
+                "opaque-image-1",
+                MediaKind::Image,
+                "image/png",
+                "diagram.png",
+            ),
+            caption: None,
+            alt_text: None,
+        },
+    )
+}
+
+fn content_message(
+    conversation_id: &str,
+    idempotency_key: &str,
+    part: ContentPart,
+) -> ChannelOutboundMessage {
     ChannelOutboundMessage {
         channel_id: "qq".into(),
         conversation_id: conversation_id.into(),
@@ -359,18 +463,16 @@ fn image_message(conversation_id: &str, idempotency_key: &str) -> ChannelOutboun
         thread_id: None,
         turn_id: Some("turn-1".into()),
         idempotency_key: idempotency_key.into(),
-        parts: vec![OutboundContentPart::Content {
-            part: ContentPart::Image {
-                media: MediaReference {
-                    opaque_id: Some("opaque-image-1".into()),
-                    kind: MediaKind::Image,
-                    content_type: Some("image/png".into()),
-                    file_name: Some("diagram.png".into()),
-                    ..Default::default()
-                },
-                caption: None,
-                alt_text: None,
-            },
-        }],
+        parts: vec![OutboundContentPart::Content { part }],
+    }
+}
+
+fn media_reference(id: &str, kind: MediaKind, content_type: &str, name: &str) -> MediaReference {
+    MediaReference {
+        opaque_id: Some(id.into()),
+        kind,
+        content_type: Some(content_type.into()),
+        file_name: Some(name.into()),
+        ..Default::default()
     }
 }
