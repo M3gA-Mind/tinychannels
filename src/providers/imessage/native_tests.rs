@@ -5,6 +5,7 @@ use crate::channel::{
 };
 use crate::providers::imessage::fixtures::*;
 use crate::providers::native::fixtures::stored_media;
+use crate::traits::Channel;
 use tinychannels_bus::channel::{ChannelSendOutcome, MessageReceipt, SendErrorKind};
 use tinychannels_bus::{
     ChannelOutboundIntent, ChannelOutboundMessage, ContentPart, ConversationKind, ConversationRef,
