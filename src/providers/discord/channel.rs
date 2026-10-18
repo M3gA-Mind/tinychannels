@@ -1,4 +1,5 @@
 use super::api::DISCORD_API_BASE;
+use super::http::{DiscordError, Payload};
 use crate::channel::LengthUnit;
 use crate::text::{ChunkMode, TextChunkOptions, chunk_text_with_options};
 use crate::traits::{Channel, ChannelMessage, SendMessage};
@@ -398,6 +399,141 @@ impl Channel for DiscordChannel {
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         self.run_gateway(tx).await
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.v2_capabilities()
+    }
+
+    fn supports_reactions(&self) -> bool {
+        true
+    }
+
+    fn supports_draft_updates(&self) -> bool {
+        true
+    }
+
+    fn supports_edit(&self) -> bool {
+        true
+    }
+
+    fn supports_reply_to_id(&self) -> bool {
+        true
+    }
+
+    fn supports_thread_id(&self) -> bool {
+        true
+    }
+
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<()> {
+        self.send_typed_with_receipt(message).await.map(|_| ())
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<tinychannels_bus::channel::ChannelSendOutcome> {
+        self.send_v2_with_receipt(message)
+            .await
+            .map_err(|error| anyhow::Error::new(DiscordError(error)))
+    }
+
+    async fn send_reaction(
+        &self,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> anyhow::Result<()> {
+        self.send_reaction_v2(conversation, provider_message_id, reaction, remove)
+            .await
+            .map_err(|error| anyhow::Error::new(DiscordError(error)))
+    }
+
+    async fn edit_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: &tinychannels_bus::channel::ChannelOutboundIntent,
+    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
+        self.edit_message_v2(receipt, intent)
+            .await
+            .map_err(|error| anyhow::Error::new(DiscordError(error)))
+    }
+
+    async fn delete_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> anyhow::Result<()> {
+        self.delete_message_v2(receipt)
+            .await
+            .map_err(|error| anyhow::Error::new(DiscordError(error)))
+    }
+
+    async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
+        self.legacy_send_draft(&message.recipient, &message.content)
+            .await
+            .map(Some)
+            .map_err(|error| anyhow::Error::new(DiscordError(error)))
+    }
+
+    async fn update_draft(
+        &self,
+        recipient: &str,
+        message_id: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        // Discord allows about five edits per five seconds per channel.
+        if self.draft_edit_throttled(recipient) {
+            return Ok(());
+        }
+        let shown = split_message_for_discord(text)
+            .into_iter()
+            .next()
+            .filter(|chunk| !chunk.trim().is_empty());
+        let Some(shown) = shown else {
+            return Ok(());
+        };
+        self.patch_content(recipient, message_id, &shown)
+            .await
+            .map_err(|error| anyhow::Error::new(DiscordError(error)))?;
+        self.mark_draft_edit(recipient);
+        Ok(())
+    }
+
+    async fn finalize_draft(
+        &self,
+        recipient: &str,
+        message_id: &str,
+        text: &str,
+        _thread_ts: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let mut chunks = split_message_for_discord(text).into_iter();
+        let Some(first) = chunks.next().filter(|chunk| !chunk.trim().is_empty()) else {
+            return Ok(());
+        };
+        self.patch_content(recipient, message_id, &first)
+            .await
+            .map_err(|error| anyhow::Error::new(DiscordError(error)))?;
+        // The draft held the first 2000 characters; the rest follows as new messages.
+        for chunk in chunks {
+            let url = self
+                .endpoint_url(&["channels", recipient, "messages"])
+                .map_err(|error| anyhow::Error::new(DiscordError(error)))?;
+            self.call(
+                reqwest::Method::POST,
+                url,
+                Payload::Json(json!({"content": chunk, "allowed_mentions": {"parse": ["users"]}})),
+                "send message",
+                false,
+            )
+            .await
+            .map_err(|error| anyhow::Error::new(DiscordError(error)))?;
+        }
+        self.last_draft_edit.lock().remove(recipient);
+        Ok(())
     }
 
     async fn health_check(&self) -> bool {
