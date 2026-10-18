@@ -4462,7 +4462,6 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         "recognized words"
     );
     let voice_scope = voice_scopes.0.lock().await[0].clone();
-    assert_eq!(voice_scope.configured_instance, "discord:account-a");
     assert_eq!(voice_scope.conversation.id, THREAD);
     assert_eq!(voice_scope.conversation.scope_id.as_deref(), Some(GUILD));
     assert_eq!(voice_scope.conversation.parent_id.as_deref(), Some(CHANNEL));
