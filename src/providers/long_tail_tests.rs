@@ -146,8 +146,9 @@ fn threading_and_typing_are_declared_only_where_implemented() {
         let typing = caps.actions.supported.iter().any(|a| a == "typing");
         let thread = caps.actions.supported.iter().any(|a| a == "thread-reply");
         assert_eq!(typing, matches!(id, "mattermost" | "yuanbao"), "{id}");
-        assert_eq!(thread, matches!(id, "mattermost" | "yuanbao"), "{id}");
+        assert_eq!(thread, id == "mattermost", "{id}");
         assert_eq!(caps.addressing.thread_id, thread, "{id}");
+        assert_eq!(caps.addressing.reply_to_id, id == "yuanbao", "{id}");
     }
 }
 

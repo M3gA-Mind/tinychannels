@@ -44,10 +44,13 @@ impl NativeProvider for YuanbaoChannel {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
         let mut caps = text_capabilities(TextSpec {
             typing: true,
-            thread: true,
+            // Yuanbao's BizMsg protocol has one `ref_msg_id` field. It can
+            // reply to a message, but cannot address a distinct thread root.
+            thread: false,
             streaming_pipeline: true,
         });
         caps.addressing.reply_to_id = true;
+        caps.actions.supported.push("reply".into());
         if self.native.media_repository.is_some() {
             let max_bytes = self.limits().file_bytes;
             caps.content.parts.extend(["image".into(), "file".into()]);
@@ -65,7 +68,7 @@ impl NativeProvider for YuanbaoChannel {
 
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
         let recipient = self.resolve_recipient(&target.conversation.id).await;
-        let reference = target.thread.as_deref().or(target.reply_to.as_deref());
+        let reference = target.reply_to.as_deref();
         let (id, kind) = match step {
             Step::Text(text) => (
                 self.outbound

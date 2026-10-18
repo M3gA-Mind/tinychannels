@@ -554,11 +554,10 @@ async fn typed_image_and_file_use_scoped_host_bytes_and_return_real_receipts() {
         }),
         conversation_ref: Some(tinychannels_bus::ConversationRef {
             id: "g:room-7".into(),
-            thread_id: Some("thread-root".into()),
             ..Default::default()
         }),
         reply_to_id: Some("reply-9".into()),
-        thread_id: Some("thread-root".into()),
+        thread_id: None,
         turn_id: Some("turn-4".into()),
         idempotency_key: "send-5".into(),
         parts: vec![
@@ -595,7 +594,7 @@ async fn typed_image_and_file_use_scoped_host_bytes_and_return_real_receipts() {
     assert_eq!(first.cmd, biz_cmd::SEND_GROUP_MESSAGE);
     assert!(contains(&first.data, "https://cdn.example/uploaded"));
     assert!(contains(&first.data, "photo caption"));
-    assert!(contains(&first.data, "thread-root"));
+    assert!(contains(&first.data, "reply-9"));
     h.gateway.reply(&first, 0, b"").await;
     let second = tokio::time::timeout(HANG_GUARD, h.gateway.recv_frame())
         .await
@@ -623,14 +622,14 @@ async fn typed_image_and_file_use_scoped_host_bytes_and_return_real_receipts() {
             .as_deref(),
         Some("account-2")
     );
-    assert_eq!(result.receipt.thread_id.as_deref(), Some("thread-root"));
+    assert_eq!(result.receipt.thread_id, None);
     assert_eq!(result.receipt.reply_to_id.as_deref(), Some("reply-9"));
     assert_eq!(repo.scopes.lock().len(), 2);
     assert!(repo.scopes.lock().iter().all(|scope| {
         scope.turn_id == "turn-4"
             && scope.channel.account_id.as_deref() == Some("account-2")
             && scope.conversation.id == "g:room-7"
-            && scope.conversation.thread_id.as_deref() == Some("thread-root")
+            && scope.conversation.thread_id.is_none()
     }));
     assert_eq!(uploaded.lock().len(), 2);
     assert_eq!(uploaded.lock()[0], png(320, 200));
@@ -696,6 +695,70 @@ async fn typed_media_upload_failure_is_retryable_and_never_reaches_yuanbao_send(
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].url.path(), "/api/resource/genUploadInfo");
+}
+
+#[tokio::test]
+async fn yuanbao_rejects_thread_addressing_before_resolving_or_uploading_media() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/resource/genUploadInfo"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let repo = Arc::new(TypedMediaRepo::default());
+    let mut config = super::super::config::YuanbaoConfig::default();
+    config.app_key = "ak".into();
+    config.bot_id = "cfg-bot".into();
+    config.token = "tok".into();
+    config.api_domain = server.uri();
+    config.ws_domain = "wss://example.invalid".into();
+    let channel = super::super::channel::YuanbaoChannel::new(config)
+        .unwrap()
+        .with_media_repository(repo.clone())
+        .with_test_outbound(Arc::new(
+            OutboundSender::new(make_conn(base_cfg()), None, "ak".into(), "cfg-bot".into())
+                .with_cos_endpoint(server.uri()),
+        ));
+    let message = ChannelOutboundMessage {
+        channel_id: "yuanbao".into(),
+        conversation_id: "g:room-7".into(),
+        channel_ref: None,
+        conversation_ref: Some(tinychannels_bus::channel::ConversationRef {
+            id: "g:room-7".into(),
+            thread_id: Some("thread-root".into()),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-4".into()),
+        idempotency_key: "send-thread-unsupported".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("image-opaque".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+        }],
+    };
+
+    let error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+    assert!(error.unsupported);
+    assert_eq!(error.message, "Yuanbao does not support threads");
+    assert!(
+        repo.scopes.lock().is_empty(),
+        "media resolution must not run"
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
 }
 
 #[tokio::test]
