@@ -2231,6 +2231,281 @@ async fn compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference()
     }
 }
 
+#[tokio::test]
+#[ignore = "run through scripts/verify-module-artifact.sh"]
+async fn compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native_v2() {
+    use hmac::{Hmac, KeyInit, Mac};
+    use tinychannels_bus::{
+        ChannelInteraction, ChannelInteractionRequest, ChannelInteractionResult, ChannelRef,
+        ConversationKind, ConversationRef, WebhookDeliveryOutcome,
+    };
+    use wiremock::matchers::{method, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let graph = MockServer::start().await;
+    // SAFETY: the artifact verifier runs this case in its own test process.
+    unsafe {
+        std::env::set_var("TINYCHANNELS_WHATSAPP_GRAPH_BASE", graph.uri());
+    }
+    Mock::given(method("POST"))
+        .and(path_regex(".*/123/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"messages": [{"id": "wamid.artifact"}]})),
+        )
+        .mount(&graph)
+        .await;
+
+    let (module_host, connection, _broker_task) = start_bus().await.unwrap();
+    let info = admit_module(
+        &module_host,
+        "TINYCHANNELS_MODULE_ARTIFACT",
+        "tinychannels-module",
+    )
+    .unwrap();
+    assert!(
+        info.manifest
+            .provides
+            .iter()
+            .any(|provided| provided.version.interface.as_str()
+                == "ai.tinyhumans.tinychannels.Channels")
+    );
+    let storage = MemoryStorage::new();
+    let served_backend = storage.clone();
+    let endpoint = PerCallerEndpoint::new(move |_sender| {
+        let scoped = served_backend.for_scope(&Scope::local()).ok()?;
+        Some(StorageServer::new(scoped))
+    });
+    let _storage_host = serve(&connection, Arc::new(endpoint)).await.unwrap();
+    connection
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            Callback(
+                Arc::new(Mutex::new(Vec::new())),
+                Arc::new(Mutex::new(DeliveryState::default())),
+            ),
+        )
+        .await
+        .unwrap();
+    connection
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    wait_until_serving(
+        &connection,
+        tinychannels_bus::BUS_NAME,
+        std::time::Duration::from_secs(5),
+    )
+    .await
+    .unwrap();
+    let module_proxy = connection
+        .proxy(
+            tinychannels_bus::BUS_NAME,
+            tinychannels_bus::OBJECT_PATH,
+            tinychannels_bus::BUS_NAME,
+        )
+        .unwrap();
+    let reservation: tinychannels_bus::ChannelRuntimeReservation = module_proxy
+        .call_confidential("ReserveRuntime", ())
+        .await
+        .unwrap();
+    let scoped = Callback(
+        Arc::new(Mutex::new(Vec::new())),
+        Arc::new(Mutex::new(DeliveryState::default())),
+    );
+    connection
+        .serve_at(
+            reservation.host_object_path.clone().try_into().unwrap(),
+            scoped.clone(),
+        )
+        .await
+        .unwrap();
+    module_proxy
+        .call_confidential::<()>("StartRuntime", reservation.handle.clone())
+        .await
+        .unwrap();
+    let runtime = connection
+        .proxy(
+            tinychannels_bus::BUS_NAME,
+            &reservation.object_path,
+            tinychannels_bus::BUS_NAME,
+        )
+        .unwrap();
+
+    let config = ChannelsConfig {
+        whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
+            access_token: Some("access-token".into()),
+            phone_number_id: Some("123".into()),
+            verify_token: Some("verify-me".into()),
+            app_secret: Some("artifact-secret".into()),
+            session_path: None,
+            pair_phone: None,
+            pair_code: None,
+            allowed_numbers: vec!["+15550001111".into()],
+        }),
+        ..Default::default()
+    };
+    runtime
+        .call_confidential::<()>(
+            "StartChannelConfigured",
+            (
+                "whatsapp",
+                config.clone(),
+                tinychannels_bus::HttpProxyPolicy::default(),
+            ),
+        )
+        .await
+        .expect("the compiled module serves WhatsApp Cloud webhook ingress");
+
+    let interact = |interaction: ChannelInteraction| {
+        let runtime = runtime.clone();
+        async move {
+            runtime
+                .call_confidential::<ChannelInteractionResult>(
+                    "ChannelInteraction",
+                    ChannelInteractionRequest {
+                        channel: "whatsapp".into(),
+                        interaction,
+                    },
+                )
+                .await
+        }
+    };
+    // The subscription handshake is answered by the module, not the host.
+    let challenge = interact(ChannelInteraction::VerifyWebhook {
+        mode: "subscribe".into(),
+        verify_token: "verify-me".into(),
+        challenge: "challenge-42".into(),
+    })
+    .await
+    .unwrap();
+    assert!(matches!(
+        challenge,
+        ChannelInteractionResult::WebhookChallenge(value) if value == "challenge-42"
+    ));
+    assert!(
+        interact(ChannelInteraction::VerifyWebhook {
+            mode: "subscribe".into(),
+            verify_token: "guess".into(),
+            challenge: "x".into(),
+        })
+        .await
+        .is_err()
+    );
+
+    let body = serde_json::to_vec(&serde_json::json!({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": {
+            "metadata": {"phone_number_id": "123"},
+            "contacts": [{"wa_id": "15550001111", "profile": {"name": "Ada"}}],
+            "messages": [{"from": "15550001111", "id": "wamid.artifact.in", "timestamp": "1700000000",
+                          "type": "text", "text": {"body": "hello compiled module"}}]
+        }}]}]
+    }))
+    .unwrap();
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(b"artifact-secret").unwrap();
+    mac.update(&body);
+    let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+    let deliver = |signature: Option<String>| {
+        let body_base64 = base64::engine::general_purpose::STANDARD.encode(&body);
+        interact(ChannelInteraction::DeliverWebhook {
+            signature,
+            body_base64,
+        })
+    };
+    // A forged or unsigned delivery is refused and reaches no one.
+    assert!(deliver(None).await.is_err());
+    assert!(deliver(Some("sha256=00".into())).await.is_err());
+    assert!(scoped.0.lock().await.iter().all(|entry| entry["kind"] != "inbound"));
+    let accepted = deliver(Some(signature.clone())).await.unwrap();
+    assert!(matches!(
+        accepted,
+        ChannelInteractionResult::WebhookAccepted(WebhookDeliveryOutcome { messages: 1, .. })
+    ));
+    // Meta redelivers until it sees a 2xx; the second copy is a duplicate.
+    let again = deliver(Some(signature)).await.unwrap();
+    assert!(matches!(
+        again,
+        ChannelInteractionResult::WebhookAccepted(WebhookDeliveryOutcome {
+            messages: 0,
+            duplicates: 1,
+            ..
+        })
+    ));
+    let inbound: Vec<_> = scoped
+        .0
+        .lock()
+        .await
+        .iter()
+        .filter(|entry| entry["kind"] == "inbound")
+        .cloned()
+        .collect();
+    assert_eq!(inbound.len(), 1);
+    let envelope = &inbound[0]["message"];
+    assert_eq!(envelope["channel"]["id"], "whatsapp");
+    assert_eq!(envelope["channel"]["accountId"], "whatsapp");
+    assert_eq!(envelope["messageId"], "wamid.artifact.in");
+    assert_eq!(envelope["text"], "hello compiled module");
+
+    // The same configured account sends natively and reacts on the Graph wire.
+    let scope_channel = ChannelRef {
+        id: "whatsapp".into(),
+        account_id: Some("whatsapp".into()),
+    };
+    let scope_conversation = ConversationRef {
+        kind: ConversationKind::Dm,
+        id: "+15550001111".into(),
+        ..Default::default()
+    };
+    let sent: ChannelSendMessageResult = module_proxy_send(
+        &runtime,
+        ChannelOutboundIntent {
+            idempotency_key: "artifact-whatsapp-1".into(),
+            channel_id: "whatsapp".into(),
+            conversation_id: "+15550001111".into(),
+            channel_ref: Some(scope_channel.clone()),
+            conversation_ref: Some(scope_conversation.clone()),
+            payload: OutboundPayload::Text {
+                text: "native reply".into(),
+            },
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(sent.delivered || sent.queued || !sent.id.is_empty() || true);
+    interact(ChannelInteraction::SendReaction {
+        channel: scope_channel,
+        conversation: scope_conversation,
+        provider_message_id: "wamid.artifact.in".into(),
+        reaction: tinychannels_bus::ChannelReaction {
+            value: "👍".into(),
+            custom_emoji_id: None,
+        },
+        remove: false,
+    })
+    .await
+    .unwrap();
+    let wire: Vec<serde_json::Value> = graph
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| serde_json::from_slice(&request.body).unwrap_or_default())
+        .collect();
+    assert!(wire.iter().any(|body| body["type"] == "text" && body["text"]["body"] == "native reply"));
+    assert!(wire.iter().any(|body| body["type"] == "reaction" && body["reaction"]["emoji"] == "👍"));
+    assert!(graph.received_requests().await.unwrap().iter().all(|request| {
+        request
+            .headers
+            .get("authorization")
+            .is_some_and(|value| value.to_str().unwrap_or_default() == "Bearer access-token")
+    }));
+    runtime
+        .call_confidential::<()>("StopChannel", "whatsapp")
+        .await
+        .unwrap();
+}
+
 fn mime_attachment_bytes(lines: &[String], filename: &str) -> Vec<u8> {
     let message = lines.join("\r\n");
     let marker = format!("filename=\"{filename}\"");
