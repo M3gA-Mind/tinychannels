@@ -154,6 +154,7 @@ async fn invalid_content_is_rejected_before_any_request() {
     no_conversation.conversation_id = " ".into();
     let cases = vec![
         message(vec![]),
+        message(vec![text("  ")]),
         no_conversation,
         message(vec![empty_presentation]),
         message(vec![bad_presentation]),

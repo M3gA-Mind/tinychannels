@@ -147,7 +147,10 @@ fn plan(message: &ChannelOutboundMessage, slack: &SlackChannel) -> Result<Vec<St
     for part in &message.parts {
         match part {
             OutboundContentPart::Content { part: ContentPart::Text { text, .. } } if voice_count == 0 => {
-                steps.push(Step::Text(strip_tool_call_tags(text)));
+                let text = strip_tool_call_tags(text);
+                if !text.trim().is_empty() {
+                    steps.push(Step::Text(text));
+                }
             }
             OutboundContentPart::Content { part: ContentPart::Text { .. } } => {}
             OutboundContentPart::Content { part: ContentPart::Presentation { blocks } } => {
@@ -195,6 +198,9 @@ fn plan(message: &ChannelOutboundMessage, slack: &SlackChannel) -> Result<Vec<St
                 });
             }
         }
+    }
+    if steps.is_empty() {
+        return Err(pre_dispatch("Slack message has no sendable content"));
     }
     Ok(steps)
 }
