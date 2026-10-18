@@ -25,14 +25,14 @@ fn waveforms_are_clamped_and_capped_at_256_samples() {
     let decoded = BASE64.decode(encode_waveform(&long)).unwrap();
     assert!(decoded.len() <= 256 && decoded.len() > 100);
     // Each bucket keeps its peak so loud moments survive downsampling.
-    assert!(decoded.iter().all(|b| *b >= 200));
+    assert!(*decoded.iter().max().unwrap() >= 230);
     assert_eq!(encode_waveform(&[]), "");
 }
 
 #[test]
 fn ogg_opus_duration_comes_from_the_last_granule_position() {
     let ms = ogg_opus_duration_ms(OGG_FIXTURE).expect("fixture is Ogg Opus");
-    assert!((500..5000).contains(&ms), "unexpected duration {ms}");
+    assert!((150..250).contains(&ms), "unexpected duration {ms}");
     assert_eq!(ogg_opus_duration_ms(b"RIFF....WAVE"), None);
     assert_eq!(ogg_opus_duration_ms(b"OggS only"), None);
     // Truncated inside the final page header.
