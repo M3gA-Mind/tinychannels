@@ -638,9 +638,12 @@ async fn attachments_without_ports_or_a_connected_session_are_handled() {
             .await
             .unwrap()
     );
-    let ingress = sink.ingress.lock();
-    assert!(matches!(&ingress[0], ChannelIngress::Inbound(envelope) if envelope.text == "words"));
-    drop(ingress);
+    {
+        let ingress = sink.ingress.lock();
+        assert!(
+            matches!(&ingress[0], ChannelIngress::Inbound(envelope) if envelope.text == "words")
+        );
+    }
 
     // Storage wired but the session is gone: transient.
     let (tx, _rx) = tokio::sync::mpsc::channel(4);
