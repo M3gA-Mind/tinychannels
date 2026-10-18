@@ -489,25 +489,6 @@ pub(crate) fn configured_media_account_scope(
             }
             vec![c.url.clone(), c.bot_token.clone()]
         }
-        "webhook" => {
-            let c = config.webhook.as_ref()?;
-            let secret = c.secret.as_deref()?;
-            if secret.trim().is_empty() {
-                return None;
-            }
-            vec![c.port.to_string(), secret.to_owned()]
-        }
-        "matrix" => {
-            let c = config.matrix.as_ref()?;
-            if c.homeserver.trim().is_empty() || c.access_token.trim().is_empty() {
-                return None;
-            }
-            vec![
-                c.homeserver.clone(),
-                c.user_id.clone().unwrap_or_default(),
-                c.access_token.clone(),
-            ]
-        }
         // Signal exposes no configured authentication secret or attested
         // account identifier in the current contract.
         "signal" => return None,
