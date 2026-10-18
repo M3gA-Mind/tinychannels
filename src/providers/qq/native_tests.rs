@@ -160,9 +160,7 @@ async fn host_voice_store_uploads_native_voice_and_sends_its_opaque_file_info() 
             200,
             json!({"file_info": "opaque-qq-voice-info", "ttl": 300}).to_string(),
         ),
-        "/v2/groups/group-1/messages" => {
-            (200, json!({"id": "qq-voice-message-1"}).to_string())
-        }
+        "/v2/groups/group-1/messages" => (200, json!({"id": "qq-voice-message-1"}).to_string()),
         other => panic!("unexpected QQ request: {other}"),
     })
     .await;
