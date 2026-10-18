@@ -1,11 +1,11 @@
 use super::*;
 use crate::channel::ChannelTypedSend;
-use crate::providers::native::fixtures::{StubMedia, stored_media};
+use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
 use serde_json::json;
 use tinychannels_bus::channel::ConversationRef;
 use tinychannels_bus::{
     ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind, MediaKind, MediaReference,
-    OutboundContentPart,
+    OutboundContentPart, OutboundVoice,
 };
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -107,6 +107,69 @@ async fn typed_image_upload_uses_scoped_bytes_and_posts_caption_with_real_id() {
     assert_eq!(post_body["root_id"], "root-1");
     assert_eq!(post_body["message"], "diagram");
     assert_eq!(post_body["file_ids"], json!(["file-1"]));
+}
+
+#[tokio::test]
+async fn typed_voice_upload_uses_host_audio_and_returns_voice_receipt() {
+    use base64::Engine as _;
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/files"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "file_infos": [{"id": "voice-file-1"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/posts"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id": "voice-post-1"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let voice = Arc::new(StubVoice::default());
+    *voice.audio_base64.lock().unwrap() =
+        Some(base64::engine::general_purpose::STANDARD.encode(b"host-audio-bytes"));
+    let channel = channel(&server, Arc::new(StubMedia::default())).with_voice_media_store(voice);
+    assert!(channel.capabilities().voice_out.supported);
+    let mut message = image_message("channel-1");
+    message.parts = vec![OutboundContentPart::Voice {
+        voice: OutboundVoice::Media {
+            media: MediaReference {
+                opaque_id: Some("opaque-voice".into()),
+                kind: MediaKind::Audio,
+                ..Default::default()
+            },
+            audio_base64: None,
+            codec: Some("m4a_aac".into()),
+            duration_ms: Some(1500),
+            waveform: None,
+        },
+    }];
+
+    let result = ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap();
+    assert_eq!(result.receipt.parts[0].kind, MessageReceiptPartKind::Voice);
+    assert_eq!(
+        result.receipt.primary_platform_message_id.as_deref(),
+        Some("voice-post-1")
+    );
+    let requests = server.received_requests().await.unwrap();
+    let upload = requests
+        .iter()
+        .find(|r| r.url.path() == "/api/v4/files")
+        .unwrap();
+    let upload_body = String::from_utf8_lossy(&upload.body);
+    assert!(upload_body.contains("host-audio-bytes"));
+    assert!(upload_body.contains("reply.m4a"));
+    let post = requests
+        .iter()
+        .find(|r| r.url.path() == "/api/v4/posts")
+        .unwrap();
+    let post_body: serde_json::Value = serde_json::from_slice(&post.body).unwrap();
+    assert_eq!(post_body["file_ids"], json!(["voice-file-1"]));
 }
 
 #[test]

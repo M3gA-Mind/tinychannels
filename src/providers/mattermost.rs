@@ -5,6 +5,9 @@ use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+pub(super) const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
+pub(super) const MAX_VOICE_BYTES: u64 = 8 * 1024 * 1024;
+
 /// Mattermost channel — polls channel posts via REST API v4.
 /// Mattermost is API-compatible with many Slack patterns but uses a dedicated v4 structure.
 pub struct MattermostChannel {
@@ -75,8 +78,7 @@ impl MattermostChannel {
         self
     }
 
-    /// Attach the host's scoped voice store. Mattermost currently uses generic
-    /// file attachments and does not advertise a native voice-note operation.
+    /// Attach the host's scoped voice store for audio file attachments.
     pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
         self.voice_media_store = Some(store);
         self
@@ -526,7 +528,6 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
             ..Default::default()
         });
         if self.media_repository.is_some() {
-            const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
             capabilities
                 .content
                 .parts
@@ -535,6 +536,15 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
             capabilities.content.image.max_size_bytes = Some(MAX_FILE_BYTES);
             capabilities.content.file.outbound = true;
             capabilities.content.file.max_size_bytes = Some(MAX_FILE_BYTES);
+        }
+        if self.voice_media_store.is_some() {
+            capabilities.content.parts.push("voice_note".into());
+            capabilities.voice_out = crate::providers::native::capabilities::voice_capabilities(
+                true,
+                false,
+                MAX_VOICE_BYTES,
+                &["m4a_aac", "mp3", "ogg_opus"],
+            );
         }
         capabilities
     }

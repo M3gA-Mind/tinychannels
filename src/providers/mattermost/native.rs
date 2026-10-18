@@ -1,15 +1,13 @@
 //! Native typed attachment delivery for Mattermost's v4 files and posts API.
 
 use super::super::long_tail::LongTail;
-use super::MattermostChannel;
+use super::{MAX_FILE_BYTES, MAX_VOICE_BYTES, MattermostChannel};
 use crate::host::{MediaRepository, VoiceMediaStore};
 use crate::providers::native::{Limits, NativeProvider, Sent, Step, Target};
 use async_trait::async_trait;
 use std::sync::Arc;
 use tinychannels_bus::ChannelCapabilities;
 use tinychannels_bus::channel::{ChannelSendError, MessageReceiptPartKind, SendErrorKind};
-
-const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
 
 #[async_trait]
 impl NativeProvider for MattermostChannel {
@@ -25,7 +23,7 @@ impl NativeProvider for MattermostChannel {
         Limits {
             text_chars: 16_383,
             file_bytes: MAX_FILE_BYTES,
-            voice_bytes: 0,
+            voice_bytes: MAX_VOICE_BYTES,
         }
     }
 
@@ -45,13 +43,21 @@ impl NativeProvider for MattermostChannel {
         self.declared()
     }
 
+    fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
+        if self.voice_media_store.is_some() {
+            vec![("voiceOut", "attachment")]
+        } else {
+            Vec::new()
+        }
+    }
+
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
         match step {
             Step::Text(text) => {
                 let id = self.create_post(target, text, Vec::new()).await?;
                 Ok(vec![Sent::new(id, MessageReceiptPartKind::Text)])
             }
-            Step::File(file) => {
+            Step::File(file) | Step::Voice(file) => {
                 let channel_id = channel_id(&target.conversation.id);
                 let file_id = self.upload_file(channel_id, file).await?;
                 let post_id = self
@@ -61,11 +67,13 @@ impl NativeProvider for MattermostChannel {
                         vec![file_id],
                     )
                     .await?;
-                Ok(vec![Sent::new(post_id, MessageReceiptPartKind::Media)])
+                let kind = if matches!(step, Step::Voice(_)) {
+                    MessageReceiptPartKind::Voice
+                } else {
+                    MessageReceiptPartKind::Media
+                };
+                Ok(vec![Sent::new(post_id, kind)])
             }
-            Step::Voice(_) => Err(crate::providers::native::unsupported(
-                "Mattermost has file attachments but no verified voice-note send operation",
-            )),
         }
     }
 
