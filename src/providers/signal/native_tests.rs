@@ -161,19 +161,18 @@ async fn images_are_sent_as_data_uri_attachments_with_the_caption() {
     let server = mock_daemon(b"").await;
     let rig = rig(&server);
     *rig.media.read.lock().unwrap() = Some(stored_media(MediaKind::Image, "image/png", b"png"));
-    let outcome = rig
-        .send(
-            &channel,
-            &message(vec![OutboundContentPart::Content {
-                part: ContentPart::Image {
-                    media: media_ref(MediaKind::Image),
-                    caption: Some("look; here, now".into()),
-                    alt_text: None,
-                },
-            }]),
-        )
-        .await
-        .unwrap();
+    let outcome = send(
+        &rig.channel,
+        &message(vec![OutboundContentPart::Content {
+            part: ContentPart::Image {
+                media: media_ref(MediaKind::Image),
+                caption: Some("look; here, now".into()),
+                alt_text: None,
+            },
+        }]),
+    )
+    .await
+    .unwrap();
     let sent = &calls(&server, "send").await[0];
     let uri = sent["attachments"][0].as_str().unwrap();
     assert!(uri.starts_with("data:image/png;filename=report.pdf;base64,"));
@@ -187,23 +186,22 @@ async fn images_are_sent_as_data_uri_attachments_with_the_caption() {
 async fn voice_clips_are_audio_attachments_captioned_with_the_transcript() {
     let server = mock_daemon(b"").await;
     let rig = rig(&server);
-    let outcome = rig
-        .send(
-            &channel,
-            &message(vec![
-                text("the transcript"),
-                OutboundContentPart::Voice {
-                    voice: OutboundVoice::Media {
-                        media: media_ref(MediaKind::Audio),
-                        audio_base64: None,
-                        codec: None,
-                        duration_ms: None,
-                    },
+    let outcome = send(
+        &rig.channel,
+        &message(vec![
+            text("the transcript"),
+            OutboundContentPart::Voice {
+                voice: OutboundVoice::Media {
+                    media: media_ref(MediaKind::Audio),
+                    audio_base64: None,
+                    codec: None,
+                    duration_ms: None,
                 },
-            ]),
-        )
-        .await
-        .unwrap();
+            },
+        ]),
+    )
+    .await
+    .unwrap();
     let sent = &calls(&server, "send").await[0];
     assert!(
         sent["attachments"][0]
