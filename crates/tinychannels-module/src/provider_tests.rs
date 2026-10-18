@@ -4361,7 +4361,8 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
                         "url": format!("{rest_url}/cdn/voice-message.ogg"),
                         "filename": "voice-message.ogg",
                         "content_type": "audio/ogg",
-                        "duration_secs": 0.2
+                        "duration_secs": 0.2,
+                        "waveform": "AQID"
                     }]
                 }),
             ),
@@ -4446,6 +4447,10 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         .to_owned();
     assert_eq!(voice["parts"][0]["voiceNote"]["codec"], "ogg_opus");
     assert_eq!(voice["parts"][0]["voiceNote"]["durationMs"], 200);
+    assert_eq!(
+        voice["parts"][0]["voiceNote"]["waveform"],
+        serde_json::json!([1.0 / 255.0, 2.0 / 255.0, 3.0 / 255.0])
+    );
     assert_eq!(
         voice["parts"][0]["voiceNote"]["transcript"]["text"],
         "recognized words"
