@@ -904,7 +904,7 @@ mod v2 {
             "verify-me".into(),
             vec!["*".into()],
         )
-        .with_api_base(&server.uri())
+        .with_api_base_for_test(&server.uri())
         .with_app_secret(Some("secret".into()))
     }
 
@@ -993,7 +993,7 @@ mod v2 {
             .await;
         assert!(!channel(&server).health_check().await);
         let insecure = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
-            .with_api_base("http://graph.example.invalid");
+            .with_api_base_for_test("http://graph.example.invalid");
         assert!(!insecure.health_check().await);
     }
 

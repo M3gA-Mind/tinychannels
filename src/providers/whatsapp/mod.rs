@@ -104,9 +104,10 @@ impl WhatsAppChannel {
         self
     }
 
-    /// Point the adapter at another Graph origin (HTTPS, or loopback for tests).
+    /// Point a test-support build at a local mock Graph server.
+    #[cfg(any(test, feature = "test-support"))]
     #[must_use]
-    pub fn with_api_base(mut self, api_base: &str) -> Self {
+    pub fn with_api_base_for_test(mut self, api_base: &str) -> Self {
         self.api_base = api::resolve_graph_base(Some(api_base.to_owned()));
         self
     }

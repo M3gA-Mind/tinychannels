@@ -4,7 +4,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 fn channel(server: &MockServer) -> WhatsAppChannel {
     WhatsAppChannel::new("tok".into(), "123".into(), "verify".into(), vec!["*".into()])
-        .with_api_base(&server.uri())
+        .with_api_base_for_test(&server.uri())
 }
 
 #[test]
@@ -114,7 +114,7 @@ async fn send_failures_are_classified_by_whether_the_account_was_touched() {
 #[tokio::test]
 async fn transport_failures_and_insecure_bases_are_handled() {
     let unreachable = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
-        .with_api_base("http://127.0.0.1:1");
+        .with_api_base_for_test("http://127.0.0.1:1");
     assert!(matches!(
         unreachable.post_messages(&serde_json::json!({})).await,
         Err(WaFailure::Uncertain(_))
@@ -124,7 +124,7 @@ async fn transport_failures_and_insecure_bases_are_handled() {
         Err(WaFailure::Rejected(_))
     ));
     let insecure = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
-        .with_api_base("http://graph.example.invalid");
+        .with_api_base_for_test("http://graph.example.invalid");
     assert!(matches!(
         insecure.post_messages(&serde_json::json!({})).await,
         Err(WaFailure::Rejected(_))

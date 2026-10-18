@@ -304,7 +304,7 @@ fn typing_handle_starts_as_none() {
 #[tokio::test]
 async fn start_typing_sets_handle() {
     let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
-        .with_api_base("http://127.0.0.1:9");
+        .with_api_base_for_test("http://127.0.0.1:9");
     let _ = ch.start_typing("123456").await;
     let guard = ch.typing_handle.lock();
     assert!(guard.is_some());
@@ -313,7 +313,7 @@ async fn start_typing_sets_handle() {
 #[tokio::test]
 async fn stop_typing_clears_handle() {
     let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
-        .with_api_base("http://127.0.0.1:9");
+        .with_api_base_for_test("http://127.0.0.1:9");
     let _ = ch.start_typing("123456").await;
     let _ = ch.stop_typing("123456").await;
     let guard = ch.typing_handle.lock();
@@ -323,7 +323,7 @@ async fn stop_typing_clears_handle() {
 #[tokio::test]
 async fn stop_typing_is_idempotent() {
     let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
-        .with_api_base("http://127.0.0.1:9");
+        .with_api_base_for_test("http://127.0.0.1:9");
     assert!(ch.stop_typing("123456").await.is_ok());
     assert!(ch.stop_typing("123456").await.is_ok());
 }
@@ -331,7 +331,7 @@ async fn stop_typing_is_idempotent() {
 #[tokio::test]
 async fn start_typing_replaces_existing_task() {
     let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
-        .with_api_base("http://127.0.0.1:9");
+        .with_api_base_for_test("http://127.0.0.1:9");
     let _ = ch.start_typing("111").await;
     let _ = ch.start_typing("222").await;
     let guard = ch.typing_handle.lock();
@@ -619,7 +619,7 @@ fn channel_at(base: &str, channel_id: Option<&str>) -> DiscordChannel {
         false,
         reqwest::Client::new(),
     )
-    .with_api_base(format!("{base}/"))
+    .with_api_base_for_test(format!("{base}/"))
 }
 
 fn outbound(content: &str, recipient: &str) -> SendMessage {
@@ -658,7 +658,7 @@ async fn message_sink(
 fn with_api_base_trims_trailing_slash_and_defaults_to_discord() {
     let ch = DiscordChannel::new("t".into(), None, None, vec![], false, false);
     assert_eq!(ch.api_base, "https://discord.com/api/v10");
-    let ch = ch.with_api_base("http://127.0.0.1:9/api//");
+    let ch = ch.with_api_base_for_test("http://127.0.0.1:9/api//");
     assert_eq!(ch.api_base, "http://127.0.0.1:9/api");
 }
 
@@ -729,7 +729,7 @@ async fn health_check_reflects_users_me_status() {
     let base = spawn_http(app).await;
     assert!(channel_at(&base, None).health_check().await);
     let bad = DiscordChannel::new("wrong".into(), None, None, vec![], false, false)
-        .with_api_base(base.clone());
+        .with_api_base_for_test(base.clone());
     assert!(!bad.health_check().await);
     // Unreachable endpoint → false rather than an error.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -864,7 +864,7 @@ async fn listen_filters_gateway_events_and_forwards_allowed_messages() {
         false,
         false,
     )
-    .with_api_base(base);
+    .with_api_base_for_test(base);
     let (tx, mut rx) = mpsc::channel(16);
     tokio::time::timeout(HANG_GUARD, ch.listen(tx))
         .await
@@ -905,7 +905,7 @@ async fn listen_handles_dm_mentions_and_bots_then_stops_on_invalid_session() {
     .await;
 
     let ch = DiscordChannel::new(BOT_TOKEN.into(), None, None, vec!["*".into()], true, true)
-        .with_api_base(base);
+        .with_api_base_for_test(base);
     let (tx, mut rx) = mpsc::channel(16);
     tokio::time::timeout(HANG_GUARD, ch.listen(tx))
         .await

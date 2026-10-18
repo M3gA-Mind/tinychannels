@@ -37,7 +37,7 @@ async fn rig(accept: bool) -> Rig {
         "verify-me".into(),
         vec!["+15550001111".into()],
     )
-    .with_api_base(&server.uri())
+    .with_api_base_for_test(&server.uri())
     .with_app_secret(Some(SECRET.into()))
     .with_events(sink.clone())
     .with_media_repository(media.clone())
@@ -457,7 +457,7 @@ async fn push_to_talk_audio_is_kept_as_a_voice_note_without_provider_urls() {
 async fn without_storage_ports_attachments_are_skipped_but_the_caption_survives() {
     let rig = rig(true).await;
     let bare = WhatsAppChannel::new("tok".into(), "123".into(), "v".into(), vec!["*".into()])
-        .with_api_base(&rig.server.uri())
+        .with_api_base_for_test(&rig.server.uri())
         .with_app_secret(Some(SECRET.into()))
         .with_events(rig.sink.clone());
     let payload = delivery(value_with(json!([
@@ -476,7 +476,7 @@ async fn a_voice_note_falls_back_to_the_media_repository_without_a_voice_store()
     let rig = rig(true).await;
     mount_media(&rig.server, "ptt", "audio/ogg", b"OggS-----".to_vec()).await;
     let repo_only = WhatsAppChannel::new("tok".into(), "123".into(), "v".into(), vec!["*".into()])
-        .with_api_base(&rig.server.uri())
+        .with_api_base_for_test(&rig.server.uri())
         .with_app_secret(Some(SECRET.into()))
         .with_events(rig.sink.clone())
         .with_media_repository(rig.media.clone());

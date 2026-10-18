@@ -128,7 +128,7 @@ async fn kit() -> CloudKit {
     media.insert(Feature::Sticker, repository.seed(MediaKind::Image, "image/webp", None, b"RIFF----WEBPxxxx"));
     let channel = Arc::new(
         WhatsAppChannel::new("tok".into(), "123".into(), "verify".into(), vec!["+15550001111".into()])
-            .with_api_base(&server.uri())
+            .with_api_base_for_test(&server.uri())
             .with_app_secret(Some(SECRET.into()))
             .with_events(sink.clone())
             .with_media_repository(repository)

@@ -49,7 +49,7 @@ async fn messages_server(responder: impl Respond + 'static) -> MockServer {
 
 fn channel(server: &MockServer) -> WhatsAppChannel {
     WhatsAppChannel::new("tok".into(), "123".into(), "verify".into(), vec!["*".into()])
-        .with_api_base(&server.uri())
+        .with_api_base_for_test(&server.uri())
 }
 
 fn message(parts: Vec<OutboundContentPart>) -> ChannelOutboundMessage {
