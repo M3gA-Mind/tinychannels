@@ -1321,7 +1321,7 @@ fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> Chann
 #[tokio::test]
 async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
     let (host, callback, _server, _storage) = ingress_fixture().await;
-    let events = ModuleEvents(host.clone(), "telegram:bot-a".into(), None);
+    let events = ModuleEvents(host.clone(), "telegram:bot-a".into(), crate::provider::MediaScope::default());
     assert!(
         events
             .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(
@@ -1388,7 +1388,7 @@ async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
 #[tokio::test]
 async fn completed_provider_transcript_skips_media_read_and_host_stt() {
     let (host, callback, _server, _storage) = ingress_fixture().await;
-    let events = ModuleEvents(host.clone(), "telegram:bot-a".into(), None);
+    let events = ModuleEvents(host.clone(), "telegram:bot-a".into(), crate::provider::MediaScope::default());
     let provider_transcript = tinychannels_bus::VoiceTranscript {
         text: "provider words".into(),
         language: Some("en".into()),
@@ -2063,7 +2063,7 @@ async fn host_adapters_propagate_callback_failures() {
             .is_err()
     );
     assert!(
-        ModuleEvents(host.clone(), "fixture".into(), None)
+        ModuleEvents(host.clone(), "fixture".into(), crate::provider::MediaScope::default())
             .publish("fixture", "event", serde_json::json!({}))
             .await
             .is_err()
@@ -2090,7 +2090,7 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
         let (send, mut commands) = mpsc::channel::<SendCommand>(1);
         let (cancel, _) = watch::channel(false);
         let running = Arc::new(Running {
-            media_account_scope: None,
+            media_account_scope: crate::provider::MediaScope::default(),
             channel: Arc::new(InteractionChannel::default()),
             configured_instance: "interaction-fixture:account-a".into(),
             send,
@@ -2132,7 +2132,7 @@ async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
     let (send, mut commands) = mpsc::channel::<SendCommand>(1);
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
-        media_account_scope: None,
+        media_account_scope: crate::provider::MediaScope::default(),
         channel: Arc::new(InteractionChannel::default()),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
@@ -2166,7 +2166,7 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
     let (send, mut commands) = mpsc::channel::<SendCommand>(1);
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
-        media_account_scope: None,
+        media_account_scope: crate::provider::MediaScope::default(),
         channel: Arc::new(InteractionChannel::default()),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
@@ -2234,7 +2234,7 @@ async fn send_configured_outcome(
     let (send, mut commands) = mpsc::channel::<SendCommand>(1);
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
-        media_account_scope: None,
+        media_account_scope: crate::provider::MediaScope::default(),
         channel: Arc::new(InteractionChannel::default()),
         configured_instance: "interaction-fixture:account-a".into(),
         send,

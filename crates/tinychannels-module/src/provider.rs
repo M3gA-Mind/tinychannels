@@ -249,6 +249,12 @@ struct MediaScopeInner {
     source: std::sync::OnceLock<Arc<dyn Channel>>,
 }
 
+impl From<Option<String>> for MediaScope {
+    fn from(scope: Option<String>) -> Self {
+        Self::fixed(scope)
+    }
+}
+
 impl std::fmt::Debug for MediaScope {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // The scope names an account authority; never print it.
@@ -319,8 +325,9 @@ impl Hooks {
         self: &Arc<Self>,
         callbacks: HostChannels,
         configured_instance: String,
-        media_account_scope: MediaScope,
+        media_account_scope: impl Into<MediaScope>,
     ) -> Arc<dyn tinychannels::host::ChannelHost> {
+        let media_account_scope = media_account_scope.into();
         *self
             .configured_instance
             .lock()
