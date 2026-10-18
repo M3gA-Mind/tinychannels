@@ -4052,3 +4052,263 @@ fn presentation_blocks_and_vcards_keep_only_supported_safe_content() {
         assert!(!response_status_ok(&invalid));
     }
 }
+
+fn draft_intent(reply: Option<&str>) -> tinychannels_bus::ChannelOutboundIntent {
+    tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "draft-key".into(),
+        channel_id: "telegram".into(),
+        conversation_id: "100".into(),
+        reply_to_id: reply.map(str::to_owned),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: "draft body".into(),
+        },
+        ..Default::default()
+    }
+}
+
+fn draft_receipt(
+    primary: Option<&str>,
+    part_id: Option<&str>,
+) -> tinychannels_bus::channel::MessageReceipt {
+    tinychannels_bus::channel::MessageReceipt {
+        channel: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: None,
+        }),
+        conversation: Some(tinychannels_bus::ConversationRef {
+            id: "100".into(),
+            ..Default::default()
+        }),
+        primary_platform_message_id: primary.map(str::to_owned),
+        parts: part_id
+            .map(|id| {
+                vec![tinychannels_bus::channel::MessageReceiptPart {
+                    platform_message_id: id.into(),
+                    ..Default::default()
+                }]
+            })
+            .unwrap_or_default(),
+        ..Default::default()
+    }
+}
+
+async fn upsert(
+    channel: &TelegramChannel,
+    previous: Option<&tinychannels_bus::channel::MessageReceipt>,
+    intent: tinychannels_bus::ChannelOutboundIntent,
+) -> Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError> {
+    crate::channel::ChannelStreamingDraft::upsert_draft(channel, previous, intent).await
+}
+
+fn refused_channel() -> TelegramChannel {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let mut ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    ch.api_base = format!("http://{address}");
+    ch
+}
+
+#[tokio::test]
+async fn draft_creation_reports_each_failure_with_the_right_error_kind() {
+    use tinychannels_bus::channel::SendErrorKind;
+    let error = upsert(&refused_channel(), None, draft_intent(None))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Transient);
+    assert!(error.sent_before_error);
+    assert!(!error.message.contains(TOKEN));
+
+    let server = mock_api().await;
+    let channel = channel_for(&server, &["*"]);
+    let error = upsert(&channel, None, draft_intent(Some("not-a-number")))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(json_bodies(&server, "sendMessage").await.is_empty());
+
+    mount_post(
+        &server,
+        "sendMessage",
+        ResponseTemplate::new(200).set_body_string("not json"),
+    )
+    .await;
+    let error = upsert(&channel, None, draft_intent(None)).await.unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Transient);
+    assert!(error.message.contains("response"));
+
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok_with(serde_json::json!({}))).await;
+    let error = upsert(&channel_for(&server, &["*"]), None, draft_intent(Some("9")))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Unknown);
+    assert!(error.message.contains("omitted message ID"));
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await[0]["reply_parameters"]["message_id"],
+        9
+    );
+}
+
+#[tokio::test]
+async fn draft_creation_without_channel_ref_defaults_to_the_telegram_channel() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 55 })),
+    )
+    .await;
+    let receipt = upsert(&channel_for(&server, &["*"]), None, draft_intent(None))
+        .await
+        .unwrap();
+    assert_eq!(receipt.channel.as_ref().unwrap().id, "telegram");
+    assert_eq!(receipt.primary_platform_message_id.as_deref(), Some("55"));
+}
+
+#[tokio::test]
+async fn draft_edit_validates_receipt_ids_and_reports_wire_failures() {
+    use tinychannels_bus::channel::SendErrorKind;
+    let server = mock_api().await;
+    let channel = channel_for(&server, &["*"]);
+
+    let error = upsert(&channel, Some(&draft_receipt(None, None)), draft_intent(None))
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(error.message.contains("no provider message ID"));
+
+    let error = upsert(
+        &channel,
+        Some(&draft_receipt(Some("abc"), None)),
+        draft_intent(None),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(error.message.contains("invalid provider message ID"));
+
+    let error = upsert(
+        &refused_channel(),
+        Some(&draft_receipt(None, Some("7"))),
+        draft_intent(None),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Transient);
+    assert!(error.sent_before_error);
+
+    mount_post(
+        &server,
+        "editMessageText",
+        ResponseTemplate::new(200).set_body_string("not json"),
+    )
+    .await;
+    let error = upsert(
+        &channel,
+        Some(&draft_receipt(Some("7"), None)),
+        draft_intent(None),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Transient);
+    assert!(error.message.contains("response"));
+}
+
+#[test]
+fn telegram_declares_remote_control_approvals_and_proactive_defaults() {
+    let ch = TelegramChannel::new(TOKEN.into(), vec!["*".into()], false);
+    assert!(Channel::supports_remote_control(&ch));
+    assert!(Channel::supports_chat_approvals(&ch));
+    assert!(Channel::history_key_ignores_thread(&ch));
+    assert_eq!(
+        crate::channel::ChannelAdapter::proactive_target(&ch),
+        Channel::proactive_target(&ch)
+    );
+}
+
+#[tokio::test]
+async fn adapter_start_stop_and_stop_typing_are_noops_without_provider_io() {
+    struct NullSink;
+    #[async_trait::async_trait]
+    impl crate::channel::ChannelInboundSink for NullSink {
+        async fn push(
+            &self,
+            _event: crate::channel::ChannelIngress,
+        ) -> Result<(), crate::channel::ChannelSendError> {
+            Ok(())
+        }
+    }
+    let server = mock_api().await;
+    let ch = channel_for(&server, &["*"]);
+    crate::channel::ChannelAdapter::start(&ch, &NullSink)
+        .await
+        .unwrap();
+    crate::channel::ChannelAdapter::stop(&ch).await.unwrap();
+    crate::channel::ChannelTyping::stop_typing(&ch, "100")
+        .await
+        .unwrap();
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn native_reaction_removal_clears_reactions_and_surfaces_rejection() {
+    let server = mock_api().await;
+    mount_post(&server, "setMessageReaction", ok_with(serde_json::json!(true))).await;
+    let ch = channel_for(&server, &["*"]);
+    let conversation = tinychannels_bus::channel::ConversationRef {
+        id: "100".into(),
+        ..Default::default()
+    };
+    let reaction = tinychannels_bus::channel::ChannelReaction {
+        value: "👍".into(),
+        custom_emoji_id: None,
+    };
+    ch.send_reaction_v2(&conversation, "7", &reaction, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        json_bodies(&server, "setMessageReaction").await[0]["reaction"],
+        serde_json::json!([])
+    );
+    // Invalid inputs are rejected before any HTTP request.
+    assert!(
+        ch.send_reaction_v2(&conversation, "nope", &reaction, true)
+            .await
+            .is_err()
+    );
+    let empty = tinychannels_bus::channel::ChannelReaction {
+        value: " ".into(),
+        custom_emoji_id: None,
+    };
+    assert!(
+        ch.send_reaction_v2(&conversation, "7", &empty, false)
+            .await
+            .is_err()
+    );
+    assert!(
+        ch.send_reaction_v2(
+            &tinychannels_bus::channel::ConversationRef::default(),
+            "7",
+            &reaction,
+            true
+        )
+        .await
+        .is_err()
+    );
+    assert_eq!(json_bodies(&server, "setMessageReaction").await.len(), 1);
+
+    let rejecting = mock_api().await;
+    mount_post(
+        &rejecting,
+        "setMessageReaction",
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"ok": false, "description": "nope"})),
+    )
+    .await;
+    let error = channel_for(&rejecting, &["*"])
+        .send_reaction_v2(&conversation, "7", &reaction, true)
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("reaction removal failed"));
+}
