@@ -1,6 +1,6 @@
 use super::*;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction as _, ChannelStreamingDraft,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelStreamingDraft,
     ChannelTypedSend, ChannelTyping,
 };
 use crate::providers::slack::fixtures::*;
