@@ -417,6 +417,21 @@ fn subagent_states_map_to_subagent_events_with_detail() {
 }
 
 #[test]
+fn a_finished_subagent_reports_its_iterations_and_final_text_on_the_detail() {
+    let done = wire(&one(ChannelOutputEvent::Subagent(Box::new(subagent(
+        "completed",
+    )))));
+    assert_eq!(done["subagent"]["iterations"], 2);
+    assert_eq!(done["subagent"]["output"], "Found results");
+
+    let running = wire(&one(ChannelOutputEvent::Subagent(Box::new(subagent(
+        "tool_call",
+    )))));
+    assert!(running["subagent"].get("iterations").is_none());
+    assert!(running["subagent"].get("output").is_none());
+}
+
+#[test]
 fn oversized_subagent_output_is_capped() {
     let mut big = subagent("tool_result");
     big.output = Some("x".repeat(tinychannels_bus::web::MAX_WEB_TOOL_PAYLOAD_BYTES + 10));

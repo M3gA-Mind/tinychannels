@@ -474,6 +474,9 @@ fn project_subagent(context: WebEventContext, out: SubagentOutput) -> Option<Web
 
 fn subagent_detail(out: &SubagentOutput) -> WebSubagentProgressDetail {
     let usage = out.usage.as_ref();
+    // A finished child reports its total iteration count and final text on the
+    // detail; every other state carries neither.
+    let completed = out.state == "completed";
     WebSubagentProgressDetail {
         mode: out.mode.clone(),
         dedicated_thread: out.dedicated_thread,
@@ -487,7 +490,7 @@ fn subagent_detail(out: &SubagentOutput) -> WebSubagentProgressDetail {
         output_tokens: usage.map(|u| u.output_tokens),
         cached_input_tokens: usage.map(|u| u.cached_input_tokens),
         cost_usd: usage.map(|u| u.charged_amount_usd),
-        iterations: None,
+        iterations: if completed { out.iteration } else { None },
         output_chars: out.output_chars.map(|n| n as u64),
         worker_thread_id: out.worker_thread_id.clone(),
         display_name: out.display_name.clone(),
@@ -495,7 +498,11 @@ fn subagent_detail(out: &SubagentOutput) -> WebSubagentProgressDetail {
         changed_files: (!out.changed_files.is_empty()).then(|| out.changed_files.clone()),
         dirty_status: out.dirty_status,
         parent_call_id: out.parent_call_id.clone(),
-        output: None,
+        output: if completed {
+            out.output.clone().map(cap_web_output)
+        } else {
+            None
+        },
     }
 }
 
