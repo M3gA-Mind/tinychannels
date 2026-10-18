@@ -27,6 +27,7 @@ const MAX_CUSTOM_ID_BYTES: usize = 100;
 const VOICE_MESSAGE_FLAG: u64 = 1 << 13;
 
 /// Where a send lands and how the receipt must describe it.
+#[derive(Debug)]
 pub(super) struct Target {
     pub(super) channel: ChannelRef,
     pub(super) conversation: ConversationRef,
@@ -49,6 +50,7 @@ enum Batch {
     Thread(ThreadSpec),
 }
 
+#[derive(Debug)]
 struct ThreadSpec {
     name: String,
     message_id: Option<String>,

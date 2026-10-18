@@ -3,7 +3,8 @@ use crate::providers::discord::support::*;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinychannels_bus::{ButtonAction, ButtonStyle, ContentPart, OutboundContentPart};
+use crate::providers::discord::voice::encode_waveform;
+use tinychannels_bus::{HostVoiceScope, MediaKind};
 use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
@@ -579,7 +580,10 @@ async fn a_voice_message_uploads_with_the_voice_flag_duration_and_waveform() {
     assert_eq!(payload["attachments"][0]["filename"], "voice-message.ogg");
     // The codec measured 2.5 s and a four-sample waveform.
     assert_eq!(payload["attachments"][0]["duration_secs"], 2.5);
-    assert_eq!(payload["attachments"][0]["waveform"], "AEBAf/8=".replace("AEBAf/8=", &encode_waveform(&[0.0, 0.25, 0.5, 1.0])));
+    assert_eq!(
+        payload["attachments"][0]["waveform"],
+        encode_waveform(&[0.0, 0.25, 0.5, 1.0])
+    );
     assert!(payload.get("message_reference").is_none(), "reply belongs to the first message");
     let raw = String::from_utf8_lossy(&sent[1].body);
     assert!(raw.contains("Content-Type: audio/ogg"));
