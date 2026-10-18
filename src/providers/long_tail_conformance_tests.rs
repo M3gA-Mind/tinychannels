@@ -157,7 +157,7 @@ impl LongTailFixture {
     async fn record(&self, feature: Feature, before: usize) {
         let Some(server) = &self.server else { return };
         let requests = server.received_requests().await.unwrap();
-        let mut ids = self.response_ids.lock().clone().into_iter();
+        let mut ids = std::mem::take(&mut *self.response_ids.lock()).into_iter();
         for request in &requests[before..] {
             let url_path = request.url.path();
             let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
@@ -250,6 +250,10 @@ impl AdapterFixture for LongTailFixture {
         let channel = self.channel.as_ref();
         let target = conversation();
         match feature {
+            // A platform without thread addressing has nothing to send to.
+            Feature::ThreadAddressing if !channel.declared_capabilities().addressing.thread_id => {
+                unsupported_result()
+            }
             Feature::Text | Feature::ThreadAddressing => {
                 self.send_and_record(
                     feature,
