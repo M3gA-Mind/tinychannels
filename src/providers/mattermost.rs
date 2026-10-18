@@ -108,7 +108,7 @@ impl MattermostChannel {
 impl MattermostChannel {
     /// Post one message and return the id Mattermost assigned to it.
     async fn post_message(&self, message: &SendMessage) -> Result<Vec<String>> {
- threading via 'root_id'.
+        // Mattermost supports threading via 'root_id'.
         // We pack 'channel_id:root_id' into recipient if it's a thread.
         let (channel_id, root_id) = if let Some((c, r)) = message.recipient.split_once(':') {
             (c, Some(r))
