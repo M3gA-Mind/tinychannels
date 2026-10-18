@@ -824,7 +824,7 @@ async fn yuanbao_rejects_direct_message_reply_before_resolving_or_uploading_medi
     assert!(error.unsupported);
     assert_eq!(
         error.message,
-        "Yuanbao does not support direct-message reply addressing"
+        "Yuanbao direct-message reply addressing"
     );
     assert!(
         repo.scopes.lock().is_empty(),

@@ -49,6 +49,8 @@ impl NativeProvider for YuanbaoChannel {
             thread: false,
             streaming_pipeline: true,
         });
+        // Reply references are implemented for group conversations only;
+        // direct-message requests are rejected by `validate_target`.
         caps.addressing.reply_to_id = true;
         caps.actions.supported.push("reply".into());
         if self.native.media_repository.is_some() {
@@ -68,7 +70,7 @@ impl NativeProvider for YuanbaoChannel {
         // the requested reply address after uploading media.
         if target.reply_to.is_some() && !target.conversation.id.starts_with("g:") {
             return Err(crate::providers::native::unsupported(
-                "direct-message reply addressing",
+                "Yuanbao direct-message reply addressing",
             ));
         }
         Ok(())
