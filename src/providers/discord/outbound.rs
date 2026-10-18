@@ -493,6 +493,7 @@ impl DiscordChannel {
                         audio_base64,
                         codec,
                         duration_ms,
+                        waveform,
                     } = voice
                     else {
                         return Err(pre_dispatch(
@@ -500,13 +501,14 @@ impl DiscordChannel {
                         ));
                     };
                     batches.push(Batch::Voice(
-                        self.prepare_voice(
+                        self.prepare_voice_with_waveform(
                             message,
                             target,
                             media,
                             audio_base64.as_deref(),
                             codec.as_deref(),
                             *duration_ms,
+                            waveform.as_deref(),
                         )
                         .await?,
                     ));

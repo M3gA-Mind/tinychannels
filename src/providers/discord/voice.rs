@@ -74,6 +74,30 @@ impl DiscordChannel {
         codec: Option<&str>,
         duration_ms: Option<u64>,
     ) -> Result<VoiceUpload, ChannelSendError> {
+        self.prepare_voice_with_waveform(
+            message,
+            target,
+            media,
+            inline_audio,
+            codec,
+            duration_ms,
+            None,
+        )
+        .await
+    }
+
+    /// As [`Self::prepare_voice`], preferring a waveform the caller measured.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) async fn prepare_voice_with_waveform(
+        &self,
+        message: &ChannelOutboundMessage,
+        target: &Target,
+        media: &MediaReference,
+        inline_audio: Option<&str>,
+        codec: Option<&str>,
+        duration_ms: Option<u64>,
+        supplied_waveform: Option<&[f32]>,
+    ) -> Result<VoiceUpload, ChannelSendError> {
         let store = self
             .voice_media_store
             .as_ref()
@@ -112,7 +136,7 @@ impl DiscordChannel {
 
         let is_ogg = codec == Some("ogg_opus") || mime == "audio/ogg" || bytes.starts_with(b"OggS");
         let mut duration = duration_ms.or(media.duration_ms);
-        let mut waveform: Option<Vec<f32>> = None;
+        let mut waveform: Option<Vec<f32>> = supplied_waveform.map(<[f32]>::to_vec);
         if let Some(host_codec) = self.voice_codec.as_ref() {
             let from = if is_ogg {
                 Some("ogg_opus")
@@ -136,7 +160,7 @@ impl DiscordChannel {
                                 .map_err(|_| pre_dispatch("Discord voice transcode was invalid"))?;
                         }
                         duration = result.duration_ms.or(duration);
-                        waveform = result.waveform;
+                        waveform = waveform.or(result.waveform);
                     }
                     Err(error) => {
                         tracing::debug!(%error, "[discord] voice codec failed");
