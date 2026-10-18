@@ -3271,6 +3271,20 @@ mod whatsapp_native {
         }
     }
 
+    /// Host callbacks are delivered asynchronously; wait for the first one.
+    async fn first_inbound(rig: &Rig) -> serde_json::Value {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some((_, envelope)) = rig.callbacks.inbound.lock().await.first() {
+                    return envelope.clone();
+                }
+                rig.callbacks.ingress_changed.notified().await;
+            }
+        })
+        .await
+        .expect("the host received the inbound message")
+    }
+
     async fn webhook(
         rig: &Rig,
         signature: Option<String>,
@@ -3314,15 +3328,13 @@ mod whatsapp_native {
             result,
             tinychannels_bus::ChannelInteractionResult::WebhookAccepted(WebhookDeliveryOutcome { messages: 1, .. })
         ));
-        let inbound = rig.callbacks.inbound.lock().await;
-        assert_eq!(inbound.len(), 1);
-        let envelope = &inbound[0].1;
+        let envelope = first_inbound(&rig).await;
+        assert_eq!(rig.callbacks.inbound.lock().await.len(), 1);
         // The module, not the payload, decides which account owns the message.
         assert_eq!(envelope["channel"]["id"], "whatsapp");
         assert_eq!(envelope["channel"]["accountId"], "whatsapp:account-a");
         assert_eq!(envelope["messageId"], "wamid.1");
         assert_eq!(envelope["text"], "hello module");
-        drop(inbound);
         rig.running.stop().await.unwrap();
     }
 
@@ -3393,8 +3405,7 @@ mod whatsapp_native {
              "audio": {"id": "ptt-1", "voice": true, "mime_type": "audio/ogg; codecs=opus"}}
         ]));
         webhook(&rig, Some(signed(&body)), &body).await.unwrap();
-        let inbound = rig.callbacks.inbound.lock().await;
-        let envelope = &inbound[0].1;
+        let envelope = first_inbound(&rig).await;
         let note = envelope["parts"]
             .as_array()
             .unwrap()
@@ -3406,7 +3417,6 @@ mod whatsapp_native {
         assert_eq!(note["voiceNote"]["transcript"]["source"], "host_stt");
         assert!(note["voiceNote"]["media"].get("url").is_none_or(serde_json::Value::is_null));
         assert_eq!(rig.callbacks.stt_calls.load(Ordering::SeqCst), 1);
-        drop(inbound);
         rig.running.stop().await.unwrap();
     }
 
