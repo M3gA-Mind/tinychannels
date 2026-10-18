@@ -1,17 +1,24 @@
 use super::*;
-use crate::traits::Channel;
 use crate::channel::{
     ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction as ReactionPort, ChannelTypedSend,
     ChannelTyping,
 };
 use crate::providers::native::fixtures::stored_media;
 use crate::providers::signal::fixtures::*;
+use crate::traits::Channel;
 use serde_json::json;
 use tinychannels_bus::channel::{MessageReceipt, MessageReceiptPart};
 use tinychannels_bus::{
     ChannelOutboundIntent, ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind,
     MediaKind, MediaReference, OutboundContentPart, OutboundPayload, OutboundVoice,
 };
+
+async fn send(
+    channel: &SignalChannel,
+    message: &ChannelOutboundMessage,
+) -> Result<tinychannels_bus::channel::ChannelSendOutcome, ChannelSendError> {
+    ChannelTypedSend::send_typed(channel, message).await
+}
 
 fn conversation(id: &str) -> ConversationRef {
     ConversationRef {
@@ -86,7 +93,7 @@ fn edit_intent(body: &str) -> ChannelOutboundIntent {
 async fn text_goes_to_the_recipient_and_returns_the_signal_timestamp() {
     let server = mock_daemon(b"").await;
     let channel = channel_for(&server);
-    let outcome = channel.send_typed(&message(vec![text("hi")])).await.unwrap();
+    let outcome = send(&channel, &message(vec![text("hi")])).await.unwrap();
     assert_eq!(
         outcome.receipt.primary_platform_message_id.as_deref(),
         Some("1700000000123")
@@ -105,7 +112,7 @@ async fn group_conversations_send_by_group_id() {
     let channel = channel_for(&server);
     let mut group = message(vec![text("hello team")]);
     group.conversation_ref = Some(conversation("group:abc"));
-    channel.send_typed(&group).await.unwrap();
+    send(&channel, &group).await.unwrap();
     assert_eq!(calls(&server, "send").await[0]["groupId"], "abc");
 }
 
@@ -114,7 +121,7 @@ async fn long_text_is_chunked_and_each_chunk_gets_a_receipt_part() {
     let server = mock_daemon(b"").await;
     let channel = channel_for(&server);
     let long = "word ".repeat(1000);
-    let outcome = channel.send_typed(&message(vec![text(&long)])).await.unwrap();
+    let outcome = send(&channel, &message(vec![text(&long)])).await.unwrap();
     assert!(outcome.receipt.parts.len() >= 3);
     assert_eq!(
         calls(&server, "send").await.len(),
@@ -128,14 +135,14 @@ async fn replies_quote_the_target_message() {
     let channel = channel_for(&server);
     let mut reply = message(vec![text("re")]);
     reply.reply_to_id = Some("1700000000001".into());
-    channel.send_typed(&reply).await.unwrap();
+    send(&channel, &reply).await.unwrap();
     let sent = &calls(&server, "send").await[0];
     assert_eq!(sent["quoteTimestamp"], 1_700_000_000_001u64);
     assert_eq!(sent["quoteAuthor"], PEER);
 
     let mut bad = message(vec![text("re")]);
     bad.reply_to_id = Some("not-a-timestamp".into());
-    assert!(channel.send_typed(&bad).await.is_err());
+    assert!(send(&channel, &bad).await.is_err());
 }
 
 #[tokio::test]
@@ -144,7 +151,7 @@ async fn threads_are_unsupported_before_any_request() {
     let channel = channel_for(&server);
     let mut threaded = message(vec![text("x")]);
     threaded.thread_id = Some("t".into());
-    let error = channel.send_typed(&threaded).await.unwrap_err();
+    let error = send(&channel, &threaded).await.unwrap_err();
     assert!(error.unsupported);
     assert!(server.received_requests().await.unwrap().is_empty());
 }
@@ -155,14 +162,16 @@ async fn images_are_sent_as_data_uri_attachments_with_the_caption() {
     let rig = rig(&server);
     *rig.media.read.lock().unwrap() = Some(stored_media(MediaKind::Image, "image/png", b"png"));
     let outcome = rig
-        .channel
-        .send_typed(&message(vec![OutboundContentPart::Content {
-            part: ContentPart::Image {
-                media: media_ref(MediaKind::Image),
-                caption: Some("look; here, now".into()),
-                alt_text: None,
-            },
-        }]))
+        .send(
+            &channel,
+            &message(vec![OutboundContentPart::Content {
+                part: ContentPart::Image {
+                    media: media_ref(MediaKind::Image),
+                    caption: Some("look; here, now".into()),
+                    alt_text: None,
+                },
+            }]),
+        )
         .await
         .unwrap();
     let sent = &calls(&server, "send").await[0];
@@ -179,18 +188,20 @@ async fn voice_clips_are_audio_attachments_captioned_with_the_transcript() {
     let server = mock_daemon(b"").await;
     let rig = rig(&server);
     let outcome = rig
-        .channel
-        .send_typed(&message(vec![
-            text("the transcript"),
-            OutboundContentPart::Voice {
-                voice: OutboundVoice::Media {
-                    media: media_ref(MediaKind::Audio),
-                    audio_base64: None,
-                    codec: None,
-                    duration_ms: None,
+        .send(
+            &channel,
+            &message(vec![
+                text("the transcript"),
+                OutboundContentPart::Voice {
+                    voice: OutboundVoice::Media {
+                        media: media_ref(MediaKind::Audio),
+                        audio_base64: None,
+                        codec: None,
+                        duration_ms: None,
+                    },
                 },
-            },
-        ]))
+            ]),
+        )
         .await
         .unwrap();
     let sent = &calls(&server, "send").await[0];
@@ -212,8 +223,7 @@ async fn a_failing_second_chunk_reports_a_partial_send() {
         .mount(&server)
         .await;
     let channel = channel_for(&server);
-    let outcome = channel
-        .send_typed(&message(vec![text(&"word ".repeat(1000))]))
+    let outcome = send(&channel, &message(vec![text(&"word ".repeat(1000))]))
         .await
         .unwrap();
     assert_eq!(outcome.receipt.parts.len(), 1);
@@ -227,8 +237,7 @@ async fn a_failing_second_chunk_reports_a_partial_send() {
         })))
         .mount(&dead)
         .await;
-    let error = channel_for(&dead)
-        .send_typed(&message(vec![text("x")]))
+    let error = send(&channel_for(&dead), &message(vec![text("x")]))
         .await
         .unwrap_err();
     assert_eq!(error.kind, SendErrorKind::RateLimited);
@@ -257,8 +266,7 @@ async fn a_send_without_a_timestamp_is_an_uncertain_failure() {
         .respond_with(wiremock::ResponseTemplate::new(201))
         .mount(&server)
         .await;
-    let error = channel_for(&server)
-        .send_typed(&message(vec![text("x")]))
+    let error = send(&channel_for(&server), &message(vec![text("x")]))
         .await
         .unwrap_err();
     assert!(error.sent_before_error);
@@ -269,7 +277,9 @@ async fn typing_starts_and_stops() {
     let server = mock_daemon(b"").await;
     let channel = channel_for(&server);
     ChannelTyping::start_typing(&channel, PEER).await.unwrap();
-    ChannelTyping::stop_typing(&channel, "group:abc").await.unwrap();
+    ChannelTyping::stop_typing(&channel, "group:abc")
+        .await
+        .unwrap();
     let typing = calls(&server, "sendTyping").await;
     assert!(typing[0].get("stop").is_none());
     assert_eq!(typing[1]["stop"], true);
@@ -345,7 +355,9 @@ fn message_targets_resolve_authors_by_conversation() {
         (PEER.to_owned(), 1_700_000_000_001)
     );
     assert_eq!(
-        channel.message_target("group:abc", "1700000000001").unwrap(),
+        channel
+            .message_target("group:abc", "1700000000001")
+            .unwrap(),
         (ACCOUNT.to_owned(), 1_700_000_000_001)
     );
     assert_eq!(
@@ -432,9 +444,15 @@ async fn legacy_channel_methods_use_the_typed_path_and_keep_typed_errors() {
         value: "👍".into(),
         custom_emoji_id: None,
     };
-    Channel::send_reaction(&channel, &conversation(PEER), "1700000000001", &thumbs, false)
-        .await
-        .unwrap();
+    Channel::send_reaction(
+        &channel,
+        &conversation(PEER),
+        "1700000000001",
+        &thumbs,
+        false,
+    )
+    .await
+    .unwrap();
     let sent = receipt("1700000000123", PEER);
     Channel::edit_message(&channel, &sent, &edit_intent("e"))
         .await
@@ -471,7 +489,10 @@ async fn rpc_failures_map_onto_typed_errors() {
     assert!(mapped.sent_before_error);
 
     let unregistered = anyhow::anyhow!("Signal RPC error -1: Unregistered user");
-    assert_eq!(rpc_error(&unregistered, "send").kind, SendErrorKind::NotFound);
+    assert_eq!(
+        rpc_error(&unregistered, "send").kind,
+        SendErrorKind::NotFound
+    );
     let rejected = anyhow::anyhow!("Signal RPC error -32602: invalid");
     assert_eq!(rpc_error(&rejected, "send").kind, SendErrorKind::Unknown);
     let unreadable = anyhow::anyhow!("expected value at line 1");
