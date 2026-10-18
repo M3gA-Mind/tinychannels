@@ -59,6 +59,8 @@ async fn host_scoped_image_media_uploads_then_sends_the_server_file_info() {
         other => panic!("unexpected QQ request: {other}"),
     })
     .await;
+    assert!(server.address.ip().is_loopback());
+    assert_ne!(server.address.port(), 0);
     let media = Arc::new(StubMedia::default());
     let mut stored = stored_media(MediaKind::Image, "image/png", b"exact-scoped-png-bytes");
     stored.file_name = Some("diagram.png".into());
