@@ -176,6 +176,56 @@ async fn typed_voice_upload_uses_host_audio_and_returns_voice_receipt() {
     assert_eq!(post_body["file_ids"], json!(["voice-file-1"]));
 }
 
+#[tokio::test]
+async fn upload_rejection_is_known_unsent_and_does_not_create_a_post() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/files"))
+        .respond_with(ResponseTemplate::new(413))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(MediaKind::Image, "image/png", b"image"));
+    let error = ChannelTypedSend::send_typed(&channel(&server, media), &image_message("chan"))
+        .await
+        .unwrap_err();
+    assert!(!error.sent_before_error);
+    assert!(!error.retryable);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/api/v4/files");
+}
+
+#[tokio::test]
+async fn final_post_server_error_preserves_unknown_delivery_state() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/files"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "file_infos": [{"id": "file-1"}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/posts"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(MediaKind::Image, "image/png", b"image"));
+    let error = ChannelTypedSend::send_typed(&channel(&server, media), &image_message("chan"))
+        .await
+        .unwrap_err();
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[1].url.path(), "/api/v4/posts");
+}
+
 #[test]
 fn media_capabilities_require_host_scoped_storage() {
     let bare = MattermostChannel::new(
@@ -188,5 +238,7 @@ fn media_capabilities_require_host_scoped_storage() {
     );
     let capabilities = NativeProvider::declared_capabilities(&bare);
     assert!(!capabilities.content.image.outbound);
+    assert!(!capabilities.content.video.outbound);
+    assert!(!capabilities.content.audio.outbound);
     assert!(!capabilities.content.file.outbound);
 }

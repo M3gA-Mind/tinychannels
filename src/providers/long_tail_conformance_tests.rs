@@ -13,10 +13,11 @@ use crate::channel::{
     ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
     ChannelTyping,
 };
-use crate::factory::{DefaultHttpClients, build_long_tail_channel, build_long_tail_channel_with_host};
+use crate::factory::{
+    DefaultHttpClients, build_long_tail_channel, build_long_tail_channel_with_host,
+};
 use crate::host::{
-    MediaMetadata, MediaRepository, MediaScope, MediaStoreRequest, StoredMedia, VoiceMediaRequest,
-    VoiceMediaStore,
+    MediaRepository, MediaScope, MediaStoreRequest, StoredMedia, VoiceMediaRequest, VoiceMediaStore,
 };
 use async_trait::async_trait;
 use parking_lot::Mutex;
@@ -36,7 +37,6 @@ use tinychannels_bus::{
     ChannelOutboundIntent, ChannelsConfig, ContentPart, MediaKind, MediaReference,
     OutboundContentPart, OutboundPayload,
 };
-use async_trait::async_trait;
 use tinychannels_conformance::{
     AdapterFixture, ConformanceFeature as Feature, ExpectedScope, WireObservation,
     check_all_features, check_feature,
@@ -194,13 +194,8 @@ impl LongTailFixture {
             .build();
         Self {
             id,
-            channel: build_long_tail_channel_with_host(
-                &config,
-                &host,
-                &DefaultHttpClients,
-                id,
-            )
-            .unwrap(),
+            channel: build_long_tail_channel_with_host(&config, &host, &DefaultHttpClients, id)
+                .unwrap(),
             server: Some(server),
             response_ids,
             observed: Mutex::new(Vec::new()),
@@ -264,7 +259,11 @@ impl LongTailFixture {
                 } else if multipart.contains("application/pdf") {
                     Some("file")
                 } else if multipart.contains("audio/mp4") {
-                    Some("audio")
+                    Some(if feature == Feature::VoiceOut {
+                        "voice"
+                    } else {
+                        "audio"
+                    })
                 } else {
                     None
                 };
@@ -273,15 +272,15 @@ impl LongTailFixture {
             let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
             let (operation, message_ids, kinds) = if url_path == "/api/v4/posts" {
                 let kinds = if body.get("file_ids").is_some() {
-                    uploaded_kind.take().into_iter().map(str::to_owned).collect()
+                    uploaded_kind
+                        .take()
+                        .into_iter()
+                        .map(str::to_owned)
+                        .collect()
                 } else {
                     vec!["text".to_owned()]
                 };
-                (
-                    "send",
-                    ids.next().into_iter().collect(),
-                    kinds,
-                )
+                ("send", ids.next().into_iter().collect(), kinds)
             } else {
                 ("typing", Vec::new(), Vec::new())
             };
@@ -391,17 +390,14 @@ impl AdapterFixture for LongTailFixture {
                 Ok(None)
             }
             Feature::Image => {
-                self.refused(ChannelAdapter::send(
-                    channel,
-                    self.intent(
-                        feature,
-                        rich(ContentPart::Image {
-                            media: media(MediaKind::Image),
-                            caption: None,
-                            alt_text: None,
-                        }),
-                    ),
-                ))
+                self.send_and_record(
+                    feature,
+                    rich(ContentPart::Image {
+                        media: media(MediaKind::Image),
+                        caption: None,
+                        alt_text: None,
+                    }),
+                )
                 .await
             }
             Feature::Video => {
@@ -436,17 +432,14 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::File => {
-                self.refused(ChannelAdapter::send(
-                    channel,
-                    self.intent(
-                        feature,
-                        rich(ContentPart::File {
-                            media: media(MediaKind::Document),
-                            file_name: None,
-                            caption: None,
-                        }),
-                    ),
-                ))
+                self.send_and_record(
+                    feature,
+                    rich(ContentPart::File {
+                        media: media(MediaKind::Document),
+                        file_name: None,
+                        caption: None,
+                    }),
+                )
                 .await
             }
             Feature::Sticker => {
@@ -554,7 +547,22 @@ impl AdapterFixture for LongTailFixture {
                 ))
                 .await
             }
-            Feature::VoiceOut | Feature::VoiceSynthesis => {
+            Feature::VoiceOut => {
+                self.send_and_record(
+                    feature,
+                    OutboundPayload::Voice {
+                        voice: tinychannels_bus::OutboundVoice::Media {
+                            media: media(MediaKind::Audio),
+                            audio_base64: None,
+                            codec: Some("m4a_aac".into()),
+                            duration_ms: Some(1500),
+                            waveform: None,
+                        },
+                    },
+                )
+                .await
+            }
+            Feature::VoiceSynthesis => {
                 self.refused(ChannelAdapter::send(
                     channel,
                     self.intent(

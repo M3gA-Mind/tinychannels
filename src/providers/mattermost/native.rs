@@ -212,7 +212,7 @@ fn http_error(status: reqwest::StatusCode, operation: &str, final_post: bool) ->
             SendErrorKind::BadFormat
         },
         message: format!("Mattermost {operation} failed with HTTP {status}"),
-        retryable: server_error,
+        retryable: server_error && !final_post,
         sent_before_error: final_post && server_error,
         ..Default::default()
     }

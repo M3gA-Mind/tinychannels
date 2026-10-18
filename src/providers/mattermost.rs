@@ -531,11 +531,41 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
             capabilities
                 .content
                 .parts
-                .extend(["image".into(), "file".into()]);
-            capabilities.content.image.outbound = true;
-            capabilities.content.image.max_size_bytes = Some(MAX_FILE_BYTES);
-            capabilities.content.file.outbound = true;
-            capabilities.content.file.max_size_bytes = Some(MAX_FILE_BYTES);
+                .extend(["image", "video", "audio", "file"].map(String::from));
+            let outbound = |types: &[&str]| tinychannels_bus::ContentCapability {
+                outbound: true,
+                accepted_types: types.iter().map(|mime| (*mime).into()).collect(),
+                emitted_types: types.iter().map(|mime| (*mime).into()).collect(),
+                max_size_bytes: Some(MAX_FILE_BYTES),
+                ..Default::default()
+            };
+            capabilities.content.image = outbound(&[
+                "image/jpeg",
+                "image/png",
+                "image/gif",
+                "image/webp",
+            ]);
+            capabilities.content.video = outbound(&[
+                "video/mp4",
+                "video/quicktime",
+                "video/webm",
+            ]);
+            capabilities.content.audio = outbound(&[
+                "audio/ogg",
+                "audio/mpeg",
+                "audio/mp4",
+                "audio/wav",
+                "audio/webm",
+            ]);
+            capabilities.content.file = outbound(&[
+                "application/pdf",
+                "text/plain",
+                "text/csv",
+                "application/json",
+                "application/zip",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ]);
         }
         if self.voice_media_store.is_some() {
             capabilities.content.parts.push("voice_note".into());
