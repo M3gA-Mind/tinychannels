@@ -316,3 +316,29 @@ async fn invalid_voice_inputs_are_rejected_before_dispatch() {
             .contains("duration")
     );
 }
+
+#[tokio::test]
+async fn a_caller_supplied_waveform_wins_over_the_codec_measurement() {
+    let server = MockServer::start().await;
+    let voice = Arc::new(MemoryVoice::default());
+    let channel = channel_for(&server)
+        .with_voice_media_store(voice.clone())
+        .with_voice_codec(Arc::new(FixedCodec::new(false)));
+    let media = reference(&voice, OGG_FIXTURE, "audio/ogg");
+    let supplied = [1.0_f32, 0.0, 1.0];
+
+    let upload = channel
+        .prepare_voice_with_waveform(
+            &voice_message(),
+            &target(),
+            &media,
+            None,
+            Some("ogg_opus"),
+            None,
+            Some(&supplied),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(upload.waveform_base64, encode_waveform(&supplied));
+}
