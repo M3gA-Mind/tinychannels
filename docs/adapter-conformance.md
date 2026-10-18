@@ -163,6 +163,35 @@ Partner V3 API) on the same `providers::native` plumbing. Its conformance test
 - **Declared unsupported:** reactions, edits, deletes, replies, threads and
   inbound events other than messages.
 
+## Email
+
+`EmailChannel` (feature `email`) is a native v2 adapter on the same
+`providers::native` plumbing. Its conformance test
+(`email_adapter_passes_the_full_conformance_matrix_against_a_capturing_relay`)
+runs all 24 kit features against a capturing SMTP relay, and drives inbound mail
+through the same dispatch the IMAP loop uses.
+
+- **Envelope:** an inbound message keeps its `Subject:` (the text is
+  `Subject: ...` then the body, as before), `Message-ID` (the message id),
+  `In-Reply-To` (`reply_to_id`) and the thread root (`conversation.thread_id`:
+  the first `References` id, else `In-Reply-To`, else the message itself). The
+  conversation is the sender's address.
+- **Outbound is one message per reply.** The planned text becomes the body,
+  files and voice clips become attachments (`bundles_steps`), so text plus an
+  image is one email, not two. The receipt id is the `Message-ID` the adapter
+  generated for the send. `reply_to_id` and `thread_id` become `In-Reply-To` and
+  `References`; the subject is the leading `Subject:` line if there is one, else
+  `Re:` the subject of the thread's inbound mail, else `OpenHuman Message`.
+- **Voice:** any inbound audio attachment is stored as a voice note and
+  transcribed with the host's speech to text. Outbound voice is an audio
+  attachment (descriptor `voiceOut=attachment`).
+- **Failures:** a recipient that is not a single address (whitespace, a comma,
+  angle brackets, control characters) is rejected before the relay; a relay
+  refusal or timeout is a retryable transient failure (`MailError::TimedOut` is
+  documented to mean "not accepted").
+- **Declared unsupported:** reactions, edits, deletes, typing, drafts and
+  inbound events.
+
 | Behavior | Foundation status | Final provider coverage |
 | --- | --- | --- |
 | Text | Running factory and Telegram Bot API mock-wire request/receipt tested | Pending full provider port coverage |
