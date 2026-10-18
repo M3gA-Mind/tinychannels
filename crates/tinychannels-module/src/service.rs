@@ -51,7 +51,7 @@ use tinychannels::delivery::{
 };
 use tinychannels::factory::{
     ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
-    build_telegram_channel,
+    build_slack_channel, build_telegram_channel,
 };
 use tinychannels::host::ChannelHost;
 use tinychannels_bus::ChannelControllerRequest;
@@ -203,8 +203,15 @@ impl Channels {
         } else {
             None
         };
+        let slack = if tinychannels_bus::provider_id(&name) == "slack" {
+            build_slack_channel(&config, &owner_host, http)
+        } else {
+            None
+        };
         let channel: Arc<dyn tinychannels::Channel> = if let Some(telegram) = &telegram {
             telegram.clone()
+        } else if let Some(slack) = &slack {
+            slack.clone()
         } else {
             build_channels(&config, &owner_host, http)
                 .into_iter()
@@ -239,6 +246,8 @@ impl Channels {
                 supervision,
                 outbound_only,
             )
+        } else if let Some(slack) = slack {
+            Running::start_slack(slack, hooks, self.host.clone(), supervision, outbound_only)
         } else {
             match supervision {
                 Some(policy) => {

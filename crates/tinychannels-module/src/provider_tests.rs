@@ -3264,7 +3264,7 @@ async fn configured_telegram_native_adapter_owns_polling_typing_drafts_and_scope
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_telegram(channel, hooks, host, None, true);
     let handle = running.adapter_handle();
-    let native = handle.telegram_native.as_ref().unwrap().clone();
+    let native = handle.native.as_ref().unwrap().clone();
 
     assert_eq!(native.proactive_target(), None);
     assert_eq!(
@@ -3559,4 +3559,154 @@ async fn module_voice_media_reports_each_precondition_and_missing_host_storage()
         .err()
         .expect("no storage module");
     assert!(error.to_string().contains("scoped storage is unavailable"));
+}
+
+#[tokio::test]
+async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_queue() {
+    use tinychannels_bus::{ChannelInteraction, ChannelOutboundIntent, OutboundPayload};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    for endpoint in [
+        "chat.postMessage",
+        "chat.update",
+        "chat.delete",
+        "reactions.add",
+        "assistant.threads.setStatus",
+    ] {
+        Mock::given(method("POST"))
+            .and(path(format!("/api/{endpoint}")))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"ok": true, "ts": "321.5"})),
+            )
+            .mount(&server)
+            .await;
+    }
+    let instance = "slack:account-a".to_owned();
+    let channel = Arc::new(
+        tinychannels::SlackChannel::new("test-token".into(), None, vec!["*".into()])
+            .with_api_base(format!("{}/api", server.uri())),
+    );
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let running = Running::start_slack(channel, hooks, host, None, true);
+    let handle = running.adapter_handle();
+    assert_eq!(handle.mode, AdapterMode::SlackNativeV2);
+    let descriptor = handle.descriptor();
+    assert_eq!(descriptor.id, "slack");
+    assert_eq!(descriptor.account_id.as_deref(), Some("slack:account-a"));
+    assert_eq!(
+        descriptor.metadata.get("adapterMode").map(String::as_str),
+        Some("native-v2")
+    );
+
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: "slack".into(),
+        account_id: Some(instance.clone()),
+    };
+    let conversation = ConversationRef {
+        kind: ConversationKind::Channel,
+        id: "C1".into(),
+        thread_id: Some("100.1".into()),
+        ..Default::default()
+    };
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "slack-native-op".into(),
+        channel_id: "slack".into(),
+        conversation_id: conversation.id.clone(),
+        channel_ref: Some(channel_ref.clone()),
+        conversation_ref: Some(conversation.clone()),
+        payload: OutboundPayload::Text {
+            text: "native send".into(),
+        },
+        ..Default::default()
+    };
+    let sent = handle.send(intent.clone()).await.unwrap();
+    assert_eq!(
+        sent.receipt.primary_platform_message_id.as_deref(),
+        Some("321.5")
+    );
+    assert_eq!(sent.receipt.conversation.as_ref(), Some(&conversation));
+
+    handle
+        .reactions()
+        .unwrap()
+        .send_reaction(
+            &channel_ref,
+            &conversation,
+            "321.5",
+            &tinychannels_bus::ChannelReaction {
+                value: "👍".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .await
+        .unwrap();
+    let receipt = sent.receipt.clone();
+    let edited = handle
+        .edits()
+        .unwrap()
+        .edit(&receipt, intent.clone())
+        .await
+        .unwrap();
+    assert_eq!(edited.conversation.as_ref(), Some(&conversation));
+    handle.deletes().unwrap().delete(&receipt).await.unwrap();
+    running
+        .interact(ChannelInteraction::StartTyping {
+            recipient: "C1:100.1".into(),
+        })
+        .await
+        .unwrap();
+    let draft = running
+        .interact(ChannelInteraction::UpsertDraft {
+            previous: None,
+            intent: intent.clone(),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        draft,
+        tinychannels_bus::ChannelInteractionResult::Sent(_)
+    ));
+
+    let before = server.received_requests().await.unwrap().len();
+    let mut wrong_scope = receipt.clone();
+    wrong_scope.conversation.as_mut().unwrap().id = "C-other".into();
+    assert!(
+        handle
+            .edits()
+            .unwrap()
+            .edit(&wrong_scope, intent)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        before,
+        "a mismatched receipt must be rejected before provider I/O"
+    );
+    let paths: Vec<_> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .map(|request| request.url.path().to_owned())
+        .collect();
+    for expected in [
+        "/api/chat.postMessage",
+        "/api/reactions.add",
+        "/api/chat.update",
+        "/api/chat.delete",
+        "/api/assistant.threads.setStatus",
+    ] {
+        assert!(
+            paths.iter().any(|path| path == expected),
+            "{expected}: {paths:?}"
+        );
+    }
+    running.stop().await.unwrap();
 }

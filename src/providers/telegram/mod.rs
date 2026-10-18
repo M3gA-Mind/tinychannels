@@ -17,6 +17,7 @@ mod text;
 
 pub use bot_api::{TelegramBotApi, TelegramReactionRequest, TopicAction};
 pub use channel_types::TelegramChannel;
+pub(crate) use text::strip_tool_call_tags;
 
 /// Approval-context client id for Telegram turns: the channel name, as for
 /// every channel.

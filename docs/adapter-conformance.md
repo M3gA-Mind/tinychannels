@@ -69,6 +69,39 @@ General host-to-module media ingestion is still missing from the TinyChannels
 bus. Host consumers must wait for the owning bus/module extension rather than
 linking TinyChannels implementation code or duplicating its metadata schema.
 
+## Slack
+
+`SlackChannel` is a native v2 adapter (`adapterMode=native-v2`). It implements
+`ChannelAdapter`, `ChannelTypedSend`, `ChannelTyping`, `ChannelReaction`,
+`ChannelEdit`, `ChannelDelete` and `ChannelStreamingDraft`, and the module runs
+it through `Running::start_slack` on the same ordered operation queue as
+Telegram. Its conformance test
+(`slack_adapter_passes_the_full_conformance_matrix_against_the_mock_platform`)
+runs all 24 kit features against a mock Web API: declared features must reach
+the platform with the right addressing and receipt IDs, and undeclared ones
+(stickers, locations, contacts, polls, native data, voice synthesis without a
+configured synthesizer, read receipts) must return an explicit unsupported
+result without any request.
+
+- **Inbound:** Socket Mode when `app_token` is set (every envelope is
+  acknowledged before it is handled, `disconnect` frames reconnect), otherwise
+  `conversations.history` polling of `channel_id`. Messages, `app_mention`,
+  edits, deletes, reactions and Block Kit button presses are normalized; a
+  repeated `channel:ts` is dropped.
+- **Files:** inbound files are downloaded with the bot token (only from
+  `files.slack.com`) into the scoped media repository; outbound files use
+  `files.getUploadURLExternal`, a raw upload and `files.completeUploadExternal`.
+- **Voice:** Slack has no native voice-note API. Inbound audio clips become
+  voice notes carrying Slack's own transcript when it is finished. Outbound
+  voice is an audio file upload with the transcript as its comment; the
+  descriptor advertises this as `voiceOut=file`.
+- **Typing:** `assistant.threads.setStatus` for a `channel:thread_ts`
+  recipient; a recipient without a thread returns an explicit unsupported
+  result.
+- **Receipts:** every text, Block Kit and draft message returns Slack's `ts`.
+  An upload whose message timestamp Slack does not report returns the file ID,
+  which can be deleted (`files.delete`) but not edited.
+
 | Behavior | Foundation status | Final provider coverage |
 | --- | --- | --- |
 | Text | Running factory and Telegram Bot API mock-wire request/receipt tested | Pending full provider port coverage |

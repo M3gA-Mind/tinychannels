@@ -265,6 +265,44 @@ pub fn build_telegram_channel(
     Some(Arc::new(telegram))
 }
 
+/// Build the Slack provider with the host ports it can use: scoped media
+/// storage, voice storage, synthesis and the ordered event sink.
+pub fn build_slack_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<SlackChannel>> {
+    let sl = config.slack.as_ref()?;
+    tracing::info!(
+        channel = "slack",
+        allowed_users_count = sl.allowed_users.len(),
+        socket_mode = sl.app_token.is_some(),
+        "[channels] slack enabled (tokens not logged)"
+    );
+    let mut slack = SlackChannel::with_http_client(
+        sl.bot_token.clone(),
+        sl.channel_id.clone(),
+        sl.allowed_users.clone(),
+        http.client_for("channel.slack"),
+    )
+    .with_app_token(sl.app_token.clone());
+    if let Some(store) = host.voice_media_store() {
+        slack = slack.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        slack = slack.with_media_repository(repository);
+    }
+    slack = slack.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        slack = slack.with_events(events);
+    }
+    Some(Arc::new(slack))
+}
+
 /// Build every provider that `config` enables.
 ///
 /// Order is stable and matches the declaration order below, so a caller that
@@ -297,13 +335,8 @@ pub fn build_channels(
         )));
     }
 
-    if let Some(sl) = config.slack.as_ref() {
-        channels.push(Arc::new(SlackChannel::with_http_client(
-            sl.bot_token.clone(),
-            sl.channel_id.clone(),
-            sl.allowed_users.clone(),
-            http.client_for("channel.slack"),
-        )));
+    if let Some(slack) = build_slack_channel(config, host, http) {
+        channels.push(slack);
     }
 
     if let Some(mm) = config.mattermost.as_ref() {
