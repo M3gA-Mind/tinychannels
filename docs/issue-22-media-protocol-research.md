@@ -87,3 +87,28 @@ Audio sent as `msg_type=audio` is a native audio message on this API. Whether
 Lark's event payload marks a received audio message as a voice note versus a
 generic audio attachment must be determined from the concrete event resource
 metadata; do not infer voice-note semantics from MIME alone.
+
+## QQ Official Bot
+
+The QQ Bot platform documents a native rich-media path rather than a text URL
+fallback:
+
+- [Rich-media overview](https://bot.q.qq.com/wiki/develop/api-v2/server-inter/message/rich-media.html)
+  says image, video, voice, and file messages use msg_type=7 and a media.file_info
+  returned by an upload request. It lists image formats, MP4 video, voice formats
+  (Silk/MP3/WAV/OGG), and arbitrary files.
+- [Direct-message file upload](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_files.post.html)
+  documents file_type 1=image, 2=video, 3=voice, 4=file; file_data is base64
+  binary data and direct upload is limited to 5 MiB. The published soft limits are
+  20 MiB images, 30 MiB videos, 20 MiB voice and 200 MiB files; larger local
+  payloads require the documented pre-upload/chunk/finish sequence.
+- [Direct-message send](https://bot.q.qq.com/wiki/develop/api-v2/autogen/api/v2_users_user_openid_messages.post.html)
+  accepts msg_type=7 with media.file_info. The matching group upload/send
+  endpoints are /v2/groups/{group_openid}/files and /v2/groups/{group_openid}/messages;
+  uploaded media is isolated between DM and group scopes.
+
+This adapter can safely support bounded native uploads without implementing
+chunk transfer: it will enforce a 5 MiB maximum before upload, classify the
+actual native file type, upload with srv_send_msg=false, then send the returned
+opaque file_info in the separate message request. The declared capability
+limit must remain 5 MiB until the full chunk-upload protocol is implemented.
