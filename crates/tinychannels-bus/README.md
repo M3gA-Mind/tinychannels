@@ -88,11 +88,20 @@ authority. Credential or endpoint changes conservatively create a new scope;
 transparent credential rotation requires a provider-authenticated stable
 identity. Existing records are retained, but provider-only legacy records that
 cannot be unambiguously bound fail closed and are never re-scoped to a caller.
+
 Signal and iMessage, and WhatsApp configurations with only a local session
 path, currently lack an authenticated identity source and fail closed for this
 media scope until one is supplied.
 In-flight upload handles remain activation-bound and cannot authorize against a
 replacement provider activation.
+
+Contract version 27 adds confidential `BeginWebTurn`, `ProjectWebOutput`, and
+`EndWebTurn` operations. Begin accepts a host-derived isolation key and
+addressing context but rejects caller-supplied sequence or timestamp values;
+the module returns an opaque handle, stamps ordered output events, and closes
+the handle on terminal output or explicit end. Context fields, retained bytes,
+and active turns are bounded, with admission rejected rather than evicting a
+live turn. Tenant/profile routing remains host-owned.
 
 Version 24 adds confidential `BeginMediaRead`, `ReadMediaChunk`, and
 `AbortMediaRead` operations. Begin resolves the opaque ID through the module's

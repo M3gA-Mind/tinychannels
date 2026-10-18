@@ -333,7 +333,7 @@ fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
     }
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible(CONTRACT_VERSION + 1));
-    assert_eq!(CONTRACT_VERSION, 26);
+    assert_eq!(CONTRACT_VERSION, 27);
     assert!(!is_compatible(25));
     assert!(!is_compatible(24));
     assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 25));

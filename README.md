@@ -183,7 +183,12 @@ cargo test --features email,lark
   Legacy `SendEmail` remains available for small requests; larger attachments
   use the confidential `BeginEmailUpload` / `AppendEmailUploadChunk` /
   `SendEmailUpload` protocol, with bounded chunks and a replayable terminal
-  result keyed by the opaque upload handle.
+  result keyed by the opaque upload handle. The confidential web-output
+  operations `BeginWebTurn`, `ProjectWebOutput`, and `EndWebTurn` give each
+  host-owned turn a bounded module-side projection state and opaque handle;
+  the module stamps ordered sequence numbers and timestamps, then closes state
+  on terminal output or explicit end. The host retains authoritative tenant
+  and profile routing stamps.
 - `src/lib.rs` exports the crate surface and re-exports the contract.
 - `src/providers/` holds the provider transports.
 - `src/delivery/` holds the durable outbound queue and `progressive/`, the

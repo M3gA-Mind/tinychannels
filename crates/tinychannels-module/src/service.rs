@@ -1,7 +1,8 @@
 //! The TinyBus service boundary for the channel surface.
 //!
 //! One object, `/ai/tinyhumans/tinychannels/Channels`, preserving its original
-//! five methods and adding typed intent, relay lifecycle, and shutdown members:
+//! five methods and adding typed intent, relay lifecycle, web projection, and
+//! shutdown members:
 //!
 //! ```text
 //! StartChannel(name, ChannelsConfig) -> ()
@@ -13,6 +14,9 @@
 //! StartChannelSupervised(name, config, proxy, policy) -> ()
 //! ChannelController(request) -> ChannelControllerResult
 //! SendChannelIntent(name, intent)     -> ChannelSendMessageResult
+//! BeginWebTurn(context, scope)        -> WebTurnHandle
+//! ProjectWebOutput(handle, event)     -> WebOutputEvents
+//! EndWebTurn(handle)                  -> ()
 //! ```
 //!
 //! # This module is stateful, unlike the document one
@@ -22,6 +26,9 @@
 //! listen loop that outlives every call. So this object keeps a registry of
 //! running providers, and `StopChannel` is not optional politeness: without it
 //! a provider's task and socket leak until the process exits.
+//! Web projection state is also module-owned and bounded. Each explicit begin
+//! creates a fresh opaque handle and sequence stream; terminal output closes it
+//! automatically, while the host ends nonterminal turns with `EndWebTurn`.
 //!
 //! # Config arrives per call, not at load
 //!
@@ -173,6 +180,7 @@ pub(crate) struct Channels {
     runtimes: Option<Arc<crate::runtime::Runtimes>>,
     shutdown_task: Mutex<Option<JoinHandle<BusResult<()>>>>,
     delivery_admission: Arc<Mutex<()>>,
+    web_turns: Mutex<crate::web_output::WebTurnRegistry>,
 }
 
 #[derive(Clone, Debug)]
@@ -214,6 +222,7 @@ impl Channels {
             runtimes,
             shutdown_task: Mutex::new(None),
             delivery_admission: Arc::new(Mutex::new(())),
+            web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         }
     }
 
@@ -444,6 +453,38 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
 )]
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.Channels")]
 impl Channels {
+    /// Begin an isolated stateful projection stream for one web turn.
+    #[tinybus(confidential)]
+    async fn begin_web_turn(
+        &self,
+        request: tinychannels_bus::BeginWebTurn,
+    ) -> BusResult<tinychannels_bus::WebTurnHandle> {
+        let mut web_turns = self.web_turns.lock().await;
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        web_turns.begin(request)
+    }
+
+    /// Project one canonical output and return its ordered web wire events.
+    #[tinybus(confidential)]
+    async fn project_web_output(
+        &self,
+        request: tinychannels_bus::ProjectWebOutput,
+    ) -> BusResult<tinychannels_bus::WebOutputEvents> {
+        let mut web_turns = self.web_turns.lock().await;
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        web_turns.project(request)
+    }
+
+    /// End a projection turn; terminal events may already have closed it.
+    #[tinybus(confidential)]
+    async fn end_web_turn(&self, request: tinychannels_bus::EndWebTurn) -> BusResult<()> {
+        self.web_turns.lock().await.end(request)
+    }
+
     /// Reserve an inert identity-scoped runtime and immutable callback paths.
     #[tinybus(confidential)]
     async fn reserve_runtime(&self) -> BusResult<tinychannels_bus::ChannelRuntimeReservation> {
@@ -1450,6 +1491,7 @@ impl Channels {
     /// Freeze operations and join all native providers, relay and callbacks.
     pub(crate) async fn shutdown(&self) -> BusResult<()> {
         self.terminal.store(true, Ordering::SeqCst);
+        self.web_turns.lock().await.clear();
         self.relays.freeze();
         // Fence and stop identity-scoped children before draining the legacy
         // service resources, but do not let one failed child skip cleanup of

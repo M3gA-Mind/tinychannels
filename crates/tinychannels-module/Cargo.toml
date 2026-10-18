@@ -22,6 +22,7 @@ crate-type = ["rlib", "cdylib"]
 tinychannels = { path = "../..", features = ["email", "lark", "whatsapp-web"] }
 # The transport-free vocabulary shared with the host.
 tinychannels-bus = { path = "../tinychannels-bus" }
+tinychannels-runtime = { path = "../tinychannels-runtime" }
 # Codec vocabulary only; audio work runs in TinyVoice's compiled TinyBus module.
 tinyvoice-bus = { git = "https://github.com/tinyhumansai/tinyvoice", rev = "7a8e3ac5b31a11e9c061541b336c666ee10fa190" }
 # TinyBus provides the typed service interface and dynamic module host ABI.
