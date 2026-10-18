@@ -121,7 +121,7 @@ pub(crate) struct Channels {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ProviderActivation {
     generation: String,
-    media_account_scope: Option<String>,
+    media_account_scope: crate::provider::MediaScope,
 }
 
 struct ModuleDeliveryHandler {
@@ -1085,7 +1085,7 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let activation = self.media_activation(&request.instance).await?;
-        if activation.media_account_scope.is_none() {
+        if activation.media_account_scope.current().is_none() {
             return Err(BusError::failed(
                 "configured account has no stable media identity",
             ));
@@ -1168,7 +1168,7 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         let activation = self.media_activation(&request.instance).await?;
-        if activation.media_account_scope.is_none() {
+        if activation.media_account_scope.current().is_none() {
             return Err(BusError::failed(
                 "configured account has no stable media identity",
             ));

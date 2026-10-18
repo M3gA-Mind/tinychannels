@@ -797,7 +797,7 @@ impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
 pub(crate) struct ModuleVoiceMediaStore(
     pub(crate) HostChannels,
     pub(crate) String,
-    pub(crate) Option<String>,
+    pub(crate) MediaScope,
 );
 
 #[async_trait::async_trait]
@@ -943,7 +943,7 @@ async fn read_scoped_voice_media(
 pub(crate) struct ModuleEvents(
     pub(crate) HostChannels,
     pub(crate) String,
-    pub(crate) Option<String>,
+    pub(crate) MediaScope,
 );
 
 #[async_trait::async_trait]

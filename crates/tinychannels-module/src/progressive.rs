@@ -30,7 +30,7 @@ const LEGACY_TURN_LIFETIME: Duration = Duration::from_secs(180);
 
 struct Sender {
     host: HostChannels,
-    media_account_scope: Option<String>,
+    media_account_scope: crate::provider::MediaScope,
     context: Option<ProgressiveOutputContext>,
     capabilities: tinychannels_bus::ChannelCapabilities,
     channel: String,
@@ -39,7 +39,7 @@ struct Sender {
 
 struct ProgressiveTarget {
     channel: String,
-    media_account_scope: Option<String>,
+    media_account_scope: crate::provider::MediaScope,
 }
 
 impl Sender {
