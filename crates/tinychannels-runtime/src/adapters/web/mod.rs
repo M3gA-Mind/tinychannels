@@ -12,5 +12,6 @@ mod sink;
 
 pub use adapter::{SYSTEM_CLIENT_ID, WebChannelAdapter};
 pub use inbound::{WEB_CHANNEL_ID, WebChatStart, normalize_chat_start};
-pub use project::{WebTurnProjector, context_mut};
+pub use project::WebTurnProjector;
 pub use sink::{WebEventSink, WebScope};
+pub use tinychannels_bus::web::context_mut;
