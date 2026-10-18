@@ -4472,7 +4472,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         .await
         .unwrap();
     assert_eq!(retained.bytes, include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg"));
-    assert_eq!(retained.content_type.as_deref(), Some("audio/ogg"));
+    assert_eq!(retained.content_type, "audio/ogg");
     assert_eq!(voice_scope.conversation.id, THREAD);
     assert_eq!(voice_scope.conversation.scope_id.as_deref(), Some(GUILD));
     assert_eq!(voice_scope.conversation.parent_id.as_deref(), Some(CHANNEL));
