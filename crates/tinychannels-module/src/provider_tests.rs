@@ -4412,7 +4412,13 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
             .iter()
             .map(|request| format!("{} {}", request.method, request.url.path()))
             .collect::<Vec<_>>();
-        panic!("mock gateway ingress timed out; REST requests: {requests:#?}");
+        panic!(
+            "mock gateway ingress timed out; REST requests: {requests:#?}; inbound={:?}, events={}, STT calls={}, voice stores={}",
+            callbacks.inbound.lock().await,
+            callbacks.events.lock().await.len(),
+            callbacks.stt_calls.load(Ordering::SeqCst),
+            callbacks.read_requests.lock().await.len(),
+        );
     }
     let voice = callbacks.inbound.lock().await[0].1.clone();
     assert!(voice.to_string().contains("recognized words"));
