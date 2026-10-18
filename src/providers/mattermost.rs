@@ -1,7 +1,9 @@
+use crate::host::{MediaRepository, VoiceMediaStore};
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use parking_lot::Mutex;
+use std::sync::Arc;
 
 /// Mattermost channel — polls channel posts via REST API v4.
 /// Mattermost is API-compatible with many Slack patterns but uses a dedicated v4 structure.
@@ -18,6 +20,8 @@ pub struct MattermostChannel {
     /// Handle for the background typing-indicator loop (aborted on stop_typing).
     typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     http_client: reqwest::Client,
+    media_repository: Option<Arc<dyn MediaRepository>>,
+    voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
 }
 
 impl MattermostChannel {
@@ -60,7 +64,22 @@ impl MattermostChannel {
             mention_only,
             typing_handle: Mutex::new(None),
             http_client,
+            media_repository: None,
+            voice_media_store: None,
         }
+    }
+
+    /// Attach the host's scoped media repository for native file uploads.
+    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
+        self.media_repository = Some(repository);
+        self
+    }
+
+    /// Attach the host's scoped voice store. Mattermost currently uses generic
+    /// file attachments and does not advertise a native voice-note operation.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
+        self.voice_media_store = Some(store);
+        self
     }
 
     fn http_client(&self) -> reqwest::Client {
@@ -501,11 +520,23 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
 
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
-        text_capabilities(TextSpec {
+        let mut capabilities = text_capabilities(TextSpec {
             typing: true,
             thread: true,
             ..Default::default()
-        })
+        });
+        if self.media_repository.is_some() {
+            const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
+            capabilities
+                .content
+                .parts
+                .extend(["image".into(), "file".into()]);
+            capabilities.content.image.outbound = true;
+            capabilities.content.image.max_size_bytes = Some(MAX_FILE_BYTES);
+            capabilities.content.file.outbound = true;
+            capabilities.content.file.max_size_bytes = Some(MAX_FILE_BYTES);
+        }
+        capabilities
     }
 
     fn typing_supported(&self) -> bool {
@@ -525,7 +556,18 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
             message.recipient = format!("{}:{root}", message.recipient);
         }
     }
+
+    async fn send_typed_message(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<tinychannels_bus::ChannelSendOutcome, tinychannels_bus::channel::ChannelSendError>
+    {
+        native::send_typed(self, message).await
+    }
 }
+
+#[path = "mattermost/native.rs"]
+mod native;
 
 crate::providers::long_tail::impl_long_tail_adapter!(MattermostChannel);
 

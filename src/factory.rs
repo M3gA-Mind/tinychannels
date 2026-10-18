@@ -479,7 +479,7 @@ fn build_long_tail_channel_inner(
     match provider {
         "mattermost" => {
             let mm = config.mattermost.as_ref()?;
-            Some(Arc::new(MattermostChannel::with_http_client(
+            let mut channel = MattermostChannel::with_http_client(
                 mm.url.clone(),
                 mm.bot_token.clone(),
                 mm.channel_id.clone(),
@@ -487,7 +487,14 @@ fn build_long_tail_channel_inner(
                 mm.thread_replies.unwrap_or(true),
                 mm.mention_only.unwrap_or(false),
                 http.client_for("channel.mattermost"),
-            )))
+            );
+            if let Some(repository) = host.and_then(|host| host.media_repository()) {
+                channel = channel.with_media_repository(repository);
+            }
+            if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+                channel = channel.with_voice_media_store(store);
+            }
+            Some(Arc::new(channel))
         }
         "irc" => {
             let irc_cfg = config.irc.as_ref()?;
