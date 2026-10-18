@@ -177,7 +177,7 @@ async fn attachment_only_messages_are_dropped_when_attachments_are_ignored() {
         vec!["*".into()],
         true,
         false,
-        Client::new(),
+        reqwest::Client::new(),
     )
     .with_events(events.clone());
     let (tx, _rx) = channel_pair();
@@ -200,7 +200,7 @@ async fn messages_without_content_or_from_strangers_publish_nothing() {
         vec![PEER.into()],
         false,
         true,
-        Client::new(),
+        reqwest::Client::new(),
     )
     .with_events(events.clone());
     let (tx, _rx) = channel_pair();
