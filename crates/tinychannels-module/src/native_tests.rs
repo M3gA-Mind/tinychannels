@@ -3,6 +3,26 @@ use tinychannels::factory::DefaultHttpClients;
 use tinychannels::host::NoopHost;
 use tinychannels_bus::config::{EmailConfig, IMessageConfig, LinqConfig, SignalConfig};
 
+#[test]
+fn a_configured_discord_account_builds_a_native_launch() {
+    let host = NoopHost::arc();
+    let config = ChannelsConfig {
+        discord: Some(tinychannels_bus::config::DiscordConfig {
+            bot_token: "token".into(),
+            guild_id: Some("guild".into()),
+            channel_id: Some("channel".into()),
+            allowed_users: vec!["*".into()],
+            listen_to_bots: false,
+            mention_only: false,
+        }),
+        ..Default::default()
+    };
+
+    let launch = build_native_v2("discord:work", &config, &host, &DefaultHttpClients)
+        .expect("a configured Discord provider must start through its native adapter");
+    assert_eq!(launch.channel.name(), "discord");
+}
+
 fn signal_config() -> ChannelsConfig {
     ChannelsConfig {
         signal: Some(SignalConfig {
