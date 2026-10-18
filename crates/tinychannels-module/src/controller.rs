@@ -330,7 +330,12 @@ impl HostBackend {
         &self,
         config: &ChannelsConfig,
         channel: &str,
-    ) -> anyhow::Result<Option<(tinychannels::providers::telegram::TelegramBotApi, Option<String>)>> {
+    ) -> anyhow::Result<
+        Option<(
+            tinychannels::providers::telegram::TelegramBotApi,
+            Option<String>,
+        )>,
+    > {
         use tinychannels::factory::HttpClientFactory as _;
         if channel != "telegram" {
             return Ok(None);
@@ -348,6 +353,32 @@ impl HostBackend {
             clients.client_for("channel.telegram"),
         );
         Ok(Some((api, telegram.chat_id.clone())))
+    }
+
+    /// Bot-token providers that have no native port for `operation` fail
+    /// explicitly instead of being routed to the managed host backend.
+    fn reject_unported(
+        config: &ChannelsConfig,
+        channel: &str,
+        operation: &str,
+    ) -> anyhow::Result<()> {
+        let bot_token_configured = match channel {
+            "discord" => config.discord.is_some(),
+            "slack" => config.slack.is_some(),
+            "mattermost" => config.mattermost.is_some(),
+            _ => false,
+        };
+        if bot_token_configured {
+            tracing::debug!(
+                channel,
+                operation,
+                "[channels] no native port for bot-token channel"
+            );
+            anyhow::bail!(
+                "{channel} has no native {operation} support yet; it is not routed to the managed backend"
+            );
+        }
+        Ok(())
     }
 
     async fn invoke(&self, request: ChannelBackendRequest) -> anyhow::Result<ChannelBackendResult> {
@@ -625,16 +656,16 @@ impl ChannelBackend for HostBackend {
         reaction: Value,
     ) -> anyhow::Result<ChannelReactionResult> {
         if let Some((api, _)) = self.telegram_native(config, channel)? {
-            let request = tinychannels::providers::telegram::TelegramReactionRequest::from_value(
-                &reaction,
-            )
-            .map_err(anyhow::Error::msg)?;
+            let request =
+                tinychannels::providers::telegram::TelegramReactionRequest::from_value(&reaction)
+                    .map_err(anyhow::Error::msg)?;
             api.send_reaction(&request).await?;
             return Ok(ChannelReactionResult {
                 success: true,
                 ..Default::default()
             });
         }
+        Self::reject_unported(config, channel, "reaction")?;
         match self
             .invoke(ChannelBackendRequest::SendReaction {
                 channel: channel.to_owned(),
@@ -664,6 +695,7 @@ impl ChannelBackend for HostBackend {
                 raw: None,
             });
         }
+        Self::reject_unported(config, channel, "thread create")?;
         match self
             .invoke(ChannelBackendRequest::CreateThread {
                 channel: channel.to_owned(),
@@ -696,6 +728,7 @@ impl ChannelBackend for HostBackend {
                 raw: None,
             });
         }
+        Self::reject_unported(config, channel, "thread update")?;
         match self
             .invoke(ChannelBackendRequest::UpdateThread {
                 channel: channel.to_owned(),
@@ -711,10 +744,14 @@ impl ChannelBackend for HostBackend {
 
     async fn list_threads(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         active: Option<bool>,
     ) -> anyhow::Result<ChannelThreadListResult> {
+        if self.telegram_native(config, channel)?.is_some() {
+            anyhow::bail!("Telegram's Bot API cannot list forum topics");
+        }
+        Self::reject_unported(config, channel, "thread list")?;
         match self
             .invoke(ChannelBackendRequest::ListThreads {
                 channel: channel.to_owned(),
