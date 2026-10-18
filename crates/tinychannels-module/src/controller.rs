@@ -305,6 +305,8 @@ struct HostBackend {
     yuanbao: Arc<dyn YuanbaoVerifier>,
     proxy: tinychannels_bus::HttpProxyPolicy,
     discord_token: Option<String>,
+    /// Bot API base override (tests and self-hosted Bot API servers).
+    telegram_api_base: Option<String>,
 }
 
 impl HostBackend {
@@ -321,6 +323,7 @@ impl HostBackend {
             yuanbao: Arc::new(NativeYuanbaoVerifier),
             proxy: tinychannels_bus::HttpProxyPolicy::default(),
             discord_token,
+            telegram_api_base: None,
         }
     }
 
@@ -348,10 +351,13 @@ impl HostBackend {
             return Ok(None);
         };
         let clients = tinychannels::factory::ConfiguredHttpClients::new(self.proxy.clone())?;
-        let api = tinychannels::providers::telegram::TelegramBotApi::new(
+        let mut api = tinychannels::providers::telegram::TelegramBotApi::new(
             telegram.bot_token.clone(),
             clients.client_for("channel.telegram"),
         );
+        if let Some(base) = &self.telegram_api_base {
+            api = api.with_api_base(base.clone());
+        }
         Ok(Some((api, telegram.chat_id.clone())))
     }
 
