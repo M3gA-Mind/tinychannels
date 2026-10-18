@@ -4333,7 +4333,11 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     let hooks = Arc::new(Hooks::default());
     let instance = "discord:account-a".to_owned();
     let voice_scopes = RecordingDiscordVoiceStore::default();
-    let provider_host = hooks.host(host.clone(), instance.clone(), Some("discord:media-v1:test"));
+    let provider_host = hooks.host(
+        host.clone(),
+        instance.clone(),
+        Some("discord:media-v1:test".to_owned()),
+    );
     let rest_url = rest.uri();
     let gateway_ready = tokio::spawn(async move {
         let (socket, _) = websocket.accept().await.unwrap();
