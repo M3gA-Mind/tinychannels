@@ -72,8 +72,8 @@ pub use backend::{ChannelBackend, ChannelManager};
 pub use factory::build_whatsapp_web_channel;
 pub use factory::{
     ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
-    build_discord_channel, build_signal_channel, build_slack_channel, build_telegram_channel,
-    build_whatsapp_cloud_channel,
+    build_discord_channel, build_imessage_channel, build_signal_channel, build_slack_channel,
+    build_telegram_channel, build_whatsapp_cloud_channel,
 };
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
 pub use providers::{

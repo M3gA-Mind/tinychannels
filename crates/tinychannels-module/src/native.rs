@@ -70,6 +70,8 @@ pub(crate) fn build_native_v2(
     match tinychannels_bus::provider_id(name) {
         "signal" => tinychannels::factory::build_signal_channel(config, host, http)
             .map(|channel| NativeLaunch::new("Signal", channel)),
+        "imessage" => tinychannels::factory::build_imessage_channel(config, host)
+            .map(|channel| NativeLaunch::new("iMessage", channel)),
         _ => None,
     }
 }

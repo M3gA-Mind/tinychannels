@@ -483,6 +483,34 @@ pub fn build_signal_channel(
     Some(Arc::new(signal))
 }
 
+/// Build the iMessage provider with the host ports it can use: scoped media and
+/// voice storage, speech-to-text, synthesis and the ordered event sink.
+pub fn build_imessage_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+) -> Option<Arc<IMessageChannel>> {
+    let im = config.imessage.as_ref()?;
+    let mut imessage = IMessageChannel::new(im.allowed_contacts.clone());
+    if let Some(store) = host.voice_media_store() {
+        imessage = imessage.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        imessage = imessage.with_media_repository(repository);
+    }
+    if let Some(transcriber) = host.transcriber() {
+        imessage = imessage.with_transcriber(transcriber);
+    }
+    imessage = imessage.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        imessage = imessage.with_events(events);
+    }
+    Some(Arc::new(imessage))
+}
+
 /// Build every provider that `config` enables.
 ///
 /// Order is stable and matches the declaration order below, so a caller that
@@ -523,8 +551,8 @@ pub fn build_channels(
         )));
     }
 
-    if let Some(im) = config.imessage.as_ref() {
-        channels.push(Arc::new(IMessageChannel::new(im.allowed_contacts.clone())));
+    if let Some(imessage) = build_imessage_channel(config, host) {
+        channels.push(imessage);
     }
 
     if config.matrix.is_some() {
