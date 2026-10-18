@@ -248,12 +248,7 @@ impl ProgressiveSender for Sender {
             .voice_reply_policy(tinychannels_bus::HostVoiceReplyPolicyRequest { scope })
             .await
             .ok();
-        Ok(policy.is_some_and(|policy| match policy.mode {
-            tinychannels_bus::HostVoiceReplyMode::Mirror => policy.inbound_has_voice,
-            tinychannels_bus::HostVoiceReplyMode::Always => true,
-            tinychannels_bus::HostVoiceReplyMode::Never => false,
-            tinychannels_bus::HostVoiceReplyMode::SpeakReply => policy.explicitly_requested,
-        }))
+        Ok(policy.is_some_and(|policy| policy_allows_speech(&policy)))
     }
 
     async fn send_parts_with_segment(
@@ -475,12 +470,7 @@ async fn send_typed_part(
                 })
                 .await
                 .ok();
-            let should_speak = policy.as_ref().is_some_and(|policy| match policy.mode {
-                tinychannels_bus::HostVoiceReplyMode::Mirror => policy.inbound_has_voice,
-                tinychannels_bus::HostVoiceReplyMode::Always => true,
-                tinychannels_bus::HostVoiceReplyMode::Never => false,
-                tinychannels_bus::HostVoiceReplyMode::SpeakReply => policy.explicitly_requested,
-            });
+            let should_speak = policy.as_ref().is_some_and(policy_allows_speech);
             let had_synthesis = prepared_parts.iter().any(|part| {
                 matches!(
                     part,
@@ -1551,6 +1541,24 @@ fn delivery_has_failure(result: &Result<ProgressiveResult>) -> bool {
             failure: Some(_),
             ..
         })
+    )
+}
+
+/// Map the host's wire policy onto the shared reply-mode decision so the
+/// mirror/always/never/speak_reply rule lives in one place.
+fn policy_allows_speech(policy: &tinychannels_bus::HostVoiceReplyPolicy) -> bool {
+    let mode = match policy.mode {
+        tinychannels_bus::HostVoiceReplyMode::Mirror => tinychannels::host::VoiceReplyMode::Mirror,
+        tinychannels_bus::HostVoiceReplyMode::Always => tinychannels::host::VoiceReplyMode::Always,
+        tinychannels_bus::HostVoiceReplyMode::Never => tinychannels::host::VoiceReplyMode::Never,
+        tinychannels_bus::HostVoiceReplyMode::SpeakReply => {
+            tinychannels::host::VoiceReplyMode::SpeakReply
+        }
+    };
+    tinychannels::host::should_synthesize_reply(
+        mode,
+        policy.inbound_has_voice,
+        policy.explicitly_requested,
     )
 }
 

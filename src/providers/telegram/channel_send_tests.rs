@@ -457,3 +457,27 @@ async fn send_by_url_includes_caption_and_surfaces_rejections() {
         assert!(err.contains("wrong file identifier"), "{err}");
     }
 }
+
+#[tokio::test]
+async fn legacy_media_markers_are_plain_text_not_uploads() {
+    let server = mock_api().await;
+    mount_post(&server, "sendMessage", ok()).await;
+    for api_method in UPLOAD_METHODS {
+        mount_post(&server, api_method, ok()).await;
+    }
+    let ch = channel_for(&server, &["*"]);
+
+    let text = "listen [VOICE:/tmp/a.ogg] and [AUDIO:/tmp/b.mp3] [IMAGE:/tmp/c.png]";
+    ch.send_text_chunks(text, "100", None, None).await.unwrap();
+
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(bodies.len(), 1);
+    let sent = bodies[0]["text"].as_str().unwrap();
+    assert!(sent.contains("VOICE:"), "marker stays literal text: {sent}");
+    for api_method in UPLOAD_METHODS {
+        assert!(
+            raw_bodies(&server, api_method).await.is_empty(),
+            "{api_method} must not fire for marker text"
+        );
+    }
+}
