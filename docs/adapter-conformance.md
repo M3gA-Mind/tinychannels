@@ -148,6 +148,37 @@ result without any request.
   An upload whose message timestamp Slack does not report returns the file ID,
   which can be deleted (`files.delete`) but not edited.
 
+## Signal
+
+`SignalChannel` is a native v2 adapter (`adapterMode=native-v2`) built on the
+shared `providers::native` plumbing that Signal, iMessage, Linq and Email use:
+a provider implements `NativeProvider` (deliver one resolved step, optionally
+typing, reactions, edits and deletes) and `native_v2_adapter!` supplies the whole
+adapter trait family. Anything a provider does not implement answers an
+explicit, non-retryable `unsupported` result before any platform I/O. The module
+runs it through `Running::start_native`. Its conformance test
+(`signal_adapter_passes_the_full_conformance_matrix_against_the_mock_daemon`)
+runs all 24 kit features against a mock signal-cli daemon.
+
+- **Inbound:** the daemon's SSE stream. Messages (with attachments), reactions,
+  remote deletes and read/delivery receipts are normalized onto the ordered
+  ingress path; a message the sink does not take falls back to the legacy
+  receiver. A repeated `sender:timestamp` is dropped.
+- **Attachments and voice:** inbound bytes come from signal-cli's
+  `getAttachment` JSON-RPC method into the scoped media repository; audio the
+  daemon flags `voiceNote` becomes a voice note transcribed with the host's
+  speech to text. Outbound attachments are `data:` URIs in the `send` call.
+  signal-cli has no voice-note flag on send, so outbound voice is an audio
+  attachment captioned with the transcript (descriptor `voiceOut=attachment`).
+- **Reactions, edits, deletes, typing:** `sendReaction`, `send` with
+  `editTimestamp`, `remoteDelete` and `sendTyping` (`stop` to clear). Message
+  ids are Signal millisecond timestamps. A reaction in a group needs the target
+  author (`author:timestamp`); a bare timestamp means the peer in a direct chat.
+- **Declared unsupported:** threads, buttons, presentations, stickers,
+  locations, contacts, polls, native data and streaming drafts.
+- **Media scope:** Signal has no secret, so the media account scope is derived
+  from the daemon URL and the registered account.
+
 | Behavior | Foundation status | Final provider coverage |
 | --- | --- | --- |
 | Text | Running factory and Telegram Bot API mock-wire request/receipt tested | Pending full provider port coverage |

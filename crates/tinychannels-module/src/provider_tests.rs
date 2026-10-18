@@ -262,10 +262,12 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
         );
     }
 
-    let unauthenticated_signal = tinychannels_bus::ChannelsConfig {
+    // Signal has no secret: the daemon and the account it serves are the
+    // identity, so each pair gets its own scope and a blank one gets none.
+    let signal = |url: &str, account: &str| tinychannels_bus::ChannelsConfig {
         signal: Some(SignalConfig {
-            http_url: "http://signal.example".into(),
-            account: "+15550001".into(),
+            http_url: url.into(),
+            account: account.into(),
             group_id: None,
             allowed_from: vec![],
             ignore_attachments: false,
@@ -273,7 +275,29 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
         }),
         ..Default::default()
     };
-    assert!(configured_media_account_scope("signal", &unauthenticated_signal).is_none());
+    let first =
+        configured_media_account_scope("signal", &signal("http://signal.example", "+15550001"))
+            .unwrap();
+    assert_eq!(
+        configured_media_account_scope("signal", &signal("http://signal.example", "+15550001"))
+            .as_deref(),
+        Some(first.as_str())
+    );
+    for other in [
+        signal("http://signal.example", "+15550002"),
+        signal("http://other.example", "+15550001"),
+    ] {
+        assert_ne!(
+            configured_media_account_scope("signal", &other).as_deref(),
+            Some(first.as_str())
+        );
+    }
+    assert!(configured_media_account_scope("signal", &signal(" ", "+15550001")).is_none());
+    assert!(configured_media_account_scope("signal", &signal("http://s", " ")).is_none());
+    assert!(
+        configured_media_account_scope("signal", &tinychannels_bus::ChannelsConfig::default())
+            .is_none()
+    );
     let session_only_whatsapp = tinychannels_bus::ChannelsConfig {
         whatsapp: Some(WhatsAppConfig {
             access_token: None,
@@ -4118,5 +4142,170 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
             "{expected}: {paths:?}"
         );
     }
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_queue() {
+    use tinychannels_bus::{ChannelInteraction, ChannelOutboundIntent, OutboundPayload};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v1/rpc"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(
+            serde_json::json!({"jsonrpc": "2.0", "result": {"timestamp": 1_700_000_000_123u64}, "id": "x"}),
+        ))
+        .mount(&server)
+        .await;
+    let instance = "signal:account-a".to_owned();
+    let channel = Arc::new(tinychannels::SignalChannel::new(
+        server.uri(),
+        "+15550000".into(),
+        None,
+        vec!["*".into()],
+        false,
+        false,
+    ));
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let running = Running::start_native("Signal", channel, hooks, host, None, true);
+    let handle = running.adapter_handle();
+    assert_eq!(handle.mode, AdapterMode::SignalNativeV2);
+    let descriptor = handle.descriptor();
+    assert_eq!(descriptor.id, "signal");
+    assert_eq!(descriptor.account_id.as_deref(), Some("signal:account-a"));
+    assert_eq!(
+        descriptor.metadata.get("adapterMode").map(String::as_str),
+        Some("native-v2")
+    );
+
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: "signal".into(),
+        account_id: Some(instance.clone()),
+    };
+    let conversation = ConversationRef {
+        kind: ConversationKind::Dm,
+        id: "+15551111".into(),
+        ..Default::default()
+    };
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "signal-native-op".into(),
+        channel_id: "signal".into(),
+        conversation_id: conversation.id.clone(),
+        channel_ref: Some(channel_ref.clone()),
+        conversation_ref: Some(conversation.clone()),
+        payload: OutboundPayload::Text {
+            text: "native send".into(),
+        },
+        ..Default::default()
+    };
+    let sent = handle.send(intent.clone()).await.unwrap();
+    assert_eq!(
+        sent.receipt.primary_platform_message_id.as_deref(),
+        Some("1700000000123")
+    );
+    assert_eq!(sent.receipt.conversation.as_ref(), Some(&conversation));
+
+    handle
+        .reactions()
+        .unwrap()
+        .send_reaction(
+            &channel_ref,
+            &conversation,
+            "1700000000001",
+            &tinychannels_bus::ChannelReaction {
+                value: "👍".into(),
+                ..Default::default()
+            },
+            false,
+        )
+        .await
+        .unwrap();
+    let receipt = sent.receipt.clone();
+    handle
+        .edits()
+        .unwrap()
+        .edit(&receipt, intent.clone())
+        .await
+        .unwrap();
+    handle.deletes().unwrap().delete(&receipt).await.unwrap();
+    running
+        .interact(ChannelInteraction::StartTyping {
+            recipient: conversation.id.clone(),
+        })
+        .await
+        .unwrap();
+    // Signal declares no streaming drafts.
+    assert!(
+        running
+            .interact(ChannelInteraction::UpsertDraft {
+                previous: None,
+                intent: intent.clone(),
+            })
+            .await
+            .is_err()
+    );
+
+    let before = server.received_requests().await.unwrap().len();
+    let mut wrong_scope = receipt.clone();
+    wrong_scope.conversation.as_mut().unwrap().id = "+15559999".into();
+    assert!(
+        handle
+            .edits()
+            .unwrap()
+            .edit(&wrong_scope, intent)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        before,
+        "a mismatched receipt must be rejected before provider I/O"
+    );
+    let methods: Vec<String> = server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .filter_map(|request| {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).ok()?;
+            body["method"].as_str().map(str::to_owned)
+        })
+        .collect();
+    for expected in ["send", "sendReaction", "remoteDelete", "sendTyping"] {
+        assert!(
+            methods.iter().any(|m| m == expected),
+            "{expected}: {methods:?}"
+        );
+    }
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn a_built_native_launch_starts_on_the_ordered_queue() {
+    use tinychannels::factory::DefaultHttpClients;
+    use tinychannels_bus::config::SignalConfig;
+    let config = tinychannels_bus::ChannelsConfig {
+        signal: Some(SignalConfig {
+            http_url: "http://127.0.0.1:1".into(),
+            account: "+15550000".into(),
+            group_id: None,
+            allowed_from: vec!["*".into()],
+            ignore_attachments: false,
+            ignore_stories: false,
+        }),
+        ..Default::default()
+    };
+    let noop: Arc<dyn tinychannels::host::ChannelHost> = tinychannels::host::NoopHost::arc();
+    let launch = crate::native::build_native_v2("signal", &config, &noop, &DefaultHttpClients)
+        .expect("signal is configured");
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), "signal".to_owned(), None);
+    let running = launch.start(hooks, host, None, true);
+    assert_eq!(running.adapter_handle().mode, AdapterMode::SignalNativeV2);
     running.stop().await.unwrap();
 }

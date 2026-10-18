@@ -20,7 +20,7 @@ mod inbound;
 mod interact;
 mod outbound;
 mod socket;
-mod text;
+pub(crate) mod text;
 mod types;
 mod upload;
 

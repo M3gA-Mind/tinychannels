@@ -446,6 +446,43 @@ pub fn build_slack_channel(
     Some(Arc::new(slack))
 }
 
+/// Build the Signal provider with the host ports it can use: scoped media and
+/// voice storage, speech-to-text, synthesis and the ordered event sink.
+pub fn build_signal_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<SignalChannel>> {
+    let sig = config.signal.as_ref()?;
+    let mut signal = SignalChannel::with_http_client(
+        sig.http_url.clone(),
+        sig.account.clone(),
+        sig.group_id.clone(),
+        sig.allowed_from.clone(),
+        sig.ignore_attachments,
+        sig.ignore_stories,
+        http.signal_client(),
+    );
+    if let Some(store) = host.voice_media_store() {
+        signal = signal.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        signal = signal.with_media_repository(repository);
+    }
+    if let Some(transcriber) = host.transcriber() {
+        signal = signal.with_transcriber(transcriber);
+    }
+    signal = signal.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        signal = signal.with_events(events);
+    }
+    Some(Arc::new(signal))
+}
+
 /// Build every provider that `config` enables.
 ///
 /// Order is stable and matches the declaration order below, so a caller that
@@ -496,16 +533,8 @@ pub fn build_channels(
         );
     }
 
-    if let Some(sig) = config.signal.as_ref() {
-        channels.push(Arc::new(SignalChannel::with_http_client(
-            sig.http_url.clone(),
-            sig.account.clone(),
-            sig.group_id.clone(),
-            sig.allowed_from.clone(),
-            sig.ignore_attachments,
-            sig.ignore_stories,
-            http.signal_client(),
-        )));
+    if let Some(signal) = build_signal_channel(config, host, http) {
+        channels.push(signal);
     }
 
     if let Some(wa) = config.whatsapp.as_ref() {
