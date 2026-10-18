@@ -73,7 +73,6 @@ pub fn resolve_provider_alias(name: &str, providers: &[ProviderDescriptor]) -> O
         .map(|provider| provider.name.clone())
 }
 
-
 /// Select the first exact provider match and preserve its first ten model IDs.
 pub fn model_preview(catalog: &ModelCatalog, provider_name: &str) -> Vec<String> {
     catalog
