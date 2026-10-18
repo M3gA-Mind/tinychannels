@@ -435,9 +435,16 @@ pub(crate) fn configured_media_account_scope(
                 c.access_token.clone(),
             ]
         }
-        // Signal exposes no configured authentication secret or attested
-        // account identifier in the current contract.
-        "signal" => return None,
+        // Signal has no secret. The daemon URL and the registered account it
+        // serves together identify the account that owns media, so two
+        // accounts (or two daemons) never share a scope.
+        "signal" => {
+            let c = config.signal.as_ref()?;
+            if c.http_url.trim().is_empty() || c.account.trim().is_empty() {
+                return None;
+            }
+            vec![c.http_url.clone(), c.account.clone()]
+        }
         "email" => {
             let c = config.email.as_ref()?;
             if c.imap_host.trim().is_empty()

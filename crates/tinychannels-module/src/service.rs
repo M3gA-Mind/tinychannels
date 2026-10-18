@@ -208,10 +208,13 @@ impl Channels {
         } else {
             None
         };
+        let native = crate::native::build_native_v2(&name, &config, &owner_host, http);
         let channel: Arc<dyn tinychannels::Channel> = if let Some(telegram) = &telegram {
             telegram.clone()
         } else if let Some(slack) = &slack {
             slack.clone()
+        } else if let Some(native) = &native {
+            native.channel.clone()
         } else {
             build_channels(&config, &owner_host, http)
                 .into_iter()
@@ -248,6 +251,15 @@ impl Channels {
             )
         } else if let Some(slack) = slack {
             Running::start_slack(slack, hooks, self.host.clone(), supervision, outbound_only)
+        } else if let Some(native) = native {
+            Running::start_native(
+                native.channel,
+                native.ports,
+                hooks,
+                self.host.clone(),
+                supervision,
+                outbound_only,
+            )
         } else {
             match supervision {
                 Some(policy) => {
