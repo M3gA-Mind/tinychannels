@@ -49,6 +49,7 @@ fn copy_converter(dir: &Path) -> Vec<String> {
             "cmd.exe".into(),
             "/D".into(),
             "/C".into(),
+            "call".into(),
             script.to_string_lossy().into_owned(),
         ]
     } else {
@@ -62,7 +63,10 @@ fn copy_converter(dir: &Path) -> Vec<String> {
 }
 
 pub(super) fn rig() -> Rig {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::Builder::new()
+        .prefix("tiny channels-")
+        .tempdir()
+        .unwrap();
     let db_path = dir.path().join("chat.db");
     let conn = Connection::open(&db_path).unwrap();
     db::tests::create_schema(&conn);
