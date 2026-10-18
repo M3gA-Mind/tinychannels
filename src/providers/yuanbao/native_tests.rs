@@ -152,9 +152,8 @@ fn upload_failure_and_disconnected_send_have_distinct_delivery_certainty() {
     assert!(upload.retryable);
     assert!(!upload.sent_before_error);
 
-    let disconnected = final_send_error(
-        crate::providers::yuanbao::errors::YuanbaoError::NotConnected,
-    );
+    let disconnected =
+        final_send_error(crate::providers::yuanbao::errors::YuanbaoError::NotConnected);
     assert!(disconnected.retryable);
     assert!(!disconnected.sent_before_error);
 

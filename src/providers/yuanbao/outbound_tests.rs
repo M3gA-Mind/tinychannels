@@ -1,4 +1,10 @@
 use super::*;
+use crate::host::{MediaRepository, MediaScope, MediaStoreRequest, StoredMedia};
+use async_trait::async_trait;
+use parking_lot::Mutex as ParkingMutex;
+use tinychannels_bus::channel::{
+    ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
+};
 
 #[test]
 fn target_parse_dm() {
@@ -444,6 +450,285 @@ async fn send_host_scoped_file_bytes_uses_the_file_message_element() {
     assert!(contains(&frame.data, "TIMFileElem"));
     assert!(contains(&frame.data, "https://cdn.example/cat.png"));
     assert!(contains(&frame.data, "report.pdf"));
+}
+
+#[derive(Default)]
+struct TypedMediaRepo {
+    scopes: ParkingMutex<Vec<MediaScope>>,
+}
+
+#[async_trait]
+impl MediaRepository for TypedMediaRepo {
+    async fn store_media(&self, _request: MediaStoreRequest) -> anyhow::Result<MediaReference> {
+        anyhow::bail!("not used")
+    }
+
+    async fn read_media(
+        &self,
+        scope: MediaScope,
+        opaque_id: String,
+        _max_bytes: u64,
+    ) -> anyhow::Result<StoredMedia> {
+        self.scopes.lock().push(scope.clone());
+        let (kind, content_type, file_name, bytes) = match opaque_id.as_str() {
+            "image-opaque" => (MediaKind::Image, "image/png", "photo.png", png(320, 200)),
+            "file-opaque" => (
+                MediaKind::Document,
+                "application/pdf",
+                "report.pdf",
+                b"%PDF-1.7 typed bytes".to_vec(),
+            ),
+            _ => anyhow::bail!("unknown opaque media reference"),
+        };
+        Ok(StoredMedia {
+            media: MediaReference {
+                opaque_id: Some(opaque_id),
+                kind,
+                ..Default::default()
+            },
+            content_type: content_type.into(),
+            file_name: Some(file_name.into()),
+            bytes,
+        })
+    }
+}
+
+#[tokio::test]
+async fn typed_image_and_file_use_scoped_host_bytes_and_return_real_receipts() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, Request, ResponseTemplate};
+
+    let server = wiremock::MockServer::start().await;
+    let uploaded = Arc::new(ParkingMutex::new(Vec::<Vec<u8>>::new()));
+    Mock::given(method("POST"))
+        .and(path("/api/resource/genUploadInfo"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "code": 0,
+            "data": {
+                "bucketName": "bucket",
+                "region": "region",
+                "location": "up/object",
+                "encryptTmpSecretId": "key-id",
+                "encryptTmpSecretKey": "key-secret",
+                "encryptToken": "session",
+                "resourceUrl": "https://cdn.example/uploaded",
+            }
+        })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    let captured_uploads = uploaded.clone();
+    Mock::given(method("PUT"))
+        .and(path("/up/object"))
+        .respond_with(move |request: &Request| {
+            captured_uploads.lock().push(request.body.clone());
+            ResponseTemplate::new(200)
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let mut h = harness("cfg-bot").await;
+    let repo = Arc::new(TypedMediaRepo::default());
+    let mut config = super::super::config::YuanbaoConfig::default();
+    config.app_key = "ak".into();
+    config.bot_id = "cfg-bot".into();
+    config.token = "tok".into();
+    config.api_domain = server.uri();
+    config.ws_domain = "wss://example.invalid".into();
+    let channel = Arc::new(
+        super::super::channel::YuanbaoChannel::new(config)
+            .unwrap()
+            .with_media_repository(repo.clone())
+            .with_test_outbound(Arc::new(
+                OutboundSender::new(h.sender.conn.clone(), None, "ak".into(), "cfg-bot".into())
+                    .with_cos_endpoint(server.uri()),
+            )),
+    );
+    let message = ChannelOutboundMessage {
+        channel_id: "yuanbao".into(),
+        conversation_id: "g:room-7".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "yuanbao".into(),
+            account_id: Some("account-2".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            id: "g:room-7".into(),
+            thread_id: Some("thread-root".into()),
+            ..Default::default()
+        }),
+        reply_to_id: Some("reply-9".into()),
+        thread_id: Some("thread-root".into()),
+        turn_id: Some("turn-4".into()),
+        idempotency_key: "send-5".into(),
+        parts: vec![
+            OutboundContentPart::Content {
+                part: ContentPart::Image {
+                    media: MediaReference {
+                        opaque_id: Some("image-opaque".into()),
+                        kind: MediaKind::Image,
+                        ..Default::default()
+                    },
+                    caption: Some("photo caption".into()),
+                    alt_text: None,
+                },
+            },
+            OutboundContentPart::Content {
+                part: ContentPart::File {
+                    media: MediaReference {
+                        opaque_id: Some("file-opaque".into()),
+                        kind: MediaKind::Document,
+                        ..Default::default()
+                    },
+                    file_name: Some("report.pdf".into()),
+                    caption: Some("file caption".into()),
+                },
+            },
+        ],
+    };
+    let send = tokio::spawn(async move {
+        crate::channel::ChannelTypedSend::send_typed(channel.as_ref(), &message).await
+    });
+    let first = h.gateway.recv_frame().await;
+    assert_eq!(first.cmd, biz_cmd::SEND_GROUP_MESSAGE);
+    assert!(contains(&first.data, "https://cdn.example/uploaded"));
+    assert!(contains(&first.data, "photo caption"));
+    assert!(contains(&first.data, "thread-root"));
+    h.gateway.reply(&first, 0, b"").await;
+    let second = h.gateway.recv_frame().await;
+    assert_eq!(second.cmd, biz_cmd::SEND_GROUP_MESSAGE);
+    assert!(contains(&second.data, "file caption"));
+    assert!(contains(&second.data, "report.pdf"));
+    assert!(contains(&second.data, "reply-9"));
+    h.gateway.reply(&second, 0, b"").await;
+    let result = tokio::time::timeout(HANG_GUARD, send)
+        .await
+        .expect("typed send hung")
+        .expect("typed send task panicked")
+        .unwrap();
+
+    assert_eq!(result.receipt.parts.len(), 2);
+    assert_eq!(result.receipt.platform_message_ids.len(), 2);
+    assert_eq!(
+        result
+            .receipt
+            .channel
+            .as_ref()
+            .unwrap()
+            .account_id
+            .as_deref(),
+        Some("account-2")
+    );
+    assert_eq!(result.receipt.thread_id.as_deref(), Some("thread-root"));
+    assert_eq!(result.receipt.reply_to_id.as_deref(), Some("reply-9"));
+    assert_eq!(repo.scopes.lock().len(), 2);
+    assert!(repo.scopes.lock().iter().all(|scope| {
+        scope.turn_id == "turn-4"
+            && scope.channel.account_id.as_deref() == Some("account-2")
+            && scope.conversation.id == "g:room-7"
+            && scope.conversation.thread_id.as_deref() == Some("thread-root")
+    }));
+    assert_eq!(uploaded.lock().len(), 2);
+    assert_eq!(uploaded.lock()[0], png(320, 200));
+    assert_eq!(uploaded.lock()[1], b"%PDF-1.7 typed bytes");
+}
+
+#[tokio::test]
+async fn typed_media_upload_failure_is_retryable_and_never_reaches_yuanbao_send() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, ResponseTemplate};
+
+    let server = wiremock::MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/resource/genUploadInfo"))
+        .respond_with(ResponseTemplate::new(503))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut config = super::super::config::YuanbaoConfig::default();
+    config.app_key = "ak".into();
+    config.bot_id = "cfg-bot".into();
+    config.token = "tok".into();
+    config.api_domain = server.uri();
+    config.ws_domain = "wss://example.invalid".into();
+    let channel = super::super::channel::YuanbaoChannel::new(config)
+        .unwrap()
+        .with_media_repository(Arc::new(TypedMediaRepo::default()))
+        .with_test_outbound(Arc::new(
+            OutboundSender::new(make_conn(base_cfg()), None, "ak".into(), "cfg-bot".into())
+                .with_cos_endpoint(server.uri()),
+        ));
+    let message = ChannelOutboundMessage {
+        channel_id: "yuanbao".into(),
+        conversation_id: "user-4".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-4".into()),
+        idempotency_key: "send-6".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("image-opaque".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+        }],
+    };
+
+    let error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+    assert!(error.retryable);
+    assert!(!error.sent_before_error);
+    assert_eq!(
+        error.message,
+        "Yuanbao media preparation failed before message delivery"
+    );
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].url.path(), "/api/resource/genUploadInfo");
+}
+
+#[tokio::test]
+async fn typed_final_write_rejection_reports_uncertain_delivery() {
+    let mut h = harness("cfg-bot").await;
+    let channel = super::super::channel::YuanbaoChannel::new(base_cfg())
+        .unwrap()
+        .with_test_outbound(h.sender.clone());
+    let message = ChannelOutboundMessage {
+        channel_id: "yuanbao".into(),
+        conversation_id: "user-4".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: None,
+        idempotency_key: "send-7".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Text {
+                text: "hello".into(),
+                markdown_dialect: None,
+            },
+        }],
+    };
+    let send = tokio::spawn(async move {
+        crate::channel::ChannelTypedSend::send_typed(&channel, &message).await
+    });
+    let request = h.gateway.recv_frame().await;
+    h.gateway.reply(&request, 7, b"").await;
+    let error = tokio::time::timeout(HANG_GUARD, send)
+        .await
+        .expect("typed send hung")
+        .expect("typed send task panicked")
+        .unwrap_err();
+    assert!(!error.retryable);
+    assert!(error.sent_before_error);
+    assert_eq!(error.message, "Yuanbao send outcome is uncertain");
 }
 
 #[tokio::test]

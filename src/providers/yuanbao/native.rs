@@ -130,8 +130,8 @@ impl NativeProvider for YuanbaoChannel {
     }
 }
 
-fn final_send_error(error: super::errors::YuanbaoError) -> ChannelSendError {
-    if matches!(error, super::errors::YuanbaoError::NotConnected) {
+fn final_send_error(error: super::super::errors::YuanbaoError) -> ChannelSendError {
+    if matches!(error, super::super::errors::YuanbaoError::NotConnected) {
         return ChannelSendError {
             kind: tinychannels_bus::channel::SendErrorKind::Transient,
             message: "Yuanbao is not connected; message was not sent".into(),

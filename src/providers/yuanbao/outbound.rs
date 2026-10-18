@@ -252,15 +252,7 @@ impl OutboundSender {
         route_env: &str,
     ) -> Result<Vec<MsgBodyElement>, YuanbaoError> {
         self.prepare_media_body_with_caption(
-            bytes,
-            filename,
-            mime_type,
-            app_key,
-            bot_id,
-            token,
-            api_domain,
-            route_env,
-            None,
+            bytes, filename, mime_type, app_key, bot_id, token, api_domain, route_env, None,
         )
         .await
     }
