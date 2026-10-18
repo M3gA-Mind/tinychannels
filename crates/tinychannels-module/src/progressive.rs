@@ -30,7 +30,7 @@ const LEGACY_TURN_LIFETIME: Duration = Duration::from_secs(180);
 
 struct Sender {
     host: HostChannels,
-    media_account_scope: Option<String>,
+    media_account_scope: crate::provider::MediaScope,
     context: Option<ProgressiveOutputContext>,
     capabilities: tinychannels_bus::ChannelCapabilities,
     channel: String,
@@ -39,7 +39,7 @@ struct Sender {
 
 struct ProgressiveTarget {
     channel: String,
-    media_account_scope: Option<String>,
+    media_account_scope: crate::provider::MediaScope,
 }
 
 impl Sender {
@@ -579,6 +579,7 @@ async fn send_typed_part(
                                     audio_base64: None,
                                     codec: note.codec,
                                     duration_ms: note.duration_ms,
+                                    waveform: note.waveform,
                                 },
                             });
                         } else if audio_file {
@@ -1030,7 +1031,12 @@ impl Replies {
             )
         } else {
             running.get(provider_id).map_or_else(
-                || (tinychannels_bus::ChannelCapabilities::unknown(), None),
+                || {
+                    (
+                        tinychannels_bus::ChannelCapabilities::unknown(),
+                        crate::provider::MediaScope::default(),
+                    )
+                },
                 |provider| {
                     (
                         provider.channel.capabilities(),

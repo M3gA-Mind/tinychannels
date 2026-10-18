@@ -106,7 +106,7 @@ mod tests;
 
 pub use module_interaction::{
     ChannelInteraction, ChannelInteractionInfo, ChannelInteractionInfoV2,
-    ChannelInteractionRequest, ChannelInteractionResult,
+    ChannelInteractionRequest, ChannelInteractionResult, WebhookDeliveryOutcome,
 };
 
 pub use module_supervision::ChannelSupervisionPolicy;

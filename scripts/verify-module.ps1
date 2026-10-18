@@ -49,6 +49,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'tinychannels module lifecycle artifact verification failed' }
     cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test module_artifact compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference -- --ignored
     if ($LASTEXITCODE -ne 0) { throw 'tinychannels media artifact verification failed' }
+    cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test module_artifact compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native_v2 -- --ignored
+    if ($LASTEXITCODE -ne 0) { throw 'tinychannels WhatsApp artifact verification failed' }
     cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test routing_artifact --test runtime_artifact -- --ignored
     if ($LASTEXITCODE -ne 0) { throw 'tinychannels routing/runtime artifact verification failed' }
 } finally {

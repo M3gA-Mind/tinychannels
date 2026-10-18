@@ -605,6 +605,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     audio_base64: None,
                     codec: Some("ogg_opus".into()),
                     duration_ms: Some(1000),
+                    waveform: None,
                 },
             },
             Feature::VoiceSynthesis => {
@@ -666,6 +667,7 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                         audio_base64: None,
                         codec: Some("ogg_opus".into()),
                         duration_ms: synthesized.duration_ms,
+                        waveform: None,
                     },
                 }
             }
@@ -1319,7 +1321,11 @@ fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> Chann
 #[tokio::test]
 async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
     let (host, callback, _server, _storage) = ingress_fixture().await;
-    let events = ModuleEvents(host.clone(), "telegram:bot-a".into(), None);
+    let events = ModuleEvents(
+        host.clone(),
+        "telegram:bot-a".into(),
+        crate::provider::MediaScope::default(),
+    );
     assert!(
         events
             .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound_voice(
@@ -1386,7 +1392,11 @@ async fn ingress_retains_voice_and_full_scope_when_stt_fails() {
 #[tokio::test]
 async fn completed_provider_transcript_skips_media_read_and_host_stt() {
     let (host, callback, _server, _storage) = ingress_fixture().await;
-    let events = ModuleEvents(host.clone(), "telegram:bot-a".into(), None);
+    let events = ModuleEvents(
+        host.clone(),
+        "telegram:bot-a".into(),
+        crate::provider::MediaScope::default(),
+    );
     let provider_transcript = tinychannels_bus::VoiceTranscript {
         text: "provider words".into(),
         language: Some("en".into()),
@@ -2061,10 +2071,14 @@ async fn host_adapters_propagate_callback_failures() {
             .is_err()
     );
     assert!(
-        ModuleEvents(host.clone(), "fixture".into(), None)
-            .publish("fixture", "event", serde_json::json!({}))
-            .await
-            .is_err()
+        ModuleEvents(
+            host.clone(),
+            "fixture".into(),
+            crate::provider::MediaScope::default()
+        )
+        .publish("fixture", "event", serde_json::json!({}))
+        .await
+        .is_err()
     );
     let transcriber = ModuleTranscriber(host.clone(), "fixture".into());
     assert_eq!(transcriber.name(), "module-host");
@@ -2088,7 +2102,7 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
         let (send, mut commands) = mpsc::channel::<SendCommand>(1);
         let (cancel, _) = watch::channel(false);
         let running = Arc::new(Running {
-            media_account_scope: None,
+            media_account_scope: crate::provider::MediaScope::default(),
             channel: Arc::new(InteractionChannel::default()),
             configured_instance: "interaction-fixture:account-a".into(),
             send,
@@ -2130,7 +2144,7 @@ async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
     let (send, mut commands) = mpsc::channel::<SendCommand>(1);
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
-        media_account_scope: None,
+        media_account_scope: crate::provider::MediaScope::default(),
         channel: Arc::new(InteractionChannel::default()),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
@@ -2164,7 +2178,7 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
     let (send, mut commands) = mpsc::channel::<SendCommand>(1);
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
-        media_account_scope: None,
+        media_account_scope: crate::provider::MediaScope::default(),
         channel: Arc::new(InteractionChannel::default()),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
@@ -2232,7 +2246,7 @@ async fn send_configured_outcome(
     let (send, mut commands) = mpsc::channel::<SendCommand>(1);
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
-        media_account_scope: None,
+        media_account_scope: crate::provider::MediaScope::default(),
         channel: Arc::new(InteractionChannel::default()),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
@@ -3122,6 +3136,398 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
     running.stop().await.unwrap();
 }
 
+// ---------------------------------------------------------------------------
+// WhatsApp: media authority and the configured native adapters
+// ---------------------------------------------------------------------------
+
+struct IdentityChannel(std::sync::Mutex<Option<String>>);
+
+#[async_trait::async_trait]
+impl Channel for IdentityChannel {
+    fn name(&self) -> &str {
+        "whatsapp"
+    }
+    async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+    async fn listen(&self, _: mpsc::Sender<tinychannels::ChannelMessage>) -> anyhow::Result<()> {
+        std::future::pending().await
+    }
+    fn media_account_identity(&self) -> Option<String> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+#[test]
+fn a_fixed_media_scope_is_returned_as_configured_and_never_printed() {
+    assert_eq!(MediaScope::default().current(), None);
+    let fixed = MediaScope::fixed(Some("telegram:media-v1:abc".into()));
+    assert_eq!(fixed.current().as_deref(), Some("telegram:media-v1:abc"));
+    assert_eq!(MediaScope::from(None).current(), None);
+    assert_eq!(
+        MediaScope::from(Some("x".into())).current().as_deref(),
+        Some("x")
+    );
+    assert_eq!(format!("{fixed:?}"), "MediaScope(..)");
+}
+
+#[test]
+fn a_linked_session_binds_the_media_scope_only_once_it_knows_its_account() {
+    let channel = Arc::new(IdentityChannel(std::sync::Mutex::new(None)));
+    let scope = MediaScope::fixed(None);
+    scope.bind_source(channel.clone());
+    // Linking has not happened: media fails closed.
+    assert_eq!(scope.current(), None);
+    *channel.0.lock().unwrap() = Some("15550001111@s.whatsapp.net".into());
+    let first = scope.current().expect("scope after linking");
+    assert!(first.starts_with("whatsapp:media-v1:"));
+    // The scope is derived from the account, so another account is another scope,
+    // and the same account always gets the same one.
+    assert_eq!(scope.current().as_deref(), Some(first.as_str()));
+    let other = MediaScope::fixed(None);
+    other.bind_source(Arc::new(IdentityChannel(std::sync::Mutex::new(Some(
+        "15550002222@s.whatsapp.net".into(),
+    )))));
+    assert_ne!(other.current().unwrap(), first);
+    // If the provider withdraws the identity (a re-link to another account),
+    // every later use fails closed again.
+    *channel.0.lock().unwrap() = None;
+    assert_eq!(scope.current(), None);
+}
+
+#[test]
+fn a_configured_scope_wins_over_any_bound_source() {
+    let scope = MediaScope::fixed(Some("fixed".into()));
+    scope.bind_source(Arc::new(IdentityChannel(std::sync::Mutex::new(Some(
+        "someone".into(),
+    )))));
+    assert_eq!(scope.current().as_deref(), Some("fixed"));
+}
+
+mod whatsapp_native {
+    use super::*;
+    use hmac::{Hmac, KeyInit, Mac};
+    use tinychannels_bus::{ChannelInteraction, WebhookDeliveryOutcome};
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const SECRET: &str = "module-secret";
+
+    fn cloud_config() -> tinychannels_bus::ChannelsConfig {
+        tinychannels_bus::ChannelsConfig {
+            whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
+                access_token: Some("access-token".into()),
+                phone_number_id: Some("123".into()),
+                verify_token: Some("verify-me".into()),
+                app_secret: Some(SECRET.into()),
+                session_path: None,
+                pair_phone: None,
+                pair_code: None,
+                allowed_numbers: vec!["+15550001111".into()],
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn signed(body: &[u8]) -> String {
+        let mut mac = Hmac::<sha2::Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
+        mac.update(body);
+        format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+    }
+
+    fn delivery(messages: serde_json::Value) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "object": "whatsapp_business_account",
+            "entry": [{"changes": [{"field": "messages", "value": {
+                "metadata": {"phone_number_id": "123"},
+                "messages": messages,
+            }}]}]
+        }))
+        .unwrap()
+    }
+
+    struct Rig {
+        running: Arc<Running>,
+        callbacks: IngressVoiceCallback,
+        server: MockServer,
+        _storage: crate::storage_fixture::StorageHost,
+        _connection: tinybus::Connection,
+    }
+
+    async fn rig() -> Rig {
+        let server = MockServer::start().await;
+        let instance = "whatsapp:account-a".to_owned();
+        let hooks = Arc::new(Hooks::default());
+        let (host, callbacks, connection, storage) = ingress_fixture().await;
+        *callbacks.transcription_result.lock().await = Some("fixture spoken words".into());
+        let provider_host = hooks.host(
+            host.clone(),
+            instance,
+            Some("whatsapp:media-v1:test".into()),
+        );
+        let built = tinychannels::build_whatsapp_cloud_channel(
+            &cloud_config(),
+            &provider_host,
+            &tinychannels::DefaultHttpClients,
+        )
+        .expect("a complete Cloud config builds");
+        let channel = Arc::new(
+            Arc::try_unwrap(built)
+                .ok()
+                .expect("factory channel has no outside owners")
+                .with_api_base_for_test(&server.uri()),
+        );
+        let running = Running::start_native("WhatsApp", channel, hooks, host, None, true);
+        Rig {
+            running,
+            callbacks,
+            server,
+            _storage: storage,
+            _connection: connection,
+        }
+    }
+
+    /// Host callbacks are delivered asynchronously; wait for the first one.
+    async fn first_inbound(rig: &Rig) -> serde_json::Value {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let Some((_, envelope)) = rig.callbacks.inbound.lock().await.first() {
+                    return envelope.clone();
+                }
+                rig.callbacks.ingress_changed.notified().await;
+            }
+        })
+        .await
+        .expect("the host received the inbound message")
+    }
+
+    async fn webhook(
+        rig: &Rig,
+        signature: Option<String>,
+        body: &[u8],
+    ) -> tinybus::Result<tinychannels_bus::ChannelInteractionResult> {
+        use base64::Engine as _;
+        rig.running
+            .webhook(ChannelInteraction::DeliverWebhook {
+                signature,
+                body_base64: base64::engine::general_purpose::STANDARD.encode(body),
+            })
+            .await
+    }
+
+    #[tokio::test]
+    async fn the_configured_adapter_is_native_and_scoped_to_its_instance() {
+        let rig = rig().await;
+        let handle = rig.running.adapter_handle();
+        assert_eq!(handle.mode, AdapterMode::WhatsAppNativeV2);
+        let descriptor = handle.descriptor();
+        assert_eq!(descriptor.id, "whatsapp");
+        assert_eq!(descriptor.account_id.as_deref(), Some("whatsapp:account-a"));
+        assert_eq!(
+            descriptor.metadata.get("adapterMode").map(String::as_str),
+            Some("native-v2")
+        );
+        let facts = handle.declared_capabilities();
+        assert!(facts.reactions && facts.content.image.outbound);
+        assert!(
+            handle.reactions().is_some() && handle.edits().is_some() && handle.deletes().is_some()
+        );
+        rig.running.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_signed_delivery_reaches_the_host_bound_to_the_configured_account() {
+        let rig = rig().await;
+        let body = delivery(serde_json::json!([
+            {"from": "15550001111", "id": "wamid.1", "timestamp": "1700000000", "type": "text", "text": {"body": "hello module"}}
+        ]));
+        let result = webhook(&rig, Some(signed(&body)), &body).await.unwrap();
+        assert!(matches!(
+            result,
+            tinychannels_bus::ChannelInteractionResult::WebhookAccepted(WebhookDeliveryOutcome {
+                messages: 1,
+                ..
+            })
+        ));
+        let envelope = first_inbound(&rig).await;
+        assert_eq!(rig.callbacks.inbound.lock().await.len(), 1);
+        // The module, not the payload, decides which account owns the message.
+        assert_eq!(envelope["channel"]["id"], "whatsapp");
+        assert_eq!(envelope["channel"]["accountId"], "whatsapp:account-a");
+        assert_eq!(envelope["messageId"], "wamid.1");
+        assert_eq!(envelope["text"], "hello module");
+        rig.running.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn unsigned_forged_and_misaddressed_deliveries_never_reach_the_host() {
+        let rig = rig().await;
+        let body = delivery(serde_json::json!([
+            {"from": "15550001111", "id": "wamid.9", "type": "text", "text": {"body": "forged"}}
+        ]));
+        for signature in [
+            None,
+            Some("sha256=00".to_owned()),
+            Some("verify-me".to_owned()),
+        ] {
+            let error = webhook(&rig, signature, &body).await.unwrap_err();
+            assert!(matches!(
+                error,
+                tinybus::Error::MethodFailed { name, .. } if name == crate::interaction::WEBHOOK_REJECTED_ERROR
+            ));
+        }
+        let other_number = serde_json::to_vec(&serde_json::json!({
+            "object": "whatsapp_business_account",
+            "entry": [{"changes": [{"field": "messages", "value": {
+                "metadata": {"phone_number_id": "999"},
+                "messages": [{"from": "15550001111", "id": "wamid.8", "type": "text", "text": {"body": "x"}}]
+            }}]}]
+        }))
+        .unwrap();
+        assert!(
+            webhook(&rig, Some(signed(&other_number)), &other_number)
+                .await
+                .is_err()
+        );
+        assert!(rig.callbacks.inbound.lock().await.is_empty());
+        rig.running.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_subscription_handshake_is_answered_by_the_module() {
+        let rig = rig().await;
+        let verify = |token: &str| {
+            rig.running.webhook(ChannelInteraction::VerifyWebhook {
+                mode: "subscribe".into(),
+                verify_token: token.into(),
+                challenge: "c-77".into(),
+            })
+        };
+        assert!(matches!(
+            verify("verify-me").await.unwrap(),
+            tinychannels_bus::ChannelInteractionResult::WebhookChallenge(challenge) if challenge == "c-77"
+        ));
+        assert!(verify("guess").await.is_err());
+        rig.running.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_inbound_voice_note_is_stored_then_transcribed_by_the_module() {
+        let rig = rig().await;
+        Mock::given(method("GET"))
+            .and(path("/v23.0/ptt-1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "url": format!("{}/cdn/ptt-1", rig.server.uri()),
+                "mime_type": "audio/ogg; codecs=opus"
+            })))
+            .mount(&rig.server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/cdn/ptt-1"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_bytes(
+                    include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg")
+                        .to_vec(),
+                ),
+            )
+            .mount(&rig.server)
+            .await;
+        let body = delivery(serde_json::json!([
+            {"from": "15550001111", "id": "wamid.voice", "timestamp": "1700000001", "type": "audio",
+             "audio": {"id": "ptt-1", "voice": true, "mime_type": "audio/ogg; codecs=opus"}}
+        ]));
+        webhook(&rig, Some(signed(&body)), &body).await.unwrap();
+        let envelope = first_inbound(&rig).await;
+        let note = envelope["parts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|part| part["kind"] == "voice_note")
+            .expect("a voice note part");
+        assert_eq!(note["voiceNote"]["pushToTalk"], true);
+        assert_eq!(
+            note["voiceNote"]["transcript"]["text"],
+            "fixture spoken words"
+        );
+        assert_eq!(note["voiceNote"]["transcript"]["source"], "host_stt");
+        assert!(
+            note["voiceNote"]["media"]
+                .get("url")
+                .is_none_or(serde_json::Value::is_null)
+        );
+        assert_eq!(rig.callbacks.stt_calls.load(Ordering::SeqCst), 1);
+        rig.running.stop().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn reactions_read_receipts_and_typing_share_the_ordered_queue_and_scope() {
+        let rig = rig().await;
+        Mock::given(method("POST"))
+            .and(path("/v23.0/123/messages"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"messages": [{"id": "wamid.ok"}]})),
+            )
+            .mount(&rig.server)
+            .await;
+        let channel = tinychannels_bus::ChannelRef {
+            id: "whatsapp".into(),
+            account_id: Some("whatsapp:account-a".into()),
+        };
+        let conversation = ConversationRef {
+            id: "+15550001111".into(),
+            kind: ConversationKind::Dm,
+            ..Default::default()
+        };
+        rig.running
+            .interact(ChannelInteraction::SendReaction {
+                channel: channel.clone(),
+                conversation: conversation.clone(),
+                provider_message_id: "wamid.in".into(),
+                reaction: tinychannels_bus::ChannelReaction {
+                    value: "👍".into(),
+                    custom_emoji_id: None,
+                },
+                remove: false,
+            })
+            .await
+            .unwrap();
+        rig.running
+            .interact(ChannelInteraction::MarkRead {
+                channel: channel.clone(),
+                conversation: conversation.clone(),
+                provider_message_id: "wamid.in".into(),
+            })
+            .await
+            .unwrap();
+        // A receipt for another account's scope is refused before dispatch.
+        let foreign = rig
+            .running
+            .interact(ChannelInteraction::MarkRead {
+                channel: tinychannels_bus::ChannelRef {
+                    id: "whatsapp".into(),
+                    account_id: Some("whatsapp:other".into()),
+                },
+                conversation,
+                provider_message_id: "wamid.in".into(),
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(foreign, RunningSendError::NotDispatched(_)));
+        let bodies: Vec<serde_json::Value> = rig
+            .server
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .collect();
+        assert_eq!(bodies.len(), 2);
+        assert_eq!(bodies[0]["type"], "reaction");
+        assert_eq!(bodies[1]["status"], "read");
+        rig.running.stop().await.unwrap();
+    }
+}
 #[test]
 fn media_scope_rejects_blank_secrets_and_distinguishes_credential_modes() {
     use tinychannels_bus::config::*;
@@ -3199,7 +3605,7 @@ async fn legacy_running_adapter_reports_status_and_refuses_second_start() {
     let (send, _commands) = mpsc::channel::<SendCommand>(1);
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
-        media_account_scope: None,
+        media_account_scope: MediaScope::default(),
         channel: Arc::new(InteractionChannel::default()),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
@@ -3502,7 +3908,7 @@ async fn module_voice_media_reports_each_precondition_and_missing_host_storage()
     let store = ModuleVoiceMediaStore(
         host.clone(),
         instance.clone(),
-        Some("telegram:media-v1:abc".into()),
+        MediaScope::fixed(Some("telegram:media-v1:abc".into())),
     );
     let scope = tinychannels_bus::HostVoiceScope {
         conversation: ConversationRef {
@@ -3552,7 +3958,11 @@ async fn module_voice_media_reports_each_precondition_and_missing_host_storage()
         .unwrap_err();
     assert!(read.to_string().contains("scoped storage is unavailable"));
 
-    let repository = ModuleMediaRepository(host, instance, Some("telegram:media-v1:abc".into()));
+    let repository = ModuleMediaRepository(
+        host,
+        instance,
+        MediaScope::fixed(Some("telegram:media-v1:abc".into())),
+    );
     let error = repository
         .scoped_store()
         .await

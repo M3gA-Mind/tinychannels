@@ -3805,6 +3805,17 @@
             },
             "media": {
               "$ref": "#/$defs/MediaReference"
+            },
+            "waveform": {
+              "description": "Normalised 0.0-1.0 loudness preview for providers that draw one\n(WhatsApp push-to-talk). Absent when the codec path produced none.",
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "number",
+                "format": "float"
+              }
             }
           },
           "required": [

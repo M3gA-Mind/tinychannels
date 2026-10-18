@@ -138,6 +138,7 @@ pub fn translate_output_event(
                     audio_base64: None,
                     codec: voice.codec,
                     duration_ms: voice.duration_ms,
+                    waveform: voice.waveform,
                 },
             });
             OutboundPayload::Parts { parts }
