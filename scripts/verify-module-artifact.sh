@@ -30,7 +30,7 @@ printf '"%s" = "%s"\n' "$(basename "$artifact")" "$artifact_sha256" \
   > "$(dirname "$artifact")/modules.toml"
 
 # The module host intentionally permits one dynamically loaded module per test
-# process. Run the two module-artifact cases separately so they each own a fresh
+# process. Run the module-artifact cases separately so they each own a fresh
 # loader process; Cargo already gives each remaining integration target one.
 TINYCHANNELS_MODULE_ARTIFACT="$artifact" \
   cargo test -p tinychannels-module --test module_artifact \
@@ -39,6 +39,10 @@ TINYCHANNELS_MODULE_ARTIFACT="$artifact" \
 TINYCHANNELS_MODULE_ARTIFACT="$artifact" \
   cargo test -p tinychannels-module --test module_artifact \
     compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference \
+    -- --ignored --nocapture
+TINYCHANNELS_MODULE_ARTIFACT="$artifact" \
+  cargo test -p tinychannels-module --test module_artifact \
+    compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native_v2 \
     -- --ignored --nocapture
 TINYCHANNELS_MODULE_ARTIFACT="$artifact" \
   cargo test -p tinychannels-module --test runtime_artifact --test routing_artifact \
