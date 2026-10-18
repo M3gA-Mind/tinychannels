@@ -118,11 +118,10 @@ impl EmailChannel {
                 return subject;
             }
         }
-        target
-            .reply_to
-            .as_deref()
-            .or(target.thread.as_deref())
-            .and_then(|id| self.subjects.get(bare_id(id)))
+        [target.reply_to.as_deref(), target.thread.as_deref()]
+            .into_iter()
+            .flatten()
+            .find_map(|id| self.subjects.get(bare_id(id)))
             .map(|subject| reply_subject(&subject))
             .unwrap_or_else(|| DEFAULT_SUBJECT.into())
     }
