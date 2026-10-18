@@ -49,18 +49,41 @@ async fn shutdown_closes_web_turn_admission_before_clearing_projection_state() {
     // Queue admission before shutdown while holding the shared registry lock.
     // Shutdown closes the atomic gate first, then waits for this lock to clear
     // state. Admission must recheck the gate after it gets the lock.
-    let held = channels.web_turns.lock().await;
-    let begin_channels = channels.clone();
-    let begin = tokio::spawn(async move { begin_channels.begin_web_turn(request).await });
-    tokio::task::yield_now().await;
-    let shutdown_channels = channels.clone();
-    let shutdown = tokio::spawn(async move { shutdown_channels.shutdown().await });
-    tokio::task::yield_now().await;
-    drop(held);
+    let mut web_turns = channels.web_turns.lock().await;
+    let active = web_turns.begin(request.clone()).unwrap();
+    let mut begin = Box::pin(channels.begin_web_turn(request));
+    futures_util::future::poll_fn(|cx| {
+        use std::future::Future as _;
+        assert!(begin.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    let mut shutdown = Box::pin(channels.shutdown());
+    futures_util::future::poll_fn(|cx| {
+        use std::future::Future as _;
+        assert!(shutdown.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    assert!(channels.terminal.load(Ordering::SeqCst));
+    drop(web_turns);
 
-    assert!(begin.await.unwrap().is_err());
-    shutdown.await.unwrap().unwrap();
-    assert!(channels.web_turns.lock().await.turns.is_empty());
+    assert!(begin.await.is_err());
+    shutdown.await.unwrap();
+    assert!(
+        channels
+            .web_turns
+            .lock()
+            .await
+            .project(tinychannels_bus::ProjectWebOutput {
+                handle: active.handle,
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "after shutdown".into(),
+                    iteration: Some(1),
+                },
+            })
+            .is_err()
+    );
     let late = tinychannels_bus::BeginWebTurn {
         scope_key: "tenant-a".into(),
         context: tinychannels_bus::WebEventContext {
