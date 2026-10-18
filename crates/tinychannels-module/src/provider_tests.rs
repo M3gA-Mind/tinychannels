@@ -4682,12 +4682,14 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         })
         .expect("Running voice send reads its retained OGG from module-managed storage");
     let multipart = String::from_utf8_lossy(&voice_request.body);
-    let payload_json = multipart
-        .split("name=\"payload_json\"\r\n\r\n")
-        .nth(1)
-        .and_then(|value| value.split("\r\n--").next())
+    let marker = multipart
+        .find("name=\"payload_json\"")
         .expect("Discord voice upload includes the typed payload_json field");
-    let voice_payload: serde_json::Value = serde_json::from_str(payload_json).unwrap();
+    let after_marker = &multipart[marker..];
+    let body_start = after_marker.find("\r\n\r\n").unwrap() + 4;
+    let payload_body = &after_marker[body_start..];
+    let body_end = payload_body.find("\r\n--").unwrap();
+    let voice_payload: serde_json::Value = serde_json::from_str(&payload_body[..body_end]).unwrap();
     assert_eq!(voice_payload["flags"], 8192);
     assert_eq!(voice_payload["attachments"][0]["duration_secs"], 0.2);
     assert!(
