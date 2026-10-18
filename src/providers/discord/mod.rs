@@ -1,4 +1,5 @@
 mod adapter;
+pub mod bot_api;
 pub mod api;
 pub mod channel;
 mod gateway;
@@ -8,6 +9,7 @@ mod interactions;
 mod outbound;
 mod voice;
 
+pub use bot_api::{DiscordReactionRequest, ThreadAction};
 pub use channel::DiscordChannel;
 
 #[cfg(test)]
