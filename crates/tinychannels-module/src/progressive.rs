@@ -1544,10 +1544,6 @@ fn delivery_has_failure(result: &Result<ProgressiveResult>) -> bool {
     )
 }
 
-#[cfg(test)]
-#[path = "progressive_tests.rs"]
-mod tests;
-
 /// Map the host's wire policy onto the shared reply-mode decision so the
 /// mirror/always/never/speak_reply rule lives in one place.
 fn policy_allows_speech(policy: &tinychannels_bus::HostVoiceReplyPolicy) -> bool {
@@ -1565,3 +1561,7 @@ fn policy_allows_speech(policy: &tinychannels_bus::HostVoiceReplyPolicy) -> bool
         policy.explicitly_requested,
     )
 }
+
+#[cfg(test)]
+#[path = "progressive_tests.rs"]
+mod tests;
