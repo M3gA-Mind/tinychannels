@@ -1,4 +1,4 @@
-mod api;
+pub(super) mod api;
 mod ingress;
 mod outbound;
 
