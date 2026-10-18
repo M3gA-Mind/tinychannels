@@ -1,7 +1,7 @@
 use super::*;
 use tinychannels::factory::DefaultHttpClients;
 use tinychannels::host::NoopHost;
-use tinychannels_bus::config::SignalConfig;
+use tinychannels_bus::config::{IMessageConfig, SignalConfig};
 
 fn signal_config() -> ChannelsConfig {
     ChannelsConfig {
@@ -32,4 +32,26 @@ fn unconfigured_and_non_native_providers_build_nothing() {
     let empty = ChannelsConfig::default();
     assert!(build_native_v2("signal", &empty, &host, &DefaultHttpClients).is_none());
     assert!(build_native_v2("irc", &signal_config(), &host, &DefaultHttpClients).is_none());
+}
+
+#[test]
+fn a_configured_imessage_account_builds_a_native_launch() {
+    let host = NoopHost::arc();
+    let config = ChannelsConfig {
+        imessage: Some(IMessageConfig {
+            allowed_contacts: vec!["*".into()],
+        }),
+        ..Default::default()
+    };
+    let launch = build_native_v2("imessage", &config, &host, &DefaultHttpClients).unwrap();
+    assert_eq!(launch.channel.name(), "imessage");
+    assert!(
+        build_native_v2(
+            "imessage",
+            &ChannelsConfig::default(),
+            &host,
+            &DefaultHttpClients
+        )
+        .is_none()
+    );
 }
