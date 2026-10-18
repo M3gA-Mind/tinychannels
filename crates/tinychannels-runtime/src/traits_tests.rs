@@ -178,3 +178,51 @@ fn capabilities_default_to_configured_instance_facts() {
     );
     assert!(!capabilities.progressive_edits);
 }
+
+#[allow(deprecated, reason = "the fixture implements the one-release v21 seam")]
+mod defaults {
+    use super::*;
+
+    struct Bare;
+
+    #[async_trait]
+    impl Channel for Bare {
+        fn name(&self) -> &str {
+            "bare"
+        }
+        async fn send(&self, _: &SendMessage) -> anyhow::Result<()> {
+            Ok(())
+        }
+        async fn listen(&self, _: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_provider_without_v2_operations_refuses_them_explicitly() {
+        let conversation = tinychannels_bus::channel::ConversationRef::default();
+        let reaction = tinychannels_bus::channel::ChannelReaction::default();
+        let receipt = tinychannels_bus::channel::MessageReceipt::default();
+        let intent = tinychannels_bus::channel::ChannelOutboundIntent::default();
+        assert!(Bare.send_reaction(&conversation, "m", &reaction, false).await.is_err());
+        assert!(Bare.edit_message(&receipt, &intent).await.is_err());
+        assert!(Bare.delete_message(&receipt).await.is_err());
+        assert!(Bare.mark_read(&conversation, "m").await.is_err());
+        let webhook = Bare.deliver_webhook(Some("sha256=00"), b"{}").await.unwrap_err();
+        assert!(webhook.to_string().contains("no webhook ingress"));
+    }
+
+    #[test]
+    fn a_provider_without_webhooks_or_a_runtime_identity_reports_none() {
+        assert_eq!(Bare.verify_webhook("subscribe", "token", "challenge"), None);
+        assert_eq!(Bare.media_account_identity(), None);
+    }
+
+    #[test]
+    fn a_rejected_webhook_names_its_reason() {
+        let rejected = WebhookRejected("signature is not valid".into());
+        assert_eq!(rejected.to_string(), "signature is not valid");
+        let error = anyhow::Error::new(rejected.clone());
+        assert_eq!(error.downcast_ref::<WebhookRejected>(), Some(&rejected));
+    }
+}
