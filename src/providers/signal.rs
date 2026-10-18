@@ -51,17 +51,7 @@ pub struct SignalChannel {
     native: NativeState,
 }
 
-/// Host ports and bookkeeping for the v2 surface.
-#[derive(Clone, Default)]
-struct NativeState {
-    media_repository: Option<Arc<dyn MediaRepository>>,
-    voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
-    transcriber: Option<Arc<dyn Transcriber>>,
-    voice_synthesis: bool,
-    events: Option<Arc<dyn EventSink>>,
-    /// Remembered `sender:timestamp` pairs so a redelivered event is dropped.
-    seen: Arc<Mutex<VecDeque<String>>>,
-}
+use crate::providers::native::HostPorts as NativeState;
 
 // signal-cli SSE event JSON shapes.
 

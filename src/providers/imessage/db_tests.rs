@@ -94,8 +94,8 @@ fn sent_messages_are_found_after_a_baseline() {
 
 #[test]
 fn dates_convert_from_apple_epoch_nanoseconds_and_seconds() {
-    // 2001-01-01T00:00:01.5Z in nanoseconds.
-    assert_eq!(unix_ms(1_500_000_000_000), Some(978_307_201_500));
+    // 1001.5 seconds after 2001-01-01, in nanoseconds.
+    assert_eq!(unix_ms(1_001_500_000_000), Some(978_308_201_500));
     assert_eq!(unix_ms(10), Some(978_307_210_000));
     assert_eq!(unix_ms(0), None);
     assert_eq!(unix_ms(-5), None);

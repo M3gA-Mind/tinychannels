@@ -18,13 +18,15 @@ pub(crate) use edit::{delete, edit, upsert_draft};
 pub(crate) use outbound::{Sent, Step, Target, to_anyhow};
 
 use async_trait::async_trait;
+use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use tinychannels_bus::ChannelCapabilities;
 use tinychannels_bus::channel::{
     ChannelReaction, ChannelSendError, ConversationRef, SendErrorKind,
 };
 
-use crate::host::{MediaRepository, VoiceMediaStore};
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 pub(crate) use outbound::{FileStep, Limits};
 
 /// An explicit, non-retryable "this adapter does not do that" result.
@@ -58,6 +60,36 @@ impl std::fmt::Display for NativeFailure {
 }
 
 impl std::error::Error for NativeFailure {}
+
+/// The host ports every native adapter can use, and its inbound dedupe window.
+#[derive(Clone, Default)]
+pub(crate) struct HostPorts {
+    pub(crate) media_repository: Option<Arc<dyn MediaRepository>>,
+    pub(crate) voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
+    pub(crate) transcriber: Option<Arc<dyn Transcriber>>,
+    pub(crate) voice_synthesis: bool,
+    pub(crate) events: Option<Arc<dyn EventSink>>,
+    /// Remembered inbound keys so a redelivered event is dropped.
+    seen: Arc<Mutex<VecDeque<String>>>,
+}
+
+/// Inbound keys remembered per adapter.
+const SEEN_WINDOW: usize = 2048;
+
+impl HostPorts {
+    /// Record `key`; false when it was already seen.
+    pub(crate) fn mark_seen(&self, key: String) -> bool {
+        let mut seen = self.seen.lock();
+        if seen.contains(&key) {
+            return false;
+        }
+        if seen.len() >= SEEN_WINDOW {
+            seen.pop_front();
+        }
+        seen.push_back(key);
+        true
+    }
+}
 
 /// A message addressed for an edit or delete.
 pub(crate) struct Address {

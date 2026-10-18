@@ -17,9 +17,6 @@ use tinychannels_bus::{
 };
 use tokio::sync::mpsc;
 
-/// Remembered `sender:timestamp` pairs.
-const SEEN_WINDOW: usize = 2048;
-
 fn signal_ref() -> ChannelRef {
     ChannelRef {
         id: "signal".into(),
@@ -62,15 +59,7 @@ impl SignalChannel {
     }
 
     fn mark_seen(&self, key: String) -> bool {
-        let mut seen = self.native.seen.lock();
-        if seen.contains(&key) {
-            return false;
-        }
-        if seen.len() >= SEEN_WINDOW {
-            seen.pop_front();
-        }
-        seen.push_back(key);
-        true
+        self.native.mark_seen(key)
     }
 
     fn accept<'a>(&self, envelope: &'a Envelope) -> Option<Accepted<'a>> {
