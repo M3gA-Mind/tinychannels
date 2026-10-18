@@ -26,6 +26,78 @@ fn whatsapp(cloud: bool) -> ChannelsConfig {
     }
 }
 
+#[tokio::test]
+async fn shutdown_closes_web_turn_admission_before_clearing_projection_state() {
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let channels = Arc::new(Channels::new(HostChannels::new(connection), None));
+    let request = tinychannels_bus::BeginWebTurn {
+        scope_key: "tenant-a".into(),
+        context: tinychannels_bus::WebEventContext {
+            client_id: "client".into(),
+            thread_id: "thread".into(),
+            request_id: "request".into(),
+            turn_request_id: None,
+            seq: None,
+            ts: None,
+        },
+    };
+
+    // Queue admission before shutdown while holding the shared registry lock.
+    // Shutdown closes the atomic gate first, then waits for this lock to clear
+    // state. Admission must recheck the gate after it gets the lock.
+    let mut web_turns = channels.web_turns.lock().await;
+    let active = web_turns.begin(request.clone()).unwrap();
+    let mut begin = Box::pin(channels.begin_web_turn(request));
+    futures_util::future::poll_fn(|cx| {
+        use std::future::Future as _;
+        assert!(begin.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    let mut shutdown = Box::pin(channels.shutdown());
+    futures_util::future::poll_fn(|cx| {
+        use std::future::Future as _;
+        assert!(shutdown.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    assert!(channels.terminal.load(Ordering::SeqCst));
+    drop(web_turns);
+
+    assert!(begin.await.is_err());
+    shutdown.await.unwrap();
+    assert!(
+        channels
+            .web_turns
+            .lock()
+            .await
+            .project(tinychannels_bus::ProjectWebOutput {
+                handle: active.handle,
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: "after shutdown".into(),
+                    iteration: Some(1),
+                },
+            })
+            .is_err()
+    );
+    let late = tinychannels_bus::BeginWebTurn {
+        scope_key: "tenant-a".into(),
+        context: tinychannels_bus::WebEventContext {
+            client_id: "client".into(),
+            thread_id: "thread".into(),
+            request_id: "late-request".into(),
+            turn_request_id: None,
+            seq: None,
+            ts: None,
+        },
+    };
+    assert!(channels.begin_web_turn(late).await.is_err());
+}
+
 #[test]
 fn linq_is_refused_because_its_inbound_path_is_a_webhook() {
     assert!(webhook_backed("linq", &ChannelsConfig::default()));
@@ -215,6 +287,7 @@ async fn typed_intent_preserves_durable_key_and_thread_in_legacy_send() {
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         terminal: AtomicBool::new(false),
         runtimes: None,
         shutdown_task: Mutex::new(None),
@@ -307,6 +380,7 @@ async fn typed_intent_keeps_media_typed_and_preserves_reply_target() {
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         terminal: AtomicBool::new(false),
         runtimes: None,
         shutdown_task: Mutex::new(None),
@@ -780,6 +854,7 @@ async fn required_durability_is_refused_before_provider_send_without_host_queue(
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays: Arc::new(Relays::new(host.clone())),
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         terminal: AtomicBool::new(false),
         runtimes: None,
         shutdown_task: Mutex::new(None),
@@ -1164,6 +1239,7 @@ async fn channels_with_store(
         running: Arc::new(Mutex::new(running)),
         provider_activations: Mutex::new(HashMap::new()),
         relays,
+        web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         terminal: AtomicBool::new(false),
         runtimes: None,
         shutdown_task: Mutex::new(None),

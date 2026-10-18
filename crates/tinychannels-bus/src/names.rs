@@ -99,6 +99,9 @@ macro_rules! channel_method_registry {
             #[doc = "Resolve scoped media once into a bounded confidential chunk session."] BEGIN_MEDIA_READ => "BeginMediaRead",
             #[doc = "Return one bounded confidential media chunk."] READ_MEDIA_CHUNK => "ReadMediaChunk",
             #[doc = "Abort a bounded media read and release temporary bytes."] ABORT_MEDIA_READ => "AbortMediaRead",
+            #[doc = "Begin an isolated module-owned web output projection turn."] BEGIN_WEB_TURN => "BeginWebTurn",
+            #[doc = "Project one canonical web output event through the module."] PROJECT_WEB_OUTPUT => "ProjectWebOutput",
+            #[doc = "End a web output turn and invalidate its projection handle."] END_WEB_TURN => "EndWebTurn",
         ]);
     };
 }
@@ -107,7 +110,7 @@ macro_rules! define_method_table {
     ([$($(#[$doc:meta])* $name:ident => $method:literal),* $(,)?]) => {
         pub mod methods { $($(#[$doc])* pub const $name: &str = $method;)* }
         /// All module method names in the declaration order used by the interface.
-        pub const METHODS: [&str; 44] = [$(methods::$name),*];
+        pub const METHODS: [&str; 47] = [$(methods::$name),*];
     };
 }
 

@@ -2832,6 +2832,7 @@ dependencies = [
  "tinychannels",
  "tinychannels-bus",
  "tinychannels-conformance",
+ "tinychannels-runtime",
  "tinystoragedrivers-bus",
  "tinystoragedrivers-busproxy",
  "tinystoragedrivers-client",
