@@ -1,7 +1,7 @@
 use super::*;
 use crate::channel::ChannelTypedSend;
-use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
 use crate::providers::native::fixtures::RecordingEvents;
+use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
 use serde_json::json;
 use tinychannels_bus::channel::ConversationRef;
 use tinychannels_bus::{
@@ -305,7 +305,10 @@ async fn inbound_file_is_downloaded_bounded_and_published_as_scoped_typed_media(
     let stored = media.stored.lock().unwrap();
     assert_eq!(stored[0].bytes, b"incoming-image-bytes");
     assert_eq!(stored[0].metadata.scope.turn_id, "post-7");
-    assert_eq!(stored[0].metadata.dedupe_key.as_deref(), Some("mattermost:post-7:file-1"));
+    assert_eq!(
+        stored[0].metadata.dedupe_key.as_deref(),
+        Some("mattermost:post-7:file-1")
+    );
     assert!(matches!(
         events.ingress.lock().unwrap().first(),
         Some(ChannelIngress::Inbound(_))
@@ -324,6 +327,32 @@ async fn inbound_download_rejects_untrusted_file_ids_before_network_io() {
         false,
         reqwest::Client::builder().no_proxy().build().unwrap(),
     );
-    assert!(channel.download_file("../private", MAX_FILE_BYTES).await.is_none());
+    assert!(
+        channel
+            .download_file("../private", MAX_FILE_BYTES)
+            .await
+            .is_none()
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn inbound_file_download_enforces_the_limit_before_returning_bytes() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/files/file-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"12345678901"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let channel = MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        None,
+        vec!["*".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    );
+    assert!(channel.download_file("file-1", 10).await.is_none());
 }

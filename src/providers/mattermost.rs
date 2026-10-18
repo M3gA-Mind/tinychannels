@@ -564,9 +564,7 @@ impl MattermostChannel {
             .get("file_ids")
             .and_then(serde_json::Value::as_array)
             .is_some_and(|files| !files.is_empty());
-        if user_id == bot_user_id
-            || create_at <= last_create_at
-            || (text.is_empty() && !has_files)
+        if user_id == bot_user_id || create_at <= last_create_at || (text.is_empty() && !has_files)
         {
             return None;
         }

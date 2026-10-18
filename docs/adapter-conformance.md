@@ -237,6 +237,19 @@ Partner V3 API) on the same `providers::native` plumbing. Its conformance test
 - **Declared unsupported:** reactions, edits, deletes, replies, threads and
   inbound events other than messages.
 
+## Mattermost
+
+Mattermost uses the v4 REST API. With both the scoped media repository and
+ordered event sink installed, inbound posts publish typed text and files;
+file bytes are fetched from `GET /api/v4/files/{id}` and file metadata comes
+from the post's `metadata.files` or `GET /api/v4/files/{id}/info`. Downloads
+are bounded to the provider's 50 MiB limit before they enter the media store.
+The post `root_id` is retained as the conversation thread and reply reference.
+Audio attachments remain ordinary audio: Mattermost's file metadata has no
+voice-note marker, so the adapter does not claim voice-note ingress or run
+speech-to-text on arbitrary audio files. Outbound voice is sent as an audio
+file attachment (`voiceOut=attachment`) when the host supplies voice storage.
+
 ## Email
 
 `EmailChannel` (feature `email`) is a native v2 adapter on the same
