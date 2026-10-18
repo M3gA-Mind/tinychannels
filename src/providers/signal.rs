@@ -624,5 +624,9 @@ super::native::native_v2_adapter!(SignalChannel);
 mod fixtures;
 
 #[cfg(test)]
+#[path = "signal/conformance_tests.rs"]
+mod conformance;
+
+#[cfg(test)]
 #[path = "signal_tests.rs"]
 mod tests;
