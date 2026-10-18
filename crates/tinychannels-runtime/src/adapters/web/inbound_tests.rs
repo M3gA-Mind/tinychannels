@@ -1,5 +1,7 @@
 use super::*;
-use tinychannels_bus::channel::{VoiceNote, VoiceTranscript};
+use tinychannels_bus::channel::{
+    VoiceNote, VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
+};
 
 fn start() -> WebChatStart {
     WebChatStart {
@@ -24,6 +26,10 @@ fn image() -> ContentPart {
 }
 
 fn voice(transcript: Option<&str>) -> ContentPart {
+    voice_in_state(transcript, VoiceTranscriptState::Complete)
+}
+
+fn voice_in_state(transcript: Option<&str>, state: VoiceTranscriptState) -> ContentPart {
     ContentPart::VoiceNote {
         voice_note: VoiceNote {
             media: MediaReference {
@@ -33,7 +39,8 @@ fn voice(transcript: Option<&str>) -> ContentPart {
             transcript: transcript.map(|text| VoiceTranscript {
                 text: text.into(),
                 language: None,
-                ..Default::default()
+                state,
+                source: VoiceTranscriptSource::HostStt,
             }),
             ..Default::default()
         },
@@ -102,6 +109,17 @@ fn voice_only_submission_uses_the_transcript_as_text() {
     let envelope = normalize_chat_start(&submission, None).unwrap();
     assert_eq!(envelope.text, "");
     assert_eq!(envelope.parts.len(), 1);
+}
+
+#[test]
+fn a_pending_transcript_is_not_promoted_to_text() {
+    let mut submission = start();
+    submission.text = String::new();
+    submission.attachments = vec![voice_in_state(
+        Some("partial"),
+        VoiceTranscriptState::Pending,
+    )];
+    assert_eq!(normalize_chat_start(&submission, None).unwrap().text, "");
 }
 
 #[test]

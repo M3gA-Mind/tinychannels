@@ -60,7 +60,7 @@ fn media_of(part: &ContentPart) -> Option<&MediaReference> {
 /// Fails with `BadFormat` when addressing is missing, when an attachment is not
 /// media (the web composer cannot send polls, buttons or locations), or when the
 /// submission carries neither text nor attachments. A voice note without typed
-/// text contributes its transcript as `text`, which keeps the plain-text
+/// text contributes its completed transcript as `text`, which keeps the plain-text
 /// projection usable by consumers that ignore `parts`.
 pub fn normalize_chat_start(
     start: &WebChatStart,
@@ -86,6 +86,7 @@ pub fn normalize_chat_start(
         if text.trim().is_empty()
             && let ContentPart::VoiceNote { voice_note } = attachment
             && let Some(transcript) = &voice_note.transcript
+            && transcript.state == VoiceTranscriptState::Complete
         {
             text.clone_from(&transcript.text);
         }
