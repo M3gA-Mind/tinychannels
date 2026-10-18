@@ -16,3 +16,7 @@ pub(crate) mod plan;
 pub(crate) mod text;
 pub(crate) mod vcard;
 pub(crate) mod window;
+
+#[cfg(test)]
+#[path = "fakes_tests.rs"]
+pub(crate) mod fakes;
