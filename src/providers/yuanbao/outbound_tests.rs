@@ -2,6 +2,7 @@ use super::*;
 use crate::host::{MediaRepository, MediaScope, MediaStoreRequest, StoredMedia};
 use async_trait::async_trait;
 use parking_lot::Mutex as ParkingMutex;
+use sha1::Digest as _;
 use tinychannels_bus::channel::{
     ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
 };
@@ -402,7 +403,7 @@ async fn send_host_scoped_image_bytes_upload_to_cos_and_return_the_platform_id()
                 "tok",
                 &api,
                 "",
-                Some("reply-1"),
+                None,
             )
             .await
     })
@@ -412,7 +413,6 @@ async fn send_host_scoped_image_bytes_upload_to_cos_and_return_the_platform_id()
     assert!(!id.is_empty());
     assert_eq!(frame.cmd, biz_cmd::SEND_C2C_MESSAGE);
     assert!(contains(&frame.data, "https://cdn.example/cat.png"));
-    assert!(contains(&frame.data, "reply-1"));
     let image_uuid = hex::encode(sha1::Sha1::digest(&png(320, 200)));
     assert!(contains(&frame.data, &image_uuid));
     let requests = server.received_requests().await.unwrap();
@@ -420,8 +420,8 @@ async fn send_host_scoped_image_bytes_upload_to_cos_and_return_the_platform_id()
         .iter()
         .find(|request| request.url.path() == "/api/resource/genUploadInfo")
         .expect("COS credential request");
-    let credential_body: serde_json::Value = serde_json::from_slice(&credential_request.body)
-        .expect("credential request JSON");
+    let credential_body: serde_json::Value =
+        serde_json::from_slice(&credential_request.body).expect("credential request JSON");
     assert_eq!(credential_body["fileName"], "asset.png");
 }
 
@@ -763,6 +763,69 @@ async fn yuanbao_rejects_thread_addressing_before_resolving_or_uploading_media()
         .unwrap_err();
     assert!(error.unsupported);
     assert_eq!(error.message, "Yuanbao does not support threads");
+    assert!(
+        repo.scopes.lock().is_empty(),
+        "media resolution must not run"
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn yuanbao_rejects_direct_message_reply_before_resolving_or_uploading_media() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/resource/genUploadInfo"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&server)
+        .await;
+    let repo = Arc::new(TypedMediaRepo::default());
+    let mut config = super::super::config::YuanbaoConfig::default();
+    config.app_key = "ak".into();
+    config.bot_id = "cfg-bot".into();
+    config.token = "tok".into();
+    config.api_domain = server.uri();
+    config.ws_domain = "wss://example.invalid".into();
+    let channel = super::super::channel::YuanbaoChannel::new(config)
+        .unwrap()
+        .with_media_repository(repo.clone())
+        .with_test_outbound(Arc::new(
+            OutboundSender::new(make_conn(base_cfg()), None, "ak".into(), "cfg-bot".into())
+                .with_cos_endpoint(server.uri()),
+        ));
+    let message = ChannelOutboundMessage {
+        channel_id: "yuanbao".into(),
+        conversation_id: "user-4".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: Some("reply-9".into()),
+        thread_id: None,
+        turn_id: Some("turn-4".into()),
+        idempotency_key: "send-dm-reply-unsupported".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("image-opaque".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+        }],
+    };
+
+    let error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+    assert!(error.unsupported);
+    assert_eq!(
+        error.message,
+        "Yuanbao does not support direct-message reply addressing"
+    );
     assert!(
         repo.scopes.lock().is_empty(),
         "media resolution must not run"

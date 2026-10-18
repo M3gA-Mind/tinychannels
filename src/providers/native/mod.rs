@@ -114,6 +114,11 @@ pub(crate) trait NativeProvider: Send + Sync {
     fn voice_media_store(&self) -> Option<&Arc<dyn VoiceMediaStore>>;
     fn voice_synthesis(&self) -> bool;
     fn declared_capabilities(&self) -> ChannelCapabilities;
+    /// Validate provider-specific address combinations before planning can
+    /// resolve opaque host media or perform any network requests.
+    fn validate_target(&self, _target: &Target) -> Result<(), ChannelSendError> {
+        Ok(())
+    }
     /// Extra descriptor metadata (for example `voiceOut=attachment`).
     fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
         Vec::new()

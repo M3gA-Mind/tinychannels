@@ -62,6 +62,18 @@ impl NativeProvider for YuanbaoChannel {
         caps
     }
 
+    fn validate_target(&self, target: &Target) -> Result<(), ChannelSendError> {
+        // BizMsg only encodes `ref_msg_id` for group sends. C2C messages have
+        // no reply-reference field, so reject rather than silently dropping
+        // the requested reply address after uploading media.
+        if target.reply_to.is_some() && !target.conversation.id.starts_with("g:") {
+            return Err(crate::providers::native::unsupported(
+                "direct-message reply addressing",
+            ));
+        }
+        Ok(())
+    }
+
     fn proactive_target(&self) -> Option<String> {
         crate::traits::Channel::proactive_target(self)
     }
