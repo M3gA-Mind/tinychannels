@@ -81,6 +81,21 @@ fn message_id(response: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// A chat id or a phone number: nothing that could alter the request path.
+fn checked_conversation(conversation: &str) -> Result<&str, ChannelSendError> {
+    let valid = !conversation.is_empty()
+        && conversation.len() <= 128
+        && conversation
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '+' | '.'))
+        && !conversation.contains("..");
+    if valid {
+        Ok(conversation)
+    } else {
+        Err(pre_dispatch("Linq conversation id is not a chat id or phone number"))
+    }
+}
+
 impl LinqChannel {
     async fn post_json(
         &self,
@@ -246,7 +261,7 @@ impl NativeProvider for LinqChannel {
     }
 
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
-        let conversation = target.conversation.id.as_str();
+        let conversation = checked_conversation(&target.conversation.id)?;
         let (parts, kind, operation) = match step {
             Step::Text(text) => (
                 vec![json!({"type": "text", "value": text})],
@@ -273,7 +288,7 @@ impl NativeProvider for LinqChannel {
     }
 
     async fn set_typing(&self, conversation: &str, on: bool) -> Result<(), ChannelSendError> {
-        self.typing(conversation, on).await
+        self.typing(checked_conversation(conversation)?, on).await
     }
 }
 

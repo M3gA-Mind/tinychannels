@@ -77,6 +77,11 @@ pub(crate) struct HostPorts {
 const SEEN_WINDOW: usize = 2048;
 
 impl HostPorts {
+    /// Whether `key` was recorded earlier, without recording it.
+    pub(crate) fn has_seen(&self, key: &str) -> bool {
+        self.seen.lock().iter().any(|seen| seen == key)
+    }
+
     /// Record `key`; false when it was already seen.
     pub(crate) fn mark_seen(&self, key: String) -> bool {
         let mut seen = self.seen.lock();
