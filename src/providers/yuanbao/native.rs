@@ -47,6 +47,7 @@ impl NativeProvider for YuanbaoChannel {
             thread: true,
             streaming_pipeline: true,
         });
+        caps.addressing.reply_to_id = true;
         if self.native.media_repository.is_some() {
             let max_bytes = self.limits().file_bytes;
             caps.content.parts.extend(["image".into(), "file".into()]);

@@ -335,7 +335,7 @@ fn receipt_part(provider: &str, sent: Sent, index: usize, target: &Target) -> Me
         kind: sent.kind,
         index,
         thread_id: target.thread.clone(),
-        reply_to_id: None,
+        reply_to_id: target.reply_to.clone(),
     }
 }
 

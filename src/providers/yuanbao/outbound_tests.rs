@@ -589,13 +589,17 @@ async fn typed_image_and_file_use_scoped_host_bytes_and_return_real_receipts() {
     let send = tokio::spawn(async move {
         crate::channel::ChannelTypedSend::send_typed(channel.as_ref(), &message).await
     });
-    let first = h.gateway.recv_frame().await;
+    let first = tokio::time::timeout(HANG_GUARD, h.gateway.recv_frame())
+        .await
+        .expect("first typed media send did not reach the mock gateway");
     assert_eq!(first.cmd, biz_cmd::SEND_GROUP_MESSAGE);
     assert!(contains(&first.data, "https://cdn.example/uploaded"));
     assert!(contains(&first.data, "photo caption"));
     assert!(contains(&first.data, "thread-root"));
     h.gateway.reply(&first, 0, b"").await;
-    let second = h.gateway.recv_frame().await;
+    let second = tokio::time::timeout(HANG_GUARD, h.gateway.recv_frame())
+        .await
+        .expect("second typed media send did not reach the mock gateway");
     assert_eq!(second.cmd, biz_cmd::SEND_GROUP_MESSAGE);
     assert!(contains(&second.data, "file caption"));
     assert!(contains(&second.data, "report.pdf"));
