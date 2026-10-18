@@ -13,6 +13,7 @@ pub mod lark;
 pub mod linq;
 pub mod mail;
 pub mod mattermost;
+pub(crate) mod native;
 pub mod qq;
 pub mod signal;
 pub mod slack;

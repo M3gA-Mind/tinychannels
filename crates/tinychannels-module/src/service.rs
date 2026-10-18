@@ -285,6 +285,11 @@ impl Channels {
             None
         };
         let whatsapp = WhatsAppNative::select(&name, &config, &owner_host, http);
+        let native = if whatsapp.is_none() {
+            crate::native::build_native_v2(&name, &config, &owner_host, http)
+        } else {
+            None
+        };
         let channel: Arc<dyn tinychannels::Channel> = if let Some(telegram) = &telegram {
             telegram.clone()
         } else if let Some(slack) = &slack {
@@ -293,6 +298,8 @@ impl Channels {
             // A linked session, not its mutable label, is the media authority.
             native.bind_media_authority(&media_account_scope);
             native.channel()
+        } else if let Some(native) = &native {
+            native.channel.clone()
         } else {
             build_channels(&config, &owner_host, http)
                 .into_iter()
@@ -330,6 +337,8 @@ impl Channels {
         } else if let Some(slack) = slack {
             Running::start_slack(slack, hooks, self.host.clone(), supervision, outbound_only)
         } else if let Some(native) = whatsapp {
+            native.start(hooks, self.host.clone(), supervision, outbound_only)
+        } else if let Some(native) = native {
             native.start(hooks, self.host.clone(), supervision, outbound_only)
         } else {
             match supervision {
