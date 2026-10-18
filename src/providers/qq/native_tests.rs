@@ -60,11 +60,9 @@ async fn host_scoped_image_media_uploads_then_sends_the_server_file_info() {
     })
     .await;
     let media = Arc::new(StubMedia::default());
-    *media.read.lock().unwrap() = Some(stored_media(
-        MediaKind::Image,
-        "image/png",
-        b"exact-scoped-png-bytes",
-    ));
+    let mut stored = stored_media(MediaKind::Image, "image/png", b"exact-scoped-png-bytes");
+    stored.file_name = Some("diagram.png".into());
+    *media.read.lock().unwrap() = Some(stored);
     let host = ChannelHostBuilder::new()
         .media_repository(media.clone())
         .build();
