@@ -3,14 +3,14 @@
 use super::api::{ApiFailure, pre_dispatch, send_error, unsupported};
 use super::events::name_for_emoji;
 use super::outbound::target_of;
-use super::text::{chunk_text, strip_tool_call_tags, to_mrkdwn};
+use super::text::{strip_tool_call_tags, to_mrkdwn};
 use super::types::{SLACK_TEXT_CHUNK_CHARS, SlackChannel};
 use serde_json::{Value, json};
 use tinychannels_bus::channel::{
     ChannelReaction, ChannelSendError, ConversationRef, MessageReceipt, MessageReceiptPart,
     MessageReceiptPartKind,
 };
-use tinychannels_bus::{ChannelOutboundIntent, ChannelOutboundMessage, OutboundContentPart, OutboundPayload};
+use tinychannels_bus::{ChannelOutboundIntent, ChannelOutboundMessage, OutboundContentPart};
 
 /// Slack answers these when the requested state already holds.
 const IDEMPOTENT: [&str; 2] = ["already_reacted", "no_reaction"];
@@ -68,7 +68,7 @@ impl SlackChannel {
         remove: bool,
     ) -> Result<(), ChannelSendError> {
         let name = name_for_emoji(&reaction.value)
-            .filter(|_| conversation.id.trim().is_empty().eq(&false) && !provider_message_id.is_empty())
+            .filter(|_| !conversation.id.trim().is_empty() && !provider_message_id.is_empty())
             .ok_or_else(|| pre_dispatch("Slack reaction needs a message and an emoji name"))?;
         let method = if remove { "reactions.remove" } else { "reactions.add" };
         let body = json!({"channel": conversation.id, "timestamp": provider_message_id, "name": name});
@@ -177,16 +177,6 @@ impl SlackChannel {
             .map(str::to_owned)
             .ok_or_else(|| send_error(&ApiFailure::Malformed, "draft"))
     }
-}
-
-/// Plain text of a legacy `SendMessage`-style draft, chunked to one message.
-pub(crate) fn first_chunk(text: &str) -> Option<String> {
-    chunk_text(&to_mrkdwn(text), SLACK_TEXT_CHUNK_CHARS).into_iter().next()
-}
-
-#[allow(dead_code)]
-fn _payload_kind(payload: &OutboundPayload) -> bool {
-    matches!(payload, OutboundPayload::Text { .. })
 }
 
 #[cfg(test)]
