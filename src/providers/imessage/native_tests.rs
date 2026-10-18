@@ -159,6 +159,7 @@ async fn voice_clips_are_sent_as_audio_attachments() {
                     audio_base64: None,
                     codec: None,
                     duration_ms: None,
+                    waveform: None,
                 },
             }],
         ),
