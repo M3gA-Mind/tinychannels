@@ -4395,7 +4395,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     assert_eq!(descriptor.id, "discord");
     assert_eq!(descriptor.account_id.as_deref(), Some("discord:account-a"));
 
-    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    let ingress = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
             if !callbacks.inbound.lock().await.is_empty() && !callbacks.events.lock().await.is_empty() {
                 break;
@@ -4403,8 +4403,17 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
             callbacks.ingress_changed.notified().await;
         }
     })
-    .await
-    .expect("mock gateway events must traverse Discord parsing and module host callbacks");
+    .await;
+    if ingress.is_err() {
+        let requests = rest
+            .received_requests()
+            .await
+            .unwrap()
+            .iter()
+            .map(|request| format!("{} {}", request.method, request.url.path()))
+            .collect::<Vec<_>>();
+        panic!("mock gateway ingress timed out; REST requests: {requests:#?}");
+    }
     let voice = callbacks.inbound.lock().await[0].1.clone();
     assert!(voice.to_string().contains("recognized words"));
     let reaction = callbacks.events.lock().await[0].clone();
