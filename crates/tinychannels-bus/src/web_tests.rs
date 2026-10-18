@@ -7,6 +7,7 @@ const LEGACY_CANCEL: &str = include_str!("fixtures/web/chat_error_cancelled.json
 const CANCEL: &str = include_str!("fixtures/web/chat_cancelled.json");
 const TEXT_DELTA: &str = include_str!("fixtures/web/text_delta.json");
 const PROACTIVE: &str = include_str!("fixtures/web/proactive_message.json");
+const CHANNEL_OUTBOUND: &str = include_str!("fixtures/web/channel_outbound.json");
 const SUBAGENT_TOOL_RESULT: &str = include_str!("fixtures/web/subagent_tool_result.json");
 const CHAT_ERROR_GUARDRAIL: &str = include_str!("fixtures/web/chat_error_guardrail.json");
 const QUEUE_ITEM: &str = include_str!("fixtures/web/queue_item_queued.json");
@@ -20,6 +21,7 @@ const WEB_SCHEMA: &str = include_str!("../schema/web-channel-event.schema.json")
 fn assert_historical_fixture_round_trips(fixture: &str) {
     let historical: serde_json::Value = serde_json::from_str(fixture).unwrap();
     let event: WebChannelEvent = serde_json::from_value(historical.clone()).unwrap();
+    assert_eq!(event.event_name(), historical["event"]);
     assert_eq!(serde_json::to_value(event).unwrap(), historical);
 }
 
@@ -37,6 +39,7 @@ fn deployed_web_event_goldens_keep_their_serialized_shapes() {
         CANCEL,
         TEXT_DELTA,
         PROACTIVE,
+        CHANNEL_OUTBOUND,
         SUBAGENT_TOOL_RESULT,
         CHAT_ERROR_GUARDRAIL,
         QUEUE_ITEM,
@@ -64,6 +67,7 @@ fn event_context_access_preserves_every_historical_wire_shape() {
         CANCEL,
         TEXT_DELTA,
         PROACTIVE,
+        CHANNEL_OUTBOUND,
         SUBAGENT_TOOL_RESULT,
         CHAT_ERROR_GUARDRAIL,
         QUEUE_ITEM,
@@ -103,6 +107,41 @@ fn event_context_access_preserves_every_historical_wire_shape() {
         with_timestamp.as_object_mut().unwrap().remove("ts");
         assert_eq!(with_timestamp, fixture);
     }
+}
+
+#[test]
+fn deployed_web_serialization_omits_null_args_and_empty_tool_names() {
+    let context = WebEventContext {
+        client_id: "client".into(),
+        thread_id: "thread".into(),
+        request_id: "request".into(),
+        ..Default::default()
+    };
+    let call = WebChannelEvent::ToolCall {
+        context: context.clone(),
+        tool_name: Some(String::new()),
+        skill_id: None,
+        args: Some(serde_json::Value::Null),
+        round: None,
+        tool_call_id: None,
+        tool_display_label: None,
+        tool_display_detail: None,
+    };
+    let wire = serde_json::to_value(call).unwrap();
+    assert!(wire.get("tool_name").is_none());
+    assert!(wire.get("args").is_none());
+
+    let delta = WebChannelEvent::ToolArgsDelta {
+        context,
+        delta: None,
+        delta_kind: None,
+        tool_call_id: None,
+        tool_name: Some(String::new()),
+        skill_id: None,
+        round: None,
+    };
+    let wire = serde_json::to_value(delta).unwrap();
+    assert!(wire.get("tool_name").is_none());
 }
 
 #[test]
