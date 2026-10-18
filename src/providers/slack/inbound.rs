@@ -144,8 +144,8 @@ impl SlackChannel {
             let is_clip = file.get("subtype").and_then(Value::as_str) == Some("slack_audio");
             let kind = match mime.split('/').next() {
                 Some("image") => MediaKind::Image,
-                Some("video") if !is_clip => MediaKind::Video,
-                Some("audio") | Some("video") => MediaKind::Audio,
+                Some("video") => MediaKind::Video,
+                Some("audio") => MediaKind::Audio,
                 _ => MediaKind::Document,
             };
             if !crate::host::is_allowed_content_type(kind, &mime) {

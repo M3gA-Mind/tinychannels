@@ -81,7 +81,6 @@ impl SlackChannel {
         if voice_enabled {
             parts.push("voice_note".into());
         }
-        actions.sort();
         ChannelCapabilities {
             remote_control: true,
             chat_approvals: true,
