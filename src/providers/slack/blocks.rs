@@ -150,7 +150,9 @@ fn collect_text(value: &Value, out: &mut Vec<String>) -> Result<(), ChannelSendE
         Value::Object(object) => {
             const KEYS: [&str; 6] = ["type", "text", "title", "heading", "caption", "description"];
             if object.keys().any(|key| !KEYS.contains(&key.as_str())) {
-                return Err(pre_dispatch("Slack presentation block has unsupported fields"));
+                return Err(pre_dispatch(
+                    "Slack presentation block has unsupported fields",
+                ));
             }
             for key in ["title", "heading", "text", "caption", "description"] {
                 match object.get(key) {
@@ -158,7 +160,9 @@ fn collect_text(value: &Value, out: &mut Vec<String>) -> Result<(), ChannelSendE
                     Some(Value::String(text)) if !text.trim().is_empty() => out.push(text.clone()),
                     Some(Value::String(_)) => {}
                     Some(_) => {
-                        return Err(pre_dispatch("Slack presentation text fields must be strings"));
+                        return Err(pre_dispatch(
+                            "Slack presentation text fields must be strings",
+                        ));
                     }
                 }
             }

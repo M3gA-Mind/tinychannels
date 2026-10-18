@@ -59,7 +59,10 @@ impl SlackChannel {
             let Ok(envelope) = serde_json::from_str::<Value>(text.as_str()) else {
                 continue;
             };
-            let kind = envelope.get("type").and_then(Value::as_str).unwrap_or_default();
+            let kind = envelope
+                .get("type")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
             if kind == "disconnect" {
                 tracing::info!("[slack] server requested a reconnect");
                 break;
@@ -118,7 +121,10 @@ impl SlackChannel {
             let messages = data.get("messages").and_then(Value::as_array);
             // History is newest-first; deliver oldest-first.
             for message in messages.into_iter().flatten().rev() {
-                let ts = message.get("ts").and_then(Value::as_str).unwrap_or_default();
+                let ts = message
+                    .get("ts")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 if ts <= oldest.as_str() {
                     continue;
                 }

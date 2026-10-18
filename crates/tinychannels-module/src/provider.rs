@@ -1283,7 +1283,10 @@ impl tinychannels::channel::ChannelAdapter for NativeAdapter {
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         Err(tinychannels::channel::ChannelSendError {
             kind: tinychannels::channel::SendErrorKind::Forbidden,
-            message: format!("{} polling is already owned by the configured module runtime", self.provider()),
+            message: format!(
+                "{} polling is already owned by the configured module runtime",
+                self.provider()
+            ),
             retryable: false,
             ..Default::default()
         })
@@ -1453,17 +1456,22 @@ impl ConfiguredAdapterFactory {
     }
 
     pub(crate) fn telegram(running: Arc<Running>) -> ConfiguredAdapterHandle {
-        Self::native(running, #[cfg(test)] AdapterMode::TelegramNativeV2)
+        Self::native(
+            running,
+            #[cfg(test)]
+            AdapterMode::TelegramNativeV2,
+        )
     }
 
     pub(crate) fn slack(running: Arc<Running>) -> ConfiguredAdapterHandle {
-        Self::native(running, #[cfg(test)] AdapterMode::SlackNativeV2)
+        Self::native(
+            running,
+            #[cfg(test)]
+            AdapterMode::SlackNativeV2,
+        )
     }
 
-    fn native(
-        running: Arc<Running>,
-        #[cfg(test)] mode: AdapterMode,
-    ) -> ConfiguredAdapterHandle {
+    fn native(running: Arc<Running>, #[cfg(test)] mode: AdapterMode) -> ConfiguredAdapterHandle {
         let configured_instance = running.configured_instance.clone();
         let native = Arc::new(NativeAdapter { running });
         let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = native.clone();
@@ -1907,7 +1915,11 @@ impl Running {
                     .any(|part| part.platform_message_id.trim().is_empty())
             {
                 return Err(RunningSendError::NotDispatched(
-                    format!("draft receipt scope does not match {} intent", self.native_provider()).into(),
+                    format!(
+                        "draft receipt scope does not match {} intent",
+                        self.native_provider()
+                    )
+                    .into(),
                 ));
             }
         }

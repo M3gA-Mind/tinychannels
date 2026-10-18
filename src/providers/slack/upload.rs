@@ -29,7 +29,10 @@ fn not_sent(mut error: ChannelSendError) -> ChannelSendError {
 }
 
 impl SlackChannel {
-    pub(crate) async fn upload_file(&self, upload: Upload<'_>) -> Result<Uploaded, ChannelSendError> {
+    pub(crate) async fn upload_file(
+        &self,
+        upload: Upload<'_>,
+    ) -> Result<Uploaded, ChannelSendError> {
         let length = upload.bytes.len().to_string();
         let started = self
             .api_form(

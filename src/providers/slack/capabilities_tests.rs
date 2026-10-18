@@ -12,7 +12,10 @@ fn bare_account_declares_text_buttons_threads_and_interactions_only() {
     assert!(caps.addressing.thread_id && caps.addressing.reply_to_id);
     assert!(caps.reactions && caps.progressive_edits);
     for action in ["send", "typing", "edit", "delete", "draft-update", "react"] {
-        assert!(caps.actions.supported.iter().any(|a| a == action), "{action}");
+        assert!(
+            caps.actions.supported.iter().any(|a| a == action),
+            "{action}"
+        );
     }
     assert!(caps.events.supported.iter().any(|e| e == "message_deleted"));
 }
@@ -30,5 +33,8 @@ fn media_and_voice_ports_enable_their_content_kinds() {
     assert!(caps.content.parts.contains(&"voice_note".to_owned()));
     assert!(caps.voice_in.supported && !caps.voice_in.synthesis);
     assert!(caps.voice_out.supported && caps.voice_out.synthesis);
-    assert_eq!(caps.voice_out.accepted_codecs, ["m4a_aac", "mp3", "ogg_opus"]);
+    assert_eq!(
+        caps.voice_out.accepted_codecs,
+        ["m4a_aac", "mp3", "ogg_opus"]
+    );
 }

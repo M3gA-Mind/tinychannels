@@ -70,16 +70,27 @@ pub(super) async fn bodies(server: &MockServer, method_name: &str) -> Vec<Value>
 pub(super) async fn mount_auth(server: &MockServer, user_id: &str) {
     Mock::given(method("GET"))
         .and(path("/api/auth.test"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true, "user_id": user_id})))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"ok": true, "user_id": user_id})),
+        )
         .mount(server)
         .await;
 }
 
 /// Serve `bytes` at `GET <path>` and return the absolute URL.
-pub(super) async fn mount_file(server: &MockServer, file_path: &str, content_type: &str, bytes: &[u8]) -> String {
+pub(super) async fn mount_file(
+    server: &MockServer,
+    file_path: &str,
+    content_type: &str,
+    bytes: &[u8],
+) -> String {
     Mock::given(method("GET"))
         .and(path(file_path))
-        .respond_with(ResponseTemplate::new(200).insert_header("content-type", content_type).set_body_bytes(bytes.to_vec()))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", content_type)
+                .set_body_bytes(bytes.to_vec()),
+        )
         .mount(server)
         .await;
     format!("{}{file_path}", server.uri())
@@ -108,7 +119,12 @@ impl MediaRepository for StubMedia {
         if self.fail_store {
             anyhow::bail!("storage unavailable");
         }
-        let MediaMetadata { kind, content_type, file_name, .. } = request.metadata.clone();
+        let MediaMetadata {
+            kind,
+            content_type,
+            file_name,
+            ..
+        } = request.metadata.clone();
         self.stored.lock().unwrap().push(request);
         Ok(MediaReference {
             opaque_id: Some("media-1".into()),
@@ -119,15 +135,28 @@ impl MediaRepository for StubMedia {
         })
     }
 
-    async fn read_media(&self, scope: MediaScope, _id: String, _max: u64) -> anyhow::Result<StoredMedia> {
+    async fn read_media(
+        &self,
+        scope: MediaScope,
+        _id: String,
+        _max: u64,
+    ) -> anyhow::Result<StoredMedia> {
         self.scopes.lock().unwrap().push(scope);
-        self.read.lock().unwrap().clone().ok_or_else(|| anyhow::anyhow!("not found"))
+        self.read
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("not found"))
     }
 }
 
 pub(super) fn stored_media(kind: MediaKind, content_type: &str, bytes: &[u8]) -> StoredMedia {
     StoredMedia {
-        media: MediaReference { opaque_id: Some("media-1".into()), kind, ..Default::default() },
+        media: MediaReference {
+            opaque_id: Some("media-1".into()),
+            kind,
+            ..Default::default()
+        },
         content_type: content_type.into(),
         file_name: Some("report.pdf".into()),
         bytes: bytes.to_vec(),
@@ -168,7 +197,12 @@ impl VoiceMediaStore for StubVoice {
         _scope: tinychannels_bus::HostVoiceScope,
         _opaque_id: String,
     ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
-        let audio_base64 = self.audio_base64.lock().unwrap().clone().ok_or_else(|| anyhow::anyhow!("missing"))?;
+        let audio_base64 = self
+            .audio_base64
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("missing"))?;
         Ok(tinychannels_bus::HostReadVoiceMediaResult {
             audio_base64,
             mime_type: "audio/mp4".into(),

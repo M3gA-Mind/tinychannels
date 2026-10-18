@@ -67,25 +67,48 @@ impl Channel for SlackChannel {
     }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let typed = text_message(&message.recipient, message.thread_ts.as_deref(), &message.content);
-        self.send_v2_with_receipt(&typed).await.map(|_| ()).map_err(send_error_to_anyhow)
+        let typed = text_message(
+            &message.recipient,
+            message.thread_ts.as_deref(),
+            &message.content,
+        );
+        self.send_v2_with_receipt(&typed)
+            .await
+            .map(|_| ())
+            .map_err(send_error_to_anyhow)
     }
 
     async fn send_typed_with_receipt(
         &self,
         message: &ChannelOutboundMessage,
     ) -> anyhow::Result<ChannelSendOutcome> {
-        self.send_v2_with_receipt(message).await.map_err(send_error_to_anyhow)
+        self.send_v2_with_receipt(message)
+            .await
+            .map_err(send_error_to_anyhow)
     }
 
     async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
-        let typed = text_message(&message.recipient, message.thread_ts.as_deref(), &message.content);
-        let outcome = self.send_v2_with_receipt(&typed).await.map_err(send_error_to_anyhow)?;
+        let typed = text_message(
+            &message.recipient,
+            message.thread_ts.as_deref(),
+            &message.content,
+        );
+        let outcome = self
+            .send_v2_with_receipt(&typed)
+            .await
+            .map_err(send_error_to_anyhow)?;
         Ok(outcome.receipt.primary_platform_message_id)
     }
 
-    async fn update_draft(&self, recipient: &str, message_id: &str, text: &str) -> anyhow::Result<()> {
-        edit_text_for_legacy(self, recipient, message_id, text).await.map_err(send_error_to_anyhow)
+    async fn update_draft(
+        &self,
+        recipient: &str,
+        message_id: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        edit_text_for_legacy(self, recipient, message_id, text)
+            .await
+            .map_err(send_error_to_anyhow)
     }
 
     async fn finalize_draft(
@@ -95,7 +118,9 @@ impl Channel for SlackChannel {
         text: &str,
         _thread_ts: Option<&str>,
     ) -> anyhow::Result<()> {
-        edit_text_for_legacy(self, recipient, message_id, text).await.map_err(send_error_to_anyhow)
+        edit_text_for_legacy(self, recipient, message_id, text)
+            .await
+            .map_err(send_error_to_anyhow)
     }
 
     async fn send_reaction(
@@ -115,11 +140,15 @@ impl Channel for SlackChannel {
         receipt: &MessageReceipt,
         intent: &ChannelOutboundIntent,
     ) -> anyhow::Result<MessageReceipt> {
-        self.edit_message_v2(receipt, intent).await.map_err(send_error_to_anyhow)
+        self.edit_message_v2(receipt, intent)
+            .await
+            .map_err(send_error_to_anyhow)
     }
 
     async fn delete_message(&self, receipt: &MessageReceipt) -> anyhow::Result<()> {
-        self.delete_message_v2(receipt).await.map_err(send_error_to_anyhow)
+        self.delete_message_v2(receipt)
+            .await
+            .map_err(send_error_to_anyhow)
     }
 
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
@@ -144,11 +173,15 @@ impl Channel for SlackChannel {
     }
 
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        self.set_typing_status(recipient, "is typing…").await.map_err(send_error_to_anyhow)
+        self.set_typing_status(recipient, "is typing…")
+            .await
+            .map_err(send_error_to_anyhow)
     }
 
     async fn stop_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        self.set_typing_status(recipient, "").await.map_err(send_error_to_anyhow)
+        self.set_typing_status(recipient, "")
+            .await
+            .map_err(send_error_to_anyhow)
     }
 }
 
@@ -186,14 +219,21 @@ impl crate::channel::ChannelAdapter for SlackChannel {
         Ok(())
     }
 
-    async fn send(&self, intent: ChannelOutboundIntent) -> Result<ChannelSendOutcome, ChannelSendError> {
-        self.send_v2_with_receipt(&ChannelOutboundMessage::from_intent(&intent)).await
+    async fn send(
+        &self,
+        intent: ChannelOutboundIntent,
+    ) -> Result<ChannelSendOutcome, ChannelSendError> {
+        self.send_v2_with_receipt(&ChannelOutboundMessage::from_intent(&intent))
+            .await
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError> {
         Ok(ChannelAccountSnapshot {
             channel_id: "slack".into(),
-            states: vec![ChannelAccountState::Configured, ChannelAccountState::Enabled],
+            states: vec![
+                ChannelAccountState::Configured,
+                ChannelAccountState::Enabled,
+            ],
             health_state: Some("unknown".into()),
             ..Default::default()
         })
@@ -202,7 +242,10 @@ impl crate::channel::ChannelAdapter for SlackChannel {
 
 #[async_trait]
 impl crate::channel::ChannelTypedSend for SlackChannel {
-    async fn send_typed(&self, message: &ChannelOutboundMessage) -> Result<ChannelSendOutcome, ChannelSendError> {
+    async fn send_typed(
+        &self,
+        message: &ChannelOutboundMessage,
+    ) -> Result<ChannelSendOutcome, ChannelSendError> {
         self.send_v2_with_receipt(message).await
     }
 }
@@ -229,7 +272,8 @@ impl crate::channel::ChannelReaction for SlackChannel {
         remove: bool,
     ) -> Result<(), ChannelSendError> {
         check_channel(channel)?;
-        self.send_reaction_v2(conversation, provider_message_id, reaction, remove).await
+        self.send_reaction_v2(conversation, provider_message_id, reaction, remove)
+            .await
     }
 }
 

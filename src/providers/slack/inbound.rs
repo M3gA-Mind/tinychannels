@@ -149,7 +149,10 @@ impl SlackChannel {
                 _ => MediaKind::Document,
             };
             if !crate::host::is_allowed_content_type(kind, &mime) {
-                tracing::debug!(file = id, "[slack] skipping a file with an unsupported type");
+                tracing::debug!(
+                    file = id,
+                    "[slack] skipping a file with an unsupported type"
+                );
                 continue;
             }
             let Some(url) = file.get("url_private_download").and_then(Value::as_str) else {
@@ -188,7 +191,11 @@ impl SlackChannel {
                     continue;
                 };
                 let mut media = result.media;
-                if media.opaque_id.as_deref().is_none_or(|v| v.trim().is_empty()) {
+                if media
+                    .opaque_id
+                    .as_deref()
+                    .is_none_or(|v| v.trim().is_empty())
+                {
                     tracing::warn!(file = id, "[slack] voice store returned no reference");
                     continue;
                 }

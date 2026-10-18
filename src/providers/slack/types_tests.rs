@@ -22,17 +22,27 @@ fn allowlists_match_exactly_or_by_wildcard() {
 #[test]
 fn app_tokens_must_be_non_blank() {
     let channel = SlackChannel::new("t".into(), None, vec![]);
-    assert!(channel.with_app_token(Some("  ".into())).app_token.is_none());
-    let channel = SlackChannel::new("t".into(), None, vec![]).with_app_token(Some("app-token".into()));
+    assert!(
+        channel
+            .with_app_token(Some("  ".into()))
+            .app_token
+            .is_none()
+    );
+    let channel =
+        SlackChannel::new("t".into(), None, vec![]).with_app_token(Some("app-token".into()));
     assert_eq!(channel.app_token.as_deref(), Some("app-token"));
 }
 
 #[test]
 fn an_api_base_override_also_scopes_the_trusted_file_origin() {
-    let channel = SlackChannel::new("t".into(), None, vec![]).with_api_base("http://127.0.0.1:9/api/");
+    let channel =
+        SlackChannel::new("t".into(), None, vec![]).with_api_base("http://127.0.0.1:9/api/");
     assert_eq!(channel.api_base, "http://127.0.0.1:9/api");
     assert_eq!(channel.files_base, "http://127.0.0.1:9/");
-    assert_eq!(channel.api_url("auth.test"), "http://127.0.0.1:9/api/auth.test");
+    assert_eq!(
+        channel.api_url("auth.test"),
+        "http://127.0.0.1:9/api/auth.test"
+    );
     let bare = SlackChannel::new("t".into(), None, vec![]).with_api_base("localhost");
     assert_eq!(bare.files_base, "localhost/");
 }
@@ -42,7 +52,10 @@ fn timing_and_voice_synthesis_are_configurable() {
     let channel = SlackChannel::new("t".into(), None, vec![])
         .with_timing(Duration::from_millis(1), Duration::from_millis(2))
         .with_voice_synthesis(true);
-    assert_eq!((channel.reconnect_backoff, channel.poll_interval), (Duration::from_millis(1), Duration::from_millis(2)));
+    assert_eq!(
+        (channel.reconnect_backoff, channel.poll_interval),
+        (Duration::from_millis(1), Duration::from_millis(2))
+    );
     assert!(channel.voice_synthesis);
 }
 
@@ -54,11 +67,17 @@ fn seen_keys_are_remembered_and_the_window_evicts_the_oldest() {
     for index in 0..SLACK_SEEN_WINDOW {
         channel.mark_seen(format!("C1:fill-{index}"));
     }
-    assert!(channel.mark_seen("C1:1".into()), "the oldest key was evicted");
+    assert!(
+        channel.mark_seen("C1:1".into()),
+        "the oldest key was evicted"
+    );
 }
 
 #[test]
 fn a_send_failure_displays_its_message() {
-    let failure = SlackFailure(ChannelSendError { message: "boom".into(), ..Default::default() });
+    let failure = SlackFailure(ChannelSendError {
+        message: "boom".into(),
+        ..Default::default()
+    });
     assert_eq!(failure.to_string(), "boom");
 }

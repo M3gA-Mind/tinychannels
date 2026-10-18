@@ -333,5 +333,8 @@ fn the_slack_stanza_builds_a_socket_mode_provider_only_when_configured() {
     assert_eq!(slack.proactive_target().as_deref(), Some("C1"));
     let capabilities = slack.capabilities();
     assert!(capabilities.addressing.thread_id && capabilities.reactions);
-    assert!(!capabilities.content.image.outbound, "no media port on the no-op host");
+    assert!(
+        !capabilities.content.image.outbound,
+        "no media port on the no-op host"
+    );
 }

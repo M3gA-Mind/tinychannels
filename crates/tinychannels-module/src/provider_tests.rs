@@ -3598,7 +3598,10 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
     let descriptor = handle.descriptor();
     assert_eq!(descriptor.id, "slack");
     assert_eq!(descriptor.account_id.as_deref(), Some("slack:account-a"));
-    assert_eq!(descriptor.metadata.get("adapterMode").map(String::as_str), Some("native-v2"));
+    assert_eq!(
+        descriptor.metadata.get("adapterMode").map(String::as_str),
+        Some("native-v2")
+    );
 
     let channel_ref = tinychannels_bus::ChannelRef {
         id: "slack".into(),
@@ -3622,7 +3625,10 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
         ..Default::default()
     };
     let sent = handle.send(intent.clone()).await.unwrap();
-    assert_eq!(sent.receipt.primary_platform_message_id.as_deref(), Some("321.5"));
+    assert_eq!(
+        sent.receipt.primary_platform_message_id.as_deref(),
+        Some("321.5")
+    );
     assert_eq!(sent.receipt.conversation.as_ref(), Some(&conversation));
 
     handle
@@ -3641,7 +3647,12 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
         .await
         .unwrap();
     let receipt = sent.receipt.clone();
-    let edited = handle.edits().unwrap().edit(&receipt, intent.clone()).await.unwrap();
+    let edited = handle
+        .edits()
+        .unwrap()
+        .edit(&receipt, intent.clone())
+        .await
+        .unwrap();
     assert_eq!(edited.conversation.as_ref(), Some(&conversation));
     handle.deletes().unwrap().delete(&receipt).await.unwrap();
     running
@@ -3657,12 +3668,22 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
         })
         .await
         .unwrap();
-    assert!(matches!(draft, tinychannels_bus::ChannelInteractionResult::Sent(_)));
+    assert!(matches!(
+        draft,
+        tinychannels_bus::ChannelInteractionResult::Sent(_)
+    ));
 
     let before = server.received_requests().await.unwrap().len();
     let mut wrong_scope = receipt.clone();
     wrong_scope.conversation.as_mut().unwrap().id = "C-other".into();
-    assert!(handle.edits().unwrap().edit(&wrong_scope, intent).await.is_err());
+    assert!(
+        handle
+            .edits()
+            .unwrap()
+            .edit(&wrong_scope, intent)
+            .await
+            .is_err()
+    );
     assert_eq!(
         server.received_requests().await.unwrap().len(),
         before,
@@ -3682,7 +3703,10 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
         "/api/chat.delete",
         "/api/assistant.threads.setStatus",
     ] {
-        assert!(paths.iter().any(|path| path == expected), "{expected}: {paths:?}");
+        assert!(
+            paths.iter().any(|path| path == expected),
+            "{expected}: {paths:?}"
+        );
     }
     running.stop().await.unwrap();
 }

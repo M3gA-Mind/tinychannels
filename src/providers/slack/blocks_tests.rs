@@ -17,7 +17,14 @@ fn buttons_render_a_section_and_split_rows_into_five_wide_action_blocks() {
     primary.style = Some(ButtonStyle::Primary);
     let mut secondary = button("d", "Delta");
     secondary.style = Some(ButtonStyle::Secondary);
-    let row = vec![button("a", "Alpha"), styled, primary, secondary, button("e", "E"), button("f", "F")];
+    let row = vec![
+        button("a", "Alpha"),
+        styled,
+        primary,
+        secondary,
+        button("e", "E"),
+        button("f", "F"),
+    ];
     let blocks = button_blocks("*pick*", &[row]).unwrap();
     assert_eq!(blocks.len(), 3);
     assert_eq!(blocks[0]["text"]["text"], "*pick*");
@@ -41,7 +48,12 @@ fn buttons_reject_inputs_slack_would_refuse() {
     let mut disabled = button("a", "A");
     disabled.disabled = true;
     assert!(button_blocks("t", &[vec![disabled]]).is_err());
-    for bad in [button("", "A"), button("a", ""), button("a", &"l".repeat(76)), button(&"i".repeat(256), "A")] {
+    for bad in [
+        button("", "A"),
+        button("a", ""),
+        button("a", &"l".repeat(76)),
+        button(&"i".repeat(256), "A"),
+    ] {
         assert!(button_blocks("t", &[vec![bad]]).is_err());
     }
 }

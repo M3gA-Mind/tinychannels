@@ -6,7 +6,7 @@ use super::types::SlackChannel;
 use crate::traits::ChannelMessage;
 use serde_json::Value;
 use tinychannels_bus::{
-    ChannelEvent, ChannelEventKind, ChannelIngress, ChannelInboundEnvelope, ChannelReaction,
+    ChannelEvent, ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelReaction,
     ContentPart, ConversationRef,
 };
 use tokio::sync::mpsc::Sender;
@@ -102,7 +102,11 @@ impl SlackChannel {
     }
 
     /// Handle one Events API / history item.
-    pub(crate) async fn handle_event(&self, event: &Value, tx: Option<&Sender<ChannelMessage>>) -> Flow {
+    pub(crate) async fn handle_event(
+        &self,
+        event: &Value,
+        tx: Option<&Sender<ChannelMessage>>,
+    ) -> Flow {
         match str_of(event, "type") {
             "message" | "app_mention" => match str_of(event, "subtype") {
                 "message_changed" => self.handle_changed(event).await,
@@ -210,7 +214,10 @@ impl SlackChannel {
                 }),
             None => false,
         };
-        if !delivered && let Some(tx) = tx && tx.send(message).await.is_err() {
+        if !delivered
+            && let Some(tx) = tx
+            && tx.send(message).await.is_err()
+        {
             return Flow::Stop;
         }
         Flow::Continue
@@ -233,7 +240,10 @@ impl SlackChannel {
         let conversation = Self::conversation_ref(
             channel,
             event.get("channel_type").and_then(Value::as_str),
-            inner.get("thread_ts").and_then(Value::as_str).map(str::to_owned),
+            inner
+                .get("thread_ts")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
         );
         let kind = ChannelEventKind::MessageUpdated {
             message_id: message_id.clone(),
@@ -244,8 +254,13 @@ impl SlackChannel {
             }],
         };
         let event_id = format!("slack:edit:{message_id}:{event_ts}");
-        self.publish_event(Self::channel_event(event_id, ts_to_ms(event_ts), Some(conversation), kind))
-            .await;
+        self.publish_event(Self::channel_event(
+            event_id,
+            ts_to_ms(event_ts),
+            Some(conversation),
+            kind,
+        ))
+        .await;
     }
 
     async fn handle_deleted(&self, event: &Value) {
@@ -263,8 +278,11 @@ impl SlackChannel {
             return;
         }
         let message_id = provider_message_id(channel, ts);
-        let conversation =
-            Self::conversation_ref(channel, event.get("channel_type").and_then(Value::as_str), None);
+        let conversation = Self::conversation_ref(
+            channel,
+            event.get("channel_type").and_then(Value::as_str),
+            None,
+        );
         let kind = ChannelEventKind::MessageDeleted {
             message_id: message_id.clone(),
             provider_message_id: Some(ts.to_owned()),
@@ -294,7 +312,8 @@ impl SlackChannel {
         }
         let event_ts = str_of(event, "event_ts");
         let direction = if added { "added" } else { "removed" };
-        let event_id = format!("slack:reaction:{direction}:{channel}:{ts}:{user}:{name}:{event_ts}");
+        let event_id =
+            format!("slack:reaction:{direction}:{channel}:{ts}:{user}:{name}:{event_ts}");
         if !self.mark_seen(event_id.clone()) {
             return;
         }
@@ -309,13 +328,28 @@ impl SlackChannel {
         };
         let provider_message_id = Some(ts.to_owned());
         let kind = if added {
-            ChannelEventKind::ReactionAdded { message_id, provider_message_id, actor, reaction }
+            ChannelEventKind::ReactionAdded {
+                message_id,
+                provider_message_id,
+                actor,
+                reaction,
+            }
         } else {
-            ChannelEventKind::ReactionRemoved { message_id, provider_message_id, actor, reaction }
+            ChannelEventKind::ReactionRemoved {
+                message_id,
+                provider_message_id,
+                actor,
+                reaction,
+            }
         };
         let conversation = Self::conversation_ref(channel, None, None);
-        self.publish_event(Self::channel_event(event_id, ts_to_ms(event_ts), Some(conversation), kind))
-            .await;
+        self.publish_event(Self::channel_event(
+            event_id,
+            ts_to_ms(event_ts),
+            Some(conversation),
+            kind,
+        ))
+        .await;
     }
 
     /// Handle one Socket Mode `interactive` payload (a Block Kit button press).
@@ -326,7 +360,10 @@ impl SlackChannel {
         let user = payload.get("user").unwrap_or(&Value::Null);
         let actor = Self::sender_ref(user);
         let allowed = self.is_user_allowed(&actor.id)
-            || actor.name.as_deref().is_some_and(|name| self.is_user_allowed(name));
+            || actor
+                .name
+                .as_deref()
+                .is_some_and(|name| self.is_user_allowed(name));
         let action = payload.pointer("/actions/0");
         let action_id = action.map(|a| str_of(a, "action_id")).unwrap_or_default();
         let channel = payload

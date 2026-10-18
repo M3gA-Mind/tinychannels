@@ -168,11 +168,23 @@ pub(crate) fn send_error(failure: &ApiFailure, operation: &str) -> ChannelSendEr
                     base(SendErrorKind::NotFound, message)
                 }
                 "msg_too_long" => base(SendErrorKind::TooLong, message),
-                "no_text" | "invalid_arguments" | "invalid_blocks" | "invalid_blocks_format"
-                | "invalid_name" | "invalid_array_arg" => base(SendErrorKind::BadFormat, message),
-                "not_in_channel" | "invalid_auth" | "not_authed" | "account_inactive"
-                | "token_revoked" | "token_expired" | "missing_scope" | "is_archived"
-                | "cant_delete_message" | "cant_update_message" | "edit_window_closed"
+                "no_text"
+                | "invalid_arguments"
+                | "invalid_blocks"
+                | "invalid_blocks_format"
+                | "invalid_name"
+                | "invalid_array_arg" => base(SendErrorKind::BadFormat, message),
+                "not_in_channel"
+                | "invalid_auth"
+                | "not_authed"
+                | "account_inactive"
+                | "token_revoked"
+                | "token_expired"
+                | "missing_scope"
+                | "is_archived"
+                | "cant_delete_message"
+                | "cant_update_message"
+                | "edit_window_closed"
                 | "restricted_action" => base(SendErrorKind::Forbidden, message),
                 _ => base(SendErrorKind::Unknown, message),
             }

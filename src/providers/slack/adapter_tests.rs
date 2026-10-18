@@ -1,7 +1,7 @@
 use super::*;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelStreamingDraft,
-    ChannelTypedSend, ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelStreamingDraft, ChannelTypedSend,
+    ChannelTyping,
 };
 use crate::providers::slack::fixtures::*;
 use serde_json::{Value, json};
@@ -21,7 +21,10 @@ const SHARE_TS: &str = "7.7";
 const CLIP_TS: &str = "1700000000.000100";
 
 fn channel_ref() -> tinychannels_bus::ChannelRef {
-    tinychannels_bus::ChannelRef { id: "slack".into(), account_id: None }
+    tinychannels_bus::ChannelRef {
+        id: "slack".into(),
+        account_id: None,
+    }
 }
 
 fn conversation(thread: Option<&str>) -> ConversationRef {
@@ -59,7 +62,11 @@ fn parts(parts: Vec<OutboundContentPart>) -> OutboundPayload {
 }
 
 fn media_ref(kind: MediaKind) -> MediaReference {
-    MediaReference { opaque_id: Some("media-1".into()), kind, ..Default::default() }
+    MediaReference {
+        opaque_id: Some("media-1".into()),
+        kind,
+        ..Default::default()
+    }
 }
 
 fn receipt(id: &str) -> MessageReceipt {
@@ -68,7 +75,10 @@ fn receipt(id: &str) -> MessageReceipt {
         conversation: Some(conversation(None)),
         primary_platform_message_id: Some(id.into()),
         platform_message_ids: vec![id.into()],
-        parts: vec![MessageReceiptPart { platform_message_id: id.into(), ..Default::default() }],
+        parts: vec![MessageReceiptPart {
+            platform_message_id: id.into(),
+            ..Default::default()
+        }],
         ..Default::default()
     }
 }
@@ -90,7 +100,12 @@ impl SlackWireFixture {
         let server = mock_api().await;
         mount_auth(&server, "UBOT").await;
         mount(&server, "chat.postMessage", ok(json!({"ts": MOCK_TS}))).await;
-        for method in ["chat.update", "chat.delete", "reactions.add", "assistant.threads.setStatus"] {
+        for method in [
+            "chat.update",
+            "chat.delete",
+            "reactions.add",
+            "assistant.threads.setStatus",
+        ] {
             mount(&server, method, ok(json!({}))).await;
         }
         mount(
@@ -115,7 +130,10 @@ impl SlackWireFixture {
         let voice = Arc::new(StubVoice::default());
         *voice.audio_base64.lock().unwrap() =
             Some(base64::engine::general_purpose::STANDARD.encode(b"voice"));
-        let events = Arc::new(RecordingEvents { deliver: true, ..Default::default() });
+        let events = Arc::new(RecordingEvents {
+            deliver: true,
+            ..Default::default()
+        });
         let slack = Arc::new(
             channel_for(&server, &["*"])
                 .with_media_repository(media.clone())
@@ -133,8 +151,13 @@ impl SlackWireFixture {
         }
     }
 
-    async fn send(&self, intent: ChannelOutboundIntent) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
-        ChannelAdapter::send(self.slack.as_ref(), intent).await.map(Some)
+    async fn send(
+        &self,
+        intent: ChannelOutboundIntent,
+    ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+        ChannelAdapter::send(self.slack.as_ref(), intent)
+            .await
+            .map(Some)
     }
 
     /// Observations for the requests sent since the previous harvest.
@@ -148,15 +171,22 @@ impl SlackWireFixture {
         for request in fresh {
             let body: Value = serde_json::from_slice(&request.body).unwrap_or_default();
             let draft = feature == ConformanceFeature::StreamingDraft;
-            let (operation, ids, kinds): (&str, Vec<String>, Vec<String>) = match request.url.path() {
+            let (operation, ids, kinds): (&str, Vec<String>, Vec<String>) = match request.url.path()
+            {
                 "/api/chat.postMessage" => {
-                    let has_actions = body["blocks"].as_array().is_some_and(|b| b.iter().any(|b| b["type"] == "actions"));
+                    let has_actions = body["blocks"]
+                        .as_array()
+                        .is_some_and(|b| b.iter().any(|b| b["type"] == "actions"));
                     let kind = match (has_actions, feature) {
                         (true, ConformanceFeature::Presentation) => "presentation",
                         (true, _) => "buttons",
                         (false, _) => "text",
                     };
-                    (if draft { "draft_create" } else { "send" }, vec![MOCK_TS.into()], vec![kind.into()])
+                    (
+                        if draft { "draft_create" } else { "send" },
+                        vec![MOCK_TS.into()],
+                        vec![kind.into()],
+                    )
                 }
                 "/api/files.completeUploadExternal" => {
                     let kind = match feature {
@@ -175,10 +205,18 @@ impl SlackWireFixture {
                         (true, 1) => "draft_update",
                         (true, _) => "draft_finalize",
                     };
-                    (operation, vec![body["ts"].as_str().unwrap().to_owned()], vec!["text".into()])
+                    (
+                        operation,
+                        vec![body["ts"].as_str().unwrap().to_owned()],
+                        vec!["text".into()],
+                    )
                 }
                 "/api/chat.delete" => (
-                    if draft { "draft_cancel_cleanup" } else { "delete" },
+                    if draft {
+                        "draft_cancel_cleanup"
+                    } else {
+                        "delete"
+                    },
                     vec![body["ts"].as_str().unwrap().to_owned()],
                     vec![],
                 ),
@@ -186,7 +224,10 @@ impl SlackWireFixture {
                 "/api/assistant.threads.setStatus" => ("typing", vec![], vec![]),
                 _ => continue,
             };
-            let channel_id = body["channel"].as_str().or(body["channel_id"].as_str()).unwrap_or_default();
+            let channel_id = body["channel"]
+                .as_str()
+                .or(body["channel_id"].as_str())
+                .unwrap_or_default();
             let thread = body["thread_ts"].as_str().map(str::to_owned);
             let thread_in_scope = feature == ConformanceFeature::ThreadAddressing;
             observed.push(WireObservation {
@@ -231,7 +272,10 @@ impl AdapterFixture for SlackWireFixture {
         self.observations.lock().unwrap().clone()
     }
 
-    async fn exercise(&self, feature: ConformanceFeature) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+    async fn exercise(
+        &self,
+        feature: ConformanceFeature,
+    ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         use ConformanceFeature as F;
         let adapter = self.slack.as_ref();
         let stored = |kind, mime: &str| Some(stored_media(kind, mime, b"bytes"));
@@ -239,29 +283,140 @@ impl AdapterFixture for SlackWireFixture {
             F::Text => self.send(text_intent("hello-kit")).await,
             F::Image | F::Video | F::Audio | F::File => {
                 let (kind, mime, part) = match feature {
-                    F::Image => (MediaKind::Image, "image/png", ContentPart::Image { media: media_ref(MediaKind::Image), caption: None, alt_text: None }),
-                    F::Video => (MediaKind::Video, "video/mp4", ContentPart::Video { media: media_ref(MediaKind::Video), caption: None, duration_ms: None, thumbnail: None }),
-                    F::Audio => (MediaKind::Audio, "audio/mpeg", ContentPart::Audio { media: media_ref(MediaKind::Audio), codec: None, duration_ms: None, title: None, transcript: None }),
-                    _ => (MediaKind::Document, "application/pdf", ContentPart::File { media: media_ref(MediaKind::Document), file_name: None, caption: None }),
+                    F::Image => (
+                        MediaKind::Image,
+                        "image/png",
+                        ContentPart::Image {
+                            media: media_ref(MediaKind::Image),
+                            caption: None,
+                            alt_text: None,
+                        },
+                    ),
+                    F::Video => (
+                        MediaKind::Video,
+                        "video/mp4",
+                        ContentPart::Video {
+                            media: media_ref(MediaKind::Video),
+                            caption: None,
+                            duration_ms: None,
+                            thumbnail: None,
+                        },
+                    ),
+                    F::Audio => (
+                        MediaKind::Audio,
+                        "audio/mpeg",
+                        ContentPart::Audio {
+                            media: media_ref(MediaKind::Audio),
+                            codec: None,
+                            duration_ms: None,
+                            title: None,
+                            transcript: None,
+                        },
+                    ),
+                    _ => (
+                        MediaKind::Document,
+                        "application/pdf",
+                        ContentPart::File {
+                            media: media_ref(MediaKind::Document),
+                            file_name: None,
+                            caption: None,
+                        },
+                    ),
                 };
                 *self.media.read.lock().unwrap() = stored(kind, mime);
                 self.send(intent(parts(vec![content(part)]))).await
             }
             F::Buttons => {
-                let button = tinychannels_bus::channel::ButtonAction { id: "go".into(), label: "Go".into(), style: None, disabled: false };
-                self.send(intent(parts(vec![content(ContentPart::Text { text: "Pick".into(), markdown_dialect: None }), content(ContentPart::Buttons { rows: vec![vec![button]] })]))).await
+                let button = tinychannels_bus::channel::ButtonAction {
+                    id: "go".into(),
+                    label: "Go".into(),
+                    style: None,
+                    disabled: false,
+                };
+                self.send(intent(parts(vec![
+                    content(ContentPart::Text {
+                        text: "Pick".into(),
+                        markdown_dialect: None,
+                    }),
+                    content(ContentPart::Buttons {
+                        rows: vec![vec![button]],
+                    }),
+                ])))
+                .await
             }
             F::Presentation => {
                 let approval = json!({"kind": "approval", "id": "r1", "prompt": "Run it?", "choices": ["Yes", "No"]});
-                self.send(intent(OutboundPayload::PresentationBlocks { blocks: approval })).await
+                self.send(intent(OutboundPayload::PresentationBlocks {
+                    blocks: approval,
+                }))
+                .await
             }
-            F::VoiceOut => self.send(intent(OutboundPayload::Voice { voice: OutboundVoice::Media { media: media_ref(MediaKind::Audio), audio_base64: None, codec: Some("m4a_aac".into()), duration_ms: None } })).await,
-            F::VoiceSynthesis => self.send(intent(OutboundPayload::Voice { voice: OutboundVoice::Synthesize { text: "speak".into(), voice: None } })).await,
-            F::Sticker => self.send(intent(parts(vec![content(ContentPart::Sticker { media: media_ref(MediaKind::Image), pack_id: None, sticker_id: None, emoji: None, alt_text: None })]))).await,
-            F::Location => self.send(intent(parts(vec![content(ContentPart::Location { latitude: 1.0, longitude: 2.0, label: None, address: None, accuracy_meters: None, live_until_unix_ms: None })]))).await,
-            F::Contact => self.send(intent(parts(vec![content(ContentPart::Contact { display_name: "Ada".into(), phone_numbers: vec![ContactMethod { value: "1".into(), label: None }], emails: vec![], organization: None })]))).await,
-            F::Poll => self.send(intent(OutboundPayload::Poll { question: "q".into(), options: vec!["a".into(), "b".into()] })).await,
-            F::NativeData => self.send(intent(OutboundPayload::NativeChannelData { data: json!({"k": 1}) })).await,
+            F::VoiceOut => {
+                self.send(intent(OutboundPayload::Voice {
+                    voice: OutboundVoice::Media {
+                        media: media_ref(MediaKind::Audio),
+                        audio_base64: None,
+                        codec: Some("m4a_aac".into()),
+                        duration_ms: None,
+                    },
+                }))
+                .await
+            }
+            F::VoiceSynthesis => {
+                self.send(intent(OutboundPayload::Voice {
+                    voice: OutboundVoice::Synthesize {
+                        text: "speak".into(),
+                        voice: None,
+                    },
+                }))
+                .await
+            }
+            F::Sticker => {
+                self.send(intent(parts(vec![content(ContentPart::Sticker {
+                    media: media_ref(MediaKind::Image),
+                    pack_id: None,
+                    sticker_id: None,
+                    emoji: None,
+                    alt_text: None,
+                })])))
+                .await
+            }
+            F::Location => {
+                self.send(intent(parts(vec![content(ContentPart::Location {
+                    latitude: 1.0,
+                    longitude: 2.0,
+                    label: None,
+                    address: None,
+                    accuracy_meters: None,
+                    live_until_unix_ms: None,
+                })])))
+                .await
+            }
+            F::Contact => {
+                self.send(intent(parts(vec![content(ContentPart::Contact {
+                    display_name: "Ada".into(),
+                    phone_numbers: vec![ContactMethod {
+                        value: "1".into(),
+                        label: None,
+                    }],
+                    emails: vec![],
+                    organization: None,
+                })])))
+                .await
+            }
+            F::Poll => {
+                self.send(intent(OutboundPayload::Poll {
+                    question: "q".into(),
+                    options: vec!["a".into(), "b".into()],
+                }))
+                .await
+            }
+            F::NativeData => {
+                self.send(intent(OutboundPayload::NativeChannelData {
+                    data: json!({"k": 1}),
+                }))
+                .await
+            }
             F::ReplyAddressing => {
                 let mut reply = text_intent("reply");
                 reply.reply_to_id = Some("2.0".into());
@@ -273,19 +428,47 @@ impl AdapterFixture for SlackWireFixture {
                 threaded.thread_id = Some("1.0".into());
                 self.send(threaded).await
             }
-            F::Typing => ChannelTyping::start_typing(adapter, "C1:1.0").await.map(|()| None),
+            F::Typing => ChannelTyping::start_typing(adapter, "C1:1.0")
+                .await
+                .map(|()| None),
             F::Reactions => {
-                let reaction = tinychannels_bus::channel::ChannelReaction { value: "👍".into(), custom_emoji_id: None };
-                crate::channel::ChannelReaction::send_reaction(adapter, &channel_ref(), &conversation(None), "1.1", &reaction, false).await.map(|()| None)
+                let reaction = tinychannels_bus::channel::ChannelReaction {
+                    value: "👍".into(),
+                    custom_emoji_id: None,
+                };
+                crate::channel::ChannelReaction::send_reaction(
+                    adapter,
+                    &channel_ref(),
+                    &conversation(None),
+                    "1.1",
+                    &reaction,
+                    false,
+                )
+                .await
+                .map(|()| None)
             }
-            F::Edit => ChannelEdit::edit(adapter, &receipt("1.1"), text_intent("edited")).await.map(|receipt| Some(ChannelSendOutcome { receipt, error: None })),
-            F::Delete => ChannelDelete::delete(adapter, &receipt("1.1")).await.map(|()| None),
+            F::Edit => ChannelEdit::edit(adapter, &receipt("1.1"), text_intent("edited"))
+                .await
+                .map(|receipt| {
+                    Some(ChannelSendOutcome {
+                        receipt,
+                        error: None,
+                    })
+                }),
+            F::Delete => ChannelDelete::delete(adapter, &receipt("1.1"))
+                .await
+                .map(|()| None),
             F::StreamingDraft => {
-                let created = ChannelStreamingDraft::upsert_draft(adapter, None, text_intent("d")).await?;
-                ChannelStreamingDraft::upsert_draft(adapter, Some(&created), text_intent("draft")).await?;
+                let created =
+                    ChannelStreamingDraft::upsert_draft(adapter, None, text_intent("d")).await?;
+                ChannelStreamingDraft::upsert_draft(adapter, Some(&created), text_intent("draft"))
+                    .await?;
                 ChannelEdit::edit(adapter, &created, text_intent("final")).await?;
                 ChannelDelete::delete(adapter, &created).await?;
-                Ok(Some(ChannelSendOutcome { receipt: created, error: None }))
+                Ok(Some(ChannelSendOutcome {
+                    receipt: created,
+                    error: None,
+                }))
             }
             F::InboundReactions => {
                 let event = json!({"type": "reaction_added", "user": "U1", "reaction": "tada", "event_ts": "9.9", "item": {"type": "message", "channel": "C1", "ts": "1.1"}});
@@ -332,7 +515,9 @@ impl AdapterFixture for SlackWireFixture {
                 });
                 Ok(None)
             }
-            F::ReadReceipts => Err(crate::providers::slack::api::unsupported("Slack exposes no read receipts to bots")),
+            F::ReadReceipts => Err(crate::providers::slack::api::unsupported(
+                "Slack exposes no read receipts to bots",
+            )),
         };
         self.harvest(feature).await;
         result
@@ -344,36 +529,57 @@ async fn slack_adapter_passes_the_full_conformance_matrix_against_the_mock_platf
     let fixture = SlackWireFixture::start().await;
     let results = check_all_features(&fixture).await;
     assert_eq!(results.len(), ConformanceFeature::ALL.len());
-    let failures: Vec<_> = results.iter().filter_map(|(feature, result)| result.as_ref().err().map(|e| format!("{feature:?}: {e}"))).collect();
+    let failures: Vec<_> = results
+        .iter()
+        .filter_map(|(feature, result)| result.as_ref().err().map(|e| format!("{feature:?}: {e}")))
+        .collect();
     assert!(failures.is_empty(), "{failures:?}");
 }
 
 #[tokio::test]
 async fn the_conformance_run_observes_real_wire_requests() {
     let fixture = SlackWireFixture::start().await;
-    tinychannels_conformance::check_feature(&fixture, ConformanceFeature::Text).await.unwrap();
+    tinychannels_conformance::check_feature(&fixture, ConformanceFeature::Text)
+        .await
+        .unwrap();
     let observation = fixture.observations().pop().unwrap();
     assert_eq!(observation.request["channel"], "C1");
     assert_eq!(observation.request["body"]["text"], "hello-kit");
     assert_eq!(observation.platform_message_ids, [MOCK_TS]);
-    tinychannels_conformance::check_feature(&fixture, ConformanceFeature::Sticker).await.unwrap();
-    assert!(fixture.observations().is_empty(), "undeclared stickers must not reach Slack");
+    tinychannels_conformance::check_feature(&fixture, ConformanceFeature::Sticker)
+        .await
+        .unwrap();
+    assert!(
+        fixture.observations().is_empty(),
+        "undeclared stickers must not reach Slack"
+    );
 }
 
 #[test]
 fn the_descriptor_status_and_capabilities_identify_the_native_adapter() {
     let channel = SlackChannel::new("t".into(), Some("C1".into()), vec![]);
     let descriptor = ChannelAdapter::descriptor(&channel);
-    assert_eq!((descriptor.id.as_str(), descriptor.display_name.as_str()), ("slack", "Slack"));
+    assert_eq!(
+        (descriptor.id.as_str(), descriptor.display_name.as_str()),
+        ("slack", "Slack")
+    );
     assert_eq!(descriptor.metadata["adapterMode"], "native-v2");
     assert_eq!(descriptor.metadata["voiceOut"], "file");
-    assert_eq!(ChannelAdapter::declared_capabilities(&channel), channel.declared());
+    assert_eq!(
+        ChannelAdapter::declared_capabilities(&channel),
+        channel.declared()
+    );
     assert_eq!(Channel::capabilities(&channel), channel.declared());
-    assert_eq!(ChannelAdapter::proactive_target(&channel).as_deref(), Some("C1"));
+    assert_eq!(
+        ChannelAdapter::proactive_target(&channel).as_deref(),
+        Some("C1")
+    );
     assert_eq!(Channel::proactive_target(&channel).as_deref(), Some("C1"));
     assert_eq!(Channel::name(&channel), "slack");
     assert!(channel.supports_remote_control() && channel.supports_chat_approvals());
-    assert!(channel.supports_reactions() && channel.supports_edit() && channel.supports_draft_updates());
+    assert!(
+        channel.supports_reactions() && channel.supports_edit() && channel.supports_draft_updates()
+    );
     assert!(channel.supports_reply_to_id() && channel.supports_thread_id());
 }
 
@@ -399,25 +605,50 @@ async fn legacy_sends_post_text_and_keep_typed_errors_recoverable() {
     let server = mock_api().await;
     mount(&server, "chat.postMessage", ok(json!({"ts": "1.1"}))).await;
     let channel = channel_for(&server, &[]);
-    Channel::send(&channel, &SendMessage::new("hi", "C1")).await.unwrap();
+    Channel::send(&channel, &SendMessage::new("hi", "C1"))
+        .await
+        .unwrap();
     let mut threaded = SendMessage::new("again", "C1");
     threaded.thread_ts = Some("1.0".into());
     Channel::send(&channel, &threaded).await.unwrap();
     let posts = bodies(&server, "chat.postMessage").await;
-    assert_eq!((posts[0]["channel"].as_str(), posts[0]["text"].as_str()), (Some("C1"), Some("hi")));
+    assert_eq!(
+        (posts[0]["channel"].as_str(), posts[0]["text"].as_str()),
+        (Some("C1"), Some("hi"))
+    );
     assert_eq!(posts[1]["thread_ts"], "1.0");
 
     let denied = mock_api().await;
-    mount(&denied, "chat.postMessage", json!({"ok": false, "error": "channel_not_found"})).await;
-    let error = Channel::send(&channel_for(&denied, &[]), &SendMessage::new("x", "C1")).await.unwrap_err();
-    let failure = error.downcast_ref::<crate::providers::slack::types::SlackFailure>().unwrap();
+    mount(
+        &denied,
+        "chat.postMessage",
+        json!({"ok": false, "error": "channel_not_found"}),
+    )
+    .await;
+    let error = Channel::send(&channel_for(&denied, &[]), &SendMessage::new("x", "C1"))
+        .await
+        .unwrap_err();
+    let failure = error
+        .downcast_ref::<crate::providers::slack::types::SlackFailure>()
+        .unwrap();
     assert_eq!(failure.0.kind, SendErrorKind::NotFound);
 
-    let outcome = channel.send_typed_with_receipt(&ChannelOutboundMessage::from_intent(&text_intent("typed"))).await.unwrap();
+    let outcome = channel
+        .send_typed_with_receipt(&ChannelOutboundMessage::from_intent(&text_intent("typed")))
+        .await
+        .unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["1.1"]);
-    let outcome = ChannelTypedSend::send_typed(&channel, &ChannelOutboundMessage::from_intent(&text_intent("typed"))).await.unwrap();
+    let outcome = ChannelTypedSend::send_typed(
+        &channel,
+        &ChannelOutboundMessage::from_intent(&text_intent("typed")),
+    )
+    .await
+    .unwrap();
     assert!(outcome.error.is_none());
-    let bad = ChannelOutboundMessage::from_intent(&intent(OutboundPayload::Poll { question: "q".into(), options: vec![] }));
+    let bad = ChannelOutboundMessage::from_intent(&intent(OutboundPayload::Poll {
+        question: "q".into(),
+        options: vec![],
+    }));
     assert!(channel.send_typed_with_receipt(&bad).await.is_err());
 }
 
@@ -427,40 +658,90 @@ async fn legacy_drafts_post_then_edit_in_place() {
     mount(&server, "chat.postMessage", ok(json!({"ts": "3.3"}))).await;
     mount(&server, "chat.update", ok(json!({}))).await;
     let channel = channel_for(&server, &[]);
-    let id = channel.send_draft(&SendMessage::new("draft", "C1")).await.unwrap();
+    let id = channel
+        .send_draft(&SendMessage::new("draft", "C1"))
+        .await
+        .unwrap();
     assert_eq!(id.as_deref(), Some("3.3"));
-    channel.update_draft("C1", "3.3", "draft more").await.unwrap();
-    channel.finalize_draft("C1", "3.3", "final", Some("1.0")).await.unwrap();
+    channel
+        .update_draft("C1", "3.3", "draft more")
+        .await
+        .unwrap();
+    channel
+        .finalize_draft("C1", "3.3", "final", Some("1.0"))
+        .await
+        .unwrap();
     let updates = bodies(&server, "chat.update").await;
-    assert_eq!((updates[0]["text"].as_str(), updates[1]["text"].as_str()), (Some("draft more"), Some("final")));
-    assert!(channel.send_draft(&SendMessage::new(" ", "C1")).await.is_err());
+    assert_eq!(
+        (updates[0]["text"].as_str(), updates[1]["text"].as_str()),
+        (Some("draft more"), Some("final"))
+    );
+    assert!(
+        channel
+            .send_draft(&SendMessage::new(" ", "C1"))
+            .await
+            .is_err()
+    );
     assert!(channel.update_draft("C1", "3.3", " ").await.is_err());
 }
 
 #[tokio::test]
 async fn legacy_interactions_delegate_to_the_typed_operations() {
     let server = mock_api().await;
-    for method in ["reactions.add", "chat.update", "chat.delete", "assistant.threads.setStatus"] {
+    for method in [
+        "reactions.add",
+        "chat.update",
+        "chat.delete",
+        "assistant.threads.setStatus",
+    ] {
         mount(&server, method, ok(json!({}))).await;
     }
     let channel = channel_for(&server, &[]);
-    let reaction = tinychannels_bus::channel::ChannelReaction { value: "👍".into(), custom_emoji_id: None };
-    Channel::send_reaction(&channel, &conversation(None), "1.1", &reaction, false).await.unwrap();
-    Channel::edit_message(&channel, &receipt("1.1"), &text_intent("new")).await.unwrap();
-    Channel::delete_message(&channel, &receipt("1.1")).await.unwrap();
+    let reaction = tinychannels_bus::channel::ChannelReaction {
+        value: "👍".into(),
+        custom_emoji_id: None,
+    };
+    Channel::send_reaction(&channel, &conversation(None), "1.1", &reaction, false)
+        .await
+        .unwrap();
+    Channel::edit_message(&channel, &receipt("1.1"), &text_intent("new"))
+        .await
+        .unwrap();
+    Channel::delete_message(&channel, &receipt("1.1"))
+        .await
+        .unwrap();
     Channel::start_typing(&channel, "C1:1.0").await.unwrap();
     Channel::stop_typing(&channel, "C1:1.0").await.unwrap();
-    ChannelTyping::start_typing(&channel, "C1:1.0").await.unwrap();
-    ChannelTyping::stop_typing(&channel, "C1:1.0").await.unwrap();
+    ChannelTyping::start_typing(&channel, "C1:1.0")
+        .await
+        .unwrap();
+    ChannelTyping::stop_typing(&channel, "C1:1.0")
+        .await
+        .unwrap();
     let statuses = bodies(&server, "assistant.threads.setStatus").await;
     assert_eq!(statuses.len(), 4);
     assert_eq!(statuses[1]["status"], "");
     assert!(Channel::start_typing(&channel, "C1").await.is_err());
     assert!(Channel::stop_typing(&channel, "C1").await.is_err());
-    assert!(Channel::edit_message(&channel, &receipt("1.1"), &text_intent(" ")).await.is_err());
-    assert!(Channel::delete_message(&channel, &MessageReceipt::default()).await.is_err());
-    let unknown = tinychannels_bus::channel::ChannelReaction { value: "??".into(), custom_emoji_id: None };
-    assert!(Channel::send_reaction(&channel, &conversation(None), "1.1", &unknown, false).await.is_err());
+    assert!(
+        Channel::edit_message(&channel, &receipt("1.1"), &text_intent(" "))
+            .await
+            .is_err()
+    );
+    assert!(
+        Channel::delete_message(&channel, &MessageReceipt::default())
+            .await
+            .is_err()
+    );
+    let unknown = tinychannels_bus::channel::ChannelReaction {
+        value: "??".into(),
+        custom_emoji_id: None,
+    };
+    assert!(
+        Channel::send_reaction(&channel, &conversation(None), "1.1", &unknown, false)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -468,9 +749,24 @@ async fn reactions_for_another_channel_are_forbidden() {
     let server = mock_api().await;
     mount(&server, "reactions.add", ok(json!({}))).await;
     let channel = channel_for(&server, &[]);
-    let reaction = tinychannels_bus::channel::ChannelReaction { value: "👍".into(), custom_emoji_id: None };
-    let other = tinychannels_bus::ChannelRef { id: "telegram".into(), account_id: None };
-    let error = crate::channel::ChannelReaction::send_reaction(&channel, &other, &conversation(None), "1.1", &reaction, false).await.unwrap_err();
+    let reaction = tinychannels_bus::channel::ChannelReaction {
+        value: "👍".into(),
+        custom_emoji_id: None,
+    };
+    let other = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: None,
+    };
+    let error = crate::channel::ChannelReaction::send_reaction(
+        &channel,
+        &other,
+        &conversation(None),
+        "1.1",
+        &reaction,
+        false,
+    )
+    .await
+    .unwrap_err();
     assert_eq!(error.kind, SendErrorKind::Forbidden);
     assert!(server.received_requests().await.unwrap().is_empty());
 }
@@ -490,15 +786,32 @@ async fn health_checks_follow_the_auth_test_status() {
 async fn listening_needs_a_channel_or_an_app_token_and_picks_the_transport() {
     let (tx, _rx) = tokio::sync::mpsc::channel(1);
     let bare = SlackChannel::new("t".into(), None, vec![]);
-    assert!(Channel::listen(&bare, tx.clone()).await.unwrap_err().to_string().contains("channel_id required"));
+    assert!(
+        Channel::listen(&bare, tx.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("channel_id required")
+    );
     let dead = |channel: Option<&str>, app: Option<&str>| {
         SlackChannel::new("t".into(), channel.map(str::to_owned), vec!["*".into()])
             .with_app_token(app.map(str::to_owned))
             .with_api_base("http://127.0.0.1:1/api")
-            .with_timing(std::time::Duration::from_millis(5), std::time::Duration::from_millis(5))
+            .with_timing(
+                std::time::Duration::from_millis(5),
+                std::time::Duration::from_millis(5),
+            )
     };
-    for channel in [dead(Some("C1"), None), dead(None, Some("app-token")), dead(Some("C1"), Some("  "))] {
-        let waited = tokio::time::timeout(std::time::Duration::from_millis(80), Channel::listen(&channel, tx.clone())).await;
+    for channel in [
+        dead(Some("C1"), None),
+        dead(None, Some("app-token")),
+        dead(Some("C1"), Some("  ")),
+    ] {
+        let waited = tokio::time::timeout(
+            std::time::Duration::from_millis(80),
+            Channel::listen(&channel, tx.clone()),
+        )
+        .await;
         assert!(waited.is_err(), "the transport loops until cancelled");
     }
 }

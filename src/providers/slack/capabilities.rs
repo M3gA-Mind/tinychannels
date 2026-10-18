@@ -27,7 +27,10 @@ const FILE_TYPES: [&str; 7] = [
 ];
 
 fn media(types: &[&str]) -> ContentCapability {
-    let owned = types.iter().map(|kind| (*kind).to_owned()).collect::<Vec<_>>();
+    let owned = types
+        .iter()
+        .map(|kind| (*kind).to_owned())
+        .collect::<Vec<_>>();
     ContentCapability {
         inbound: true,
         outbound: true,
@@ -42,9 +45,7 @@ impl SlackChannel {
     pub(crate) fn declared(&self) -> ChannelCapabilities {
         let media_enabled = self.media_repository.is_some();
         let voice_enabled = self.voice_media_store.is_some();
-        let mut parts: Vec<String> = ["text", "buttons", "presentation"]
-            .map(String::from)
-            .into();
+        let mut parts: Vec<String> = ["text", "buttons", "presentation"].map(String::from).into();
         let actions: Vec<String> = [
             "send",
             "typing",
@@ -100,10 +101,26 @@ impl SlackChannel {
                     outbound: true,
                     ..Default::default()
                 },
-                image: if media_enabled { media(&IMAGE_TYPES) } else { Default::default() },
-                video: if media_enabled { media(&VIDEO_TYPES) } else { Default::default() },
-                audio: if media_enabled { media(&AUDIO_TYPES) } else { Default::default() },
-                file: if media_enabled { media(&FILE_TYPES) } else { Default::default() },
+                image: if media_enabled {
+                    media(&IMAGE_TYPES)
+                } else {
+                    Default::default()
+                },
+                video: if media_enabled {
+                    media(&VIDEO_TYPES)
+                } else {
+                    Default::default()
+                },
+                audio: if media_enabled {
+                    media(&AUDIO_TYPES)
+                } else {
+                    Default::default()
+                },
+                file: if media_enabled {
+                    media(&FILE_TYPES)
+                } else {
+                    Default::default()
+                },
                 buttons: ContentCapability {
                     outbound: true,
                     ..Default::default()
