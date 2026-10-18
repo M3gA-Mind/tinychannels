@@ -424,3 +424,7 @@ pub(crate) use impl_long_tail_adapter;
 #[cfg(test)]
 #[path = "long_tail_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "long_tail_conformance_tests.rs"]
+mod conformance_tests;
