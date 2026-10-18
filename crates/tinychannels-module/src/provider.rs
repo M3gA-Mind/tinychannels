@@ -1085,6 +1085,8 @@ async fn listen_with_supervision(
 /// A resource is retained until its owning task acknowledges cleanup.
 #[derive(Clone)]
 struct NativePorts {
+    /// How operator-facing errors name the provider.
+    label: &'static str,
     adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
     typed_send: Arc<dyn tinychannels::channel::ChannelTypedSend>,
     typing: Arc<dyn tinychannels::channel::ChannelTyping>,
@@ -1095,8 +1097,22 @@ struct NativePorts {
 }
 
 impl NativePorts {
-    fn telegram(channel: Arc<tinychannels::TelegramChannel>) -> Self {
+    /// Bind every optional v2 port to one provider object, so the operation
+    /// queue, the typed sender and the declared capabilities all describe the
+    /// same configured account.
+    fn new<T>(label: &'static str, channel: Arc<T>) -> Self
+    where
+        T: tinychannels::channel::ChannelAdapter
+            + tinychannels::channel::ChannelTypedSend
+            + tinychannels::channel::ChannelTyping
+            + tinychannels::channel::ChannelReaction
+            + tinychannels::channel::ChannelEdit
+            + tinychannels::channel::ChannelDelete
+            + tinychannels::channel::ChannelStreamingDraft
+            + 'static,
+    {
         Self {
+            label,
             adapter: channel.clone(),
             typed_send: channel.clone(),
             typing: channel.clone(),
@@ -1105,6 +1121,10 @@ impl NativePorts {
             deletes: channel.clone(),
             drafts: channel,
         }
+    }
+
+    fn telegram(channel: Arc<tinychannels::TelegramChannel>) -> Self {
+        Self::new("Telegram", channel)
     }
 }
 
@@ -1124,6 +1144,7 @@ pub(crate) struct Running {
 pub(crate) enum AdapterMode {
     LegacyBacked,
     TelegramNativeV2,
+    WhatsAppNativeV2,
 }
 
 pub(crate) struct ConfiguredAdapterHandle {
@@ -1132,7 +1153,7 @@ pub(crate) struct ConfiguredAdapterHandle {
     pub(crate) mode: AdapterMode,
     adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
     #[cfg(test)]
-    telegram_native: Option<Arc<TelegramNativeAdapter>>,
+    telegram_native: Option<Arc<NativeAdapter>>,
 }
 
 impl ConfiguredAdapterHandle {
@@ -1191,17 +1212,29 @@ impl ConfiguredAdapterHandle {
 
 pub(crate) struct ConfiguredAdapterFactory;
 
-/// Configured Telegram v2 surface. The provider's native typed sender remains
+/// Configured native v2 surface. The provider's native typed sender remains
 /// the implementation authority; this adapter submits every operation to the
 /// running provider's single ordered operation queue.
-struct TelegramNativeAdapter {
+struct NativeAdapter {
     running: Arc<Running>,
 }
 
-fn adapter_operation_error(error: RunningSendError) -> tinychannels::channel::ChannelSendError {
+impl NativeAdapter {
+    fn label(&self) -> &'static str {
+        self.running
+            .native_ports
+            .as_ref()
+            .map_or("Provider", |ports| ports.label)
+    }
+}
+
+fn adapter_operation_error(
+    label: &str,
+    error: RunningSendError,
+) -> tinychannels::channel::ChannelSendError {
     tinychannels::channel::ChannelSendError {
         kind: tinychannels::channel::SendErrorKind::Unknown,
-        message: "Telegram operation failed".into(),
+        message: format!("{label} operation failed"),
         retryable: matches!(error, RunningSendError::NotDispatched(_)),
         sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
         ..Default::default()
@@ -1209,13 +1242,13 @@ fn adapter_operation_error(error: RunningSendError) -> tinychannels::channel::Ch
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelAdapter for NativeAdapter {
     fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
         let mut descriptor = self
             .running
             .native_ports
             .as_ref()
-            .expect("Telegram native ports")
+            .expect("native ports")
             .adapter
             .descriptor();
         descriptor.account_id = Some(self.running.configured_instance.clone());
@@ -1230,7 +1263,7 @@ impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
         self.running
             .native_ports
             .as_ref()
-            .expect("Telegram native ports")
+            .expect("native ports")
             .adapter
             .declared_capabilities()
     }
@@ -1249,7 +1282,7 @@ impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         Err(tinychannels::channel::ChannelSendError {
             kind: tinychannels::channel::SendErrorKind::Forbidden,
-            message: "Telegram polling is already owned by the configured module runtime".into(),
+            message: format!("{} ingress is already owned by the configured module runtime", self.label()),
             retryable: false,
             ..Default::default()
         })
@@ -1261,7 +1294,7 @@ impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
             .await
             .map_err(|_error| tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Transient,
-                message: "Telegram runtime stop failed".into(),
+                message: format!("{} runtime stop failed", self.label()),
                 retryable: false,
                 sent_before_error: true,
                 ..Default::default()
@@ -1289,7 +1322,7 @@ impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelTyping for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelTyping for NativeAdapter {
     async fn start_typing(
         &self,
         conversation_id: &str,
@@ -1300,7 +1333,7 @@ impl tinychannels::channel::ChannelTyping for TelegramNativeAdapter {
             })
             .await
             .map(|_| ())
-            .map_err(adapter_operation_error)
+            .map_err(|error| adapter_operation_error(self.label(), error))
     }
 
     async fn stop_typing(
@@ -1313,12 +1346,12 @@ impl tinychannels::channel::ChannelTyping for TelegramNativeAdapter {
             })
             .await
             .map(|_| ())
-            .map_err(adapter_operation_error)
+            .map_err(|error| adapter_operation_error(self.label(), error))
     }
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelReaction for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelReaction for NativeAdapter {
     async fn send_reaction(
         &self,
         channel: &tinychannels_bus::channel::ChannelRef,
@@ -1337,12 +1370,12 @@ impl tinychannels::channel::ChannelReaction for TelegramNativeAdapter {
             })
             .await
             .map(|_| ())
-            .map_err(adapter_operation_error)
+            .map_err(|error| adapter_operation_error(self.label(), error))
     }
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelEdit for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelEdit for NativeAdapter {
     async fn edit(
         &self,
         receipt: &tinychannels_bus::channel::MessageReceipt,
@@ -1358,12 +1391,12 @@ impl tinychannels::channel::ChannelEdit for TelegramNativeAdapter {
                 intent,
             })
             .await
-            .map_err(adapter_operation_error)?
+            .map_err(|error| adapter_operation_error(self.label(), error))?
         {
             tinychannels_bus::ChannelInteractionResult::Sent(outcome) => Ok(outcome.receipt),
             _ => Err(tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Unknown,
-                message: "Telegram edit returned no message receipt".into(),
+                message: format!("{} edit returned no message receipt", self.label()),
                 retryable: false,
                 ..Default::default()
             }),
@@ -1372,7 +1405,7 @@ impl tinychannels::channel::ChannelEdit for TelegramNativeAdapter {
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelDelete for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelDelete for NativeAdapter {
     async fn delete(
         &self,
         receipt: &tinychannels_bus::channel::MessageReceipt,
@@ -1383,12 +1416,12 @@ impl tinychannels::channel::ChannelDelete for TelegramNativeAdapter {
             })
             .await
             .map(|_| ())
-            .map_err(adapter_operation_error)
+            .map_err(|error| adapter_operation_error(self.label(), error))
     }
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelStreamingDraft for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelStreamingDraft for NativeAdapter {
     async fn upsert_draft(
         &self,
         previous: Option<&tinychannels_bus::channel::MessageReceipt>,
@@ -1400,7 +1433,7 @@ impl tinychannels::channel::ChannelStreamingDraft for TelegramNativeAdapter {
         self.running
             .upsert_native_draft(previous.cloned(), intent)
             .await
-            .map_err(adapter_operation_error)
+            .map_err(|error| adapter_operation_error(self.label(), error))
     }
 }
 
@@ -1418,14 +1451,19 @@ impl ConfiguredAdapterFactory {
         }
     }
 
-    pub(crate) fn telegram(running: Arc<Running>) -> ConfiguredAdapterHandle {
+    pub(crate) fn native(running: Arc<Running>) -> ConfiguredAdapterHandle {
         let configured_instance = running.configured_instance.clone();
-        let native = Arc::new(TelegramNativeAdapter { running });
+        #[cfg(test)]
+        let mode = match running.native_ports.as_ref().map(|ports| ports.label) {
+            Some("WhatsApp") => AdapterMode::WhatsAppNativeV2,
+            _ => AdapterMode::TelegramNativeV2,
+        };
+        let native = Arc::new(NativeAdapter { running });
         let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = native.clone();
         ConfiguredAdapterHandle {
             configured_instance,
             #[cfg(test)]
-            mode: AdapterMode::TelegramNativeV2,
+            mode,
             adapter,
             #[cfg(test)]
             telegram_native: Some(native),
@@ -1436,7 +1474,7 @@ impl ConfiguredAdapterFactory {
 impl Running {
     pub(crate) fn adapter_handle(self: &Arc<Self>) -> ConfiguredAdapterHandle {
         if self.native_ports.is_some() {
-            ConfiguredAdapterFactory::telegram(self.clone())
+            ConfiguredAdapterFactory::native(self.clone())
         } else {
             ConfiguredAdapterFactory::legacy(self.clone())
         }
@@ -1479,6 +1517,38 @@ impl Running {
             supervision,
             outbound_only,
             Some(NativePorts::telegram(channel)),
+        )
+    }
+
+    /// Start a provider whose concrete object is both the listener and the
+    /// native v2 executor (the WhatsApp Cloud and Web adapters).
+    pub(crate) fn start_native<T>(
+        label: &'static str,
+        channel: Arc<T>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: Option<ChannelSupervisionPolicy>,
+        outbound_only: bool,
+    ) -> Arc<Self>
+    where
+        T: Channel
+            + tinychannels::channel::ChannelAdapter
+            + tinychannels::channel::ChannelTypedSend
+            + tinychannels::channel::ChannelTyping
+            + tinychannels::channel::ChannelReaction
+            + tinychannels::channel::ChannelEdit
+            + tinychannels::channel::ChannelDelete
+            + tinychannels::channel::ChannelStreamingDraft
+            + 'static,
+    {
+        let channel_dyn: Arc<dyn Channel> = channel.clone();
+        Self::start_inner(
+            channel_dyn,
+            hooks,
+            host,
+            supervision,
+            outbound_only,
+            Some(NativePorts::new(label, channel)),
         )
     }
 
@@ -1835,7 +1905,7 @@ impl Running {
                     .any(|part| part.platform_message_id.trim().is_empty())
             {
                 return Err(RunningSendError::NotDispatched(
-                    "draft receipt scope does not match Telegram intent".into(),
+                    "draft receipt scope does not match the configured intent".into(),
                 ));
             }
         }
@@ -2070,8 +2140,8 @@ impl tinychannels::channel::ChannelAdapter for Running {
             let sent_before_error = matches!(error, RunningSendError::AfterDispatch(_));
             tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Unknown,
-                message: if self.native_ports.is_some() {
-                    "Telegram send failed".into()
+                message: if let Some(ports) = &self.native_ports {
+                    format!("{} send failed", ports.label)
                 } else {
                     error.to_string()
                 },
