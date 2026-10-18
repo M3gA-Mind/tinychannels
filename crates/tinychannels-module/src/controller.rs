@@ -305,6 +305,8 @@ struct HostBackend {
     yuanbao: Arc<dyn YuanbaoVerifier>,
     proxy: tinychannels_bus::HttpProxyPolicy,
     discord_token: Option<String>,
+    /// Bot API base override (tests and self-hosted Bot API servers).
+    telegram_api_base: Option<String>,
 }
 
 impl HostBackend {
@@ -321,7 +323,68 @@ impl HostBackend {
             yuanbao: Arc::new(NativeYuanbaoVerifier),
             proxy: tinychannels_bus::HttpProxyPolicy::default(),
             discord_token,
+            telegram_api_base: None,
         }
+    }
+
+    /// Bot-token Telegram client plus its default chat, when the config carries
+    /// a bot token. `None` means the managed (host-backend) transport applies.
+    fn telegram_native(
+        &self,
+        config: &ChannelsConfig,
+        channel: &str,
+    ) -> anyhow::Result<
+        Option<(
+            tinychannels::providers::telegram::TelegramBotApi,
+            Option<String>,
+        )>,
+    > {
+        use tinychannels::factory::HttpClientFactory as _;
+        if channel != "telegram" {
+            return Ok(None);
+        }
+        let Some(telegram) = config
+            .telegram
+            .as_ref()
+            .filter(|telegram| !telegram.bot_token.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let clients = tinychannels::factory::ConfiguredHttpClients::new(self.proxy.clone())?;
+        let mut api = tinychannels::providers::telegram::TelegramBotApi::new(
+            telegram.bot_token.clone(),
+            clients.client_for("channel.telegram"),
+        );
+        if let Some(base) = &self.telegram_api_base {
+            api = api.with_api_base(base.clone());
+        }
+        Ok(Some((api, telegram.chat_id.clone())))
+    }
+
+    /// Bot-token providers that have no native port for `operation` fail
+    /// explicitly instead of being routed to the managed host backend.
+    fn reject_unported(
+        config: &ChannelsConfig,
+        channel: &str,
+        operation: &str,
+    ) -> anyhow::Result<()> {
+        let bot_token_configured = match channel {
+            "discord" => config.discord.is_some(),
+            "slack" => config.slack.is_some(),
+            "mattermost" => config.mattermost.is_some(),
+            _ => false,
+        };
+        if bot_token_configured {
+            tracing::debug!(
+                channel,
+                operation,
+                "[channels] no native port for bot-token channel"
+            );
+            anyhow::bail!(
+                "{channel} has no native {operation} support yet; it is not routed to the managed backend"
+            );
+        }
+        Ok(())
     }
 
     async fn invoke(&self, request: ChannelBackendRequest) -> anyhow::Result<ChannelBackendResult> {
@@ -594,10 +657,21 @@ impl ChannelBackend for HostBackend {
 
     async fn send_reaction(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         reaction: Value,
     ) -> anyhow::Result<ChannelReactionResult> {
+        if let Some((api, _)) = self.telegram_native(config, channel)? {
+            let request =
+                tinychannels::providers::telegram::TelegramReactionRequest::from_value(&reaction)
+                    .map_err(anyhow::Error::msg)?;
+            api.send_reaction(&request).await?;
+            return Ok(ChannelReactionResult {
+                success: true,
+                ..Default::default()
+            });
+        }
+        Self::reject_unported(config, channel, "reaction")?;
         match self
             .invoke(ChannelBackendRequest::SendReaction {
                 channel: channel.to_owned(),
@@ -612,10 +686,22 @@ impl ChannelBackend for HostBackend {
 
     async fn create_thread(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         title: &str,
     ) -> anyhow::Result<ChannelThreadResult> {
+        if let Some((api, chat_id)) = self.telegram_native(config, channel)? {
+            let chat_id = chat_id.ok_or_else(|| {
+                anyhow::anyhow!("Telegram threads need a default chat_id in the channel config")
+            })?;
+            let (thread_id, name) = api.create_topic(&chat_id, title).await?;
+            return Ok(ChannelThreadResult {
+                thread_id,
+                title: Some(name),
+                raw: None,
+            });
+        }
+        Self::reject_unported(config, channel, "thread create")?;
         match self
             .invoke(ChannelBackendRequest::CreateThread {
                 channel: channel.to_owned(),
@@ -630,11 +716,25 @@ impl ChannelBackend for HostBackend {
 
     async fn update_thread(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         thread_id: &str,
         action: &str,
     ) -> anyhow::Result<ChannelThreadResult> {
+        if let Some((api, chat_id)) = self.telegram_native(config, channel)? {
+            let chat_id = chat_id.ok_or_else(|| {
+                anyhow::anyhow!("Telegram threads need a default chat_id in the channel config")
+            })?;
+            let action = tinychannels::providers::telegram::TopicAction::parse(action)
+                .map_err(anyhow::Error::msg)?;
+            api.update_topic(&chat_id, thread_id, action).await?;
+            return Ok(ChannelThreadResult {
+                thread_id: thread_id.to_owned(),
+                title: None,
+                raw: None,
+            });
+        }
+        Self::reject_unported(config, channel, "thread update")?;
         match self
             .invoke(ChannelBackendRequest::UpdateThread {
                 channel: channel.to_owned(),
@@ -650,10 +750,14 @@ impl ChannelBackend for HostBackend {
 
     async fn list_threads(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         active: Option<bool>,
     ) -> anyhow::Result<ChannelThreadListResult> {
+        if self.telegram_native(config, channel)?.is_some() {
+            anyhow::bail!("Telegram's Bot API cannot list forum topics");
+        }
+        Self::reject_unported(config, channel, "thread list")?;
         match self
             .invoke(ChannelBackendRequest::ListThreads {
                 channel: channel.to_owned(),

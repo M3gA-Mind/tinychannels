@@ -6,6 +6,7 @@
 //! paths compiling.
 
 mod attachments;
+mod bot_api;
 mod channel;
 mod channel_core;
 mod channel_ops;
@@ -14,6 +15,7 @@ mod channel_send;
 mod channel_types;
 mod text;
 
+pub use bot_api::{TelegramBotApi, TelegramReactionRequest, TopicAction};
 pub use channel_types::TelegramChannel;
 
 /// Approval-context client id for Telegram turns: the channel name, as for
