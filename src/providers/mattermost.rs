@@ -570,9 +570,11 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
     async fn send_typed_message(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> Result<tinychannels_bus::ChannelSendOutcome, tinychannels_bus::channel::ChannelSendError>
-    {
-        native::send_typed(self, message).await
+    ) -> Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        crate::providers::native::outbound::send_typed(self, message).await
     }
 }
 

@@ -1,6 +1,7 @@
 use super::*;
 use crate::channel::ChannelTypedSend;
 use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
+use crate::traits::Channel;
 use serde_json::json;
 use tinychannels_bus::channel::ConversationRef;
 use tinychannels_bus::{
