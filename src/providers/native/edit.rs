@@ -145,7 +145,7 @@ pub(crate) async fn upsert_draft<P: NativeProvider + ?Sized>(
     previous: Option<&MessageReceipt>,
     intent: ChannelOutboundIntent,
 ) -> Result<MessageReceipt, ChannelSendError> {
-    if !provider.can_edit() {
+    if !provider.can_edit() || !provider.can_draft() {
         return Err(unsupported(&format!(
             "{} does not support streaming drafts",
             provider.display()

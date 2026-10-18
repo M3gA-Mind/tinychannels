@@ -352,6 +352,19 @@ pub(crate) async fn send_typed<P: NativeProvider + ?Sized>(
 ) -> Result<ChannelSendOutcome, ChannelSendError> {
     let id = provider.id();
     let target = target_of(message, id, provider.display())?;
+    let declared = provider.declared_capabilities();
+    if target.thread.is_some() && !declared.addressing.thread_id {
+        return Err(unsupported(&format!(
+            "{} does not support threads",
+            provider.display()
+        )));
+    }
+    if target.reply_to.is_some() && !declared.addressing.reply_to_id {
+        return Err(unsupported(&format!(
+            "{} does not support reply addressing",
+            provider.display()
+        )));
+    }
     let steps = plan(provider, message, &target).await?;
     let mut parts: Vec<MessageReceiptPart> = Vec::new();
     let mut failure = None;

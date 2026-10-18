@@ -109,6 +109,11 @@ pub(crate) trait NativeProvider: Send + Sync {
         false
     }
 
+    /// Whether streaming drafts (create, edit repeatedly, finalize) are declared.
+    fn can_draft(&self) -> bool {
+        false
+    }
+
     async fn edit_text(&self, _address: &Address, _text: &str) -> Result<(), ChannelSendError> {
         Err(unsupported(&format!(
             "{} does not support edits",
