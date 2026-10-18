@@ -247,10 +247,10 @@ async fn a_failed_attachment_after_the_caption_is_a_partial_send() {
     )
     .await;
     recorder.abort();
-    // The caption was delivered, so the failure comes back as a partial send.
-    let outcome = result.unwrap();
-    assert_eq!(outcome.receipt.platform_message_ids, ["SENT1"]);
-    assert!(outcome.error.unwrap().sent_before_error);
+    // The caption was delivered, so the failure must say a retry is unsafe.
+    let error = result.unwrap_err();
+    assert!(error.sent_before_error && !error.retryable);
+    assert_eq!(rig.scripts().len(), 1);
 }
 
 #[test]
