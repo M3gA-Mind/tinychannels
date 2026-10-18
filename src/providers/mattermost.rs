@@ -488,7 +488,11 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
 
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
-        text_capabilities(TextSpec { typing: true, thread: true, ..Default::default() })
+        text_capabilities(TextSpec {
+            typing: true,
+            thread: true,
+            ..Default::default()
+        })
     }
 
     fn typing_supported(&self) -> bool {
@@ -497,7 +501,10 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
 
     fn address(&self, message: &mut SendMessage) {
         // Mattermost packs the thread root into the recipient (`channel:root`).
-        if let Some(root) = message.thread_ts.take_if(|_| !message.recipient.contains(':')) {
+        if let Some(root) = message
+            .thread_ts
+            .take_if(|_| !message.recipient.contains(':'))
+        {
             message.recipient = format!("{}:{root}", message.recipient);
         }
     }

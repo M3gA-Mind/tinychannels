@@ -132,9 +132,9 @@ pub(crate) async fn send_typed<T: LongTail + ?Sized>(
     }
     // Only plain text is representable; anything richer is refused before any
     // request is made.
-    let mut legacy = message.to_legacy_message().map_err(|_| {
-        unsupported::<T>("typed content other than plain text")
-    })?;
+    let mut legacy = message
+        .to_legacy_message()
+        .map_err(|_| unsupported::<T>("typed content other than plain text"))?;
     provider.address(&mut legacy);
     tracing::debug!(
         channel = T::ID,
@@ -285,7 +285,9 @@ macro_rules! impl_long_tail_adapter {
                 _reaction: &tinychannels_bus::channel::ChannelReaction,
                 _remove: bool,
             ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-                Err($crate::providers::long_tail::unsupported::<$ty>("reactions"))
+                Err($crate::providers::long_tail::unsupported::<$ty>(
+                    "reactions",
+                ))
             }
         }
 
@@ -299,7 +301,9 @@ macro_rules! impl_long_tail_adapter {
                 tinychannels_bus::channel::MessageReceipt,
                 tinychannels_bus::channel::ChannelSendError,
             > {
-                Err($crate::providers::long_tail::unsupported::<$ty>("message edits"))
+                Err($crate::providers::long_tail::unsupported::<$ty>(
+                    "message edits",
+                ))
             }
         }
 
@@ -309,7 +313,9 @@ macro_rules! impl_long_tail_adapter {
                 &self,
                 _receipt: &tinychannels_bus::channel::MessageReceipt,
             ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-                Err($crate::providers::long_tail::unsupported::<$ty>("message deletion"))
+                Err($crate::providers::long_tail::unsupported::<$ty>(
+                    "message deletion",
+                ))
             }
         }
 
@@ -323,7 +329,9 @@ macro_rules! impl_long_tail_adapter {
                 tinychannels_bus::channel::MessageReceipt,
                 tinychannels_bus::channel::ChannelSendError,
             > {
-                Err($crate::providers::long_tail::unsupported::<$ty>("in-place draft updates"))
+                Err($crate::providers::long_tail::unsupported::<$ty>(
+                    "in-place draft updates",
+                ))
             }
         }
     };

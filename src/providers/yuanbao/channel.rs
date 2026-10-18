@@ -453,7 +453,12 @@ impl crate::providers::long_tail::LongTail for YuanbaoChannel {
 
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
-        text_capabilities(TextSpec { typing: true, thread: true, streaming_pipeline: true, ..Default::default() })
+        text_capabilities(TextSpec {
+            typing: true,
+            thread: true,
+            streaming_pipeline: true,
+            ..Default::default()
+        })
     }
 
     fn typing_supported(&self) -> bool {
