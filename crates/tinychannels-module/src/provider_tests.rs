@@ -4447,9 +4447,19 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         .to_owned();
     assert_eq!(voice["parts"][0]["voiceNote"]["codec"], "ogg_opus");
     assert_eq!(voice["parts"][0]["voiceNote"]["durationMs"], 200);
+    let waveform = voice["parts"][0]["voiceNote"]["waveform"]
+        .as_array()
+        .expect("Discord waveform is retained as normalized samples");
     assert_eq!(
-        voice["parts"][0]["voiceNote"]["waveform"],
-        serde_json::json!([1.0 / 255.0, 2.0 / 255.0, 3.0 / 255.0])
+        waveform
+            .iter()
+            .map(|sample| sample.as_f64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![
+            f64::from(1.0_f32 / 255.0),
+            f64::from(2.0_f32 / 255.0),
+            f64::from(3.0_f32 / 255.0),
+        ]
     );
     assert_eq!(
         voice["parts"][0]["voiceNote"]["transcript"]["text"],
@@ -4597,6 +4607,57 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     }));
     assert!(requests.iter().any(|request| {
         request.method == "POST" && request.url.path() == format!("/channels/{THREAD}/typing")
+    }));
+
+    let native = adapter.native.as_deref().unwrap();
+    let draft_intent = |text: &str| {
+        let mut draft = intent.clone();
+        draft.idempotency_key = format!("discord-draft-{text}");
+        draft.payload = OutboundPayload::Text { text: text.into() };
+        draft
+    };
+    let draft = tinychannels::channel::ChannelStreamingDraft::upsert_draft(
+        native,
+        None,
+        draft_intent("stream-start"),
+    )
+    .await
+    .unwrap();
+    let updated = tinychannels::channel::ChannelStreamingDraft::upsert_draft(
+        native,
+        Some(&draft),
+        draft_intent("stream-update"),
+    )
+    .await
+    .unwrap();
+    let finalized = adapter
+        .edits()
+        .unwrap()
+        .edit(&updated, draft_intent("stream-final"))
+        .await
+        .unwrap();
+    let abandoned = tinychannels::channel::ChannelStreamingDraft::upsert_draft(
+        native,
+        None,
+        draft_intent("stream-cancel"),
+    )
+    .await
+    .unwrap();
+    adapter.deletes().unwrap().delete(&abandoned).await.unwrap();
+    assert_eq!(finalized.channel.as_ref(), Some(&channel_ref));
+    assert_eq!(finalized.conversation.as_ref(), Some(&conversation));
+    let requests = rest.received_requests().await.unwrap();
+    for expected_text in ["stream-start", "stream-update", "stream-final", "stream-cancel"] {
+        assert!(
+            requests
+                .iter()
+                .any(|request| String::from_utf8_lossy(&request.body).contains(expected_text)),
+            "stream draft payload {expected_text:?} must reach Discord"
+        );
+    }
+    assert!(requests.iter().any(|request| {
+        request.method == "DELETE"
+            && request.url.path() == format!("/channels/{THREAD}/messages/1234567890123456789")
     }));
 
     running.stop().await.unwrap();
