@@ -382,7 +382,7 @@ impl AdapterFixture for DiscordFixture {
             Feature::VoiceOut | Feature::VoiceSynthesis => {
                 let media = self.voice.seed(OGG_FIXTURE, "audio/ogg");
                 self.send_and_record(feature, OutboundPayload::Voice {
-                    voice: OutboundVoice::Media { media, audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: Some(200) },
+                    voice: OutboundVoice::Media { media, audio_base64: None, codec: Some("ogg_opus".into()), duration_ms: Some(200), waveform: None },
                 })
                 .await
             }
