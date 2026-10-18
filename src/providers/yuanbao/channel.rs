@@ -457,7 +457,6 @@ impl crate::providers::long_tail::LongTail for YuanbaoChannel {
             typing: true,
             thread: true,
             streaming_pipeline: true,
-            ..Default::default()
         })
     }
 

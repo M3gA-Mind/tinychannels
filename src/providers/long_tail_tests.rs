@@ -23,10 +23,12 @@ const PROVIDERS: [(&str, &str); 6] = [
 ];
 
 fn config(mattermost_url: &str) -> ChannelsConfig {
-    let mut yuanbao = YuanbaoConfig::default();
-    yuanbao.app_key = "ak".into();
-    yuanbao.ws_domain = "wss://example.invalid".into();
-    yuanbao.token = "tok".into();
+    let yuanbao = YuanbaoConfig {
+        app_key: "ak".into(),
+        ws_domain: "wss://example.invalid".into(),
+        token: "tok".into(),
+        ..Default::default()
+    };
     ChannelsConfig {
         mattermost: Some(MattermostConfig {
             url: mattermost_url.into(),

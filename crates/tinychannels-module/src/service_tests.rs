@@ -3692,7 +3692,9 @@ fn long_tail_providers_have_a_display_name_and_nothing_else_does() {
     ] {
         assert_eq!(super::long_tail_display(id), Some(display));
     }
-    for id in ["telegram", "slack", "whatsapp", "discord", "email", "unknown"] {
+    for id in [
+        "telegram", "slack", "whatsapp", "discord", "email", "unknown",
+    ] {
         assert_eq!(super::long_tail_display(id), None, "{id}");
     }
 }

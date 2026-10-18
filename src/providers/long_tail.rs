@@ -4,7 +4,7 @@
 //! Each provider keeps its own transport and `Channel` listener; this module
 //! gives it the portable adapter traits so a configured account is described,
 //! validated and driven through `ChannelAdapter` like Telegram and Slack. A
-//! provider states what it supports once, in [`LongTail::declared`], and every
+//! provider states what it supports once, in `LongTail::declared`, and every
 //! operation it does not implement answers with an explicit `unsupported`
 //! error instead of pretending to succeed.
 
