@@ -278,5 +278,5 @@ impl Channel for WhatsAppChannel {
 }
 
 #[cfg(test)]
-#[path = "whatsapp_tests.rs"]
+#[path = "mod_tests.rs"]
 mod tests;
