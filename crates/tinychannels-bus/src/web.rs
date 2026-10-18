@@ -7,6 +7,14 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+fn web_tool_name_is_absent(value: &Option<String>) -> bool {
+    value.as_deref().is_none_or(str::is_empty)
+}
+
+fn is_none_or_json_null(value: &Option<serde_json::Value>) -> bool {
+    value.as_ref().is_none_or(serde_json::Value::is_null)
+}
+
 /// Shared addressing and ordering fields present on historical web events.
 /// Tenant/profile stamps belong to the host and must never cross the wire.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -119,7 +127,7 @@ pub enum WebChannelEvent {
         delta_kind: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_call_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_id: Option<String>,
@@ -145,11 +153,11 @@ pub enum WebChannelEvent {
     ToolCall {
         #[serde(flatten)]
         context: WebEventContext,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "is_none_or_json_null")]
         args: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         round: Option<u32>,
@@ -171,13 +179,13 @@ pub enum WebChannelEvent {
     ToolResult {
         #[serde(flatten)]
         context: WebEventContext,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "is_none_or_json_null")]
         args: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         success: Option<bool>,
@@ -209,7 +217,7 @@ pub enum WebChannelEvent {
         context: WebEventContext,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_id: Option<String>,
@@ -223,7 +231,7 @@ pub enum WebChannelEvent {
         context: WebEventContext,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_id: Option<String>,
@@ -239,7 +247,7 @@ pub enum WebChannelEvent {
         context: WebEventContext,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_id: Option<String>,
@@ -255,7 +263,7 @@ pub enum WebChannelEvent {
         context: WebEventContext,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_id: Option<String>,
@@ -271,7 +279,7 @@ pub enum WebChannelEvent {
         context: WebEventContext,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_id: Option<String>,
@@ -283,11 +291,11 @@ pub enum WebChannelEvent {
     SubagentToolCall {
         #[serde(flatten)]
         context: WebEventContext,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "is_none_or_json_null")]
         args: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         round: Option<u32>,
@@ -303,7 +311,7 @@ pub enum WebChannelEvent {
     SubagentToolResult {
         #[serde(flatten)]
         context: WebEventContext,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         skill_id: Option<String>,
@@ -315,7 +323,7 @@ pub enum WebChannelEvent {
         tool_call_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         output: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "is_none_or_json_null")]
         args: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         elapsed_ms: Option<u64>,
@@ -361,11 +369,11 @@ pub enum WebChannelEvent {
     ApprovalRequest {
         #[serde(flatten)]
         context: WebEventContext,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "is_none_or_json_null")]
         args: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_call_id: Option<String>,
@@ -377,7 +385,7 @@ pub enum WebChannelEvent {
     ApprovalDecided {
         #[serde(flatten)]
         context: WebEventContext,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
@@ -389,11 +397,11 @@ pub enum WebChannelEvent {
     PlanReviewRequest {
         #[serde(flatten)]
         context: WebEventContext,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "is_none_or_json_null")]
         args: Option<serde_json::Value>,
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_call_id: Option<String>,
@@ -403,7 +411,7 @@ pub enum WebChannelEvent {
     PlanReviewDecided {
         #[serde(flatten)]
         context: WebEventContext,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "web_tool_name_is_absent")]
         tool_name: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         message: Option<String>,
@@ -457,7 +465,7 @@ pub enum WebChannelEvent {
         context: WebEventContext,
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_call_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "is_none_or_json_null")]
         args: Option<serde_json::Value>,
     },
     ArtifactFailed {
@@ -465,7 +473,7 @@ pub enum WebChannelEvent {
         context: WebEventContext,
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_call_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "is_none_or_json_null")]
         args: Option<serde_json::Value>,
     },
     ArtifactPending {
@@ -473,19 +481,19 @@ pub enum WebChannelEvent {
         context: WebEventContext,
         #[serde(skip_serializing_if = "Option::is_none")]
         tool_call_id: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "is_none_or_json_null")]
         args: Option<serde_json::Value>,
     },
     MemoryActivity {
         #[serde(flatten)]
         context: WebEventContext,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "is_none_or_json_null")]
         args: Option<serde_json::Value>,
     },
     ExternalTransferPending {
         #[serde(flatten)]
         context: WebEventContext,
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing_if = "is_none_or_json_null")]
         args: Option<serde_json::Value>,
     },
     ProactiveMessage {
@@ -509,6 +517,14 @@ pub enum WebChannelEvent {
         full_response: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         success: Option<bool>,
+    },
+    ChannelOutbound {
+        #[serde(flatten)]
+        context: WebEventContext,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        full_response: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        structured: Option<serde_json::Value>,
     },
     UserError {
         #[serde(flatten)]
@@ -547,6 +563,59 @@ pub enum WebChannelEvent {
 }
 
 impl WebChannelEvent {
+    /// Historical Socket.IO discriminator for this event.
+    pub const fn event_name(&self) -> &'static str {
+        use WebChannelEvent as E;
+        match self {
+            E::ChatDone { .. } => "chat_done",
+            E::ChatInterim { .. } => "chat_interim",
+            E::ChatSuggestions { .. } => "chat_suggestions",
+            E::ChatError { .. } => "chat_error",
+            E::ChatCancelled { .. } => "chat_cancelled",
+            E::TextDelta { .. } => "text_delta",
+            E::ThinkingDelta { .. } => "thinking_delta",
+            E::ToolArgsDelta { .. } => "tool_args_delta",
+            E::InferenceStart { .. } => "inference_start",
+            E::InferenceHeartbeat { .. } => "inference_heartbeat",
+            E::IterationStart { .. } => "iteration_start",
+            E::ToolCall { .. } => "tool_call",
+            E::ToolProgress { .. } => "tool_progress",
+            E::ToolResult { .. } => "tool_result",
+            E::TurnCost { .. } => "turn_cost",
+            E::SubagentSpawned { .. } => "subagent_spawned",
+            E::SubagentCompleted { .. } => "subagent_completed",
+            E::SubagentFailed { .. } => "subagent_failed",
+            E::SubagentAwaitingUser { .. } => "subagent_awaiting_user",
+            E::SubagentIterationStart { .. } => "subagent_iteration_start",
+            E::SubagentToolCall { .. } => "subagent_tool_call",
+            E::SubagentToolResult { .. } => "subagent_tool_result",
+            E::SubagentTextDelta { .. } => "subagent_text_delta",
+            E::SubagentThinkingDelta { .. } => "subagent_thinking_delta",
+            E::ApprovalRequest { .. } => "approval_request",
+            E::ApprovalDecided { .. } => "approval_decided",
+            E::PlanReviewRequest { .. } => "plan_review_request",
+            E::PlanReviewDecided { .. } => "plan_review_decided",
+            E::QueueItemQueued { .. } => "queue_item_queued",
+            E::QueueItemDelivered { .. } => "queue_item_delivered",
+            E::QueueItemRemoved { .. } => "queue_item_removed",
+            E::ThreadGoalUpdated { .. } => "thread_goal_updated",
+            E::ThreadGoalCleared { .. } => "thread_goal_cleared",
+            E::ThreadTodosChanged { .. } => "thread_todos_changed",
+            E::RunModeChanged { .. } => "run_mode_changed",
+            E::ArtifactReady { .. } => "artifact_ready",
+            E::ArtifactFailed { .. } => "artifact_failed",
+            E::ArtifactPending { .. } => "artifact_pending",
+            E::MemoryActivity { .. } => "memory_activity",
+            E::ExternalTransferPending { .. } => "external_transfer_pending",
+            E::ProactiveMessage { .. } => "proactive_message",
+            E::VoiceSpeak { .. } => "voice_speak",
+            E::ChannelOutbound { .. } => "channel_outbound",
+            E::UserError { .. } => "user_error",
+            E::ChatMessage { .. } => "chat_message",
+            E::ChatSegment { .. } => "chat_segment",
+        }
+    }
+
     /// The shared addressing and ordering context for this event.
     pub fn context(&self) -> &WebEventContext {
         use WebChannelEvent as E;
@@ -593,6 +662,7 @@ impl WebChannelEvent {
             | E::ExternalTransferPending { context, .. }
             | E::ProactiveMessage { context, .. }
             | E::VoiceSpeak { context, .. }
+            | E::ChannelOutbound { context, .. }
             | E::UserError { context, .. }
             | E::ChatMessage { context, .. }
             | E::ChatSegment { context, .. } => context,
@@ -645,6 +715,7 @@ impl WebChannelEvent {
             | E::ExternalTransferPending { context, .. }
             | E::ProactiveMessage { context, .. }
             | E::VoiceSpeak { context, .. }
+            | E::ChannelOutbound { context, .. }
             | E::UserError { context, .. }
             | E::ChatMessage { context, .. }
             | E::ChatSegment { context, .. } => context,
