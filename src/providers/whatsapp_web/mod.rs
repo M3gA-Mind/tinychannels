@@ -46,6 +46,20 @@ use anyhow::Result;
 use async_trait::async_trait;
 use std::sync::Arc;
 
+#[cfg(feature = "whatsapp-web")]
+mod client;
+#[cfg(feature = "whatsapp-web")]
+mod identity;
+#[cfg(feature = "whatsapp-web")]
+mod inbound;
+#[cfg(feature = "whatsapp-web")]
+mod outbound;
+
+#[cfg(feature = "whatsapp-web")]
+use crate::providers::whatsapp_shared::window::{BoundedMap, SeenSet};
+#[cfg(feature = "whatsapp-web")]
+use client::OutboundClient;
+
 // Imports used only by the real (feature-on) implementation; gated so the
 // feature-off stub build doesn't flag them as unused.
 #[cfg(feature = "whatsapp-web")]
@@ -56,43 +70,6 @@ use parking_lot::Mutex;
 use std::collections::HashSet;
 #[cfg(feature = "whatsapp-web")]
 use std::sync::atomic::{AtomicBool, Ordering};
-
-/// Outbound operations the channel performs on a live WhatsApp session.
-///
-/// Implemented by [`whatsapp_rust::Client`]; the seam lets the outbound gate,
-/// recipient parsing and error mapping run against a test double instead of a
-/// connected session.
-#[cfg(feature = "whatsapp-web")]
-#[async_trait]
-trait OutboundClient: Send + Sync {
-    /// Send a plain-text message to `to`.
-    async fn send_text(&self, to: whatsapp_rust::Jid, text: String) -> Result<()>;
-    /// Publish the "composing" chat state to `to`.
-    async fn send_composing(&self, to: &whatsapp_rust::Jid) -> Result<()>;
-    /// Publish the "paused" chat state to `to`.
-    async fn send_paused(&self, to: &whatsapp_rust::Jid) -> Result<()>;
-}
-
-#[cfg(feature = "whatsapp-web")]
-#[async_trait]
-impl OutboundClient for whatsapp_rust::Client {
-    async fn send_text(&self, to: whatsapp_rust::Jid, text: String) -> Result<()> {
-        let outgoing = whatsapp_rust::waproto::whatsapp::Message {
-            conversation: Some(text),
-            ..Default::default()
-        };
-        self.send_message(to, outgoing).await?;
-        Ok(())
-    }
-
-    async fn send_composing(&self, to: &whatsapp_rust::Jid) -> Result<()> {
-        Ok(self.chatstate().send_composing(to).await?)
-    }
-
-    async fn send_paused(&self, to: &whatsapp_rust::Jid) -> Result<()> {
-        Ok(self.chatstate().send_paused(to).await?)
-    }
-}
 
 /// State the bot's event handler shares with the channel: the inbound sink,
 /// the allow-list, the liveness flag and the group-provenance set.
@@ -106,6 +83,18 @@ struct InboundState {
     allowed_numbers: Vec<String>,
     connected: Arc<AtomicBool>,
     allowed_groups: Arc<Mutex<HashSet<String>>>,
+    /// Typed ingress and the ports it persists attachments through. Without an
+    /// event sink the state keeps the v21 text path.
+    events: Option<Arc<dyn crate::host::EventSink>>,
+    media_repository: Option<Arc<dyn crate::host::MediaRepository>>,
+    voice_media_store: Option<Arc<dyn crate::host::VoiceMediaStore>>,
+    /// The live session, for attachment downloads and the linked account.
+    client: Arc<Mutex<Option<Arc<dyn OutboundClient>>>>,
+    /// Provider message ids already published (the SDK may redeliver).
+    seen: Arc<Mutex<SeenSet>>,
+    /// Author of each recent inbound message, for group reactions and quotes.
+    authors: Arc<Mutex<BoundedMap>>,
+    identity: Arc<identity::LinkedIdentity>,
 }
 
 #[cfg(feature = "whatsapp-web")]
@@ -139,7 +128,15 @@ impl InboundState {
                     self.handle_inbound(inbound).await;
                 }
             }
+            Event::Receipt(receipt) => self.publish_receipt(receipt).await,
             Event::Connected(_) => {
+                let account = self
+                    .client
+                    .lock()
+                    .as_ref()
+                    .and_then(|client| client.linked_account())
+                    .map(|jid| jid.to_string());
+                self.identity.observe(account.as_deref());
                 self.connected.store(true, Ordering::Release);
                 tracing::info!("✅ WhatsApp Web connected successfully!");
             }
@@ -230,6 +227,32 @@ impl InboundState {
         // `should_allow_outbound`.
         if WhatsAppWebChannel::is_group_jid(&chat) {
             self.allowed_groups.lock().insert(chat.clone());
+        }
+        if !info.id.is_empty() {
+            self.authors
+                .lock()
+                .insert(&info.id, &info.source.sender.to_non_ad_string());
+        }
+        if self.identity.is_conflicted() {
+            tracing::warn!("[whatsapp_web] the linked account changed; inbound message dropped");
+            return;
+        }
+        match self
+            .publish_typed(
+                inbound,
+                &reply_target,
+                &normalized,
+                sender_name.clone(),
+                WhatsAppWebChannel::is_group_jid(&chat),
+            )
+            .await
+        {
+            Ok(true) => return,
+            Ok(false) => {}
+            Err(error) => {
+                tracing::warn!("[whatsapp_web] typed inbound delivery failed: {error}");
+                return;
+            }
         }
         let message = ChannelMessage {
             id: uuid::Uuid::new_v4().to_string(),
