@@ -30,12 +30,7 @@ impl SignalChannel {
         }
         content.parts = parts;
         let voice = |synthesis| {
-            voice_capabilities(
-                voice_enabled,
-                synthesis,
-                SIGNAL_MAX_VOICE_BYTES,
-                self.native.transcriber.is_some(),
-            )
+            voice_capabilities(voice_enabled, synthesis, SIGNAL_MAX_VOICE_BYTES)
         };
         ChannelCapabilities {
             remote_control: true,

@@ -47,12 +47,11 @@ pub(crate) fn media_capabilities(content: &mut ContentCapabilities, max_bytes: u
 }
 
 /// Voice facts for one direction. Transcripts come from the host's speech to
-/// text, which this adapter calls itself when it was given a transcriber.
+/// text, either through the adapter's own transcriber or the shared ingress.
 pub(crate) fn voice_capabilities(
     enabled: bool,
     synthesis: bool,
     max_bytes: u64,
-    _transcriber: bool,
 ) -> VoiceCapabilities {
     if !enabled {
         return VoiceCapabilities::default();
