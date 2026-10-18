@@ -362,7 +362,13 @@ pub(crate) async fn send_typed<P: NativeProvider + ?Sized>(
     let steps = plan(provider, message, &target).await?;
     let mut parts: Vec<MessageReceiptPart> = Vec::new();
     let mut failure = None;
-    for step in &steps {
+    if provider.bundles_steps() {
+        for item in provider.deliver_bundle(&target, &steps).await? {
+            let index = parts.len();
+            parts.push(receipt_part(id, item, index, &target));
+        }
+    }
+    for step in steps.iter().filter(|_| !provider.bundles_steps()) {
         match provider.deliver(&target, step).await {
             Ok(sent) => {
                 for item in sent {
