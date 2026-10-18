@@ -3,6 +3,21 @@ pub use tinychannels_bus::{ChannelMessage, SendMessage};
 
 use async_trait::async_trait;
 
+/// A webhook delivery refused before any of it was ingested: the signature
+/// did not verify, the body was oversized or malformed, or it was addressed
+/// to another account. Hosts answer these with a client error rather than a
+/// retryable one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebhookRejected(pub String);
+
+impl std::fmt::Display for WebhookRejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for WebhookRejected {}
+
 /// Provider-facing channel operations shared by the runtime and every host.
 ///
 /// This trait belongs to the runtime crate because its async provider methods

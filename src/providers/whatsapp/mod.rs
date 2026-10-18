@@ -48,6 +48,9 @@ pub struct WhatsAppChannel {
     listener: Mutex<Option<tokio::sync::mpsc::Sender<ChannelMessage>>>,
     /// Provider message ids already published (Meta redelivers).
     seen: Mutex<SeenSet>,
+    /// Serializes deliveries so one provider id is never published twice by
+    /// concurrent redeliveries.
+    ingest_gate: tokio::sync::Mutex<()>,
     /// Latest inbound message per conversation, the anchor for typing indicators.
     anchors: Mutex<BoundedMap>,
 }
@@ -89,6 +92,7 @@ impl WhatsAppChannel {
             events: None,
             listener: Mutex::new(None),
             seen: Mutex::new(SeenSet::new(ingress::SEEN_WINDOW)),
+            ingest_gate: tokio::sync::Mutex::new(()),
             anchors: Mutex::new(BoundedMap::new(ingress::ANCHOR_WINDOW)),
         }
     }
@@ -437,7 +441,13 @@ impl Channel for WhatsAppChannel {
     ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
         self.ingest_webhook(signature, body)
             .await
-            .map_err(anyhow::Error::new)
+            .map_err(|failure| match failure {
+                // A refused delivery is a client error, never a retryable one.
+                WaFailure::Rejected(message) | WaFailure::Unsupported(message) => {
+                    anyhow::Error::new(tinychannels_runtime::WebhookRejected(message))
+                }
+                uncertain => anyhow::Error::new(uncertain),
+            })
     }
 
     fn verify_webhook(&self, mode: &str, verify_token: &str, challenge: &str) -> Option<String> {

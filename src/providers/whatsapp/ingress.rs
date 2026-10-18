@@ -118,6 +118,7 @@ impl WhatsAppChannel {
         if payload.get("object").and_then(Value::as_str) != Some("whatsapp_business_account") {
             return Err(WaFailure::rejected("WhatsApp webhook object is not supported"));
         }
+        let _gate = self.ingest_gate.lock().await;
         let mut outcome = WebhookDeliveryOutcome::default();
         let mut mismatched = 0usize;
         let mut matched = 0usize;
