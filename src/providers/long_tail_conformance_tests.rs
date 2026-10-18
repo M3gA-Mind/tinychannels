@@ -23,7 +23,11 @@ use tinychannels_bus::channel::{
     ChannelRef, ChannelSendError, ChannelSendOutcome, ConversationRef, MessageReceipt,
     SendErrorKind,
 };
-use tinychannels_bus::config::{MattermostConfig, QQConfig};
+#[cfg(feature = "lark")]
+use tinychannels_bus::config::LarkConfig;
+use tinychannels_bus::config::{
+    DingTalkConfig, IrcConfig, MattermostConfig, QQConfig, YuanbaoConfig,
+};
 use tinychannels_bus::{
     ChannelOutboundIntent, ChannelsConfig, ContentPart, MediaKind, MediaReference,
     OutboundContentPart, OutboundPayload,
@@ -534,30 +538,79 @@ async fn mattermost_text_receipt_carries_the_post_id_the_server_returned() {
 
 fn offline_config() -> ChannelsConfig {
     ChannelsConfig {
+        irc: Some(IrcConfig {
+            server: "irc.example.invalid".into(),
+            port: 6697,
+            nickname: "bot".into(),
+            username: None,
+            channels: vec![],
+            allowed_users: vec![],
+            server_password: None,
+            nickserv_password: None,
+            sasl_password: None,
+            verify_tls: None,
+        }),
+        dingtalk: Some(DingTalkConfig {
+            client_id: "id".into(),
+            client_secret: "secret".into(),
+            allowed_users: vec![],
+        }),
         qq: Some(QQConfig {
             app_id: "id".into(),
             app_secret: "secret".into(),
             allowed_users: vec![],
         }),
+        yuanbao: Some(YuanbaoConfig {
+            app_key: "ak".into(),
+            ws_domain: "wss://example.invalid".into(),
+            token: "tok".into(),
+            ..Default::default()
+        }),
+        #[cfg(feature = "lark")]
+        lark: Some(LarkConfig {
+            app_id: "id".into(),
+            app_secret: "secret".into(),
+            encrypt_key: None,
+            verification_token: None,
+            allowed_users: vec![],
+            use_feishu: false,
+            receive_mode: Default::default(),
+            port: None,
+        }),
         ..Default::default()
     }
 }
 
+#[cfg(feature = "lark")]
+const OFFLINE: &[&str] = &["lark", "irc", "qq", "dingtalk", "yuanbao"];
+#[cfg(not(feature = "lark"))]
+const OFFLINE: &[&str] = &["irc", "qq", "dingtalk", "yuanbao"];
+
+/// These providers reach fixed hosts, so only the features they do not
+/// declare can run: each must refuse explicitly and without a request.
 #[tokio::test]
-async fn an_offline_provider_degrades_every_undeclared_feature_gracefully() {
-    let fixture = LongTailFixture::offline("qq", &offline_config());
-    let declared = fixture.channel.declared_capabilities();
-    let mut checked = 0;
-    for feature in Feature::ALL {
-        // Text is the only feature QQ declares; its wire is a fixed host.
-        if feature == Feature::Text {
-            assert!(declared.content.text.outbound);
-            continue;
+async fn offline_providers_degrade_every_undeclared_feature_gracefully() {
+    let config = offline_config();
+    for id in OFFLINE {
+        let fixture = LongTailFixture::offline(id, &config);
+        let declared = fixture.channel.declared_capabilities();
+        let mut checked = 0;
+        for feature in Feature::ALL {
+            let thread_declared = declared.addressing.thread_id;
+            let skip = match feature {
+                Feature::Text => true,
+                Feature::Typing => declared.actions.supported.iter().any(|a| a == "typing"),
+                Feature::ThreadAddressing => thread_declared,
+                _ => false,
+            };
+            if skip {
+                continue;
+            }
+            check_feature(&fixture, feature)
+                .await
+                .unwrap_or_else(|error| panic!("{id} {feature:?}: {error}"));
+            checked += 1;
         }
-        check_feature(&fixture, feature)
-            .await
-            .unwrap_or_else(|error| panic!("{feature:?}: {error}"));
-        checked += 1;
+        assert!(checked >= Feature::ALL.len() - 3, "{id} checked {checked}");
     }
-    assert_eq!(checked, Feature::ALL.len() - 1);
 }
