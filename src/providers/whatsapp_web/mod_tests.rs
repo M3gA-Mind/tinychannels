@@ -590,49 +590,11 @@ async fn pairing_and_unrelated_events_change_nothing() {
 // Outbound paths over the `OutboundClient` seam
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, PartialEq)]
-enum Call {
-    Text(String, String),
-    Composing(String),
-    Paused(String),
-}
+use super::fakes::{Call, RecordingClient};
 
-#[derive(Default)]
-struct FakeClient {
-    calls: Mutex<Vec<Call>>,
-    fail: bool,
-}
-
-#[async_trait]
-impl OutboundClient for FakeClient {
-    async fn send_text(&self, to: Jid, text: String) -> Result<()> {
-        if self.fail {
-            anyhow::bail!("send boom");
-        }
-        self.calls.lock().push(Call::Text(to.to_string(), text));
-        Ok(())
-    }
-
-    async fn send_composing(&self, to: &Jid) -> Result<()> {
-        if self.fail {
-            anyhow::bail!("composing boom");
-        }
-        self.calls.lock().push(Call::Composing(to.to_string()));
-        Ok(())
-    }
-
-    async fn send_paused(&self, to: &Jid) -> Result<()> {
-        if self.fail {
-            anyhow::bail!("paused boom");
-        }
-        self.calls.lock().push(Call::Paused(to.to_string()));
-        Ok(())
-    }
-}
-
-fn connected_channel(fail: bool) -> (WhatsAppWebChannel, Arc<FakeClient>) {
+fn connected_channel(fail: bool) -> (WhatsAppWebChannel, Arc<RecordingClient>) {
     let ch = make_channel(); // allowed_numbers = ["+1234567890"]
-    let fake = Arc::new(FakeClient {
+    let fake = Arc::new(RecordingClient {
         fail,
         ..Default::default()
     });
@@ -661,11 +623,8 @@ async fn send_delivers_text_to_an_allowed_number_as_a_phone_jid() {
     let (ch, fake) = connected_channel(false);
     ch.send(&message("+1234567890", "hello")).await.unwrap();
     assert_eq!(
-        *fake.calls.lock(),
-        [Call::Text(
-            "1234567890@s.whatsapp.net".into(),
-            "hello".into()
-        )]
+        fake.texts(),
+        [("1234567890@s.whatsapp.net".to_owned(), "hello".to_owned())]
     );
 }
 
@@ -677,8 +636,8 @@ async fn send_into_a_provenanced_group_uses_the_group_jid() {
         .await
         .unwrap();
     assert_eq!(
-        *fake.calls.lock(),
-        [Call::Text("987654321@g.us".into(), "to group".into())]
+        fake.texts(),
+        [("987654321@g.us".to_owned(), "to group".to_owned())]
     );
 }
 
@@ -689,13 +648,13 @@ async fn blocked_recipients_are_skipped_silently() {
     ch.send(&message("11111@g.us", "nope")).await.unwrap();
     ch.start_typing("+9999999999").await.unwrap();
     ch.stop_typing("+9999999999").await.unwrap();
-    assert!(fake.calls.lock().is_empty());
+    assert!(fake.calls().is_empty());
 }
 
 #[tokio::test]
 async fn unparseable_recipients_are_rejected() {
     let ch = WhatsAppWebChannel::new("/tmp/t.db".into(), None, None, vec![]);
-    let fake = Arc::new(FakeClient::default());
+    let fake = Arc::new(RecordingClient::default());
     *ch.client.lock() = Some(fake.clone() as Arc<dyn OutboundClient>);
 
     let empty = ch.send(&message("   ", "x")).await.unwrap_err();
@@ -710,7 +669,7 @@ async fn unparseable_recipients_are_rejected() {
         bad_jid.to_string().contains("Invalid WhatsApp JID"),
         "{bad_jid}"
     );
-    assert!(fake.calls.lock().is_empty());
+    assert!(fake.calls().is_empty());
 }
 
 #[tokio::test]
@@ -718,13 +677,11 @@ async fn typing_states_go_to_the_recipient_jid() {
     let (ch, fake) = connected_channel(false);
     ch.start_typing("+1234567890").await.unwrap();
     ch.stop_typing("1234567890@s.whatsapp.net").await.unwrap();
-    assert_eq!(
-        *fake.calls.lock(),
-        [
-            Call::Composing("1234567890@s.whatsapp.net".into()),
-            Call::Paused("1234567890@s.whatsapp.net".into()),
-        ]
-    );
+    assert!(matches!(
+        fake.calls().as_slice(),
+        [Call::Composing(first), Call::Paused(second)]
+            if first == "1234567890@s.whatsapp.net" && second == "1234567890@s.whatsapp.net"
+    ));
 }
 
 #[tokio::test]
