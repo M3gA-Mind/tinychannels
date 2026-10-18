@@ -6,20 +6,45 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde_json::json;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Instant;
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
 
+/// Minimum spacing between streaming-draft edits (Discord allows roughly five
+/// edits per five seconds per channel).
+const DEFAULT_DRAFT_UPDATE_INTERVAL_MS: u64 = 1000;
+
 /// Discord channel — connects via Gateway WebSocket for real-time messages
 pub struct DiscordChannel {
-    bot_token: String,
-    guild_id: Option<String>,
-    channel_id: Option<String>,
-    allowed_users: Vec<String>,
-    listen_to_bots: bool,
-    mention_only: bool,
+    pub(super) bot_token: String,
+    pub(super) guild_id: Option<String>,
+    pub(super) channel_id: Option<String>,
+    pub(super) allowed_users: Vec<String>,
+    pub(super) listen_to_bots: bool,
+    pub(super) mention_only: bool,
     typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     http_client: reqwest::Client,
-    api_base: String,
+    pub(super) api_base: String,
+    /// Host speech-to-text for inbound voice messages. `None` leaves the
+    /// transcript `Unavailable`; the audio is still delivered.
+    pub(super) transcriber: Option<Arc<dyn crate::host::Transcriber>>,
+    /// Durable voice storage for voice messages in and out.
+    pub(super) voice_media_store: Option<Arc<dyn crate::host::VoiceMediaStore>>,
+    /// Scoped media storage for attachments in and out.
+    pub(super) media_repository: Option<Arc<dyn crate::host::MediaRepository>>,
+    /// TinyVoice codec access used for voice duration and waveform.
+    pub(super) voice_codec: Option<Arc<dyn crate::host::VoiceCodec>>,
+    pub(super) voice_synthesis: bool,
+    /// Module ingress and event sink. `None` falls back to the legacy
+    /// `listen` sender with text-only messages.
+    pub(super) events: Option<Arc<dyn crate::host::EventSink>>,
+    /// Channel id -> thread parent, filled from gateway events and REST lookups.
+    pub(super) channel_cache: Mutex<HashMap<String, super::inbound::ChannelInfo>>,
+    /// Last streaming-draft edit per channel, for edit rate limiting.
+    pub(super) last_draft_edit: Mutex<HashMap<String, Instant>>,
+    pub(super) draft_update_interval_ms: u64,
 }
 
 impl DiscordChannel {
@@ -41,6 +66,15 @@ impl DiscordChannel {
             typing_handle: Mutex::new(None),
             http_client: reqwest::Client::new(),
             api_base: DISCORD_API_BASE.to_string(),
+            transcriber: None,
+            voice_media_store: None,
+            media_repository: None,
+            voice_codec: None,
+            voice_synthesis: false,
+            events: None,
+            channel_cache: Mutex::new(HashMap::new()),
+            last_draft_edit: Mutex::new(HashMap::new()),
+            draft_update_interval_ms: DEFAULT_DRAFT_UPDATE_INTERVAL_MS,
         }
     }
 
@@ -63,6 +97,15 @@ impl DiscordChannel {
             typing_handle: Mutex::new(None),
             http_client,
             api_base: DISCORD_API_BASE.to_string(),
+            transcriber: None,
+            voice_media_store: None,
+            media_repository: None,
+            voice_codec: None,
+            voice_synthesis: false,
+            events: None,
+            channel_cache: Mutex::new(HashMap::new()),
+            last_draft_edit: Mutex::new(HashMap::new()),
+            draft_update_interval_ms: DEFAULT_DRAFT_UPDATE_INTERVAL_MS,
         }
     }
 
@@ -75,7 +118,49 @@ impl DiscordChannel {
         self
     }
 
-    fn http_client(&self) -> reqwest::Client {
+    /// Attach the host speech-to-text capability for inbound voice messages.
+    #[must_use]
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn crate::host::Transcriber>) -> Self {
+        self.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Attach durable voice storage (voice messages in and out).
+    #[must_use]
+    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
+        self.voice_media_store = Some(store);
+        self
+    }
+
+    /// Attach scoped media storage (attachments in and out).
+    #[must_use]
+    pub fn with_media_repository(mut self, repository: Arc<dyn crate::host::MediaRepository>) -> Self {
+        self.media_repository = Some(repository);
+        self
+    }
+
+    /// Attach the TinyVoice codec used for voice duration and waveform.
+    #[must_use]
+    pub fn with_voice_codec(mut self, codec: Arc<dyn crate::host::VoiceCodec>) -> Self {
+        self.voice_codec = Some(codec);
+        self
+    }
+
+    /// Declare that the host can synthesize and encode spoken replies.
+    #[must_use]
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.voice_synthesis = enabled;
+        self
+    }
+
+    /// Attach the module ingress/event sink.
+    #[must_use]
+    pub fn with_events(mut self, events: Arc<dyn crate::host::EventSink>) -> Self {
+        self.events = Some(events);
+        self
+    }
+
+    pub(super) fn http_client(&self) -> reqwest::Client {
         self.http_client.clone()
     }
 
