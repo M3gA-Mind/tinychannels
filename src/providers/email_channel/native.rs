@@ -26,10 +26,13 @@ const DEFAULT_SUBJECT: &str = "OpenHuman Message";
 /// Inbound subjects remembered so replies keep them.
 const SUBJECT_WINDOW: usize = 512;
 
+/// The subjects and the order they arrived in, oldest first.
+type SubjectWindow = (HashMap<String, String>, VecDeque<String>);
+
 /// Subjects of inbound messages by message id.
 #[derive(Clone, Default)]
 pub(crate) struct Subjects {
-    inner: Arc<Mutex<(HashMap<String, String>, VecDeque<String>)>>,
+    inner: Arc<Mutex<SubjectWindow>>,
 }
 
 impl Subjects {

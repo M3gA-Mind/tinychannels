@@ -1,7 +1,7 @@
 use super::*;
 use tinychannels::factory::DefaultHttpClients;
 use tinychannels::host::NoopHost;
-use tinychannels_bus::config::{IMessageConfig, LinqConfig, SignalConfig};
+use tinychannels_bus::config::{EmailConfig, IMessageConfig, LinqConfig, SignalConfig};
 
 fn signal_config() -> ChannelsConfig {
     ChannelsConfig {
@@ -73,6 +73,29 @@ fn a_configured_linq_account_builds_a_native_launch() {
     assert!(
         build_native_v2(
             "linq",
+            &ChannelsConfig::default(),
+            &host,
+            &DefaultHttpClients
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn a_configured_email_account_builds_a_native_launch() {
+    let host = NoopHost::arc();
+    let config = ChannelsConfig {
+        email: Some(EmailConfig {
+            from_address: "bot@example.com".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let launch = build_native_v2("email", &config, &host, &DefaultHttpClients).unwrap();
+    assert_eq!(launch.channel.name(), "email");
+    assert!(
+        build_native_v2(
+            "email",
             &ChannelsConfig::default(),
             &host,
             &DefaultHttpClients

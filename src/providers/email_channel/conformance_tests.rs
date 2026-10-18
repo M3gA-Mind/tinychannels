@@ -99,16 +99,14 @@ struct EmailFixture {
 }
 
 impl EmailFixture {
-    fn start() -> impl std::future::Future<Output = Self> {
-        async {
-            let smtp = smtp(false).await;
-            let rig = rig(&smtp);
-            Self {
-                rig,
-                smtp,
-                observations: Mutex::default(),
-                cursor: Mutex::default(),
-            }
+    async fn start() -> Self {
+        let smtp = smtp(false).await;
+        let rig = rig(&smtp);
+        Self {
+            rig,
+            smtp,
+            observations: Mutex::default(),
+            cursor: Mutex::default(),
         }
     }
 
