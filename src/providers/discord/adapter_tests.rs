@@ -106,6 +106,11 @@ async fn every_extension_trait_reaches_discord_through_the_adapter() {
                 .await;
         }
     }
+    Mock::given(method("POST"))
+        .and(wiremock::matchers::path(format!("/channels/{CHANNEL}/typing")))
+        .respond_with(ResponseTemplate::new(204))
+        .mount(&server)
+        .await;
     let (channel, ..) = full_channel(&server);
 
     let sent = ChannelAdapter::send(&channel, intent("hello")).await.unwrap();
