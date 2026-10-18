@@ -290,6 +290,18 @@ async fn every_content_kind_is_uploaded_or_built_and_sent_in_order() {
     let outcome = channel.send_v2(&request).await.unwrap();
     assert!(outcome.error.is_none());
     assert_eq!(outcome.receipt.platform_message_ids.len(), 8);
+    let builds: Vec<_> = client
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            Call::Media { build, bytes } => Some((build, bytes)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(builds.len(), 6, "every attachment is uploaded exactly once");
+    assert!(builds.iter().all(|(_, bytes)| *bytes > 0));
+    assert!(matches!(builds[0].0, MediaBuild::Image { .. }));
+    assert!(matches!(builds[5].0, MediaBuild::Voice { duration_seconds: Some(2), .. }));
     let sent = client.messages();
     assert!(sent[0].image_message.as_option().is_some());
     assert_eq!(sent[1].video_message.seconds, Some(2));

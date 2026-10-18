@@ -982,9 +982,7 @@ async fn without_usable_host_storage_the_session_falls_back_to_memory() {
 
 mod v2 {
     use super::*;
-    use crate::channel::{
-        ChannelAdapter as _, ChannelDelete as _, ChannelEdit as _, ChannelStreamingDraft as _,
-    };
+    use crate::channel::ChannelAdapter as _;
     use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices};
     use crate::providers::whatsapp_web::fakes::{Call, RecordingClient, base_state};
     use tinychannels_bus::channel::{ChannelRef, ConversationRef};
@@ -1107,8 +1105,8 @@ mod v2 {
         assert!(!refused.unsupported && !refused.sent_before_error);
         crate::channel::ChannelTyping::start_typing(&channel, "+15550001111").await.unwrap();
         crate::channel::ChannelTyping::stop_typing(&channel, "+15550001111").await.unwrap();
-        let blocked = crate::channel::ChannelTyping::start_typing(&channel, "not a number").await.unwrap_err();
-        assert!(!blocked.unsupported);
+        // Typing toward a number the account does not admit is silently skipped.
+        crate::channel::ChannelTyping::start_typing(&channel, "+19998887777").await.unwrap();
 
         let sent = crate::channel::ChannelTypedSend::send_typed(&channel, &typed("hi")).await.unwrap();
         let intent = tinychannels_bus::ChannelOutboundIntent {
