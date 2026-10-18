@@ -22,7 +22,7 @@ use tinychannels_bus::{
 enum Step {
     Text(String),
     Buttons { text: String, rows: Vec<Vec<ButtonAction>> },
-    Media { kind: MediaKind, media: MediaReference, name: &'static str, caption: Option<String> },
+    Media { kind: MediaKind, media: MediaReference, name: String, caption: Option<String> },
     Voice { media: MediaReference, caption: Option<String> },
 }
 
@@ -140,16 +140,19 @@ fn plan(message: &ChannelOutboundMessage, slack: &SlackChannel) -> Result<Vec<St
                 });
             }
             OutboundContentPart::Content { part: content } => {
+                let (kind, media, name, caption) = match content {
+                    ContentPart::Image { media, caption, .. } => (MediaKind::Image, media, "image", caption.clone()),
+                    ContentPart::Video { media, caption, .. } => (MediaKind::Video, media, "video", caption.clone()),
+                    ContentPart::Audio { media, title, .. } => (MediaKind::Audio, media, "audio", title.clone()),
+                    ContentPart::File { media, file_name, caption } => {
+                        (MediaKind::Document, media, file_name.as_deref().unwrap_or("file"), caption.clone())
+                    }
+                    _ => return Err(unsupported("Slack does not support this content kind")),
+                };
                 if slack.media_repository.is_none() {
                     return Err(unsupported("Slack media needs scoped host storage"));
                 }
-                steps.push(match content {
-                    ContentPart::Image { media, caption, .. } => Step::Media { kind: MediaKind::Image, media: media.clone(), name: "image", caption: caption.clone() },
-                    ContentPart::Video { media, caption, .. } => Step::Media { kind: MediaKind::Video, media: media.clone(), name: "video", caption: caption.clone() },
-                    ContentPart::Audio { media, title, .. } => Step::Media { kind: MediaKind::Audio, media: media.clone(), name: "audio", caption: title.clone() },
-                    ContentPart::File { media, file_name, caption } => Step::Media { kind: MediaKind::Document, media: media.clone(), name: if file_name.is_some() { "named" } else { "file" }, caption: caption.clone() },
-                    _ => return Err(unsupported("Slack does not support this content kind")),
-                });
+                steps.push(Step::Media { kind, media: media.clone(), name: name.to_owned(), caption });
             }
             OutboundContentPart::Voice { voice: OutboundVoice::Media { media, .. } } => {
                 if slack.voice_media_store.is_none() {
@@ -220,7 +223,10 @@ impl SlackChannel {
                 let mut sent = Vec::new();
                 for chunk in chunk_text(&to_mrkdwn(text), SLACK_TEXT_CHUNK_CHARS) {
                     let ts = self.post_message(target, json!({"text": chunk, "mrkdwn": true})).await.map_err(|mut e| {
-                        e.sent_before_error |= !sent.is_empty();
+                        if !sent.is_empty() {
+                            e.sent_before_error = true;
+                            e.retryable = false;
+                        }
                         e
                     })?;
                     sent.push((ts, MessageReceiptPartKind::Text));
@@ -248,7 +254,7 @@ impl SlackChannel {
                 {
                     return Err(pre_dispatch("Slack media failed upload validation"));
                 }
-                let file_name = stored.file_name.clone().unwrap_or_else(|| (*name).to_owned());
+                let file_name = stored.file_name.clone().unwrap_or_else(|| name.clone());
                 let comment = caption.as_deref().map(strip_tool_call_tags).map(|c| to_mrkdwn(&c));
                 let uploaded = self
                     .upload_file(Upload {
