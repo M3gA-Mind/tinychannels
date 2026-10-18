@@ -68,6 +68,8 @@ pub use delivery::progressive::{
 };
 
 pub use backend::{ChannelBackend, ChannelManager};
+#[cfg(feature = "email")]
+pub use factory::build_email_channel;
 #[cfg(feature = "whatsapp-web")]
 pub use factory::build_whatsapp_web_channel;
 pub use factory::{

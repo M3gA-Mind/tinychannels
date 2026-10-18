@@ -66,11 +66,11 @@ mod inbound;
 mod native;
 
 pub use crate::config::EmailConfig;
+#[cfg(feature = "email")]
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::mail::{ImapCredentials, MailSecret, SmtpCredentials, SmtpSecurity};
 #[cfg(feature = "email")]
 use crate::providers::mail::{LettreMailSender, MailCredentials, MailSender, OutboundEmail};
-#[cfg(feature = "email")]
-use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 #[cfg(feature = "email")]
 use crate::providers::native::HostPorts as NativeState;
 #[cfg(feature = "email")]

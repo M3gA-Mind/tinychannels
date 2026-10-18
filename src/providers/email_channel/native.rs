@@ -8,9 +8,7 @@ use crate::providers::mail::{
     LettreMailSender, MailAttachment, MailCredentials, MailError, MailHeaders, MailSender,
     OutboundEmail,
 };
-use crate::providers::native::{
-    Limits, NativeProvider, Sent, Step, Target, pre_dispatch,
-};
+use crate::providers::native::{Limits, NativeProvider, Sent, Step, Target, pre_dispatch};
 use async_trait::async_trait;
 use parking_lot::Mutex;
 use std::collections::{HashMap, VecDeque};
@@ -38,7 +36,10 @@ impl Subjects {
     pub(crate) fn remember(&self, message_id: &str, subject: &str) {
         let mut guard = self.inner.lock();
         let (map, order) = &mut *guard;
-        if map.insert(message_id.to_owned(), subject.to_owned()).is_none() {
+        if map
+            .insert(message_id.to_owned(), subject.to_owned())
+            .is_none()
+        {
             order.push_back(message_id.to_owned());
             if order.len() > SUBJECT_WINDOW
                 && let Some(oldest) = order.pop_front()
@@ -87,12 +88,6 @@ fn mail_error(error: MailError) -> ChannelSendError {
         MailError::InvalidAddress(_) | MailError::Config(_) => {
             pre_dispatch("Email message was rejected before sending")
         }
-        MailError::TimedOut => ChannelSendError {
-            kind: SendErrorKind::Transient,
-            message: "Email send outcome is uncertain".into(),
-            sent_before_error: true,
-            ..Default::default()
-        },
         _ => ChannelSendError {
             kind: SendErrorKind::Transient,
             message: "Email relay did not accept the message".into(),
@@ -176,7 +171,8 @@ impl NativeProvider for EmailChannel {
     }
 
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
-        self.deliver_bundle(target, std::slice::from_ref(step)).await
+        self.deliver_bundle(target, std::slice::from_ref(step))
+            .await
     }
 
     async fn deliver_bundle(
