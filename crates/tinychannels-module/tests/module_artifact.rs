@@ -32,6 +32,15 @@ struct DeliveryState {
     results: BTreeMap<String, tinychannels_bus::DeliveryTerminalResult>,
 }
 
+fn projected_text_context(
+    events: &tinychannels_bus::WebOutputEvents,
+) -> &tinychannels_bus::WebEventContext {
+    let tinychannels_bus::WebChannelEvent::TextDelta { context, .. } = &events.events[0] else {
+        panic!("expected text delta from loaded module: {events:?}");
+    };
+    context
+}
+
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
 impl Callback {
     async fn deliver_inbound(&self, channel: String, message: serde_json::Value) -> Result<()> {
@@ -283,17 +292,79 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         .call_confidential("ProjectWebOutput", project(&tenant_b, "isolated"))
         .await
         .unwrap();
-    let output_context = |events: &tinychannels_bus::WebOutputEvents| {
-        let tinychannels_bus::WebChannelEvent::TextDelta { context, .. } = &events.events[0] else {
-            panic!("expected text delta from loaded module: {events:?}");
-        };
-        context
+    assert_eq!(projected_text_context(&tenant_a_first).seq, Some(1));
+    assert_eq!(projected_text_context(&tenant_a_second).seq, Some(2));
+    assert_eq!(projected_text_context(&tenant_b_first).seq, Some(1));
+    assert_eq!(projected_text_context(&tenant_a_first).client_id, "same-client");
+    assert!(projected_text_context(&tenant_a_first).ts.is_some());
+    let project_concurrently = |text: &'static str| {
+        let connection = connection.clone();
+        let handle = tenant_a.clone();
+        async move {
+            let proxy = connection
+                .proxy(
+                    tinychannels_bus::BUS_NAME,
+                    tinychannels_bus::OBJECT_PATH,
+                    tinychannels_bus::BUS_NAME,
+                )
+                .unwrap();
+            let request = tinychannels_bus::ProjectWebOutput {
+                handle: handle.handle,
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::TextDelta {
+                    text: text.into(),
+                    iteration: Some(1),
+                },
+            };
+            proxy
+                .call_confidential::<tinychannels_bus::WebOutputEvents>(
+                    "ProjectWebOutput",
+                    request,
+                )
+                .await
+        }
     };
-    assert_eq!(output_context(&tenant_a_first).seq, Some(1));
-    assert_eq!(output_context(&tenant_a_second).seq, Some(2));
-    assert_eq!(output_context(&tenant_b_first).seq, Some(1));
-    assert_eq!(output_context(&tenant_a_first).client_id, "same-client");
-    assert!(output_context(&tenant_a_first).ts.is_some());
+    let (left, right) = tokio::join!(
+        project_concurrently("left"),
+        project_concurrently("right")
+    );
+    let left = left.unwrap();
+    let right = right.unwrap();
+    let mut concurrent_sequences = [
+        projected_text_context(&left).seq.unwrap(),
+        projected_text_context(&right).seq.unwrap(),
+    ];
+    concurrent_sequences.sort_unstable();
+    assert_eq!(concurrent_sequences, [3, 4]);
+    let end_proxy = connection
+        .proxy(
+            tinychannels_bus::BUS_NAME,
+            tinychannels_bus::OBJECT_PATH,
+            tinychannels_bus::BUS_NAME,
+        )
+        .unwrap();
+    let end = end_proxy.call_confidential::<()>(
+        "EndWebTurn",
+        tinychannels_bus::EndWebTurn {
+            handle: tenant_a.handle.clone(),
+        },
+    );
+    let end_race_project = end_proxy.call_confidential::<tinychannels_bus::WebOutputEvents>(
+        "ProjectWebOutput",
+        project(&tenant_a, "end race"),
+    );
+    let (end_result, project_result) = tokio::join!(end, end_race_project);
+    end_result.unwrap();
+    let late_after_end = proxy
+        .call_confidential::<tinychannels_bus::WebOutputEvents>(
+            "ProjectWebOutput",
+            project(&tenant_a, "late after end"),
+        )
+        .await
+        .unwrap_err();
+    match project_result {
+        Ok(projected) => assert_eq!(projected_text_context(&projected).seq, Some(5)),
+        Err(error) => assert_eq!(error.wire_name(), late_after_end.wire_name()),
+    }
     proxy
         .call_confidential::<()>(
             "EndWebTurn",
@@ -312,6 +383,31 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
             .await
             .is_err()
     );
+    let terminal: tinychannels_bus::WebOutputEvents = proxy
+        .call_confidential(
+            "ProjectWebOutput",
+            tinychannels_bus::ProjectWebOutput {
+                handle: tenant_b.handle.clone(),
+                event: tinychannels_bus::module_progressive::ChannelOutputEvent::FinalMessage {
+                    text: "done".into(),
+                    parts: Vec::new(),
+                    receipt: None,
+                },
+            },
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        terminal.events.as_slice(),
+        [tinychannels_bus::WebChannelEvent::ChatDone { .. }]
+    ));
+    assert!(proxy
+        .call_confidential::<tinychannels_bus::WebOutputEvents>(
+            "ProjectWebOutput",
+            project(&tenant_b, "late after terminal"),
+        )
+        .await
+        .is_err());
     proxy
         .call_confidential::<()>(
             "EndWebTurn",
