@@ -265,6 +265,54 @@ pub fn build_telegram_channel(
     Some(Arc::new(telegram))
 }
 
+/// Build the configured Discord channel as its concrete provider type,
+/// wired to whatever media, voice and event services the host supplies.
+#[must_use]
+pub fn build_discord_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<DiscordChannel>> {
+    let dc = config.discord.as_ref()?;
+    tracing::info!(
+        channel = "discord",
+        allowed_users_count = dc.allowed_users.len(),
+        mention_only = dc.mention_only,
+        "[channels] discord enabled (bot token not logged)"
+    );
+    let mut discord = DiscordChannel::with_http_client(
+        dc.bot_token.clone(),
+        dc.guild_id.clone(),
+        dc.channel_id.clone(),
+        dc.allowed_users.clone(),
+        dc.listen_to_bots,
+        dc.mention_only,
+        http.client_for("channel.discord"),
+    );
+    // Each is optional; Discord degrades to text without them.
+    if let Some(transcriber) = host.transcriber() {
+        discord = discord.with_transcriber(transcriber);
+    }
+    if let Some(store) = host.voice_media_store() {
+        discord = discord.with_voice_media_store(store);
+    }
+    if let Some(repository) = host.media_repository() {
+        discord = discord.with_media_repository(repository);
+    }
+    if let Some(codec) = host.voice_codec() {
+        discord = discord.with_voice_codec(codec);
+    }
+    discord = discord.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        discord = discord.with_events(events);
+    }
+    Some(Arc::new(discord))
+}
+
 /// Build the configured WhatsApp Business Cloud channel as its concrete type.
 ///
 /// The module uses this to retain the same object as the webhook ingress owner
@@ -455,16 +503,8 @@ pub fn build_channels(
         channels.push(telegram);
     }
 
-    if let Some(dc) = config.discord.as_ref() {
-        channels.push(Arc::new(DiscordChannel::with_http_client(
-            dc.bot_token.clone(),
-            dc.guild_id.clone(),
-            dc.channel_id.clone(),
-            dc.allowed_users.clone(),
-            dc.listen_to_bots,
-            dc.mention_only,
-            http.client_for("channel.discord"),
-        )));
+    if let Some(discord) = build_discord_channel(config, host, http) {
+        channels.push(discord);
     }
 
     if let Some(slack) = build_slack_channel(config, host, http) {

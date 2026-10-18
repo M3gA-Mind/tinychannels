@@ -1183,36 +1183,149 @@ async fn bot_token_channels_without_native_port_fail_explicitly_not_via_host() {
         None,
     );
     let config = ChannelsConfig {
-        discord: Some(tinychannels::config::DiscordConfig {
-            bot_token: "d".into(),
-            guild_id: None,
+        slack: Some(tinychannels::config::SlackConfig {
+            bot_token: "s".into(),
+            app_token: None,
             channel_id: None,
             allowed_users: vec![],
-            listen_to_bots: false,
-            mention_only: false,
         }),
         ..Default::default()
     };
     for error in [
         backend
-            .send_reaction(&config, "discord", serde_json::json!({}))
+            .send_reaction(&config, "slack", serde_json::json!({}))
             .await
             .map(|_| ()),
         backend
-            .create_thread(&config, "discord", "t")
+            .create_thread(&config, "slack", "t")
             .await
             .map(|_| ()),
         backend
-            .update_thread(&config, "discord", "1", "close")
+            .update_thread(&config, "slack", "1", "close")
             .await
             .map(|_| ()),
         backend
-            .list_threads(&config, "discord", None)
+            .list_threads(&config, "slack", None)
             .await
             .map(|_| ()),
     ] {
         assert!(error.unwrap_err().to_string().contains("no native"));
     }
     assert!(fixture.0.lock().await.is_empty());
+    host.shutdown().await.unwrap();
+}
+
+fn discord_config(channel_id: Option<&str>) -> ChannelsConfig {
+    ChannelsConfig {
+        discord: Some(tinychannels::config::DiscordConfig {
+            bot_token: "dtok".into(),
+            guild_id: Some("900".into()),
+            channel_id: channel_id.map(str::to_owned),
+            allowed_users: vec![],
+            listen_to_bots: false,
+            mention_only: false,
+        }),
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn bot_token_discord_reactions_and_threads_never_reach_the_host_backend() {
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    let server = MockServer::start().await;
+    Mock::given(method("PUT"))
+        .and(path_regex(r"^/channels/55/messages/66/reactions/.+/@me$"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/channels/55/threads"))
+        .respond_with(
+            ResponseTemplate::new(201)
+                .set_body_json(serde_json::json!({"id": "77", "name": "Plan"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path("/channels/77"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": "77"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/guilds/900/threads/active"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "threads": [{"id": "77", "name": "Plan", "parent_id": "55", "thread_metadata": {"archived": false}}]
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let (host, fixture, _server) = connected_host().await;
+    let mut backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    backend.discord_api_base = Some(server.uri());
+    let config = discord_config(Some("55"));
+
+    let reaction = backend
+        .send_reaction(
+            &config,
+            "discord",
+            serde_json::json!({"channelId": "55", "messageId": "66", "emoji": "🔥"}),
+        )
+        .await
+        .unwrap();
+    assert!(reaction.success);
+    let created = backend
+        .create_thread(&config, "discord", "Plan")
+        .await
+        .unwrap();
+    assert_eq!(
+        (created.thread_id.as_str(), created.title.as_deref()),
+        ("77", Some("Plan"))
+    );
+    let archived = backend
+        .update_thread(&config, "discord", "77", "archive")
+        .await
+        .unwrap();
+    assert_eq!(archived.thread_id, "77");
+    let listed = backend
+        .list_threads(&config, "discord", None)
+        .await
+        .unwrap();
+    assert_eq!(listed.threads.len(), 1);
+    assert_eq!(listed.threads[0].thread_id, "77");
+
+    assert!(
+        backend
+            .update_thread(&config, "discord", "77", "bogus")
+            .await
+            .is_err()
+    );
+    assert!(
+        backend
+            .send_reaction(&config, "discord", serde_json::json!({"emoji": "x"}))
+            .await
+            .is_err()
+    );
+    let no_channel = discord_config(None);
+    assert!(
+        backend
+            .create_thread(&no_channel, "discord", "x")
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("channel_id")
+    );
+    assert!(
+        fixture.0.lock().await.is_empty(),
+        "native discord must not call the host backend"
+    );
     host.shutdown().await.unwrap();
 }
