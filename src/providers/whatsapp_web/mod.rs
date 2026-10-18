@@ -313,6 +313,15 @@ pub struct WhatsAppWebChannel {
     /// Host storage for the durable session. When absent the session lives in
     /// memory and the device must be re-linked after a restart.
     storage: Option<Arc<dyn crate::host::StorageProvider>>,
+    media_repository: Option<Arc<dyn crate::host::MediaRepository>>,
+    voice_media_store: Option<Arc<dyn crate::host::VoiceMediaStore>>,
+    voice_synthesis: bool,
+    /// Where typed inbound messages and events are published.
+    events: Option<Arc<dyn crate::host::EventSink>>,
+    seen: Arc<Mutex<SeenSet>>,
+    authors: Arc<Mutex<BoundedMap>>,
+    /// The account the linked session is authenticated as.
+    identity: Arc<identity::LinkedIdentity>,
 }
 
 #[cfg(feature = "whatsapp-web")]
@@ -344,7 +353,42 @@ impl WhatsAppWebChannel {
             tx: Arc::new(Mutex::new(None)),
             lifecycle: None,
             storage: None,
+            media_repository: None,
+            voice_media_store: None,
+            voice_synthesis: false,
+            events: None,
+            seen: Arc::new(Mutex::new(SeenSet::new(4096))),
+            authors: Arc::new(Mutex::new(BoundedMap::new(4096))),
+            identity: Arc::new(identity::LinkedIdentity::default()),
         }
+    }
+
+    /// Scoped host media storage, which unlocks typed media in both directions.
+    #[must_use]
+    pub fn with_media_repository(mut self, store: Arc<dyn crate::host::MediaRepository>) -> Self {
+        self.media_repository = Some(store);
+        self
+    }
+
+    /// Host voice storage, which unlocks voice notes in both directions.
+    #[must_use]
+    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
+        self.voice_media_store = Some(store);
+        self
+    }
+
+    /// Whether the module can prepare synthesized voice replies for this account.
+    #[must_use]
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.voice_synthesis = enabled;
+        self
+    }
+
+    /// Where typed inbound messages and events are published.
+    #[must_use]
+    pub fn with_events(mut self, events: Arc<dyn crate::host::EventSink>) -> Self {
+        self.events = Some(events);
+        self
     }
 
     /// Persist the linked-device session through the host's storage so a
@@ -601,6 +645,13 @@ impl WhatsAppWebChannel {
             allowed_numbers: self.allowed_numbers.clone(),
             connected: Arc::clone(&self.connected),
             allowed_groups: Arc::clone(&self.allowed_groups),
+            events: self.events.clone(),
+            media_repository: self.media_repository.clone(),
+            voice_media_store: self.voice_media_store.clone(),
+            client: Arc::clone(&self.client),
+            seen: Arc::clone(&self.seen),
+            authors: Arc::clone(&self.authors),
+            identity: Arc::clone(&self.identity),
         };
 
         let mut builder = Bot::builder()
