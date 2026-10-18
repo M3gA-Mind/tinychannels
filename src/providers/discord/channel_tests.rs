@@ -795,7 +795,7 @@ where
         let identify = next_json(&mut ws).await;
         assert_eq!(identify["op"], 2);
         assert_eq!(identify["d"]["token"], BOT_TOKEN);
-        assert_eq!(identify["d"]["intents"], 37377);
+        assert_eq!(identify["d"]["intents"], 46593);
         // The heartbeat timer fires immediately, before any sequence is known.
         assert_eq!(next_json(&mut ws).await, json!({"op": 1, "d": null}));
         script(ws).await;

@@ -4,14 +4,11 @@ use crate::channel::LengthUnit;
 use crate::text::{ChunkMode, TextChunkOptions, chunk_text_with_options};
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
-use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde_json::json;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
-use tokio_tungstenite::tungstenite::Message;
-use uuid::Uuid;
 
 /// Minimum spacing between streaming-draft edits (Discord allows roughly five
 /// edits per five seconds per channel).

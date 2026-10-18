@@ -2,7 +2,7 @@
 //! threads and lifecycle events.
 
 use super::api::DISCORD_API_BASE;
-use super::channel::{DiscordChannel, contains_bot_mention, mention_tags};
+use super::channel::{DiscordChannel, contains_bot_mention, normalize_incoming_content};
 use crate::traits::ChannelMessage;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
@@ -78,20 +78,10 @@ pub(super) fn message_text(
     if content.trim().is_empty() {
         return (has_attachments && (!mention_only || replies_to_bot)).then(String::new);
     }
-    if mention_only && !contains_bot_mention(content, bot_user_id) {
-        return None;
-    }
-    let mut text = content.to_owned();
-    if mention_only {
-        for tag in mention_tags(bot_user_id) {
-            text = text.replace(&tag, " ");
-        }
-    }
-    let text = text.trim().to_owned();
-    if text.is_empty() {
-        return has_attachments.then(String::new);
-    }
-    Some(text)
+    normalize_incoming_content(content, mention_only, bot_user_id).or_else(|| {
+        // A bare mention that carries attachments still addresses the bot.
+        (has_attachments && contains_bot_mention(content, bot_user_id)).then(String::new)
+    })
 }
 
 fn media_kind_for(content_type: &str) -> MediaKind {
