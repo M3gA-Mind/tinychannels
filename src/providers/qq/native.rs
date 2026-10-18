@@ -1,6 +1,6 @@
 //! Native typed media delivery for QQ Official Bot.
 
-use super::QQChannel;
+use super::{QQ_API_BASE, QQChannel};
 use crate::host::{MediaRepository, VoiceMediaStore};
 use crate::providers::native::{
     FileStep, Limits, NativeProvider, Sent, Step, Target, pre_dispatch, unsupported,

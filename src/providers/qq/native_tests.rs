@@ -1,8 +1,8 @@
 use super::super::http_test_support::HttpsServer;
-use super::*;
 use crate::factory::{HttpClientFactory, build_long_tail_channel_with_host};
 use crate::host::{ChannelHostBuilder, VoiceMediaRequest, VoiceMediaStore};
 use crate::providers::native::fixtures::{StubMedia, stored_media};
+use base64::Engine as _;
 use serde_json::json;
 use std::sync::Arc;
 use tinychannels_bus::{
@@ -208,6 +208,10 @@ async fn host_voice_store_uploads_native_voice_and_sends_its_opaque_file_info() 
                     content_type: Some("audio/ogg".into()),
                     ..Default::default()
                 },
+                audio_base64: None,
+                codec: None,
+                duration_ms: None,
+                waveform: None,
             },
         }],
     };
