@@ -77,7 +77,9 @@ fn legacy_model_help_ignores_stale_workspace_cache() {
     };
     let model_help = build_models_help_response(&current, tempdir.path());
     assert!(model_help.contains("Current provider: `openai`"));
-    assert!(model_help.contains("No cached model list found for `openai`"));
+    assert!(model_help.contains("Model catalog is unavailable in this channel"));
+    assert!(model_help.contains("View available models in the web UI"));
+    assert!(!model_help.contains("refresh the model list"));
     assert!(!model_help.contains("stale-model"));
 
     let provider_help = build_providers_help_response(&current, &providers());
