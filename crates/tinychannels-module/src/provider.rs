@@ -1084,7 +1084,7 @@ async fn listen_with_supervision(
 
 /// A resource is retained until its owning task acknowledges cleanup.
 #[derive(Clone)]
-struct NativePorts {
+pub(crate) struct NativePorts {
     /// Display name used in operation errors ("Telegram", "Slack").
     provider: &'static str,
     adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
@@ -1097,7 +1097,7 @@ struct NativePorts {
 }
 
 impl NativePorts {
-    fn native<T>(channel: Arc<T>, provider: &'static str) -> Self
+    pub(crate) fn native<T>(channel: Arc<T>, provider: &'static str) -> Self
     where
         T: tinychannels::channel::ChannelAdapter
             + tinychannels::channel::ChannelTypedSend
@@ -1146,6 +1146,10 @@ pub(crate) enum AdapterMode {
     LegacyBacked,
     TelegramNativeV2,
     SlackNativeV2,
+    SignalNativeV2,
+    IMessageNativeV2,
+    LinqNativeV2,
+    EmailNativeV2,
 }
 
 pub(crate) struct ConfiguredAdapterHandle {
@@ -1471,7 +1475,10 @@ impl ConfiguredAdapterFactory {
         )
     }
 
-    fn native(running: Arc<Running>, #[cfg(test)] mode: AdapterMode) -> ConfiguredAdapterHandle {
+    pub(crate) fn native(
+        running: Arc<Running>,
+        #[cfg(test)] mode: AdapterMode,
+    ) -> ConfiguredAdapterHandle {
         let configured_instance = running.configured_instance.clone();
         let native = Arc::new(NativeAdapter { running });
         let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = native.clone();
@@ -1489,10 +1496,29 @@ impl ConfiguredAdapterFactory {
 impl Running {
     pub(crate) fn adapter_handle(self: &Arc<Self>) -> ConfiguredAdapterHandle {
         if let Some(ports) = &self.native_ports {
-            if ports.provider == "Slack" {
-                ConfiguredAdapterFactory::slack(self.clone())
-            } else {
-                ConfiguredAdapterFactory::telegram(self.clone())
+            match ports.provider {
+                "Slack" => ConfiguredAdapterFactory::slack(self.clone()),
+                "Signal" => ConfiguredAdapterFactory::native(
+                    self.clone(),
+                    #[cfg(test)]
+                    AdapterMode::SignalNativeV2,
+                ),
+                "iMessage" => ConfiguredAdapterFactory::native(
+                    self.clone(),
+                    #[cfg(test)]
+                    AdapterMode::IMessageNativeV2,
+                ),
+                "Linq" => ConfiguredAdapterFactory::native(
+                    self.clone(),
+                    #[cfg(test)]
+                    AdapterMode::LinqNativeV2,
+                ),
+                "Email" => ConfiguredAdapterFactory::native(
+                    self.clone(),
+                    #[cfg(test)]
+                    AdapterMode::EmailNativeV2,
+                ),
+                _ => ConfiguredAdapterFactory::telegram(self.clone()),
             }
         } else {
             ConfiguredAdapterFactory::legacy(self.clone())
@@ -1536,6 +1562,24 @@ impl Running {
             supervision,
             outbound_only,
             Some(NativePorts::telegram(channel)),
+        )
+    }
+    /// Start a provider that implements the whole native v2 adapter family.
+    pub(crate) fn start_native(
+        channel: Arc<dyn Channel>,
+        ports: NativePorts,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: Option<ChannelSupervisionPolicy>,
+        outbound_only: bool,
+    ) -> Arc<Self> {
+        Self::start_inner(
+            channel,
+            hooks,
+            host,
+            supervision,
+            outbound_only,
+            Some(ports),
         )
     }
     pub(crate) fn start_slack(
