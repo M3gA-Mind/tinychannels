@@ -86,6 +86,8 @@ struct Envelope {
     story_message: Option<serde_json::Value>,
     #[serde(default)]
     timestamp: Option<u64>,
+    #[serde(rename = "receiptMessage", default)]
+    receipt_message: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
