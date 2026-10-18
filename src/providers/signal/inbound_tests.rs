@@ -137,14 +137,15 @@ async fn unusable_attachments_are_skipped_but_the_text_survives() {
     assert!(rig.media.stored.lock().unwrap().is_empty());
 
     // Without any storage the attachments are never fetched.
-    let bare = channel_for(&server).with_events(Arc::new(RecordingEvents::delivering()));
+    let quiet = mock_daemon(b"x").await;
+    let bare = channel_for(&quiet).with_events(Arc::new(RecordingEvents::delivering()));
     let envelope = data_envelope(json!({
         "message": "caption",
         "timestamp": 1_700_000_000_408u64,
         "attachments": [attachment("a", "image/png", false)],
     }));
     bare.dispatch_envelope(&envelope, &tx).await;
-    assert!(calls(&server, "getAttachment").await.is_empty());
+    assert!(calls(&quiet, "getAttachment").await.is_empty());
 }
 
 #[tokio::test]
