@@ -51,6 +51,8 @@ mod client;
 #[cfg(feature = "whatsapp-web")]
 mod identity;
 #[cfg(feature = "whatsapp-web")]
+mod media_build;
+#[cfg(feature = "whatsapp-web")]
 mod inbound;
 #[cfg(feature = "whatsapp-web")]
 mod outbound;

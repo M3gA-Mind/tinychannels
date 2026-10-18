@@ -9,36 +9,8 @@ use anyhow::Result;
 use async_trait::async_trait;
 use wacore::download::{Downloadable, MediaType};
 use whatsapp_rust::Jid;
-use whatsapp_rust::media::{self, AudioOptions, DocumentOptions, ImageOptions, VideoOptions};
+use super::media_build::{self, MediaBuild, UploadedMedia};
 use whatsapp_rust::waproto::whatsapp as wa;
-
-/// What to build around an uploaded attachment.
-#[derive(Debug, Clone, PartialEq)]
-pub(super) enum MediaBuild {
-    Image {
-        caption: Option<String>,
-        mimetype: String,
-    },
-    Video {
-        caption: Option<String>,
-        duration_seconds: Option<u32>,
-    },
-    Audio {
-        mimetype: String,
-        duration_seconds: Option<u32>,
-    },
-    /// A push-to-talk voice note.
-    Voice {
-        duration_seconds: Option<u32>,
-        waveform: Option<Vec<u8>>,
-    },
-    Document {
-        mimetype: String,
-        file_name: Option<String>,
-        caption: Option<String>,
-    },
-    Sticker,
-}
 
 #[async_trait]
 pub(super) trait OutboundClient: Send + Sync {
@@ -89,7 +61,6 @@ impl OutboundClient for whatsapp_rust::Client {
         build: MediaBuild,
         context: Option<wa::ContextInfo>,
     ) -> Result<wa::Message> {
-        let context_info = context.map(Box::new);
         let kind = match &build {
             MediaBuild::Image { .. } => MediaType::Image,
             MediaBuild::Video { .. } => MediaType::Video,
@@ -100,85 +71,20 @@ impl OutboundClient for whatsapp_rust::Client {
         let upload = self
             .upload(bytes, kind, whatsapp_rust::UploadOptions::new())
             .await?;
-        Ok(match build {
-            MediaBuild::Image { caption, mimetype } => media::image_message(
-                upload,
-                ImageOptions {
-                    caption,
-                    mimetype: Some(mimetype),
-                    context_info,
-                    ..Default::default()
-                },
-            ),
-            MediaBuild::Video {
-                caption,
-                duration_seconds,
-            } => media::video_message(
-                upload,
-                VideoOptions {
-                    caption,
-                    duration_seconds,
-                    context_info,
-                    ..Default::default()
-                },
-            ),
-            MediaBuild::Audio {
-                mimetype,
-                duration_seconds,
-            } => media::audio_message(
-                upload,
-                AudioOptions {
-                    mimetype: Some(mimetype),
-                    duration_seconds,
-                    context_info,
-                    ..Default::default()
-                },
-            ),
-            MediaBuild::Voice {
-                duration_seconds,
-                waveform,
-            } => media::audio_message(
-                upload,
-                AudioOptions {
-                    mimetype: Some("audio/ogg; codecs=opus".into()),
-                    duration_seconds,
-                    ptt: Some(true),
-                    waveform,
-                    context_info,
-                },
-            ),
-            MediaBuild::Document {
-                mimetype,
-                file_name,
-                caption,
-            } => media::document_message(
-                upload,
-                DocumentOptions {
-                    mimetype: Some(mimetype),
-                    file_name,
-                    caption,
-                    context_info,
-                    ..Default::default()
-                },
-            ),
-            MediaBuild::Sticker => wa::Message {
-                sticker_message: whatsapp_rust::buffa::MessageField::some(wa::message::StickerMessage {
-                    url: Some(upload.url),
-                    direct_path: Some(upload.direct_path),
-                    media_key: Some(upload.media_key.to_vec()),
-                    file_sha256: Some(upload.file_sha256.to_vec()),
-                    file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
-                    file_length: Some(upload.file_length),
-                    media_key_timestamp: Some(upload.media_key_timestamp),
-                    mimetype: Some("image/webp".into()),
-                    context_info: context_info
-                        .map(|info| whatsapp_rust::buffa::MessageField::some(*info))
-                        .unwrap_or_default(),
-                    ..Default::default()
-                }),
-                ..Default::default()
+        Ok(media_build::build(
+            UploadedMedia {
+                url: upload.url,
+                direct_path: upload.direct_path,
+                media_key: upload.media_key.to_vec(),
+                file_sha256: upload.file_sha256.to_vec(),
+                file_enc_sha256: upload.file_enc_sha256.to_vec(),
+                file_length: upload.file_length,
+                media_key_timestamp: upload.media_key_timestamp,
+                streaming_sidecar: upload.streaming_sidecar,
             },
-        })
+            build,
+            context,
+        ))
     }
 
     async fn download(&self, media: &dyn Downloadable) -> Result<Vec<u8>> {

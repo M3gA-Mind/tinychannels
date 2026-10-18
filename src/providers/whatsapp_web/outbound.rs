@@ -1,6 +1,7 @@
 //! Typed outbound delivery for the WhatsApp Web adapter.
 
-use super::client::{MediaBuild, OutboundClient};
+use super::client::OutboundClient;
+use super::media_build::MediaBuild;
 use super::WhatsAppWebChannel;
 use crate::channel::{
     ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind,
