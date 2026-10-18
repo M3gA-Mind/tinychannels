@@ -381,11 +381,70 @@ impl Channel for SignalChannel {
         "signal"
     }
 
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.declared()
+    }
+
     fn supports_remote_control(&self) -> bool {
         true
     }
     fn supports_chat_approvals(&self) -> bool {
         true
+    }
+    fn supports_reactions(&self) -> bool {
+        true
+    }
+    fn supports_edit(&self) -> bool {
+        true
+    }
+    fn supports_reply_to_id(&self) -> bool {
+        true
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
+        super::native::outbound::send_typed(self, message)
+            .await
+            .map_err(super::native::to_anyhow)
+    }
+
+    async fn send_reaction(
+        &self,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> anyhow::Result<()> {
+        super::native::NativeProvider::react(
+            self,
+            conversation,
+            provider_message_id,
+            reaction,
+            remove,
+        )
+        .await
+        .map_err(super::native::to_anyhow)
+    }
+
+    async fn edit_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: &tinychannels_bus::ChannelOutboundIntent,
+    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
+        super::native::edit(self, receipt, intent)
+            .await
+            .map_err(super::native::to_anyhow)
+    }
+
+    async fn delete_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> anyhow::Result<()> {
+        super::native::delete(self, receipt)
+            .await
+            .map_err(super::native::to_anyhow)
     }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
@@ -481,8 +540,7 @@ impl Channel for SignalChannel {
                             match serde_json::from_str::<SseEnvelope>(&current_data) {
                                 Ok(sse) => {
                                     if let Some(ref envelope) = sse.envelope
-                                        && let Some(msg) = self.process_envelope(envelope)
-                                        && tx.send(msg).await.is_err()
+                                        && !self.dispatch_envelope(envelope, &tx).await
                                     {
                                         return Ok(());
                                     }
@@ -506,10 +564,8 @@ impl Channel for SignalChannel {
             if !current_data.is_empty() {
                 match serde_json::from_str::<SseEnvelope>(&current_data) {
                     Ok(sse) => {
-                        if let Some(ref envelope) = sse.envelope
-                            && let Some(msg) = self.process_envelope(envelope)
-                        {
-                            let _ = tx.send(msg).await;
+                        if let Some(ref envelope) = sse.envelope {
+                            let _ = self.dispatch_envelope(envelope, &tx).await;
                         }
                     }
                     Err(e) => {
@@ -558,6 +614,8 @@ impl Channel for SignalChannel {
         Ok(())
     }
 }
+
+super::native::native_v2_adapter!(SignalChannel);
 
 #[cfg(test)]
 #[path = "signal_tests.rs"]

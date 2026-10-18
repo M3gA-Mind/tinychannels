@@ -12,6 +12,7 @@ pub mod irc;
 pub mod lark;
 pub mod linq;
 pub mod mail;
+pub(crate) mod native;
 pub mod mattermost;
 pub mod qq;
 pub mod signal;
