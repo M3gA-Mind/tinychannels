@@ -137,7 +137,8 @@ fn parse_reads_text_quotes_and_unwraps_ephemeral_wrappers() {
         ..Default::default()
     };
     assert_eq!(parse(&wrapped).text, "inside");
-    let empty = parse(&wa::Message::default());
+    let blank = wa::Message::default();
+    let empty = parse(&blank);
     assert!(empty.text.is_empty() && empty.attachments.is_empty() && empty.location.is_none());
 }
 
