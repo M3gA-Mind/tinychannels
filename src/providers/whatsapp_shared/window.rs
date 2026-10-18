@@ -72,6 +72,18 @@ impl BoundedMap {
     }
 }
 
+/// Clears a shared slot when dropped, including when the owning task is
+/// aborted. A listener that parks keeps its inbound sender in such a slot; if
+/// the slot outlived the listener the module's inbound forwarder would never
+/// see its channel close and provider shutdown would wait forever.
+pub(crate) struct ClearOnDrop<'a, T>(pub(crate) &'a parking_lot::Mutex<Option<T>>);
+
+impl<T> Drop for ClearOnDrop<'_, T> {
+    fn drop(&mut self) {
+        *self.0.lock() = None;
+    }
+}
+
 #[cfg(test)]
 #[path = "window_tests.rs"]
 mod tests;

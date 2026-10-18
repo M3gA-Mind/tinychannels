@@ -3538,3 +3538,68 @@ async fn shutdown_refuses_preparation_and_execution_before_host_work() {
             .is_err()
     );
 }
+
+#[test]
+fn only_providers_without_any_module_ingress_are_refused_a_normal_start() {
+    // WhatsApp Cloud is webhook-backed, but the module authenticates and
+    // ingests the raw POSTs the host forwards, so it is not refused.
+    assert!(super::lacks_module_ingress("linq"));
+    for name in ["whatsapp", "telegram", "discord"] {
+        assert!(!super::lacks_module_ingress(name), "{name}");
+    }
+}
+
+#[tokio::test]
+async fn whatsapp_cloud_starts_normally_and_serves_webhook_ingress_over_the_bus() {
+    let service = inbound_preparation_service().await;
+    let config = ChannelsConfig {
+        whatsapp: Some(tinychannels_bus::config::WhatsAppConfig {
+            access_token: Some("access-token".into()),
+            phone_number_id: Some("123".into()),
+            verify_token: Some("verify-me".into()),
+            app_secret: Some("secret".into()),
+            session_path: None,
+            pair_phone: None,
+            pair_code: None,
+            allowed_numbers: vec!["*".into()],
+        }),
+        ..Default::default()
+    };
+    service
+        .start_channel("whatsapp".into(), config.clone())
+        .await
+        .expect("the module serves the Cloud webhook ingress");
+    // The subscription handshake is answered through the interaction method.
+    let challenge = service
+        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+            channel: "whatsapp".into(),
+            interaction: tinychannels_bus::ChannelInteraction::VerifyWebhook {
+                mode: "subscribe".into(),
+                verify_token: "verify-me".into(),
+                challenge: "challenge-1".into(),
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        challenge,
+        tinychannels_bus::ChannelInteractionResult::WebhookChallenge(value) if value == "challenge-1"
+    ));
+    // An unsigned delivery is refused with the client-error name.
+    let refused = service
+        .channel_interaction(tinychannels_bus::ChannelInteractionRequest {
+            channel: "whatsapp".into(),
+            interaction: tinychannels_bus::ChannelInteraction::DeliverWebhook {
+                signature: None,
+                body_base64: "e30=".into(),
+            },
+        })
+        .await
+        .map(|_| ())
+        .expect_err("an unsigned delivery must be refused");
+    assert!(matches!(
+        refused,
+        BusError::MethodFailed { name, .. } if name == crate::interaction::WEBHOOK_REJECTED_ERROR
+    ));
+    service.shutdown().await.unwrap();
+}

@@ -651,6 +651,9 @@ impl WhatsAppWebChannel {
         H: whatsapp_rust::http::HttpClient + 'static,
     {
         *self.tx.lock() = Some(tx.clone());
+        // Release the sender when the listener ends or is aborted, so the
+        // module's inbound forwarder can finish during shutdown.
+        let _release = crate::providers::whatsapp_shared::window::ClearOnDrop(&self.tx);
 
         use whatsapp_rust::TokioRuntime;
         use whatsapp_rust::bot::Bot;

@@ -351,6 +351,9 @@ impl Channel for WhatsAppChannel {
         // only keeps the legacy sink so a host without typed ingress still
         // receives it, then parks until the channel is cancelled.
         *self.listener.lock() = Some(tx);
+        // Release the sender when the listener ends or is aborted, so the
+        // module's inbound forwarder can finish during shutdown.
+        let _release = crate::providers::whatsapp_shared::window::ClearOnDrop(&self.listener);
         tracing::info!(
             "[whatsapp] cloud channel active (webhook mode); authenticated deliveries are \
             ingested through the module"

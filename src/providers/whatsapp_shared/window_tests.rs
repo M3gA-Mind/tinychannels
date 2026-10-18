@@ -34,3 +34,13 @@ fn zero_capacity_is_clamped_to_one() {
     map.insert("a", "1");
     assert_eq!(map.get("a").as_deref(), Some("1"));
 }
+
+#[test]
+fn the_sender_slot_is_cleared_when_its_guard_drops() {
+    let slot = parking_lot::Mutex::new(Some(7));
+    {
+        let _guard = ClearOnDrop(&slot);
+        assert_eq!(*slot.lock(), Some(7));
+    }
+    assert_eq!(*slot.lock(), None);
+}
