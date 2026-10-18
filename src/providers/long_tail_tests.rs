@@ -245,7 +245,10 @@ async fn unimplemented_operations_are_explicitly_unsupported() {
 #[tokio::test]
 async fn providers_without_a_typing_indicator_refuse_it() {
     let config = config("http://mm.invalid");
-    for id in ["irc", "qq", "dingtalk"] {
+    for (id, _) in PROVIDERS
+        .iter()
+        .filter(|(id, _)| matches!(*id, "lark" | "irc" | "qq" | "dingtalk"))
+    {
         let channel = build(&config, id);
         for start in [true, false] {
             let error = if start {
