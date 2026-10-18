@@ -721,6 +721,7 @@ async fn loopback_bot_api_retries_poll_then_routes_status_reply() {
     assert_eq!(inbound.content, "/status");
     assert_eq!(inbound.sender, "alice");
     assert_eq!(inbound.reply_target, "777");
+    assert_eq!(inbound.thread_ts.as_deref(), Some("41"));
 
     // This is the channel-facing part of the host's /status handler: it
     // turns the received command into a provider reply in the originating chat.
@@ -728,7 +729,7 @@ async fn loopback_bot_api_retries_poll_then_routes_status_reply() {
         .send(&SendMessage::new(
             "Thread: none\nProvider: openai",
             inbound.reply_target,
-        ))
+        ).in_thread(inbound.thread_ts))
         .await
         .unwrap();
     assert_eq!(
@@ -737,7 +738,9 @@ async fn loopback_bot_api_retries_poll_then_routes_status_reply() {
             "sendMessage".to_string(),
             serde_json::json!({
                 "chat_id": "777",
-                "text": "Thread: none\nProvider: openai"
+                "text": "Thread: none\nProvider: openai",
+                "parse_mode": "Markdown",
+                "reply_to_message_id": 41
             })
         )]
     );
