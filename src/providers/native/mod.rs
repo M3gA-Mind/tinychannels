@@ -172,6 +172,11 @@ pub(crate) trait NativeProvider: Send + Sync {
         false
     }
 
+    /// Whether provider message deletion is implemented.
+    fn can_delete(&self) -> bool {
+        false
+    }
+
     /// Whether streaming drafts (create, edit repeatedly, finalize) are declared.
     fn can_draft(&self) -> bool {
         false

@@ -135,6 +135,12 @@ pub(crate) async fn delete<P: NativeProvider + ?Sized>(
     provider: &P,
     receipt: &MessageReceipt,
 ) -> Result<(), ChannelSendError> {
+    if !provider.can_delete() {
+        return Err(unsupported(&format!(
+            "{} does not support deleting messages",
+            provider.display()
+        )));
+    }
     let address = address_of(provider, receipt)?;
     provider.delete_message(&address).await
 }

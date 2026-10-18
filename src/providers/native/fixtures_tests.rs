@@ -284,6 +284,10 @@ impl super::NativeProvider for FakeProvider {
         self.edits
     }
 
+    fn can_delete(&self) -> bool {
+        true
+    }
+
     fn can_draft(&self) -> bool {
         self.drafts
     }

@@ -262,6 +262,10 @@ impl NativeProvider for SignalChannel {
         true
     }
 
+    fn can_delete(&self) -> bool {
+        true
+    }
+
     async fn edit_text(&self, address: &Address, text: &str) -> Result<(), ChannelSendError> {
         let timestamp = address
             .message_id

@@ -600,6 +600,7 @@ async fn offline_providers_degrade_every_undeclared_feature_gracefully() {
             let skip = match feature {
                 Feature::Text => true,
                 Feature::Typing => declared.actions.supported.iter().any(|a| a == "typing"),
+                Feature::ReplyAddressing => declared.addressing.reply_to_id,
                 Feature::ThreadAddressing => thread_declared,
                 _ => false,
             };
