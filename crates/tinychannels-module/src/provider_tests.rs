@@ -3605,7 +3605,7 @@ async fn legacy_running_adapter_reports_status_and_refuses_second_start() {
     let (send, _commands) = mpsc::channel::<SendCommand>(1);
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
-        media_account_scope: None,
+        media_account_scope: MediaScope::default(),
         channel: Arc::new(InteractionChannel::default()),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
@@ -3908,7 +3908,7 @@ async fn module_voice_media_reports_each_precondition_and_missing_host_storage()
     let store = ModuleVoiceMediaStore(
         host.clone(),
         instance.clone(),
-        Some("telegram:media-v1:abc".into()),
+        MediaScope::fixed(Some("telegram:media-v1:abc".into())),
     );
     let scope = tinychannels_bus::HostVoiceScope {
         conversation: ConversationRef {
@@ -3958,7 +3958,11 @@ async fn module_voice_media_reports_each_precondition_and_missing_host_storage()
         .unwrap_err();
     assert!(read.to_string().contains("scoped storage is unavailable"));
 
-    let repository = ModuleMediaRepository(host, instance, Some("telegram:media-v1:abc".into()));
+    let repository = ModuleMediaRepository(
+        host,
+        instance,
+        MediaScope::fixed(Some("telegram:media-v1:abc".into())),
+    );
     let error = repository
         .scoped_store()
         .await
