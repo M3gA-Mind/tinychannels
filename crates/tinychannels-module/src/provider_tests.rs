@@ -4230,6 +4230,242 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
 }
 
 #[tokio::test]
+async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
+    use futures_util::{SinkExt, StreamExt};
+    use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
+    use wiremock::matchers::{method, path, path_regex};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const BOT_TOKEN: &str = "MTIzNDU2.ts.hmac";
+    const CHANNEL: &str = "555000111";
+    const THREAD: &str = "777000222";
+    const GUILD: &str = "999000333";
+
+    let rest = MockServer::start().await;
+    let websocket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let websocket_url = format!("ws://{}", websocket.local_addr().unwrap());
+    Mock::given(method("GET"))
+        .and(path("/gateway/bot"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "url": websocket_url,
+        })))
+        .mount(&rest)
+        .await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"^/channels/\d+/messages$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "1234567890123456789",
+        })))
+        .mount(&rest)
+        .await;
+    Mock::given(method("POST"))
+        .and(path_regex(r"^/channels/\d+/threads$"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "id": "777000222",
+        })))
+        .mount(&rest)
+        .await;
+    Mock::given(method("PATCH"))
+        .and(path_regex(r"^/channels/\d+/messages/\d+$"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "1234567890123456789",
+        })))
+        .mount(&rest)
+        .await;
+    for (verb, route) in [
+        ("PUT", r"^/channels/\d+/messages/\d+/reactions/.+/@me$"),
+        ("DELETE", r"^/channels/\d+/messages/\d+$"),
+        ("POST", r"^/channels/\d+/typing$"),
+    ] {
+        Mock::given(method(verb))
+            .and(path_regex(route))
+            .respond_with(ResponseTemplate::new(204))
+            .mount(&rest)
+            .await;
+    }
+    Mock::given(method("GET"))
+        .and(path(format!("/channels/{THREAD}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": THREAD,
+            "type": 11,
+            "parent_id": CHANNEL,
+        })))
+        .mount(&rest)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/cdn/voice-message.ogg"))
+        .respond_with(ResponseTemplate::new(200).set_body_raw(
+            include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+            "audio/ogg",
+        ))
+        .mount(&rest)
+        .await;
+
+    let (host, callbacks, _bus_server, _storage) = ingress_fixture().await;
+    *callbacks.transcription_result.lock().await = Some("recognized words".into());
+    let hooks = Arc::new(Hooks::default());
+    let instance = "discord:account-a".to_owned();
+    let provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let rest_url = rest.uri();
+    let gateway_ready = tokio::spawn(async move {
+        let (socket, _) = websocket.accept().await.unwrap();
+        let mut channel_ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+        channel_ws
+            .send(tokio_tungstenite::tungstenite::Message::Text(
+                serde_json::json!({"op": 10, "d": {"heartbeat_interval": 60000}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        let identify = channel_ws.next().await.unwrap().unwrap();
+        let identify: serde_json::Value = serde_json::from_str(&identify.to_string()).unwrap();
+        assert_eq!(identify["op"], 2);
+        assert_eq!(identify["d"]["token"], BOT_TOKEN);
+        assert_eq!(identify["d"]["intents"], 46593);
+        let heartbeat = channel_ws.next().await.unwrap().unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&heartbeat.to_string()).unwrap(),
+            serde_json::json!({"op": 1, "d": null})
+        );
+        for (sequence, event, data) in [
+            (
+                2,
+                "MESSAGE_CREATE",
+                serde_json::json!({
+                    "id": "1111111111111111111",
+                    "channel_id": THREAD,
+                    "guild_id": GUILD,
+                    "content": "",
+                    "flags": 8192,
+                    "author": {"id": "42", "username": "alice"},
+                    "attachments": [{
+                        "id": "5",
+                        "url": format!("{rest_url}/cdn/voice-message.ogg"),
+                        "filename": "voice-message.ogg",
+                        "content_type": "audio/ogg",
+                        "duration_secs": 0.2
+                    }]
+                }),
+            ),
+            (
+                3,
+                "MESSAGE_REACTION_ADD",
+                serde_json::json!({
+                    "user_id": "42",
+                    "message_id": "88",
+                    "channel_id": THREAD,
+                    "guild_id": GUILD,
+                    "emoji": {"name": "🔥"}
+                }),
+            ),
+        ] {
+            channel_ws
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    serde_json::json!({"op": 0, "s": sequence, "t": event, "d": data})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+        }
+        // Keep the real Gateway listener alive until Running::stop cancels it.
+        while channel_ws.next().await.is_some() {}
+    });
+
+    let channel = Arc::new(
+        tinychannels::DiscordChannel::new(
+            BOT_TOKEN.into(),
+            Some(GUILD.into()),
+            Some(CHANNEL.into()),
+            vec!["*".into()],
+            false,
+            false,
+        )
+        .with_api_base(rest.uri())
+        .with_events(provider_host.events().unwrap())
+        .with_media_repository(provider_host.media_repository().unwrap())
+        .with_voice_media_store(provider_host.voice_media_store().unwrap())
+        .with_transcriber(provider_host.transcriber().unwrap()),
+    );
+    let running = Running::start_native("Discord", channel, hooks, host, None, false);
+    let adapter = running.adapter_handle();
+    assert_eq!(adapter.mode, AdapterMode::DiscordNativeV2);
+    let descriptor = adapter.descriptor();
+    assert_eq!(descriptor.id, "discord");
+    assert_eq!(descriptor.account_id.as_deref(), Some("discord:account-a"));
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if !callbacks.inbound.lock().await.is_empty() && !callbacks.events.lock().await.is_empty() {
+                break;
+            }
+            callbacks.ingress_changed.notified().await;
+        }
+    })
+    .await
+    .expect("mock gateway events must traverse Discord parsing and module host callbacks");
+    let voice = callbacks.inbound.lock().await[0].1.clone();
+    assert!(voice.to_string().contains("recognized words"));
+    let reaction = callbacks.events.lock().await[0].clone();
+    assert_eq!(reaction.channel.account_id.as_deref(), Some("discord:account-a"));
+
+    let channel_ref = tinychannels_bus::ChannelRef {
+        id: "discord".into(),
+        account_id: Some("discord:account-a".into()),
+    };
+    let conversation = ConversationRef {
+        kind: ConversationKind::Thread,
+        id: THREAD.into(),
+        scope_id: Some(GUILD.into()),
+        parent_id: Some(CHANNEL.into()),
+        thread_id: Some(THREAD.into()),
+        ..Default::default()
+    };
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "discord-running-send".into(),
+        channel_id: instance,
+        conversation_id: THREAD.into(),
+        channel_ref: Some(channel_ref.clone()),
+        conversation_ref: Some(conversation.clone()),
+        thread_id: Some(THREAD.into()),
+        payload: OutboundPayload::Text {
+            text: "running send".into(),
+        },
+        ..Default::default()
+    };
+    let sent = adapter.send(intent.clone()).await.unwrap();
+    let message_id = sent.receipt.primary_platform_message_id.clone().unwrap();
+    adapter
+        .reactions()
+        .unwrap()
+        .send_reaction(
+            &channel_ref,
+            &conversation,
+            &message_id,
+            &tinychannels_bus::ChannelReaction {
+                value: "👍".into(),
+                custom_emoji_id: None,
+            },
+            false,
+        )
+        .await
+        .unwrap();
+    let mut edit = intent.clone();
+    edit.payload = OutboundPayload::Text {
+        text: "edited through Running".into(),
+    };
+    let edited = adapter.edits().unwrap().edit(&sent.receipt, edit).await.unwrap();
+    adapter.deletes().unwrap().delete(&edited).await.unwrap();
+
+    running.stop().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(5), gateway_ready)
+        .await
+        .expect("fake Gateway task must stop")
+        .unwrap();
+}
+
+#[tokio::test]
 async fn a_built_native_launch_starts_on_the_ordered_queue() {
     use tinychannels::factory::DefaultHttpClients;
     use tinychannels_bus::config::SignalConfig;
