@@ -331,7 +331,7 @@ impl AdapterFixture for IMessageFixture {
             }
             F::ReplyAddressing => {
                 let mut reply = text_intent("reply");
-                reply.reply_to_id = Some(REPLY_TS.into());
+                reply.reply_to_id = Some(REPLY_ID.into());
                 self.send(reply).await
             }
             F::ThreadAddressing => {
