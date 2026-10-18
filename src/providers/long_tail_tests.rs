@@ -13,8 +13,19 @@ use tinychannels_bus::{
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+/// Lark is an optional feature; every other provider is always built in.
+#[cfg(feature = "lark")]
 const PROVIDERS: [(&str, &str); 6] = [
     ("lark", "Lark"),
+    ("mattermost", "Mattermost"),
+    ("irc", "IRC"),
+    ("qq", "QQ"),
+    ("dingtalk", "DingTalk"),
+    ("yuanbao", "Yuanbao"),
+];
+
+#[cfg(not(feature = "lark"))]
+const PROVIDERS: [(&str, &str); 5] = [
     ("mattermost", "Mattermost"),
     ("irc", "IRC"),
     ("qq", "QQ"),
@@ -234,7 +245,7 @@ async fn unimplemented_operations_are_explicitly_unsupported() {
 #[tokio::test]
 async fn providers_without_a_typing_indicator_refuse_it() {
     let config = config("http://mm.invalid");
-    for id in ["lark", "irc", "qq", "dingtalk"] {
+    for id in ["irc", "qq", "dingtalk"] {
         let channel = build(&config, id);
         for start in [true, false] {
             let error = if start {
