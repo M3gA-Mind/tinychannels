@@ -6,7 +6,8 @@ use super::native::{LINQ_MAX_FILE_BYTES, LINQ_MAX_VOICE_BYTES};
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, media_of, publish,
 };
-use crate::providers::{WebhookRejected, native::inbound::normalize_mime};
+use crate::WebhookRejected;
+use crate::providers::native::inbound::normalize_mime;
 use serde_json::{Value, json};
 use tinychannels_bus::{
     ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef, SenderRef,
