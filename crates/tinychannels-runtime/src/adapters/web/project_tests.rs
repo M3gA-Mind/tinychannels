@@ -357,7 +357,10 @@ fn artifacts_and_lifecycle_stages_map_by_name() {
         max_iterations: None,
         stop: None,
     };
-    assert_eq!(wire(&one(lifecycle("inference_start")))["event"], "inference_start");
+    assert_eq!(
+        wire(&one(lifecycle("inference_start")))["event"],
+        "inference_start"
+    );
     assert_eq!(
         wire(&one(lifecycle("inference_heartbeat")))["event"],
         "inference_heartbeat"
@@ -381,7 +384,9 @@ fn subagent_states_map_to_subagent_events_with_detail() {
         ("text_delta", "subagent_text_delta"),
         ("thinking_delta", "subagent_thinking_delta"),
     ] {
-        let projected = wire(&one(ChannelOutputEvent::Subagent(Box::new(subagent(state)))));
+        let projected = wire(&one(ChannelOutputEvent::Subagent(Box::new(subagent(
+            state,
+        )))));
         assert_eq!(projected["event"], event, "{state}");
         assert_eq!(projected["skill_id"], "task-1");
         assert_eq!(projected["subagent"]["agent_id"], "researcher");
