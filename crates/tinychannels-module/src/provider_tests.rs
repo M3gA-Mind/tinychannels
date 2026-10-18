@@ -4242,7 +4242,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     const GUILD: &str = "999000333";
 
     let rest = MockServer::start().await;
-    let message_sequence = Arc::new(AtomicU64::new(1));
+    let message_sequence = Arc::new(AtomicUsize::new(1));
     let websocket = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let websocket_url = format!("ws://{}", websocket.local_addr().unwrap());
     Mock::given(method("GET"))
@@ -4256,7 +4256,10 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     Mock::given(method("POST"))
         .and(path_regex(r"^/channels/\d+/messages$"))
         .respond_with(move |_request: &wiremock::Request| {
-            let id = format!("1234567890123456{:03}", sequence.fetch_add(1, Ordering::SeqCst));
+            let id = format!(
+                "1234567890123456{:03}",
+                sequence.fetch_add(1, Ordering::SeqCst)
+            );
             ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": id}))
         })
         .mount(&rest)
@@ -4512,6 +4515,11 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         reaction.conversation.as_ref().unwrap().scope_id.as_deref(),
         Some(GUILD)
     );
+    assert_eq!(
+        reaction.conversation.as_ref(),
+        Some(&voice_scope.conversation),
+        "reaction retains the complete guild/channel/thread scope"
+    );
     match reaction.event {
         tinychannels_bus::ChannelEventKind::ReactionAdded {
             message_id,
@@ -4669,10 +4677,11 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         voice_sent.receipt.conversation.as_ref(),
         Some(&conversation)
     );
-    assert_eq!(
-        voice_sent.receipt.primary_platform_message_id.as_deref(),
-        Some("1234567890123456789")
-    );
+    let voice_message_id = voice_sent
+        .receipt
+        .primary_platform_message_id
+        .clone()
+        .unwrap();
     let requests = rest.received_requests().await.unwrap();
     let voice_request = requests
         .iter()
@@ -4696,11 +4705,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     let voice_payload: serde_json::Value = serde_json::from_str(&payload_body[..body_end]).unwrap();
     assert_eq!(voice_payload["flags"], 8192);
     assert_eq!(voice_payload["attachments"][0]["duration_secs"], 0.2);
-    assert!(
-        voice_payload["attachments"][0]["waveform"]
-            .as_str()
-            .is_some_and(|value| !value.is_empty())
-    );
+    assert_eq!(voice_payload["attachments"][0]["waveform"], "AID/");
 
     let native = adapter.native.as_deref().unwrap();
     let draft_intent = |text: &str| {
@@ -4716,6 +4721,10 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     )
     .await
     .unwrap();
+    let draft_message_id = draft
+        .primary_platform_message_id
+        .clone()
+        .expect("draft creation returns the created platform message id");
     let updated = tinychannels::channel::ChannelStreamingDraft::upsert_draft(
         native,
         Some(&draft),
@@ -4723,12 +4732,20 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     )
     .await
     .unwrap();
+    assert_eq!(
+        updated.primary_platform_message_id.as_deref(),
+        Some(draft_message_id.as_str())
+    );
     let finalized = adapter
         .edits()
         .unwrap()
         .edit(&updated, draft_intent("stream-final"))
         .await
         .unwrap();
+    assert_eq!(
+        finalized.primary_platform_message_id.as_deref(),
+        Some(draft_message_id.as_str())
+    );
     let abandoned = tinychannels::channel::ChannelStreamingDraft::upsert_draft(
         native,
         None,
@@ -4736,27 +4753,48 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     )
     .await
     .unwrap();
+    let abandoned_message_id = abandoned
+        .primary_platform_message_id
+        .clone()
+        .expect("canceled draft setup returns its own platform message id");
+    assert_ne!(abandoned_message_id, draft_message_id);
     adapter.deletes().unwrap().delete(&abandoned).await.unwrap();
     assert_eq!(finalized.channel.as_ref(), Some(&channel_ref));
     assert_eq!(finalized.conversation.as_ref(), Some(&conversation));
     let requests = rest.received_requests().await.unwrap();
-    for expected_text in [
-        "stream-start",
-        "stream-update",
-        "stream-final",
-        "stream-cancel",
-    ] {
-        assert!(
-            requests
-                .iter()
-                .any(|request| String::from_utf8_lossy(&request.body).contains(expected_text)),
-            "stream draft payload {expected_text:?} must reach Discord"
-        );
-    }
+    let stream_requests = requests
+        .iter()
+        .filter(|request| {
+            request
+                .url
+                .path()
+                .starts_with(&format!("/channels/{THREAD}/messages"))
+        })
+        .collect::<Vec<_>>();
+    let request_with_payload = |method: &str, id: Option<&str>, payload: &str| {
+        stream_requests.iter().any(|request| {
+            request.method == method
+                && id.map_or(true, |id| request.url.path().ends_with(&format!("/{id}")))
+                && String::from_utf8_lossy(&request.body).contains(payload)
+        })
+    };
+    assert!(request_with_payload("POST", None, "stream-start"));
+    assert!(request_with_payload(
+        "PATCH",
+        Some(&draft_message_id),
+        "stream-update"
+    ));
+    assert!(request_with_payload(
+        "PATCH",
+        Some(&draft_message_id),
+        "stream-final"
+    ));
+    assert!(request_with_payload("POST", None, "stream-cancel"));
     assert!(requests.iter().any(|request| {
         request.method == "DELETE"
-            && request.url.path() == format!("/channels/{THREAD}/messages/1234567890123456789")
+            && request.url.path() == format!("/channels/{THREAD}/messages/{abandoned_message_id}")
     }));
+    assert_ne!(voice_message_id, message_id);
 
     running.stop().await.unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), gateway_ready)
