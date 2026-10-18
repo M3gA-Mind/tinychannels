@@ -13,6 +13,13 @@ pub struct BeginWebTurn {
     pub context: WebEventContext,
 }
 
+/// Opaque identifier for one active module projection state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WebTurnHandle {
+    pub handle: String,
+}
+
 /// Project one canonical output event on an active module-owned turn.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]

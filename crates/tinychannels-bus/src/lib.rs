@@ -112,6 +112,8 @@ pub use module_interaction::{
 
 pub use module_supervision::ChannelSupervisionPolicy;
 
-pub use module_web_output::{BeginWebTurn, EndWebTurn, ProjectWebOutput, WebOutputEvents};
+pub use module_web_output::{
+    BeginWebTurn, EndWebTurn, ProjectWebOutput, WebOutputEvents, WebTurnHandle,
+};
 
 pub use module_runtime::{ChannelRuntimeDispatchPolicy, ChannelRuntimeReservation};
