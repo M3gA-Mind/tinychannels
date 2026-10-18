@@ -1,7 +1,7 @@
 use super::*;
 use crate::channel::ChannelTypedSend;
 use crate::providers::native::fixtures::RecordingEvents;
-use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
+use crate::providers::native::fixtures::{stored_media, StubMedia, StubVoice};
 use serde_json::json;
 use tinychannels_bus::channel::{ConversationRef, SendErrorKind};
 use tinychannels_bus::{
@@ -351,12 +351,10 @@ async fn inbound_download_rejects_untrusted_file_ids_before_network_io() {
         false,
         reqwest::Client::builder().no_proxy().build().unwrap(),
     );
-    assert!(
-        channel
-            .download_file("../private", MAX_FILE_BYTES)
-            .await
-            .is_none()
-    );
+    assert!(channel
+        .download_file("../private", MAX_FILE_BYTES)
+        .await
+        .is_none());
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 

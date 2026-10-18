@@ -1013,6 +1013,10 @@ mod tests;
 #[path = "lark_api_tests.rs"]
 mod api_tests;
 
+#[cfg(test)]
+#[path = "lark_conformance_tests.rs"]
+mod conformance_tests;
+
 #[async_trait]
 impl crate::providers::long_tail::LongTail for LarkChannel {
     const ID: &'static str = "lark";

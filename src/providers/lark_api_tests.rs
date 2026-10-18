@@ -321,6 +321,7 @@ async fn host_aware_factory_sends_typed_image_through_lark_image_upload() {
     let capabilities = channel.capabilities();
     assert!(capabilities.content.image.outbound);
     assert!(capabilities.content.file.outbound);
+    assert!(capabilities.content.video.outbound);
     assert!(capabilities.content.audio.outbound);
     assert!(capabilities.voice_out.supported);
     let result = crate::channel::ChannelTypedSend::send_typed(
@@ -420,6 +421,48 @@ async fn host_aware_factory_sends_typed_image_through_lark_image_upload() {
     assert!(file_result.error.is_none());
 
     *media.read.lock().unwrap() = Some(crate::providers::native::fixtures::stored_media(
+        tinychannels_bus::MediaKind::Video,
+        "video/mp4",
+        b"opaque-scoped-mp4-bytes",
+    ));
+    let video_result = crate::channel::ChannelTypedSend::send_typed(
+        channel.as_ref(),
+        &tinychannels_bus::ChannelOutboundMessage {
+            channel_id: "lark".into(),
+            conversation_id: "oc_chat_1".into(),
+            channel_ref: Some(tinychannels_bus::ChannelRef {
+                id: "lark".into(),
+                account_id: Some("lark:fixture".into()),
+            }),
+            conversation_ref: Some(tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Group,
+                id: "oc_chat_1".into(),
+                ..Default::default()
+            }),
+            turn_id: Some("turn-video-1".into()),
+            idempotency_key: "typed-video-1".into(),
+            reply_to_id: None,
+            thread_id: None,
+            parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Video {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("opaque-video-1".into()),
+                        kind: tinychannels_bus::MediaKind::Video,
+                        content_type: Some("video/mp4".into()),
+                        ..Default::default()
+                    },
+                    caption: None,
+                    duration_ms: None,
+                    thumbnail: None,
+                },
+            }],
+        },
+    )
+    .await
+    .unwrap();
+    assert!(video_result.error.is_none());
+
+    *media.read.lock().unwrap() = Some(crate::providers::native::fixtures::stored_media(
         tinychannels_bus::MediaKind::Audio,
         "audio/ogg",
         include_bytes!("telegram/fixtures/sine-ogg-opus.ogg"),
@@ -463,11 +506,13 @@ async fn host_aware_factory_sends_typed_image_through_lark_image_upload() {
     assert!(audio_result.error.is_none());
 
     let requests = server.requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 7);
+    assert_eq!(requests.len(), 9);
     assert_eq!(requests[3].target, "/open-apis/im/v1/files");
     assert_eq!(requests[4].body["msg_type"], "file");
     assert_eq!(requests[5].target, "/open-apis/im/v1/files");
-    assert_eq!(requests[6].body["msg_type"], "audio");
+    assert_eq!(requests[6].body["msg_type"], "media");
+    assert_eq!(requests[7].target, "/open-apis/im/v1/files");
+    assert_eq!(requests[8].body["msg_type"], "audio");
 
     let voice_result = crate::channel::ChannelTypedSend::send_typed(
         channel.as_ref(),
@@ -507,9 +552,9 @@ async fn host_aware_factory_sends_typed_image_through_lark_image_upload() {
     .unwrap();
     assert!(voice_result.error.is_none());
     let requests = server.requests.lock().unwrap().clone();
-    assert_eq!(requests.len(), 9);
-    assert_eq!(requests[7].target, "/open-apis/im/v1/files");
-    assert_eq!(requests[8].body["msg_type"], "audio");
+    assert_eq!(requests.len(), 11);
+    assert_eq!(requests[9].target, "/open-apis/im/v1/files");
+    assert_eq!(requests[10].body["msg_type"], "audio");
 }
 
 #[tokio::test]

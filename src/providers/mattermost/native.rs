@@ -1,13 +1,13 @@
 //! Native typed attachment delivery for Mattermost's v4 files and posts API.
 
 use super::super::long_tail::LongTail;
-use super::{MAX_FILE_BYTES, MAX_VOICE_BYTES, MattermostChannel};
+use super::{MattermostChannel, MAX_FILE_BYTES, MAX_VOICE_BYTES};
 use crate::host::{MediaRepository, VoiceMediaStore};
 use crate::providers::native::{Limits, NativeProvider, Sent, Step, Target};
 use async_trait::async_trait;
 use std::sync::Arc;
-use tinychannels_bus::ChannelCapabilities;
 use tinychannels_bus::channel::{ChannelSendError, MessageReceiptPartKind, SendErrorKind};
+use tinychannels_bus::ChannelCapabilities;
 
 #[async_trait]
 impl NativeProvider for MattermostChannel {
@@ -47,11 +47,8 @@ impl NativeProvider for MattermostChannel {
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
     ) -> Result<Target, ChannelSendError> {
-        let mut target = crate::providers::native::outbound::target_of(
-            message,
-            self.id(),
-            self.display(),
-        )?;
+        let mut target =
+            crate::providers::native::outbound::target_of(message, self.id(), self.display())?;
         if let Some((_, packed_root)) = target.conversation.id.split_once(':') {
             if message
                 .conversation_ref
@@ -242,7 +239,11 @@ fn http_error(status: reqwest::StatusCode, operation: &str, final_post: bool) ->
         } else {
             SendErrorKind::BadFormat
         },
-        message: format!("Mattermost {operation} failed with HTTP {status}"),
+        message: if final_post && server_error {
+            "Mattermost post failed after submission; delivery state is unknown".into()
+        } else {
+            format!("Mattermost {operation} failed with HTTP {status}")
+        },
         retryable: server_error && !final_post,
         sent_before_error: final_post && server_error,
         ..Default::default()
