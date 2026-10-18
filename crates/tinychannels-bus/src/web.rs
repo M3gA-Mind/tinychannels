@@ -545,6 +545,113 @@ pub enum WebChannelEvent {
         parts: Option<Vec<crate::channel::OutboundContentPart>>,
     },
 }
+
+impl WebChannelEvent {
+    /// The shared addressing and ordering context for this event.
+    pub fn context(&self) -> &WebEventContext {
+        use WebChannelEvent as E;
+        match self {
+            E::ChatDone { context, .. }
+            | E::ChatInterim { context, .. }
+            | E::ChatSuggestions { context, .. }
+            | E::ChatError { context, .. }
+            | E::ChatCancelled { context, .. }
+            | E::TextDelta { context, .. }
+            | E::ThinkingDelta { context, .. }
+            | E::ToolArgsDelta { context, .. }
+            | E::InferenceStart { context }
+            | E::InferenceHeartbeat { context }
+            | E::IterationStart { context, .. }
+            | E::ToolCall { context, .. }
+            | E::ToolProgress { context, .. }
+            | E::ToolResult { context, .. }
+            | E::TurnCost { context, .. }
+            | E::SubagentSpawned { context, .. }
+            | E::SubagentCompleted { context, .. }
+            | E::SubagentFailed { context, .. }
+            | E::SubagentAwaitingUser { context, .. }
+            | E::SubagentIterationStart { context, .. }
+            | E::SubagentToolCall { context, .. }
+            | E::SubagentToolResult { context, .. }
+            | E::SubagentTextDelta { context, .. }
+            | E::SubagentThinkingDelta { context, .. }
+            | E::ApprovalRequest { context, .. }
+            | E::ApprovalDecided { context, .. }
+            | E::PlanReviewRequest { context, .. }
+            | E::PlanReviewDecided { context, .. }
+            | E::QueueItemQueued { context, .. }
+            | E::QueueItemDelivered { context, .. }
+            | E::QueueItemRemoved { context, .. }
+            | E::ThreadGoalUpdated { context, .. }
+            | E::ThreadGoalCleared { context, .. }
+            | E::ThreadTodosChanged { context, .. }
+            | E::RunModeChanged { context, .. }
+            | E::ArtifactReady { context, .. }
+            | E::ArtifactFailed { context, .. }
+            | E::ArtifactPending { context, .. }
+            | E::MemoryActivity { context, .. }
+            | E::ExternalTransferPending { context, .. }
+            | E::ProactiveMessage { context, .. }
+            | E::VoiceSpeak { context, .. }
+            | E::UserError { context, .. }
+            | E::ChatMessage { context, .. }
+            | E::ChatSegment { context, .. } => context,
+        }
+    }
+
+    /// Mutable access to the shared addressing and ordering context.
+    pub fn context_mut(&mut self) -> &mut WebEventContext {
+        use WebChannelEvent as E;
+        match self {
+            E::ChatDone { context, .. }
+            | E::ChatInterim { context, .. }
+            | E::ChatSuggestions { context, .. }
+            | E::ChatError { context, .. }
+            | E::ChatCancelled { context, .. }
+            | E::TextDelta { context, .. }
+            | E::ThinkingDelta { context, .. }
+            | E::ToolArgsDelta { context, .. }
+            | E::InferenceStart { context }
+            | E::InferenceHeartbeat { context }
+            | E::IterationStart { context, .. }
+            | E::ToolCall { context, .. }
+            | E::ToolProgress { context, .. }
+            | E::ToolResult { context, .. }
+            | E::TurnCost { context, .. }
+            | E::SubagentSpawned { context, .. }
+            | E::SubagentCompleted { context, .. }
+            | E::SubagentFailed { context, .. }
+            | E::SubagentAwaitingUser { context, .. }
+            | E::SubagentIterationStart { context, .. }
+            | E::SubagentToolCall { context, .. }
+            | E::SubagentToolResult { context, .. }
+            | E::SubagentTextDelta { context, .. }
+            | E::SubagentThinkingDelta { context, .. }
+            | E::ApprovalRequest { context, .. }
+            | E::ApprovalDecided { context, .. }
+            | E::PlanReviewRequest { context, .. }
+            | E::PlanReviewDecided { context, .. }
+            | E::QueueItemQueued { context, .. }
+            | E::QueueItemDelivered { context, .. }
+            | E::QueueItemRemoved { context, .. }
+            | E::ThreadGoalUpdated { context, .. }
+            | E::ThreadGoalCleared { context, .. }
+            | E::ThreadTodosChanged { context, .. }
+            | E::RunModeChanged { context, .. }
+            | E::ArtifactReady { context, .. }
+            | E::ArtifactFailed { context, .. }
+            | E::ArtifactPending { context, .. }
+            | E::MemoryActivity { context, .. }
+            | E::ExternalTransferPending { context, .. }
+            | E::ProactiveMessage { context, .. }
+            | E::VoiceSpeak { context, .. }
+            | E::UserError { context, .. }
+            | E::ChatMessage { context, .. }
+            | E::ChatSegment { context, .. } => context,
+        }
+    }
+}
+
 /// Cost provenance copied as a wire enum to avoid depending on the harness.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]

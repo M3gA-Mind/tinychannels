@@ -55,6 +55,48 @@ fn deployed_web_event_goldens_keep_their_serialized_shapes() {
 }
 
 #[test]
+fn event_context_access_preserves_every_historical_wire_shape() {
+    for fixture in [
+        CHAT_DONE,
+        APPROVAL,
+        SUBAGENT,
+        LEGACY_CANCEL,
+        CANCEL,
+        TEXT_DELTA,
+        PROACTIVE,
+        SUBAGENT_TOOL_RESULT,
+        CHAT_ERROR_GUARDRAIL,
+        QUEUE_ITEM,
+        THREAD_GOAL,
+        THREAD_TODOS,
+        TOOL_RESULT,
+        APPROVAL_DECIDED,
+    ] {
+        let historical: serde_json::Value = serde_json::from_str(fixture).unwrap();
+        let mut event: WebChannelEvent = serde_json::from_value(historical.clone()).unwrap();
+        assert_eq!(event.context().client_id, historical["client_id"]);
+        assert_eq!(event.context().thread_id, historical["thread_id"]);
+        assert_eq!(event.context().request_id, historical["request_id"]);
+        event.context_mut().ts = Some(42);
+        let mut with_timestamp = serde_json::to_value(event).unwrap();
+        assert_eq!(with_timestamp["ts"], 42);
+        with_timestamp.as_object_mut().unwrap().remove("ts");
+        assert_eq!(with_timestamp, historical);
+    }
+
+    for fixture in
+        serde_json::from_str::<Vec<serde_json::Value>>(ADDITIONAL_HISTORICAL_EVENTS).unwrap()
+    {
+        let mut event: WebChannelEvent = serde_json::from_value(fixture.clone()).unwrap();
+        event.context_mut().ts = Some(42);
+        let mut with_timestamp = serde_json::to_value(event).unwrap();
+        assert_eq!(with_timestamp["ts"], 42);
+        with_timestamp.as_object_mut().unwrap().remove("ts");
+        assert_eq!(with_timestamp, fixture);
+    }
+}
+
+#[test]
 fn usage_defaults_and_unknown_costs_match_the_harness_wire_contract() {
     assert_eq!(WebCostSource::default(), WebCostSource::Charged);
     let usage: WebTurnUsagePayload = serde_json::from_value(serde_json::json!({
