@@ -59,6 +59,20 @@ fn receipt_address(receipt: &MessageReceipt) -> Result<(String, String), Channel
     Ok((conversation.id.clone(), id.to_owned()))
 }
 
+/// Edit by raw ids, for the legacy draft entry points.
+pub(crate) async fn edit_text_for_legacy(
+    channel: &SlackChannel,
+    recipient: &str,
+    message_id: &str,
+    text: &str,
+) -> Result<(), ChannelSendError> {
+    let text = to_mrkdwn(&strip_tool_call_tags(text));
+    if text.trim().is_empty() {
+        return Err(pre_dispatch("Slack edits and drafts require text"));
+    }
+    channel.update_text(recipient, message_id, &text).await
+}
+
 impl SlackChannel {
     pub(crate) async fn send_reaction_v2(
         &self,

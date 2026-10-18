@@ -18,6 +18,25 @@ use tinychannels_bus::{
     MediaReference, OutboundContentPart, OutboundVoice,
 };
 
+/// A plain-text typed message for the legacy `SendMessage` entry points.
+pub(crate) fn text_message(recipient: &str, thread_ts: Option<&str>, content: &str) -> ChannelOutboundMessage {
+    ChannelOutboundMessage {
+        channel_id: "slack".into(),
+        conversation_id: recipient.to_owned(),
+        thread_id: thread_ts.map(str::to_owned),
+        idempotency_key: format!("slack-legacy-{}", uuid::Uuid::new_v4()),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Text { text: content.to_owned(), markdown_dialect: None },
+        }],
+        ..Default::default()
+    }
+}
+
+/// Carry a typed failure through `anyhow`; callers recover it by downcast.
+pub(crate) fn send_error_to_anyhow(error: ChannelSendError) -> anyhow::Error {
+    anyhow::Error::new(super::types::SlackFailure(error))
+}
+
 /// One validated unit of work, in message order.
 enum Step {
     Text(String),
