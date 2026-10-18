@@ -28,6 +28,14 @@ fn channel_ref() -> ChannelRef {
     }
 }
 
+/// The conversation a feature addresses: a thread send is scoped to its thread.
+fn conversation_for(feature: ConformanceFeature) -> ConversationRef {
+    ConversationRef {
+        thread_id: (feature == ConformanceFeature::ThreadAddressing).then(|| THREAD_ID.to_owned()),
+        ..conversation()
+    }
+}
+
 fn conversation() -> ConversationRef {
     ConversationRef {
         kind: ConversationKind::Dm,
@@ -125,7 +133,7 @@ impl EmailFixture {
             feature,
             operation: operation.into(),
             channel: channel_ref(),
-            conversation: conversation(),
+            conversation: conversation_for(feature),
             reply_to_id: None,
             thread_id: None,
             payload_kinds: kinds,
@@ -173,7 +181,7 @@ impl EmailFixture {
                 feature,
                 operation: "send".into(),
                 channel: channel_ref(),
-                conversation: conversation(),
+                conversation: conversation_for(feature),
                 reply_to_id: reply,
                 thread_id: thread,
                 payload_kinds: kinds,
@@ -193,7 +201,7 @@ impl AdapterFixture for EmailFixture {
     fn expected_scope(&self, feature: ConformanceFeature) -> ExpectedScope {
         ExpectedScope {
             channel: channel_ref(),
-            conversation: conversation(),
+            conversation: conversation_for(feature),
             reply_to_id: (feature == ConformanceFeature::ReplyAddressing)
                 .then(|| REPLY_ID.to_owned()),
             thread_id: (feature == ConformanceFeature::ThreadAddressing)
@@ -357,6 +365,7 @@ impl AdapterFixture for EmailFixture {
             F::ThreadAddressing => {
                 let mut threaded = text_intent("threaded");
                 threaded.thread_id = Some(THREAD_ID.into());
+                threaded.conversation_ref = Some(conversation_for(F::ThreadAddressing));
                 self.send(threaded).await
             }
             F::Typing => ChannelTyping::start_typing(adapter, PEER)
