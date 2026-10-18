@@ -165,7 +165,7 @@ impl OutboundClient for whatsapp_rust::Client {
                 },
             ),
             MediaBuild::Sticker => wa::Message {
-                sticker_message: buffa::MessageField::some(wa::message::StickerMessage {
+                sticker_message: whatsapp_rust::buffa::MessageField::some(wa::message::StickerMessage {
                     url: Some(upload.url),
                     direct_path: Some(upload.direct_path),
                     media_key: Some(upload.media_key.to_vec()),
@@ -175,7 +175,7 @@ impl OutboundClient for whatsapp_rust::Client {
                     media_key_timestamp: Some(upload.media_key_timestamp),
                     mimetype: Some("image/webp".into()),
                     context_info: context_info
-                        .map(|info| buffa::MessageField::some(*info))
+                        .map(|info| whatsapp_rust::buffa::MessageField::some(*info))
                         .unwrap_or_default(),
                     ..Default::default()
                 }),

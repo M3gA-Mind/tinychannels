@@ -100,7 +100,7 @@ pub(super) fn parse(message: &wa::Message) -> Parsed<'_> {
         text: base.text_content().unwrap_or_default().to_owned(),
         ..Default::default()
     };
-    let mut reply = |context: &buffa::MessageField<wa::ContextInfo>| {
+    let mut reply = |context: &whatsapp_rust::buffa::MessageField<wa::ContextInfo>| {
         if parsed.reply_to.is_none() {
             parsed.reply_to = context
                 .stanza_id

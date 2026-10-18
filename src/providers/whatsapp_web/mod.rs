@@ -59,6 +59,10 @@ mod outbound;
 use crate::providers::whatsapp_shared::window::{BoundedMap, SeenSet};
 #[cfg(feature = "whatsapp-web")]
 use client::OutboundClient;
+#[cfg(feature = "whatsapp-web")]
+use crate::providers::whatsapp_shared::capabilities::{CapabilitySpec, capabilities};
+#[cfg(feature = "whatsapp-web")]
+use crate::providers::whatsapp_shared::error::WaFailure;
 
 // Imports used only by the real (feature-on) implementation; gated so the
 // feature-off stub build doesn't flag them as unused.
@@ -743,6 +747,83 @@ impl Channel for WhatsAppWebChannel {
         true
     }
 
+    fn supports_reactions(&self) -> bool {
+        true
+    }
+
+    fn supports_edit(&self) -> bool {
+        true
+    }
+
+    fn supports_reply_to_id(&self) -> bool {
+        true
+    }
+
+    fn history_key_ignores_thread(&self) -> bool {
+        true
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        capabilities(&CapabilitySpec {
+            media: self.media_repository.is_some(),
+            voice_store: self.voice_media_store.is_some(),
+            voice_synthesis: self.voice_synthesis && self.voice_media_store.is_some(),
+            native_waveform: true,
+            edit_delete: true,
+            limits: outbound::MEDIA_LIMITS,
+            text_limit: outbound::TEXT_LIMIT as u64,
+        })
+    }
+
+    fn media_account_identity(&self) -> Option<String> {
+        self.identity.current()
+    }
+
+    async fn send_typed(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> Result<()> {
+        self.send_v2(message).await.map(|_| ()).map_err(anyhow::Error::new)
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<crate::channel::ChannelSendOutcome> {
+        self.send_v2(message).await.map_err(anyhow::Error::new)
+    }
+
+    async fn send_reaction(
+        &self,
+        conversation: &tinychannels_bus::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::ChannelReaction,
+        remove: bool,
+    ) -> Result<()> {
+        self.react_v2(conversation, provider_message_id, reaction, remove)
+            .await
+            .map_err(anyhow::Error::new)
+    }
+
+    async fn mark_read(
+        &self,
+        conversation: &tinychannels_bus::ConversationRef,
+        provider_message_id: &str,
+    ) -> Result<()> {
+        self.read_v2(conversation, provider_message_id)
+            .await
+            .map_err(anyhow::Error::new)
+    }
+
+    async fn edit_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: &tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<tinychannels_bus::channel::MessageReceipt> {
+        self.edit_v2(receipt, intent).await.map_err(anyhow::Error::new)
+    }
+
+    async fn delete_message(&self, receipt: &tinychannels_bus::channel::MessageReceipt) -> Result<()> {
+        self.delete_v2(receipt).await.map_err(anyhow::Error::new)
+    }
+
     async fn send(&self, message: &SendMessage) -> Result<()> {
         let client = self.connected_client()?;
 
@@ -755,7 +836,9 @@ impl Channel for WhatsAppWebChannel {
         }
 
         let to = self.recipient_to_jid(&message.recipient)?;
-        client.send_text(to, message.content.clone()).await?;
+        client
+            .send_message(to, outbound::text_message(&message.content, None))
+            .await?;
         tracing::debug!("WhatsApp Web: sent message to {}", message.recipient);
         Ok(())
     }
@@ -810,6 +893,167 @@ impl Channel for WhatsAppWebChannel {
 
         tracing::debug!("WhatsApp Web: stop typing for {}", recipient);
         Ok(())
+    }
+}
+
+/// The failure class of an error produced by the Web adapter.
+#[cfg(feature = "whatsapp-web")]
+fn failure_of(error: &anyhow::Error) -> WaFailure {
+    error
+        .downcast_ref::<WaFailure>()
+        .cloned()
+        .unwrap_or_else(|| WaFailure::uncertain("WhatsApp Web operation outcome is uncertain"))
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelAdapter for WhatsAppWebChannel {
+    fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
+        tinychannels_bus::channel::ChannelDescriptor {
+            id: "whatsapp".into(),
+            display_name: "WhatsApp".into(),
+            metadata: std::collections::BTreeMap::from([
+                ("adapterMode".into(), "native-v2".into()),
+                ("backend".into(), "web".into()),
+            ]),
+            ..Default::default()
+        }
+    }
+
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        Channel::capabilities(self)
+    }
+
+    async fn start(
+        &self,
+        _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        // The configured module runtime owns the single linked-device session.
+        Ok(())
+    }
+
+    async fn stop(&self) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        Ok(())
+    }
+
+    async fn send(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
+        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+        self.send_v2(&message).await.map_err(WaFailure::into_send_error)
+    }
+
+    async fn status(
+        &self,
+    ) -> std::result::Result<
+        tinychannels_runtime::controllers::ChannelAccountSnapshot,
+        crate::channel::ChannelSendError,
+    > {
+        let connected = self.connected.load(Ordering::Acquire);
+        Ok(tinychannels_bus::controllers::ChannelAccountSnapshot {
+            channel_id: "whatsapp".into(),
+            states: vec![
+                tinychannels_bus::controllers::ChannelAccountState::Configured,
+                tinychannels_bus::controllers::ChannelAccountState::Enabled,
+            ],
+            health_state: Some(if connected { "healthy" } else { "unhealthy" }.into()),
+            ..Default::default()
+        })
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelTypedSend for WhatsAppWebChannel {
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> std::result::Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
+        self.send_v2(message).await.map_err(WaFailure::into_send_error)
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelTyping for WhatsAppWebChannel {
+    async fn start_typing(
+        &self,
+        conversation_id: &str,
+    ) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        Channel::start_typing(self, conversation_id)
+            .await
+            .map_err(|error| failure_of(&error).into_send_error())
+    }
+
+    async fn stop_typing(
+        &self,
+        conversation_id: &str,
+    ) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        Channel::stop_typing(self, conversation_id)
+            .await
+            .map_err(|error| failure_of(&error).into_send_error())
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelReaction for WhatsAppWebChannel {
+    async fn send_reaction(
+        &self,
+        channel: &tinychannels_bus::channel::ChannelRef,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        if channel.id != "whatsapp" {
+            return Err(
+                WaFailure::rejected("reaction channel does not match WhatsApp").into_send_error()
+            );
+        }
+        self.react_v2(conversation, provider_message_id, reaction, remove)
+            .await
+            .map_err(WaFailure::into_send_error)
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelEdit for WhatsAppWebChannel {
+    async fn edit(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError>
+    {
+        self.edit_v2(receipt, &intent)
+            .await
+            .map_err(WaFailure::into_send_error)
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelDelete for WhatsAppWebChannel {
+    async fn delete(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> std::result::Result<(), crate::channel::ChannelSendError> {
+        self.delete_v2(receipt).await.map_err(WaFailure::into_send_error)
+    }
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[async_trait]
+impl crate::channel::ChannelStreamingDraft for WhatsAppWebChannel {
+    async fn upsert_draft(
+        &self,
+        _previous: Option<&tinychannels_bus::channel::MessageReceipt>,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError>
+    {
+        Err(WaFailure::unsupported("WhatsApp messages cannot be streamed as edited drafts").into_send_error())
     }
 }
 

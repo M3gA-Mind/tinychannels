@@ -45,9 +45,9 @@ pub(super) fn text_message(text: &str, context: Option<wa::ContextInfo>) -> wa::
             ..Default::default()
         },
         Some(context) => wa::Message {
-            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
+            extended_text_message: whatsapp_rust::buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some(text.to_owned()),
-                context_info: buffa::MessageField::some(context),
+                context_info: whatsapp_rust::buffa::MessageField::some(context),
                 ..Default::default()
             }),
             ..Default::default()
@@ -63,12 +63,12 @@ pub(super) fn location_message(
     context: Option<wa::ContextInfo>,
 ) -> wa::Message {
     wa::Message {
-        location_message: buffa::MessageField::some(wa::message::LocationMessage {
+        location_message: whatsapp_rust::buffa::MessageField::some(wa::message::LocationMessage {
             degrees_latitude: Some(latitude),
             degrees_longitude: Some(longitude),
             name: name.map(str::to_owned),
             address: address.map(str::to_owned),
-            context_info: context.map(buffa::MessageField::some).unwrap_or_default(),
+            context_info: context.map(whatsapp_rust::buffa::MessageField::some).unwrap_or_default(),
             ..Default::default()
         }),
         ..Default::default()
@@ -77,10 +77,10 @@ pub(super) fn location_message(
 
 pub(super) fn contact_message(card: &ContactCard, context: Option<wa::ContextInfo>) -> wa::Message {
     wa::Message {
-        contact_message: buffa::MessageField::some(wa::message::ContactMessage {
+        contact_message: whatsapp_rust::buffa::MessageField::some(wa::message::ContactMessage {
             display_name: Some(card.display_name.clone()),
             vcard: Some(vcard::write(card)),
-            context_info: context.map(buffa::MessageField::some).unwrap_or_default(),
+            context_info: context.map(whatsapp_rust::buffa::MessageField::some).unwrap_or_default(),
             ..Default::default()
         }),
         ..Default::default()
