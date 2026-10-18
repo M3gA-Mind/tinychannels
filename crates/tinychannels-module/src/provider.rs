@@ -2034,6 +2034,19 @@ impl Running {
                         .into(),
                 ));
             }
+            tinychannels_bus::ChannelInteraction::MarkRead {
+                channel,
+                conversation,
+                provider_message_id,
+            } if channel != &expected_channel
+                || conversation.id.trim().is_empty()
+                || provider_message_id.trim().is_empty() =>
+            {
+                return Err(RunningSendError::NotDispatched(
+                    "provider read receipt scope is incomplete or does not match configured account"
+                        .into(),
+                ));
+            }
             tinychannels_bus::ChannelInteraction::EditMessage { receipt, intent }
                 if !valid_receipt(receipt)
                     || self.validate_adapter_intent(intent).is_err()
@@ -2054,6 +2067,16 @@ impl Running {
         }
         self.submit(ProviderOperation::Interaction(interaction))
             .await
+    }
+
+    /// Run a webhook interaction directly on the provider. Ingesting a
+    /// delivery can download media for seconds; it must not hold up the
+    /// ordered send queue, and its ordering against sends does not matter.
+    pub(crate) async fn webhook(
+        &self,
+        interaction: tinychannels_bus::ChannelInteraction,
+    ) -> Result<tinychannels_bus::ChannelInteractionResult> {
+        crate::interaction::dispatch(self.channel.as_ref(), interaction).await
     }
 
     async fn submit(

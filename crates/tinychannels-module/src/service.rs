@@ -89,6 +89,13 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
                 .is_some_and(|wa| wa.backend_type() == "cloud"))
 }
 
+/// Whether `name` receives inbound traffic only through a webhook this module
+/// has no ingress for. WhatsApp Cloud is not one: the host forwards each raw
+/// POST and the module authenticates and ingests it.
+fn lacks_module_ingress(name: &str) -> bool {
+    name == "linq"
+}
+
 async fn configured_capabilities(
     running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
     name: &str,
@@ -122,6 +129,15 @@ pub(crate) struct Channels {
 struct ProviderActivation {
     generation: String,
     media_account_scope: crate::provider::MediaScope,
+}
+
+/// Two activations are the same when they are the same provider generation.
+/// The media scope is read live from the provider on every use, so a scope that
+/// changed mid-session fails the next media operation rather than this check.
+impl PartialEq for ProviderActivation {
+    fn eq(&self, other: &Self) -> bool {
+        self.generation == other.generation
+    }
 }
 
 struct ModuleDeliveryHandler {
@@ -200,13 +216,33 @@ impl Channels {
         );
         let owner_host: Arc<dyn ChannelHost> =
             hooks.host(self.host.clone(), name.clone(), media_account_scope.clone());
-        let telegram = if tinychannels_bus::provider_id(&name) == "telegram" {
+        let provider_id = tinychannels_bus::provider_id(&name);
+        let telegram = if provider_id == "telegram" {
             build_telegram_channel(&config, &owner_host, http)
+        } else {
+            None
+        };
+        let whatsapp_backend = (provider_id == "whatsapp")
+            .then(|| config.whatsapp.as_ref().map(|wa| wa.backend_type()))
+            .flatten();
+        let whatsapp_cloud = if whatsapp_backend == Some("cloud") {
+            tinychannels::build_whatsapp_cloud_channel(&config, &owner_host, http)
+        } else {
+            None
+        };
+        let whatsapp_web = if whatsapp_backend == Some("web") {
+            tinychannels::build_whatsapp_web_channel(&config, &owner_host)
         } else {
             None
         };
         let channel: Arc<dyn tinychannels::Channel> = if let Some(telegram) = &telegram {
             telegram.clone()
+        } else if let Some(cloud) = &whatsapp_cloud {
+            cloud.clone()
+        } else if let Some(web) = &whatsapp_web {
+            // The linked session, not its mutable label, is the media authority.
+            media_account_scope.bind_source(web.clone());
+            web.clone()
         } else {
             build_channels(&config, &owner_host, http)
                 .into_iter()
@@ -217,7 +253,7 @@ impl Channels {
                 })?
         };
 
-        if is_webhook_backed(&name, &config) && !outbound_only {
+        if lacks_module_ingress(&name) && !outbound_only {
             return Err(BusError::MethodFailed {
                 name: NO_INGRESS_ERROR.to_owned(),
                 message: format!(
@@ -241,6 +277,10 @@ impl Channels {
                 supervision,
                 outbound_only,
             )
+        } else if let Some(cloud) = whatsapp_cloud {
+            Running::start_native("WhatsApp", cloud, hooks, self.host.clone(), supervision, outbound_only)
+        } else if let Some(web) = whatsapp_web {
+            Running::start_native("WhatsApp", web, hooks, self.host.clone(), supervision, outbound_only)
         } else {
             match supervision {
                 Some(policy) => {
@@ -868,6 +908,13 @@ impl Channels {
                 name: UNKNOWN_CHANNEL_ERROR.to_owned(),
                 message: "requested channel is not running".into(),
             })?;
+        if matches!(
+            request.interaction,
+            tinychannels_bus::ChannelInteraction::DeliverWebhook { .. }
+                | tinychannels_bus::ChannelInteraction::VerifyWebhook { .. }
+        ) {
+            return entry.webhook(request.interaction).await;
+        }
         entry
             .interact(request.interaction)
             .await
