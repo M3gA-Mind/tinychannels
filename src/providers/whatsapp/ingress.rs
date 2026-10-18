@@ -518,38 +518,26 @@ impl WhatsAppChannel {
             "sticker" => InboundKind::Sticker,
             _ => InboundKind::Audio,
         };
-        let stored = if is_voice && let Some(store) = self.voice_media_store.as_deref() {
-            self.download_media(media_id, MAX_INBOUND_VOICE_BYTES)
-                .await
-                .map(Some)
-                .and_then(|download| match download {
-                    Some(mut download) => {
-                        if download.content_type.is_empty() {
-                            download.content_type = text_of(media, &["mime_type"]).unwrap_or_default().to_owned();
-                        }
-                        Ok(Some(download))
-                    }
-                    None => Ok(None),
-                })
-                .map(|download| download.map(|download| (store, download)))
-        } else {
-            Ok(None)
-        };
-        match stored {
-            Ok(Some((store, download))) => {
-                let note = inbound::store_voice_note(store, scope, download, None).await;
-                return match note {
-                    Ok(voice_note) => Ok(Some(ContentPart::VoiceNote { voice_note })),
-                    Err(WaFailure::Rejected(_)) => Ok(None),
-                    Err(error) => Err(error),
-                };
+        if is_voice && let Some(store) = self.voice_media_store.as_deref() {
+            let mut download = match self.download_media(media_id, MAX_INBOUND_VOICE_BYTES).await {
+                Ok(download) => download,
+                Err(WaFailure::Rejected(reason)) => {
+                    tracing::warn!(reason, "[whatsapp] inbound voice note skipped");
+                    return Ok(None);
+                }
+                Err(error) => return Err(error),
+            };
+            if download.content_type.is_empty() {
+                download.content_type = text_of(media, &["mime_type"]).unwrap_or_default().to_owned();
             }
-            Ok(None) => {}
-            Err(WaFailure::Rejected(reason)) => {
-                tracing::warn!(reason, "[whatsapp] inbound voice note skipped");
-                return Ok(None);
-            }
-            Err(error) => return Err(error),
+            return match inbound::store_voice_note(store, scope, download, None).await {
+                Ok(voice_note) => Ok(Some(ContentPart::VoiceNote { voice_note })),
+                Err(WaFailure::Rejected(reason)) => {
+                    tracing::warn!(reason, "[whatsapp] inbound voice note skipped");
+                    Ok(None)
+                }
+                Err(error) => Err(error),
+            };
         }
         let Some(repository) = self.media_repository.as_deref() else {
             return Ok(None);
