@@ -195,4 +195,4 @@ pub(crate) fn target_guid(associated: &str) -> &str {
 
 #[cfg(test)]
 #[path = "db_tests.rs"]
-mod tests;
+pub(crate) mod tests;
