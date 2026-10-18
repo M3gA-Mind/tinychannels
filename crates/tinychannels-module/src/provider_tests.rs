@@ -1263,33 +1263,6 @@ async fn ingress_fixture() -> (
     (HostChannels::new(client), callback, server, storage)
 }
 
-#[derive(Clone, Default)]
-struct RecordingDiscordVoiceStore(
-    Arc<Mutex<Vec<tinychannels_bus::HostVoiceScope>>>,
-);
-
-#[async_trait::async_trait]
-impl tinychannels::host::VoiceMediaStore for RecordingDiscordVoiceStore {
-    async fn store_voice(
-        &self,
-        request: tinychannels::host::VoiceMediaRequest,
-    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
-        self.0.lock().await.push(request.scope);
-        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
-            media: tinychannels_bus::MediaReference {
-                opaque_id: Some("discord-module-voice".into()),
-                kind: tinychannels_bus::MediaKind::Audio,
-                content_type: Some(request.mime_type),
-                file_name: request.file_name,
-                duration_ms: request.duration_ms,
-                codec: request.codec,
-                ..Default::default()
-            },
-            accessible_url: None,
-        })
-    }
-}
-
 fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> ChannelInboundEnvelope {
     ChannelInboundEnvelope {
         channel: tinychannels_bus::ChannelRef {
@@ -4332,11 +4305,23 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     *callbacks.transcription_result.lock().await = Some("recognized words".into());
     let hooks = Arc::new(Hooks::default());
     let instance = "discord:account-a".to_owned();
-    let voice_scopes = RecordingDiscordVoiceStore::default();
+    let config = tinychannels_bus::ChannelsConfig {
+        discord: Some(tinychannels_bus::config::DiscordConfig {
+            bot_token: BOT_TOKEN.into(),
+            guild_id: Some(GUILD.into()),
+            channel_id: Some(CHANNEL.into()),
+            allowed_users: vec!["*".into()],
+            listen_to_bots: false,
+            mention_only: false,
+        }),
+        ..Default::default()
+    };
+    let media_scope = configured_media_account_scope("discord", &config)
+        .expect("configured Discord auth binds module media to the account");
     let provider_host = hooks.host(
         host.clone(),
         instance.clone(),
-        Some("discord:media-v1:test".to_owned()),
+        Some(media_scope),
     );
     let rest_url = rest.uri();
     let gateway_ready = tokio::spawn(async move {
@@ -4417,7 +4402,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         .with_api_base(rest.uri())
         .with_events(provider_host.events().unwrap())
         .with_media_repository(provider_host.media_repository().unwrap())
-        .with_voice_media_store(Arc::new(voice_scopes.clone()))
+        .with_voice_media_store(provider_host.voice_media_store().unwrap())
         .with_transcriber(provider_host.transcriber().unwrap()),
     );
     let running = Running::start_native("Discord", channel, hooks, host, None, false);
@@ -4454,14 +4439,40 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     }
     let voice = callbacks.inbound.lock().await[0].1.clone();
     assert_eq!(voice["parts"][0]["kind"], "voice_note");
-    assert_eq!(voice["parts"][0]["voiceNote"]["media"]["opaqueId"], "discord-module-voice");
+    let media_id = voice["parts"][0]["voiceNote"]["media"]["opaqueId"]
+        .as_str()
+        .expect("module voice store returns a retained media reference")
+        .to_owned();
     assert_eq!(voice["parts"][0]["voiceNote"]["codec"], "ogg_opus");
     assert_eq!(voice["parts"][0]["voiceNote"]["durationMs"], 200);
     assert_eq!(
         voice["parts"][0]["voiceNote"]["transcript"]["text"],
         "recognized words"
     );
-    let voice_scope = voice_scopes.0.lock().await[0].clone();
+    let voice_scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: instance.clone(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "discord".into(),
+            account_id: Some(instance.clone()),
+        },
+        conversation: ConversationRef {
+            kind: ConversationKind::Thread,
+            id: THREAD.into(),
+            scope_id: Some(GUILD.into()),
+            parent_id: Some(CHANNEL.into()),
+            thread_id: Some(THREAD.into()),
+            ..Default::default()
+        },
+        turn_id: "discord_1111111111111111111".into(),
+    };
+    let retained = provider_host
+        .media_repository()
+        .unwrap()
+        .read_media(voice_scope.clone(), media_id, 8 * 1024 * 1024)
+        .await
+        .unwrap();
+    assert_eq!(retained.bytes, include_bytes!("../../../src/providers/telegram/fixtures/sine-ogg-opus.ogg"));
+    assert_eq!(retained.content_type.as_deref(), Some("audio/ogg"));
     assert_eq!(voice_scope.conversation.id, THREAD);
     assert_eq!(voice_scope.conversation.scope_id.as_deref(), Some(GUILD));
     assert_eq!(voice_scope.conversation.parent_id.as_deref(), Some(CHANNEL));
