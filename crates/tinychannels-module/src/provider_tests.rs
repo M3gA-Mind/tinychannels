@@ -102,32 +102,6 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
             |c| c.mattermost.as_mut().unwrap().bot_token.clear(),
         ),
         (
-            "webhook",
-            tinychannels_bus::ChannelsConfig {
-                webhook: Some(WebhookConfig {
-                    port: 8080,
-                    secret: Some("secret".into()),
-                }),
-                ..Default::default()
-            },
-            |c| c.webhook.as_mut().unwrap().secret = None,
-        ),
-        (
-            "matrix",
-            tinychannels_bus::ChannelsConfig {
-                matrix: Some(MatrixConfig {
-                    homeserver: "https://matrix.example".into(),
-                    access_token: "secret".into(),
-                    user_id: Some("@bot:example".into()),
-                    device_id: None,
-                    room_id: "!room:example".into(),
-                    allowed_users: vec![],
-                }),
-                ..Default::default()
-            },
-            |c| c.matrix.as_mut().unwrap().access_token.clear(),
-        ),
-        (
             "email",
             tinychannels_bus::ChannelsConfig {
                 email: Some(EmailConfig {
@@ -350,26 +324,6 @@ fn configured_media_scope_requires_each_supported_providers_authentication_mater
     assert!(configured_media_account_scope("mattermost", &missing_authority).is_some());
     missing_authority.mattermost.as_mut().unwrap().url.clear();
     assert!(configured_media_account_scope("mattermost", &missing_authority).is_none());
-
-    let mut missing_authority = tinychannels_bus::ChannelsConfig {
-        matrix: Some(MatrixConfig {
-            homeserver: "https://matrix.example".into(),
-            access_token: "secret".into(),
-            user_id: Some("@bot:example".into()),
-            device_id: None,
-            room_id: "!room:example".into(),
-            allowed_users: vec![],
-        }),
-        ..Default::default()
-    };
-    assert!(configured_media_account_scope("matrix", &missing_authority).is_some());
-    missing_authority
-        .matrix
-        .as_mut()
-        .unwrap()
-        .homeserver
-        .clear();
-    assert!(configured_media_account_scope("matrix", &missing_authority).is_none());
 
     let mut missing_authority = tinychannels_bus::ChannelsConfig {
         irc: Some(IrcConfig {
@@ -3556,16 +3510,6 @@ mod whatsapp_native {
 #[test]
 fn media_scope_rejects_blank_secrets_and_distinguishes_credential_modes() {
     use tinychannels_bus::config::*;
-    let webhook = |secret: &str| tinychannels_bus::ChannelsConfig {
-        webhook: Some(WebhookConfig {
-            port: 8080,
-            secret: Some(secret.into()),
-        }),
-        ..Default::default()
-    };
-    assert!(configured_media_account_scope("webhook", &webhook("  ")).is_none());
-    assert!(configured_media_account_scope("webhook", &webhook("s")).is_some());
-
     let whatsapp = |phone: &str, token: &str| tinychannels_bus::ChannelsConfig {
         whatsapp: Some(WhatsAppConfig {
             access_token: Some(token.into()),
@@ -4378,5 +4322,75 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::EmailNativeV2);
     assert_eq!(handle.descriptor().id, "email");
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_long_tail_adapter_sends_through_the_ordered_queue_and_refuses_the_rest() {
+    use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/posts"))
+        .and(body_partial_json(
+            serde_json::json!({"channel_id": "chan1", "root_id": "root1", "message": "native send"}),
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({"id": "p1"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let config = tinychannels_bus::ChannelsConfig {
+        mattermost: Some(tinychannels_bus::config::MattermostConfig {
+            url: server.uri(),
+            bot_token: "bot-token".into(),
+            channel_id: None,
+            allowed_users: vec![],
+            thread_replies: None,
+            mention_only: None,
+        }),
+        ..Default::default()
+    };
+    let channel = tinychannels::build_long_tail_channel(
+        &config,
+        &tinychannels::DefaultHttpClients,
+        "mattermost",
+    )
+    .expect("mattermost is configured");
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), "mattermost:team-a".into(), None);
+    let running = Running::start_long_tail("Mattermost", channel, hooks, host, None, true);
+    let handle = running.adapter_handle();
+    assert_eq!(handle.mode, AdapterMode::LongTailNativeV2);
+    let descriptor = handle.descriptor();
+    assert_eq!(descriptor.id, "mattermost");
+    assert_eq!(descriptor.account_id.as_deref(), Some("mattermost:team-a"));
+    assert!(handle.declared_capabilities().addressing.thread_id);
+
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "mm-native-op".into(),
+        channel_id: "mattermost".into(),
+        conversation_id: "chan1".into(),
+        thread_id: Some("root1".into()),
+        payload: OutboundPayload::Text {
+            text: "native send".into(),
+        },
+        ..Default::default()
+    };
+    let sent = handle.send(intent.clone()).await.unwrap();
+    assert!(sent.error.is_none());
+
+    let receipt = tinychannels_bus::channel::MessageReceipt::default();
+    assert!(
+        handle
+            .edits()
+            .unwrap()
+            .edit(&receipt, intent)
+            .await
+            .is_err()
+    );
+    assert!(handle.deletes().unwrap().delete(&receipt).await.is_err());
     running.stop().await.unwrap();
 }

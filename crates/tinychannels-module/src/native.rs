@@ -49,6 +49,17 @@ impl NativeLaunch {
         }
     }
 
+    /// A long-tail text provider held as its trait object.
+    fn long_tail(provider: &'static str, channel: Arc<dyn tinychannels::LongTailNative>) -> Self {
+        let dynamic: Arc<dyn Channel> = channel.clone();
+        Self {
+            channel: dynamic,
+            start: Box::new(move |hooks, host, supervision, outbound_only| {
+                Running::start_long_tail(provider, channel, hooks, host, supervision, outbound_only)
+            }),
+        }
+    }
+
     pub(crate) fn start(
         self,
         hooks: Arc<Hooks>,
@@ -57,6 +68,20 @@ impl NativeLaunch {
         outbound_only: bool,
     ) -> Arc<Running> {
         (self.start)(hooks, host, supervision, outbound_only)
+    }
+}
+
+/// Display name of a long-tail text provider that serves the v2 adapter
+/// traits itself, or `None` for every other provider.
+pub(crate) fn long_tail_display(provider: &str) -> Option<&'static str> {
+    match provider {
+        "lark" => Some("Lark"),
+        "mattermost" => Some("Mattermost"),
+        "irc" => Some("IRC"),
+        "qq" => Some("QQ"),
+        "dingtalk" => Some("DingTalk"),
+        "yuanbao" => Some("Yuanbao"),
+        _ => None,
     }
 }
 
@@ -76,7 +101,11 @@ pub(crate) fn build_native_v2(
             .map(|channel| NativeLaunch::new("Linq", channel)),
         "email" => tinychannels::factory::build_email_channel(config, host)
             .map(|channel| NativeLaunch::new("Email", channel)),
-        _ => None,
+        id => {
+            let display = long_tail_display(id)?;
+            tinychannels::build_long_tail_channel(config, http, id)
+                .map(|channel| NativeLaunch::long_tail(display, channel))
+        }
     }
 }
 

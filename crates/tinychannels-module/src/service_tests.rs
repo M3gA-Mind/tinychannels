@@ -3670,3 +3670,28 @@ async fn whatsapp_selection_follows_the_stanza_shape_and_web_binds_its_media_aut
     );
     running.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn a_long_tail_provider_starts_as_a_native_adapter_and_is_listed() {
+    let service = inbound_preparation_service().await;
+    let config = ChannelsConfig {
+        mattermost: Some(tinychannels_bus::config::MattermostConfig {
+            url: "http://127.0.0.1:9".into(),
+            bot_token: "bot-token".into(),
+            channel_id: Some("chan1".into()),
+            allowed_users: vec![],
+            thread_replies: None,
+            mention_only: None,
+        }),
+        ..Default::default()
+    };
+    service
+        .start_channel("mattermost".into(), config.clone())
+        .await
+        .expect("the module starts a long-tail provider");
+    assert_eq!(service.list_channels().await.unwrap(), ["mattermost"]);
+    let running = service.running.lock().await.get("mattermost").cloned();
+    let running = running.expect("mattermost is running");
+    assert_eq!(running.adapter_handle().descriptor().id, "mattermost");
+    service.shutdown().await.unwrap();
+}

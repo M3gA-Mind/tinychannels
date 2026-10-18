@@ -35,6 +35,43 @@ fn unconfigured_and_non_native_providers_build_nothing() {
 }
 
 #[test]
+fn long_tail_providers_have_a_display_name_and_nothing_else_does() {
+    for (id, display) in [
+        ("lark", "Lark"),
+        ("mattermost", "Mattermost"),
+        ("irc", "IRC"),
+        ("qq", "QQ"),
+        ("dingtalk", "DingTalk"),
+        ("yuanbao", "Yuanbao"),
+    ] {
+        assert_eq!(super::long_tail_display(id), Some(display));
+    }
+    for id in [
+        "telegram", "slack", "whatsapp", "discord", "email", "unknown",
+    ] {
+        assert_eq!(super::long_tail_display(id), None, "{id}");
+    }
+}
+
+#[test]
+fn long_tail_providers_build_as_native_launches_only_when_configured() {
+    let host: Arc<dyn ChannelHost> = NoopHost::arc();
+    let config = ChannelsConfig {
+        dingtalk: Some(tinychannels_bus::config::DingTalkConfig {
+            client_id: "id".into(),
+            client_secret: "secret".into(),
+            allowed_users: vec![],
+        }),
+        ..Default::default()
+    };
+    let launch = build_native_v2("dingtalk", &config, &host, &DefaultHttpClients)
+        .expect("a configured long-tail provider is a native launch");
+    assert_eq!(launch.channel.name(), "dingtalk");
+    assert!(build_native_v2("qq", &config, &host, &DefaultHttpClients).is_none());
+    assert!(build_native_v2("slack", &config, &host, &DefaultHttpClients).is_none());
+}
+
+#[test]
 fn a_configured_imessage_account_builds_a_native_launch() {
     let host = NoopHost::arc();
     let config = ChannelsConfig {

@@ -11,6 +11,7 @@ pub mod irc;
 #[cfg(feature = "lark")]
 pub mod lark;
 pub mod linq;
+pub mod long_tail;
 pub mod mail;
 pub mod mattermost;
 pub(crate) mod native;

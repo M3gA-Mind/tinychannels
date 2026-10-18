@@ -191,6 +191,10 @@ impl YuanbaoChannel {
 
 #[async_trait]
 impl Channel for YuanbaoChannel {
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        crate::providers::long_tail::LongTail::declared(self)
+    }
+
     fn name(&self) -> &str {
         "yuanbao"
     }
@@ -442,6 +446,26 @@ impl Drop for YuanbaoChannel {
         let _ = self.shutdown_tx.send(true);
     }
 }
+
+impl crate::providers::long_tail::LongTail for YuanbaoChannel {
+    const ID: &'static str = "yuanbao";
+    const DISPLAY: &'static str = "Yuanbao";
+
+    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
+        use crate::providers::long_tail::{TextSpec, text_capabilities};
+        text_capabilities(TextSpec {
+            typing: true,
+            thread: true,
+            streaming_pipeline: true,
+        })
+    }
+
+    fn typing_supported(&self) -> bool {
+        true
+    }
+}
+
+crate::providers::long_tail::impl_long_tail_adapter!(YuanbaoChannel);
 
 #[cfg(test)]
 #[path = "channel_tests.rs"]

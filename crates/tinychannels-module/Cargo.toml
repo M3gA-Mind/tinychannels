@@ -19,7 +19,7 @@ crate-type = ["rlib", "cdylib"]
 # loop. Without the feature the factory compiles its gate-off branch, returns no
 # provider, and the request fails as `NotConfigured`: a guard that allows a
 # configuration the build cannot serve.
-tinychannels = { path = "../..", features = ["email", "lark", "whatsapp-web", "relay-websocket"] }
+tinychannels = { path = "../..", features = ["email", "lark", "whatsapp-web"] }
 # The transport-free vocabulary shared with the host.
 tinychannels-bus = { path = "../tinychannels-bus" }
 # Codec vocabulary only; audio work runs in TinyVoice's compiled TinyBus module.

@@ -124,6 +124,10 @@ impl DingTalkChannel {
 
 #[async_trait]
 impl Channel for DingTalkChannel {
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        crate::providers::long_tail::LongTail::declared(self)
+    }
+
     fn name(&self) -> &str {
         "dingtalk"
     }
@@ -321,6 +325,18 @@ impl Channel for DingTalkChannel {
         self.register_connection().await.is_ok()
     }
 }
+
+impl crate::providers::long_tail::LongTail for DingTalkChannel {
+    const ID: &'static str = "dingtalk";
+    const DISPLAY: &'static str = "DingTalk";
+
+    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
+        use crate::providers::long_tail::{TextSpec, text_capabilities};
+        text_capabilities(TextSpec::default())
+    }
+}
+
+crate::providers::long_tail::impl_long_tail_adapter!(DingTalkChannel);
 
 #[cfg(test)]
 #[path = "dingtalk_tests.rs"]

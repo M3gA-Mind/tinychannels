@@ -34,6 +34,7 @@ use tinychannels_runtime::config::WhatsAppConfigExt as _;
 
 use crate::host::ChannelHost;
 use crate::providers::irc;
+use crate::providers::long_tail::LongTailNative;
 use crate::{
     Channel, DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, LinqChannel,
     MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
@@ -446,6 +447,80 @@ pub fn build_slack_channel(
     Some(Arc::new(slack))
 }
 
+/// Build one long-tail text provider (Lark, Mattermost, IRC, QQ, DingTalk,
+/// Yuanbao) with its v2 adapter surface, or `None` when `provider` is not
+/// configured, not built in, or its configuration is invalid.
+#[must_use]
+pub fn build_long_tail_channel(
+    config: &ChannelsConfig,
+    http: &dyn HttpClientFactory,
+    provider: &str,
+) -> Option<Arc<dyn LongTailNative>> {
+    match provider {
+        "mattermost" => {
+            let mm = config.mattermost.as_ref()?;
+            Some(Arc::new(MattermostChannel::with_http_client(
+                mm.url.clone(),
+                mm.bot_token.clone(),
+                mm.channel_id.clone(),
+                mm.allowed_users.clone(),
+                mm.thread_replies.unwrap_or(true),
+                mm.mention_only.unwrap_or(false),
+                http.client_for("channel.mattermost"),
+            )))
+        }
+        "irc" => {
+            let irc_cfg = config.irc.as_ref()?;
+            Some(Arc::new(IrcChannel::new(irc::IrcChannelConfig {
+                server: irc_cfg.server.clone(),
+                port: irc_cfg.port,
+                nickname: irc_cfg.nickname.clone(),
+                username: irc_cfg.username.clone(),
+                channels: irc_cfg.channels.clone(),
+                allowed_users: irc_cfg.allowed_users.clone(),
+                server_password: irc_cfg.server_password.clone(),
+                nickserv_password: irc_cfg.nickserv_password.clone(),
+                sasl_password: irc_cfg.sasl_password.clone(),
+                verify_tls: irc_cfg.verify_tls.unwrap_or(true),
+            })))
+        }
+        #[cfg(feature = "lark")]
+        "lark" => {
+            let lk = config.lark.as_ref()?;
+            Some(Arc::new(crate::providers::LarkChannel::from_config(lk)))
+        }
+        "dingtalk" => {
+            let dt = config.dingtalk.as_ref()?;
+            Some(Arc::new(DingTalkChannel::with_http_client(
+                dt.client_id.clone(),
+                dt.client_secret.clone(),
+                dt.allowed_users.clone(),
+                http.client_for("channel.dingtalk"),
+            )))
+        }
+        "qq" => {
+            let qq = config.qq.as_ref()?;
+            Some(Arc::new(QQChannel::with_http_client(
+                qq.app_id.clone(),
+                qq.app_secret.clone(),
+                qq.allowed_users.clone(),
+                http.client_for("channel.qq"),
+            )))
+        }
+        "yuanbao" => {
+            let yb = config.yuanbao.as_ref()?;
+            match YuanbaoChannel::new(yb.clone()) {
+                Ok(channel) => Some(Arc::new(channel)),
+                Err(error) => {
+                    tracing::warn!("[channels] yuanbao config invalid: {error}");
+                    None
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Build the Signal provider with the host ports it can use: scoped media and
 /// voice storage, speech-to-text, synthesis and the ordered event sink.
 pub fn build_signal_channel(
@@ -602,26 +677,12 @@ pub fn build_channels(
         channels.push(slack);
     }
 
-    if let Some(mm) = config.mattermost.as_ref() {
-        channels.push(Arc::new(MattermostChannel::with_http_client(
-            mm.url.clone(),
-            mm.bot_token.clone(),
-            mm.channel_id.clone(),
-            mm.allowed_users.clone(),
-            mm.thread_replies.unwrap_or(true),
-            mm.mention_only.unwrap_or(false),
-            http.client_for("channel.mattermost"),
-        )));
+    if let Some(mattermost) = build_long_tail_channel(config, http, "mattermost") {
+        channels.push(mattermost);
     }
 
     if let Some(imessage) = build_imessage_channel(config, host) {
         channels.push(imessage);
-    }
-
-    if config.matrix.is_some() {
-        tracing::warn!(
-            "[channels] matrix is configured but Matrix support was removed from this build; skipping"
-        );
     }
 
     if let Some(signal) = build_signal_channel(config, host, http) {
@@ -656,49 +717,24 @@ pub fn build_channels(
         channels.push(email);
     }
 
-    if let Some(irc_cfg) = config.irc.as_ref() {
-        channels.push(Arc::new(IrcChannel::new(irc::IrcChannelConfig {
-            server: irc_cfg.server.clone(),
-            port: irc_cfg.port,
-            nickname: irc_cfg.nickname.clone(),
-            username: irc_cfg.username.clone(),
-            channels: irc_cfg.channels.clone(),
-            allowed_users: irc_cfg.allowed_users.clone(),
-            server_password: irc_cfg.server_password.clone(),
-            nickserv_password: irc_cfg.nickserv_password.clone(),
-            sasl_password: irc_cfg.sasl_password.clone(),
-            verify_tls: irc_cfg.verify_tls.unwrap_or(true),
-        })));
+    if let Some(irc) = build_long_tail_channel(config, http, "irc") {
+        channels.push(irc);
     }
 
-    #[cfg(feature = "lark")]
-    if let Some(lk) = config.lark.as_ref() {
-        channels.push(Arc::new(crate::providers::LarkChannel::from_config(lk)));
+    if let Some(lark) = build_long_tail_channel(config, http, "lark") {
+        channels.push(lark);
     }
 
-    if let Some(dt) = config.dingtalk.as_ref() {
-        channels.push(Arc::new(DingTalkChannel::with_http_client(
-            dt.client_id.clone(),
-            dt.client_secret.clone(),
-            dt.allowed_users.clone(),
-            http.client_for("channel.dingtalk"),
-        )));
+    if let Some(dingtalk) = build_long_tail_channel(config, http, "dingtalk") {
+        channels.push(dingtalk);
     }
 
-    if let Some(qq) = config.qq.as_ref() {
-        channels.push(Arc::new(QQChannel::with_http_client(
-            qq.app_id.clone(),
-            qq.app_secret.clone(),
-            qq.allowed_users.clone(),
-            http.client_for("channel.qq"),
-        )));
+    if let Some(qq) = build_long_tail_channel(config, http, "qq") {
+        channels.push(qq);
     }
 
-    if let Some(yb) = config.yuanbao.as_ref() {
-        match YuanbaoChannel::new(yb.clone()) {
-            Ok(channel) => channels.push(Arc::new(channel)),
-            Err(error) => tracing::warn!("[channels] yuanbao config invalid: {error}"),
-        }
+    if let Some(yuanbao) = build_long_tail_channel(config, http, "yuanbao") {
+        channels.push(yuanbao);
     }
 
     channels

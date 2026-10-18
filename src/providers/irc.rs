@@ -342,6 +342,10 @@ impl rustls::client::danger::ServerCertVerifier for NoVerify {
 #[async_trait]
 #[allow(clippy::too_many_lines)]
 impl Channel for IrcChannel {
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        crate::providers::long_tail::LongTail::declared(self)
+    }
+
     fn name(&self) -> &str {
         "irc"
     }
@@ -619,6 +623,18 @@ impl Channel for IrcChannel {
 #[cfg(test)]
 #[path = "irc_tests.rs"]
 mod tests;
+
+impl crate::providers::long_tail::LongTail for IrcChannel {
+    const ID: &'static str = "irc";
+    const DISPLAY: &'static str = "IRC";
+
+    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
+        use crate::providers::long_tail::{TextSpec, text_capabilities};
+        text_capabilities(TextSpec::default())
+    }
+}
+
+crate::providers::long_tail::impl_long_tail_adapter!(IrcChannel);
 
 #[cfg(test)]
 #[path = "irc_listen_tests.rs"]

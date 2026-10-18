@@ -28,7 +28,6 @@ impl ChannelsConfigExt for ChannelsConfig {
             || self.dingtalk.is_some()
             || self.qq.is_some()
             || self.yuanbao.is_some()
-            || self.matrix.is_some()
             || self.whatsapp.is_some()
             || self
                 .relay

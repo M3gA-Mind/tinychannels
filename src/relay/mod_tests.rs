@@ -935,7 +935,6 @@ async fn relay_transport_reconnect_supervisor_redials_and_rehandshakes() {
     handle.abort();
 }
 
-#[cfg(feature = "relay-websocket")]
 #[test]
 fn websocket_dial_url_matches_hermes_normalization() {
     assert_eq!(
@@ -952,7 +951,6 @@ fn websocket_dial_url_matches_hermes_normalization() {
     );
 }
 
-#[cfg(feature = "relay-websocket")]
 #[test]
 fn websocket_upgrade_authorization_uses_relay_hmac_token() {
     let config = crate::relay::WebSocketRelayConfig {
@@ -969,7 +967,6 @@ fn websocket_upgrade_authorization_uses_relay_hmac_token() {
     );
 }
 
-#[cfg(feature = "relay-websocket")]
 #[test]
 fn websocket_config_projects_from_relay_runtime_config() {
     let config = crate::config::RelayRuntimeConfig {
@@ -992,7 +989,6 @@ fn websocket_config_projects_from_relay_runtime_config() {
 /// End-to-end loopback tests that dial the real WebSocket relay I/O against an
 /// in-process `tokio-tungstenite` server, exercising newline-delimited frame
 /// sequencing, upgrade-token authorization, and reconnect through the dialer.
-#[cfg(feature = "relay-websocket")]
 mod websocket_loopback {
     use super::{SECRET, telegram_descriptor};
     use crate::relay::{

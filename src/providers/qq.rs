@@ -192,6 +192,10 @@ impl QQChannel {
 
 #[async_trait]
 impl Channel for QQChannel {
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        crate::providers::long_tail::LongTail::declared(self)
+    }
+
     fn name(&self) -> &str {
         "qq"
     }
@@ -478,6 +482,18 @@ impl Channel for QQChannel {
         self.fetch_access_token().await.is_ok()
     }
 }
+
+impl crate::providers::long_tail::LongTail for QQChannel {
+    const ID: &'static str = "qq";
+    const DISPLAY: &'static str = "QQ";
+
+    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
+        use crate::providers::long_tail::{TextSpec, text_capabilities};
+        text_capabilities(TextSpec::default())
+    }
+}
+
+crate::providers::long_tail::impl_long_tail_adapter!(QQChannel);
 
 #[cfg(test)]
 #[path = "qq_tests.rs"]

@@ -489,25 +489,6 @@ pub(crate) fn configured_media_account_scope(
             }
             vec![c.url.clone(), c.bot_token.clone()]
         }
-        "webhook" => {
-            let c = config.webhook.as_ref()?;
-            let secret = c.secret.as_deref()?;
-            if secret.trim().is_empty() {
-                return None;
-            }
-            vec![c.port.to_string(), secret.to_owned()]
-        }
-        "matrix" => {
-            let c = config.matrix.as_ref()?;
-            if c.homeserver.trim().is_empty() || c.access_token.trim().is_empty() {
-                return None;
-            }
-            vec![
-                c.homeserver.clone(),
-                c.user_id.clone().unwrap_or_default(),
-                c.access_token.clone(),
-            ]
-        }
         // Signal has no secret. The daemon URL and the registered account it
         // serves together identify the account that owns media, so two
         // accounts (or two daemons) never share a scope.
@@ -1188,6 +1169,21 @@ impl NativePorts {
         }
     }
 
+    /// Ports over one long-tail provider object (Lark, Mattermost, IRC, QQ,
+    /// DingTalk, Yuanbao); `provider` is its display name in errors.
+    fn long_tail(channel: Arc<dyn tinychannels::LongTailNative>, provider: &'static str) -> Self {
+        Self {
+            provider,
+            adapter: channel.clone(),
+            typed_send: channel.clone(),
+            typing: channel.clone(),
+            reactions: channel.clone(),
+            edits: channel.clone(),
+            deletes: channel.clone(),
+            drafts: channel,
+        }
+    }
+
     fn telegram(channel: Arc<tinychannels::TelegramChannel>) -> Self {
         Self::native(channel, "Telegram")
     }
@@ -1219,6 +1215,7 @@ pub(crate) enum AdapterMode {
     LinqNativeV2,
     EmailNativeV2,
     WhatsAppNativeV2,
+    LongTailNativeV2,
 }
 
 pub(crate) struct ConfiguredAdapterHandle {
@@ -1544,6 +1541,14 @@ impl ConfiguredAdapterFactory {
         )
     }
 
+    pub(crate) fn long_tail(running: Arc<Running>) -> ConfiguredAdapterHandle {
+        Self::native(
+            running,
+            #[cfg(test)]
+            AdapterMode::LongTailNativeV2,
+        )
+    }
+
     pub(crate) fn slack(running: Arc<Running>) -> ConfiguredAdapterHandle {
         Self::native(
             running,
@@ -1596,7 +1601,8 @@ impl Running {
                     AdapterMode::EmailNativeV2,
                 ),
                 "WhatsApp" => ConfiguredAdapterFactory::whatsapp(self.clone()),
-                _ => ConfiguredAdapterFactory::telegram(self.clone()),
+                "Telegram" => ConfiguredAdapterFactory::telegram(self.clone()),
+                _ => ConfiguredAdapterFactory::long_tail(self.clone()),
             }
         } else {
             ConfiguredAdapterFactory::legacy(self.clone())
@@ -1671,6 +1677,27 @@ impl Running {
             supervision,
             outbound_only,
             Some(NativePorts::native(channel, provider)),
+        )
+    }
+
+    /// Start one long-tail text provider whose object is both the listener and
+    /// the v2 adapter.
+    pub(crate) fn start_long_tail(
+        provider: &'static str,
+        channel: Arc<dyn tinychannels::LongTailNative>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: Option<ChannelSupervisionPolicy>,
+        outbound_only: bool,
+    ) -> Arc<Self> {
+        let channel_dyn: Arc<dyn Channel> = channel.clone();
+        Self::start_inner(
+            channel_dyn,
+            hooks,
+            host,
+            supervision,
+            outbound_only,
+            Some(NativePorts::long_tail(channel, provider)),
         )
     }
 
