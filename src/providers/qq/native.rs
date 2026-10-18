@@ -243,6 +243,7 @@ impl QQChannel {
             ..Default::default()
         };
         let mut ingested = Ingested::default();
+        let mut downloaded_bytes = 0_u64;
         if self.native.events.is_some()
             && self.native.media_repository.is_some()
             && let Some(attachments) = message
@@ -253,9 +254,11 @@ impl QQChannel {
                 let Some(url) = attachment.get("url").and_then(serde_json::Value::as_str) else {
                     continue;
                 };
-                let Some((bytes, response_mime)) = self.download_attachment(url).await else {
+                let remaining = INBOUND_ATTACHMENT_LIMIT.saturating_sub(downloaded_bytes);
+                let Some((bytes, response_mime)) = self.download_attachment(url, remaining).await else {
                     continue;
                 };
+                downloaded_bytes += bytes.len() as u64;
                 let mime = attachment
                     .get("content_type")
                     .and_then(serde_json::Value::as_str)
@@ -326,7 +329,11 @@ impl QQChannel {
         })
     }
 
-    async fn download_attachment(&self, raw_url: &str) -> Option<(Vec<u8>, String)> {
+    async fn download_attachment(
+        &self,
+        raw_url: &str,
+        max_bytes: u64,
+    ) -> Option<(Vec<u8>, String)> {
         let url = reqwest::Url::parse(raw_url).ok()?;
         let host = url.host_str()?.to_ascii_lowercase();
         let tencent_host = ["qq.com", "qq.com.cn"]
@@ -351,7 +358,7 @@ impl QQChannel {
         }
         if response
             .content_length()
-            .is_some_and(|length| length > INBOUND_ATTACHMENT_LIMIT)
+            .is_some_and(|length| length > max_bytes)
         {
             return None;
         }
@@ -364,7 +371,7 @@ impl QQChannel {
         let mut response = response;
         let mut bytes = Vec::new();
         while let Some(chunk) = response.chunk().await.ok()? {
-            if bytes.len() as u64 + chunk.len() as u64 > INBOUND_ATTACHMENT_LIMIT {
+            if bytes.len() as u64 + chunk.len() as u64 > max_bytes {
                 return None;
             }
             bytes.extend_from_slice(&chunk);
