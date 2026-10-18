@@ -539,17 +539,9 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
                 max_size_bytes: Some(MAX_FILE_BYTES),
                 ..Default::default()
             };
-            capabilities.content.image = outbound(&[
-                "image/jpeg",
-                "image/png",
-                "image/gif",
-                "image/webp",
-            ]);
-            capabilities.content.video = outbound(&[
-                "video/mp4",
-                "video/quicktime",
-                "video/webm",
-            ]);
+            capabilities.content.image =
+                outbound(&["image/jpeg", "image/png", "image/gif", "image/webp"]);
+            capabilities.content.video = outbound(&["video/mp4", "video/quicktime", "video/webm"]);
             capabilities.content.audio = outbound(&[
                 "audio/ogg",
                 "audio/mpeg",

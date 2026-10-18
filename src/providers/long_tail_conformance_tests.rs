@@ -77,6 +77,18 @@ impl MediaRepository for ConformanceMedia {
                 "document.pdf",
                 b"conformance-file".as_slice(),
             ),
+            "media-Video" => (
+                MediaKind::Video,
+                "video/mp4",
+                "clip.mp4",
+                b"conformance-video".as_slice(),
+            ),
+            "media-Audio" => (
+                MediaKind::Audio,
+                "audio/mp4",
+                "audio.m4a",
+                b"conformance-audio".as_slice(),
+            ),
             _ => anyhow::bail!("unexpected conformance media id"),
         };
         Ok(StoredMedia {
@@ -221,6 +233,7 @@ impl LongTailFixture {
             channel_ref: Some(account(self.id)),
             conversation_ref: Some(conversation()),
             thread_id: Some(ROOT.into()),
+            turn_id: Some("conformance-turn".into()),
             payload,
             ..Default::default()
         }
@@ -258,6 +271,8 @@ impl LongTailFixture {
                     Some("image")
                 } else if multipart.contains("application/pdf") {
                     Some("file")
+                } else if multipart.contains("video/mp4") {
+                    Some("video")
                 } else if multipart.contains("audio/mp4") {
                     Some(if feature == Feature::VoiceOut {
                         "voice"
@@ -401,34 +416,28 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Video => {
-                self.refused(ChannelAdapter::send(
-                    channel,
-                    self.intent(
-                        feature,
-                        rich(ContentPart::Video {
-                            media: media(MediaKind::Video),
-                            caption: None,
-                            duration_ms: None,
-                            thumbnail: None,
-                        }),
-                    ),
-                ))
+                self.send_and_record(
+                    feature,
+                    rich(ContentPart::Video {
+                        media: media(MediaKind::Video),
+                        caption: None,
+                        duration_ms: None,
+                        thumbnail: None,
+                    }),
+                )
                 .await
             }
             Feature::Audio => {
-                self.refused(ChannelAdapter::send(
-                    channel,
-                    self.intent(
-                        feature,
-                        rich(ContentPart::Audio {
-                            media: media(MediaKind::Audio),
-                            codec: None,
-                            duration_ms: None,
-                            title: None,
-                            transcript: None,
-                        }),
-                    ),
-                ))
+                self.send_and_record(
+                    feature,
+                    rich(ContentPart::Audio {
+                        media: media(MediaKind::Audio),
+                        codec: None,
+                        duration_ms: None,
+                        title: None,
+                        transcript: None,
+                    }),
+                )
                 .await
             }
             Feature::File => {
@@ -568,12 +577,9 @@ impl AdapterFixture for LongTailFixture {
                     self.intent(
                         feature,
                         OutboundPayload::Voice {
-                            voice: tinychannels_bus::OutboundVoice::Media {
-                                media: media(MediaKind::Audio),
-                                audio_base64: None,
-                                codec: Some("ogg_opus".into()),
-                                duration_ms: Some(200),
-                                waveform: None,
+                            voice: tinychannels_bus::OutboundVoice::Synthesize {
+                                text: "synthesize this".into(),
+                                voice: None,
                             },
                         },
                     ),
