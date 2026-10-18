@@ -461,3 +461,22 @@ fn the_web_builder_wires_ports_and_refuses_cloud_shaped_stanzas() {
     assert!(build_whatsapp_web_channel(&web(Some("123"), Some("label")), &wired_host).is_none());
     assert!(build_whatsapp_web_channel(&ChannelsConfig::default(), &wired_host).is_none());
 }
+
+#[test]
+fn the_slack_stanza_builds_a_socket_mode_provider_only_when_configured() {
+    let none = ChannelsConfig::default();
+    assert!(build_slack_channel(&none, &host(), &DefaultHttpClients).is_none());
+    let config: ChannelsConfig = serde_json::from_value(serde_json::json!({
+        "slack": {"bot_token": "token", "app_token": "app", "channel_id": "C1", "allowed_users": ["*"]}
+    }))
+    .unwrap();
+    let slack = build_slack_channel(&config, &host(), &DefaultHttpClients).unwrap();
+    assert_eq!(slack.name(), "slack");
+    assert_eq!(slack.proactive_target().as_deref(), Some("C1"));
+    let capabilities = slack.capabilities();
+    assert!(capabilities.addressing.thread_id && capabilities.reactions);
+    assert!(
+        !capabilities.content.image.outbound,
+        "no media port on the no-op host"
+    );
+}
