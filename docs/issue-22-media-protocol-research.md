@@ -55,7 +55,7 @@ Lark/Feishu explicitly supports native audio and other media message types:
 - [Upload image](https://open.feishu.cn/document/server-docs/im-v1/image/create)
   creates image keys; [upload file](https://open.feishu.cn/document/server-docs/im-v1/file/create)
   creates file keys, including audio/video/documents.
-- [Download message resources](https://open.feishu.cn/document/server-docs/im-v1/message/get)
+- [Download message resources](https://open.feishu.cn/document/server-docs/im-v1/message-resource/get)
   provides the message-resource retrieval surface for received media. The
   resource URL is `/im/v1/messages/:message_id/resources/:file_key`.
 

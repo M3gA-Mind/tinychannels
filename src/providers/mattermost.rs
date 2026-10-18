@@ -188,9 +188,12 @@ impl MattermostChannel {
             if self.media_repository.is_none() || self.events.is_none() {
                 break;
             }
-            let Some((mime, name)) = self.file_info(post, file_id).await else {
+            let Some((mime, name, size)) = self.file_info(post, file_id).await else {
                 continue;
             };
+            if size.is_some_and(|size| size > MAX_FILE_BYTES) {
+                continue;
+            }
             let kind = crate::providers::native::inbound::kind_for_mime(&mime);
             if !crate::host::is_allowed_content_type(kind, &mime) {
                 continue;
@@ -218,6 +221,9 @@ impl MattermostChannel {
                 .await;
         }
         let parts = crate::providers::native::inbound::assemble(&message.content, None, ingested);
+        if parts.is_empty() {
+            return None;
+        }
         Some(tinychannels_bus::ChannelInboundEnvelope {
             channel: tinychannels_bus::ChannelRef {
                 id: "mattermost".into(),
@@ -243,7 +249,7 @@ impl MattermostChannel {
         &self,
         post: &serde_json::Value,
         file_id: &str,
-    ) -> Option<(String, Option<String>)> {
+    ) -> Option<(String, Option<String>, Option<u64>)> {
         if let Some(file) = post
             .pointer("/metadata/files")
             .and_then(serde_json::Value::as_array)
@@ -259,6 +265,7 @@ impl MattermostChannel {
                 file.get("name")
                     .and_then(serde_json::Value::as_str)
                     .map(str::to_owned),
+                file.get("size").and_then(serde_json::Value::as_u64),
             ));
         }
         if !valid_file_id(file_id) {
@@ -283,6 +290,7 @@ impl MattermostChannel {
             info.get("name")
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned),
+            info.get("size").and_then(serde_json::Value::as_u64),
         ))
     }
 
