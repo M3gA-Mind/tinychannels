@@ -1,6 +1,5 @@
 use super::super::http_test_support::HttpsServer;
 use super::*;
-use crate::channel::ChannelTypedSend;
 use crate::factory::{HttpClientFactory, build_long_tail_channel_with_host};
 use crate::host::ChannelHostBuilder;
 use crate::providers::native::fixtures::{StubMedia, stored_media};
@@ -59,38 +58,40 @@ async fn host_scoped_image_media_uploads_then_sends_the_server_file_info() {
     .expect("configured QQ adapter");
     assert!(channel.capabilities().content.image.outbound);
 
-    let result = channel
-        .send_typed(&ChannelOutboundMessage {
-            channel_id: "qq".into(),
-            conversation_id: "user-1".into(),
-            channel_ref: Some(tinychannels_bus::ChannelRef {
-                id: "qq".into(),
-                account_id: Some("qq-account".into()),
-            }),
-            conversation_ref: Some(tinychannels_bus::ConversationRef {
-                kind: tinychannels_bus::ConversationKind::Dm,
-                id: "user-1".into(),
-                ..Default::default()
-            }),
-            turn_id: Some("turn-1".into()),
-            idempotency_key: "image-1".into(),
-            parts: vec![OutboundContentPart::Content {
-                part: ContentPart::Image {
-                    media: MediaReference {
-                        opaque_id: Some("opaque-image-1".into()),
-                        kind: MediaKind::Image,
-                        content_type: Some("image/png".into()),
-                        file_name: Some("diagram.png".into()),
-                        ..Default::default()
-                    },
-                    caption: None,
-                    alt_text: None,
-                },
-            }],
+    let message = ChannelOutboundMessage {
+        channel_id: "qq".into(),
+        conversation_id: "user-1".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "qq".into(),
+            account_id: Some("qq-account".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "user-1".into(),
             ..Default::default()
-        })
-        .await
-        .expect("typed QQ image send");
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-1".into()),
+        idempotency_key: "image-1".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("opaque-image-1".into()),
+                    kind: MediaKind::Image,
+                    content_type: Some("image/png".into()),
+                    file_name: Some("diagram.png".into()),
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+        }],
+    };
+    let result =
+        tinychannels_runtime::channel::ChannelTypedSend::send_typed(channel.as_ref(), &message)
+            .await
+            .expect("typed QQ image send");
 
     assert!(result.error.is_none());
     assert_eq!(
@@ -118,6 +119,6 @@ async fn host_scoped_image_media_uploads_then_sends_the_server_file_info() {
         requests[2].body["media"]["file_info"],
         "opaque-qq-file-info"
     );
-    assert_eq!(media.scopes.lock().unwrap()[0].conversation_id, "user-1");
+    assert_eq!(media.scopes.lock().unwrap()[0].conversation.id, "user-1");
     assert_eq!(media.scopes.lock().unwrap()[0].turn_id, "turn-1");
 }
