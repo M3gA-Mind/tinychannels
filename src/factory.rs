@@ -265,6 +265,98 @@ pub fn build_telegram_channel(
     Some(Arc::new(telegram))
 }
 
+/// Build the configured WhatsApp Business Cloud channel as its concrete type.
+///
+/// The module uses this to retain the same object as the webhook ingress owner
+/// and the native v2 operation executor. The Meta app secret that authenticates
+/// webhook POSTs is passed through here; without it the channel sends but
+/// refuses every webhook delivery.
+#[must_use]
+pub fn build_whatsapp_cloud_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+) -> Option<Arc<WhatsAppChannel>> {
+    let wa = config.whatsapp.as_ref()?;
+    if !wa.is_cloud_config() {
+        return None;
+    }
+    tracing::info!(
+        channel = "whatsapp",
+        backend = "cloud",
+        signed_webhooks = wa.app_secret.as_deref().is_some_and(|secret| !secret.trim().is_empty()),
+        "[channels] whatsapp cloud enabled (credentials not logged)"
+    );
+    let mut channel = WhatsAppChannel::with_http_client(
+        wa.access_token.clone().unwrap_or_default(),
+        wa.phone_number_id.clone().unwrap_or_default(),
+        wa.verify_token.clone().unwrap_or_default(),
+        wa.allowed_numbers.clone(),
+        http.client_for("channel.whatsapp"),
+    )
+    .with_app_secret(wa.app_secret.clone());
+    if let Some(repository) = host.media_repository() {
+        channel = channel.with_media_repository(repository);
+    }
+    if let Some(store) = host.voice_media_store() {
+        channel = channel.with_voice_media_store(store);
+    }
+    channel = channel.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        channel = channel.with_events(events);
+    }
+    Some(Arc::new(channel))
+}
+
+/// Build the configured WhatsApp Web channel as its concrete type.
+#[cfg(feature = "whatsapp-web")]
+#[must_use]
+pub fn build_whatsapp_web_channel(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+) -> Option<Arc<crate::WhatsAppWebChannel>> {
+    let wa = config.whatsapp.as_ref()?;
+    if !wa.is_web_config() || wa.phone_number_id.is_some() {
+        return None;
+    }
+    tracing::info!(
+        channel = "whatsapp",
+        backend = "web",
+        "[channels] whatsapp web enabled (session not logged)"
+    );
+    let mut channel = crate::WhatsAppWebChannel::new(
+        wa.session_path.clone().unwrap_or_default(),
+        wa.pair_phone.clone(),
+        wa.pair_code.clone(),
+        wa.allowed_numbers.clone(),
+    );
+    if let Some(lifecycle) = host.lifecycle() {
+        channel = channel.with_lifecycle(lifecycle);
+    }
+    if let Some(storage) = host.storage() {
+        channel = channel.with_storage(storage);
+    }
+    if let Some(repository) = host.media_repository() {
+        channel = channel.with_media_repository(repository);
+    }
+    if let Some(store) = host.voice_media_store() {
+        channel = channel.with_voice_media_store(store);
+    }
+    channel = channel.with_voice_synthesis(
+        host.synthesizer().is_some()
+            && host.voice_codec().is_some()
+            && host.voice_media_store().is_some(),
+    );
+    if let Some(events) = host.events() {
+        channel = channel.with_events(events);
+    }
+    Some(Arc::new(channel))
+}
+
 /// Build every provider that `config` enables.
 ///
 /// Order is stable and matches the declaration order below, so a caller that
@@ -345,13 +437,9 @@ pub fn build_channels(
         // the shape of the config decides which one is meant.
         match wa.backend_type() {
             "cloud" if wa.is_cloud_config() => {
-                channels.push(Arc::new(WhatsAppChannel::with_http_client(
-                    wa.access_token.clone().unwrap_or_default(),
-                    wa.phone_number_id.clone().unwrap_or_default(),
-                    wa.verify_token.clone().unwrap_or_default(),
-                    wa.allowed_numbers.clone(),
-                    http.client_for("channel.whatsapp"),
-                )));
+                if let Some(channel) = build_whatsapp_cloud_channel(config, host, http) {
+                    channels.push(channel);
+                }
             }
             "cloud" => tracing::warn!(
                 "[channels] whatsapp cloud configured but missing phone_number_id, access_token or verify_token"
@@ -443,23 +531,16 @@ fn build_whatsapp_web(
 ) -> Option<Arc<dyn Channel>> {
     #[cfg(feature = "whatsapp-web")]
     {
+        let _ = wa;
+        let config = ChannelsConfig {
+            whatsapp: Some(wa.clone()),
+            ..Default::default()
+        };
         if !wa.is_web_config() {
             tracing::warn!("[channels] whatsapp web configured but session_path not set");
             return None;
         }
-        let mut channel = crate::WhatsAppWebChannel::new(
-            wa.session_path.clone().unwrap_or_default(),
-            wa.pair_phone.clone(),
-            wa.pair_code.clone(),
-            wa.allowed_numbers.clone(),
-        );
-        if let Some(lifecycle) = host.lifecycle() {
-            channel = channel.with_lifecycle(lifecycle);
-        }
-        if let Some(storage) = host.storage() {
-            channel = channel.with_storage(storage);
-        }
-        Some(Arc::new(channel))
+        build_whatsapp_web_channel(&config, host).map(|channel| channel as Arc<dyn Channel>)
     }
     #[cfg(not(feature = "whatsapp-web"))]
     {

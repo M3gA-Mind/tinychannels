@@ -70,8 +70,10 @@ pub use delivery::progressive::{
 pub use backend::{ChannelBackend, ChannelManager};
 pub use factory::{
     ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
-    build_telegram_channel,
+    build_telegram_channel, build_whatsapp_cloud_channel,
 };
+#[cfg(feature = "whatsapp-web")]
+pub use factory::build_whatsapp_web_channel;
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
 pub use providers::{
     CliChannel, DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, IrcChannelConfig,
