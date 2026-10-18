@@ -3473,3 +3473,66 @@ async fn voice_codec_maps_known_formats_and_surfaces_missing_module_errors() {
         );
     }
 }
+
+#[tokio::test]
+async fn module_voice_media_reports_each_precondition_and_missing_host_storage() {
+    use base64::Engine;
+    use tinychannels::host::{VoiceMediaRequest, VoiceMediaStore};
+    let connection = tinybus::Connection::connect({
+        let bus = tinybus::transport::memory::MemoryBus::new();
+        tinybus::broker::Broker::new().spawn(bus.clone());
+        bus.connect().await.unwrap()
+    })
+    .await
+    .unwrap();
+    let host = HostChannels::new(connection);
+    let instance = "telegram:account-a".to_owned();
+    let store = ModuleVoiceMediaStore(
+        host.clone(),
+        instance.clone(),
+        Some("telegram:media-v1:abc".into()),
+    );
+    let scope = tinychannels_bus::HostVoiceScope {
+        conversation: ConversationRef {
+            id: "room".into(),
+            ..Default::default()
+        },
+        turn_id: "turn-1".into(),
+        ..Default::default()
+    };
+    let request = |audio: &str, scope: tinychannels_bus::HostVoiceScope| VoiceMediaRequest {
+        audio_base64: audio.into(),
+        mime_type: "audio/ogg".into(),
+        codec: None,
+        duration_ms: None,
+        file_name: None,
+        direction: tinychannels_bus::HostVoiceMediaDirection::Inbound,
+        scope,
+    };
+    let missing_identity = store
+        .store_voice(request("AAAA", Default::default()))
+        .await
+        .unwrap_err();
+    assert!(missing_identity.to_string().contains("conversation and turn"));
+    let invalid = store
+        .store_voice(request("***", scope.clone()))
+        .await
+        .unwrap_err();
+    assert!(invalid.to_string().contains("payload is invalid"));
+    let payload = base64::engine::general_purpose::STANDARD.encode([1u8, 2, 3]);
+    let no_storage = store
+        .store_voice(request(&payload, scope.clone()))
+        .await
+        .unwrap_err();
+    assert!(no_storage.to_string().contains("scoped storage is unavailable"));
+
+    let read = store
+        .read_voice(scope.clone(), "tinychannels_media_v1_missing".into())
+        .await
+        .unwrap_err();
+    assert!(read.to_string().contains("scoped storage is unavailable"));
+
+    let repository = ModuleMediaRepository(host, instance, Some("telegram:media-v1:abc".into()));
+    let error = repository.scoped_store().await.err().expect("no storage module");
+    assert!(error.to_string().contains("scoped storage is unavailable"));
+}
