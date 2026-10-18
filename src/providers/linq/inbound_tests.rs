@@ -43,7 +43,12 @@ async fn unsigned_badly_signed_stale_and_unconfigured_deliveries_are_rejected() 
     let stale = signed_at(&body, "1000");
     let tampered = signed(&format!("{body} "));
     let garbled = "v1=deadbeef";
-    for signature in [None, Some(stale.as_str()), Some(tampered.as_str()), Some(garbled)] {
+    for signature in [
+        None,
+        Some(stale.as_str()),
+        Some(tampered.as_str()),
+        Some(garbled),
+    ] {
         let error = rig
             .channel
             .deliver_webhook(signature, body.as_bytes())
@@ -67,13 +72,17 @@ async fn authenticated_but_malformed_bodies_are_rejected() {
         .await
         .unwrap_err();
     assert!(is_rejection(&error));
-    assert!(is_rejection(&deliver(&rig.channel, "not json").await.unwrap_err()));
+    assert!(is_rejection(
+        &deliver(&rig.channel, "not json").await.unwrap_err()
+    ));
     let no_id = json!({
         "event_type": "message.received",
         "data": {"from": PEER, "message": {"parts": [{"type": "text", "value": "x"}]}},
     })
     .to_string();
-    assert!(is_rejection(&deliver(&rig.channel, &no_id).await.unwrap_err()));
+    assert!(is_rejection(
+        &deliver(&rig.channel, &no_id).await.unwrap_err()
+    ));
 }
 
 #[tokio::test]
@@ -91,19 +100,40 @@ async fn other_events_own_messages_and_unlisted_senders_publish_nothing() {
 
     let mut own: serde_json::Value = serde_json::from_str(&body).unwrap();
     own["data"]["is_from_me"] = true.into();
-    assert_eq!(deliver(&rig.channel, &own.to_string()).await.unwrap().messages, 0);
+    assert_eq!(
+        deliver(&rig.channel, &own.to_string())
+            .await
+            .unwrap()
+            .messages,
+        0
+    );
 
     let mut other = own.clone();
     other["data"]["is_from_me"] = false.into();
     other["event_type"] = "message.delivered".into();
-    assert_eq!(deliver(&rig.channel, &other.to_string()).await.unwrap().messages, 0);
+    assert_eq!(
+        deliver(&rig.channel, &other.to_string())
+            .await
+            .unwrap()
+            .messages,
+        0
+    );
 
     let mut no_data = other.clone();
     no_data.as_object_mut().unwrap().remove("data");
     no_data["event_type"] = "message.received".into();
-    assert_eq!(deliver(&rig.channel, &no_data.to_string()).await.unwrap().messages, 0);
+    assert_eq!(
+        deliver(&rig.channel, &no_data.to_string())
+            .await
+            .unwrap()
+            .messages,
+        0
+    );
 
-    let empty = webhook("m2", json!([{"type": "text", "value": "  "}, {"type": "sticker"}]));
+    let empty = webhook(
+        "m2",
+        json!([{"type": "text", "value": "  "}, {"type": "sticker"}]),
+    );
     assert_eq!(deliver(&rig.channel, &empty).await.unwrap().messages, 0);
     assert!(rig.events.inbound().is_empty());
 }
@@ -123,11 +153,14 @@ async fn a_redelivered_message_is_dropped_once_published() {
 async fn a_message_the_host_did_not_accept_fails_and_can_be_redelivered() {
     let server = mock_api(b"").await;
     let mut rig = rig(&server);
-    let rejecting = std::sync::Arc::new(crate::providers::native::fixtures::RecordingEvents::default());
+    let rejecting =
+        std::sync::Arc::new(crate::providers::native::fixtures::RecordingEvents::default());
     rig.channel = channel_for(&server).with_events(rejecting.clone());
     let body = webhook("m1", json!([{"type": "text", "value": "retry me"}]));
     assert!(deliver(&rig.channel, &body).await.is_err());
-    assert!(!is_rejection(&deliver(&rig.channel, &body).await.unwrap_err()));
+    assert!(!is_rejection(
+        &deliver(&rig.channel, &body).await.unwrap_err()
+    ));
     let no_sink = channel_for(&server);
     assert!(deliver(&no_sink, &body).await.is_err());
 }
@@ -165,14 +198,22 @@ async fn voice_memos_are_stored_as_voice_notes_with_a_transcript() {
     let rig = rig(&server);
     let url = format!("{}/media/clip", server.uri());
     for (id, part) in [
-        ("v1", json!({"type": "voice_memo", "url": url, "mime_type": "audio/mp4"})),
-        ("v2", json!({"type": "media", "url": url, "mime_type": "audio/mp4", "voice_memo": true})),
+        (
+            "v1",
+            json!({"type": "voice_memo", "url": url, "mime_type": "audio/mp4"}),
+        ),
+        (
+            "v2",
+            json!({"type": "media", "url": url, "mime_type": "audio/mp4", "voice_memo": true}),
+        ),
         (
             "v3",
             json!({"type": "media", "url": url, "mime_type": "audio/mp4", "filename": "Audio Message.m4a", "duration_ms": 1200}),
         ),
     ] {
-        deliver(&rig.channel, &webhook(id, json!([part]))).await.unwrap();
+        deliver(&rig.channel, &webhook(id, json!([part])))
+            .await
+            .unwrap();
     }
     let inbound = rig.events.inbound();
     assert_eq!(inbound.len(), 3);
@@ -192,7 +233,11 @@ async fn untrusted_oversized_and_failing_media_is_skipped_but_text_is_kept() {
     let missing = format!("{}/media/missing", server.uri());
     Mock::given(method("GET"))
         .and(path("/media/big"))
-        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; (LINQ_MAX_FILE_BYTES + 1) as usize]))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![
+            0u8;
+            (LINQ_MAX_FILE_BYTES + 1)
+                as usize
+        ]))
         .mount(&server)
         .await;
     let big = format!("{}/media/big", server.uri());

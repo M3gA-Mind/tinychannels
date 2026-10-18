@@ -14,7 +14,10 @@ fn a_bare_account_declares_text_and_typing_only() {
     assert!(!caps.content.image.outbound && !caps.voice_in.supported);
     assert!(!caps.reactions && !caps.addressing.reply_to_id);
     for action in ["send", "typing"] {
-        assert!(caps.actions.supported.iter().any(|a| a == action), "{action}");
+        assert!(
+            caps.actions.supported.iter().any(|a| a == action),
+            "{action}"
+        );
     }
     assert!(!caps.actions.supported.iter().any(|a| a == "edit"));
 }

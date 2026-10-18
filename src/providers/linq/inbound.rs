@@ -3,11 +3,11 @@
 
 use super::LinqChannel;
 use super::native::{LINQ_MAX_FILE_BYTES, LINQ_MAX_VOICE_BYTES};
+use crate::WebhookRejected;
+use crate::providers::native::inbound::normalize_mime;
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, media_of, publish,
 };
-use crate::WebhookRejected;
-use crate::providers::native::inbound::normalize_mime;
 use serde_json::{Value, json};
 use tinychannels_bus::{
     ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef, SenderRef,
@@ -109,8 +109,7 @@ impl LinqChannel {
             return None;
         }
         let mut response = self.http_client().get(url).send().await.ok()?;
-        if !response.status().is_success() || response.content_length().is_some_and(|n| n > limit)
-        {
+        if !response.status().is_success() || response.content_length().is_some_and(|n| n > limit) {
             tracing::warn!("[linq] media download refused or failed");
             return None;
         }

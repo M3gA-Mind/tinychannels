@@ -107,7 +107,10 @@ pub(super) fn signed(body: &str) -> String {
 pub(super) fn signed_at(body: &str, timestamp: &str) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(SECRET.as_bytes()).unwrap();
     mac.update(format!("{timestamp}.{body}").as_bytes());
-    format!("t={timestamp},v1={}", hex::encode(mac.finalize().into_bytes()))
+    format!(
+        "t={timestamp},v1={}",
+        hex::encode(mac.finalize().into_bytes())
+    )
 }
 
 /// A `message.received` webhook body with `parts`.
@@ -130,7 +133,11 @@ pub(super) fn webhook(message_id: &str, parts: Value) -> String {
 }
 
 /// Requests the API received for `path_suffix`, as JSON bodies.
-pub(super) async fn bodies(server: &MockServer, http_method: &str, path_suffix: &str) -> Vec<Value> {
+pub(super) async fn bodies(
+    server: &MockServer,
+    http_method: &str,
+    path_suffix: &str,
+) -> Vec<Value> {
     server
         .received_requests()
         .await

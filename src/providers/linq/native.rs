@@ -92,7 +92,9 @@ fn checked_conversation(conversation: &str) -> Result<&str, ChannelSendError> {
     if valid {
         Ok(conversation)
     } else {
-        Err(pre_dispatch("Linq conversation id is not a chat id or phone number"))
+        Err(pre_dispatch(
+            "Linq conversation id is not a chat id or phone number",
+        ))
     }
 }
 
@@ -116,7 +118,10 @@ impl LinqChannel {
             tracing::warn!(operation, status = status.as_u16(), "[linq] request failed");
             return Err(status_error(status, operation));
         }
-        response.json::<Value>().await.map_err(|_| uncertain(operation))
+        response
+            .json::<Value>()
+            .await
+            .map_err(|_| uncertain(operation))
     }
 
     /// Upload `file` and return the attachment id Linq issued for it.

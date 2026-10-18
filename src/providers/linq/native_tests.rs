@@ -61,10 +61,18 @@ async fn send(
 async fn text_goes_to_the_chat_and_returns_the_message_id() {
     let server = mock_api(b"").await;
     let channel = channel_for(&server);
-    let outcome = send(&channel, &message(CHAT, vec![text("hi")])).await.unwrap();
-    assert_eq!(outcome.receipt.primary_platform_message_id.as_deref(), Some("MSG-1"));
+    let outcome = send(&channel, &message(CHAT, vec![text("hi")]))
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("MSG-1")
+    );
     let sent = &bodies(&server, "POST", "/messages").await[0];
-    assert_eq!(sent["message"]["parts"], json!([{"type": "text", "value": "hi"}]));
+    assert_eq!(
+        sent["message"]["parts"],
+        json!([{"type": "text", "value": "hi"}])
+    );
 }
 
 #[tokio::test]
@@ -77,12 +85,20 @@ async fn a_phone_number_without_a_chat_opens_a_new_chat() {
         .await;
     Mock::given(method("POST"))
         .and(path("/chats"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"chat": {"id": "c", "message": {"id": "NEW-1"}}})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"chat": {"id": "c", "message": {"id": "NEW-1"}}})),
+        )
         .mount(&server)
         .await;
     let channel = channel_for(&server);
-    let outcome = send(&channel, &message(PEER, vec![text("hello")])).await.unwrap();
-    assert_eq!(outcome.receipt.primary_platform_message_id.as_deref(), Some("NEW-1"));
+    let outcome = send(&channel, &message(PEER, vec![text("hello")]))
+        .await
+        .unwrap();
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("NEW-1")
+    );
     let created = &bodies(&server, "POST", "/chats").await[0];
     assert_eq!(created["from"], FROM);
     assert_eq!(created["to"], json!([PEER]));
@@ -93,9 +109,14 @@ async fn long_text_is_chunked_into_separate_messages() {
     let server = mock_api(b"").await;
     let channel = channel_for(&server);
     let long = "word ".repeat(2000);
-    let outcome = send(&channel, &message(CHAT, vec![text(&long)])).await.unwrap();
+    let outcome = send(&channel, &message(CHAT, vec![text(&long)]))
+        .await
+        .unwrap();
     assert!(outcome.receipt.parts.len() >= 3);
-    assert_eq!(bodies(&server, "POST", "/messages").await.len(), outcome.receipt.parts.len());
+    assert_eq!(
+        bodies(&server, "POST", "/messages").await.len(),
+        outcome.receipt.parts.len()
+    );
 }
 
 #[tokio::test]
@@ -165,7 +186,10 @@ async fn voice_clips_are_sent_as_audio_attachments() {
         outcome.receipt.parts[0].kind,
         tinychannels_bus::channel::MessageReceiptPartKind::Voice
     );
-    assert_eq!(bodies(&server, "POST", "/attachments").await[0]["content_type"], "audio/mp4");
+    assert_eq!(
+        bodies(&server, "POST", "/attachments").await[0]["content_type"],
+        "audio/mp4"
+    );
 }
 
 #[tokio::test]
@@ -201,7 +225,9 @@ async fn an_unreachable_api_is_an_uncertain_outcome_and_a_missing_id_is_too() {
         reqwest::Client::builder().no_proxy().build().unwrap(),
     )
     .with_api_base("http://127.0.0.1:1");
-    let error = send(&dead, &message(CHAT, vec![text("x")])).await.unwrap_err();
+    let error = send(&dead, &message(CHAT, vec![text("x")]))
+        .await
+        .unwrap_err();
     assert!(error.sent_before_error && !error.retryable);
 
     let server = MockServer::start().await;
@@ -219,7 +245,11 @@ async fn an_unreachable_api_is_an_uncertain_outcome_and_a_missing_id_is_too() {
         .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
         .mount(&garbled)
         .await;
-    assert!(send(&channel_for(&garbled), &message(CHAT, vec![text("x")])).await.is_err());
+    assert!(
+        send(&channel_for(&garbled), &message(CHAT, vec![text("x")]))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -239,7 +269,11 @@ async fn upload_failures_never_reach_a_chat() {
             alt_text: None,
         },
     };
-    assert!(send(&rig.channel, &message(CHAT, vec![part.clone()])).await.is_err());
+    assert!(
+        send(&rig.channel, &message(CHAT, vec![part.clone()]))
+            .await
+            .is_err()
+    );
     assert!(bodies(&server, "POST", "/messages").await.is_empty());
 
     // A target without an upload url, then a rejected PUT.
@@ -251,13 +285,20 @@ async fn upload_failures_never_reach_a_chat() {
         .await;
     let rig2 = self::rig(&server);
     *rig2.media.read.lock().unwrap() = Some(stored_media(MediaKind::Image, "image/png", b"png"));
-    assert!(send(&rig2.channel, &message(CHAT, vec![part.clone()])).await.is_err());
+    assert!(
+        send(&rig2.channel, &message(CHAT, vec![part.clone()]))
+            .await
+            .is_err()
+    );
 
     let server = MockServer::start().await;
     let upload = format!("{}/up", server.uri());
     Mock::given(method("POST"))
         .and(path("/attachments"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"attachment_id": "a", "upload_url": upload})))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!({"attachment_id": "a", "upload_url": upload})),
+        )
         .mount(&server)
         .await;
     Mock::given(method("PUT"))
@@ -266,7 +307,11 @@ async fn upload_failures_never_reach_a_chat() {
         .await;
     let rig3 = self::rig(&server);
     *rig3.media.read.lock().unwrap() = Some(stored_media(MediaKind::Image, "image/png", b"png"));
-    assert!(send(&rig3.channel, &message(CHAT, vec![part])).await.is_err());
+    assert!(
+        send(&rig3.channel, &message(CHAT, vec![part]))
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -274,9 +319,14 @@ async fn conversation_ids_cannot_alter_the_request_path() {
     let server = mock_api(b"").await;
     let channel = channel_for(&server);
     for bad in ["../admin", "a/b", "a b", "x?y=1"] {
-        let error = send(&channel, &message(bad, vec![text("x")])).await.unwrap_err();
+        let error = send(&channel, &message(bad, vec![text("x")]))
+            .await
+            .unwrap_err();
         assert!(!error.retryable && !error.sent_before_error, "{bad}");
-        assert!(ChannelTyping::start_typing(&channel, bad).await.is_err(), "{bad}");
+        assert!(
+            ChannelTyping::start_typing(&channel, bad).await.is_err(),
+            "{bad}"
+        );
     }
     assert!(server.received_requests().await.unwrap().is_empty());
 }
@@ -301,7 +351,11 @@ async fn typing_starts_and_stops_through_the_api_and_reports_failures() {
         .respond_with(ResponseTemplate::new(404))
         .mount(&failing)
         .await;
-    assert!(ChannelTyping::start_typing(&channel_for(&failing), CHAT).await.is_err());
+    assert!(
+        ChannelTyping::start_typing(&channel_for(&failing), CHAT)
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
@@ -321,9 +375,16 @@ async fn operations_the_api_cannot_do_are_explicitly_unsupported() {
         id: "linq".into(),
         account_id: None,
     };
-    let error = ChannelReaction::send_reaction(&channel, &channel_ref, &conversation, "m", &reaction, false)
-        .await
-        .unwrap_err();
+    let error = ChannelReaction::send_reaction(
+        &channel,
+        &channel_ref,
+        &conversation,
+        "m",
+        &reaction,
+        false,
+    )
+    .await
+    .unwrap_err();
     assert!(error.unsupported);
     assert!(server.received_requests().await.unwrap().is_empty());
 }
@@ -334,11 +395,17 @@ async fn the_descriptor_and_legacy_methods_use_the_native_surface() {
     let channel = channel_for(&server);
     let descriptor = ChannelAdapter::descriptor(&channel);
     assert_eq!(descriptor.id, "linq");
-    assert_eq!(descriptor.metadata.get("voiceOut").map(String::as_str), Some("attachment"));
+    assert_eq!(
+        descriptor.metadata.get("voiceOut").map(String::as_str),
+        Some("attachment")
+    );
     assert_eq!(channel.capabilities().remote_control, true);
     let outcome = channel
         .send_typed_with_receipt(&message(CHAT, vec![text("legacy")]))
         .await
         .unwrap();
-    assert_eq!(outcome.receipt.primary_platform_message_id.as_deref(), Some("MSG-1"));
+    assert_eq!(
+        outcome.receipt.primary_platform_message_id.as_deref(),
+        Some("MSG-1")
+    );
 }
