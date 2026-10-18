@@ -65,6 +65,7 @@ fn codec_for_mime(mime: &str) -> Option<&'static str> {
 
 impl DiscordChannel {
     /// Resolve, validate and measure the audio for one voice message.
+    #[cfg(test)]
     pub(super) async fn prepare_voice(
         &self,
         message: &ChannelOutboundMessage,
