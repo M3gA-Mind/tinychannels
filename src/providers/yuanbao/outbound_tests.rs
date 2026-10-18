@@ -822,10 +822,7 @@ async fn yuanbao_rejects_direct_message_reply_before_resolving_or_uploading_medi
         .await
         .unwrap_err();
     assert!(error.unsupported);
-    assert_eq!(
-        error.message,
-        "Yuanbao direct-message reply addressing"
-    );
+    assert_eq!(error.message, "Yuanbao direct-message reply addressing");
     assert!(
         repo.scopes.lock().is_empty(),
         "media resolution must not run"
