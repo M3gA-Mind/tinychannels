@@ -4,7 +4,7 @@
 use super::channel::{DiscordChannel, split_message_for_discord};
 use super::http::{Payload, pre_dispatch};
 use super::inbound::is_snowflake;
-use super::outbound::{MAX_UPLOAD_BYTES as _, target_for};
+use super::outbound::target_for;
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 use tinychannels_bus::channel::{

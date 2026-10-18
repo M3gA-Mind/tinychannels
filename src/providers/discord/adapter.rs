@@ -2,8 +2,6 @@
 //! typing, reaction, edit, delete and streaming-draft extensions.
 
 use super::channel::DiscordChannel;
-use super::http::unsupported;
-use super::inbound::channel_ref;
 use super::outbound::MAX_UPLOAD_BYTES;
 use crate::channel::{
     ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink, ChannelReaction,
@@ -316,8 +314,6 @@ impl ChannelStreamingDraft for DiscordChannel {
         if intent.channel_ref.as_ref().is_some_and(|c| tinychannels_bus::provider_id(&c.id) != "discord") {
             return Err(wrong_channel("draft"));
         }
-        let _ = channel_ref;
-        let _ = unsupported;
         self.upsert_draft_v2(previous, intent).await
     }
 }
