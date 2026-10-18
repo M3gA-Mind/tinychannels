@@ -324,6 +324,32 @@ impl HostBackend {
         }
     }
 
+    /// Bot-token Telegram client plus its default chat, when the config carries
+    /// a bot token. `None` means the managed (host-backend) transport applies.
+    fn telegram_native(
+        &self,
+        config: &ChannelsConfig,
+        channel: &str,
+    ) -> anyhow::Result<Option<(tinychannels::providers::telegram::TelegramBotApi, Option<String>)>> {
+        use tinychannels::factory::HttpClientFactory as _;
+        if channel != "telegram" {
+            return Ok(None);
+        }
+        let Some(telegram) = config
+            .telegram
+            .as_ref()
+            .filter(|telegram| !telegram.bot_token.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let clients = tinychannels::factory::ConfiguredHttpClients::new(self.proxy.clone())?;
+        let api = tinychannels::providers::telegram::TelegramBotApi::new(
+            telegram.bot_token.clone(),
+            clients.client_for("channel.telegram"),
+        );
+        Ok(Some((api, telegram.chat_id.clone())))
+    }
+
     async fn invoke(&self, request: ChannelBackendRequest) -> anyhow::Result<ChannelBackendResult> {
         self.host
             .dispatch_controller_backend(request)
@@ -594,10 +620,21 @@ impl ChannelBackend for HostBackend {
 
     async fn send_reaction(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         reaction: Value,
     ) -> anyhow::Result<ChannelReactionResult> {
+        if let Some((api, _)) = self.telegram_native(config, channel)? {
+            let request = tinychannels::providers::telegram::TelegramReactionRequest::from_value(
+                &reaction,
+            )
+            .map_err(anyhow::Error::msg)?;
+            api.send_reaction(&request).await?;
+            return Ok(ChannelReactionResult {
+                success: true,
+                ..Default::default()
+            });
+        }
         match self
             .invoke(ChannelBackendRequest::SendReaction {
                 channel: channel.to_owned(),
@@ -612,10 +649,21 @@ impl ChannelBackend for HostBackend {
 
     async fn create_thread(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         title: &str,
     ) -> anyhow::Result<ChannelThreadResult> {
+        if let Some((api, chat_id)) = self.telegram_native(config, channel)? {
+            let chat_id = chat_id.ok_or_else(|| {
+                anyhow::anyhow!("Telegram threads need a default chat_id in the channel config")
+            })?;
+            let (thread_id, name) = api.create_topic(&chat_id, title).await?;
+            return Ok(ChannelThreadResult {
+                thread_id,
+                title: Some(name),
+                raw: None,
+            });
+        }
         match self
             .invoke(ChannelBackendRequest::CreateThread {
                 channel: channel.to_owned(),
@@ -630,11 +678,24 @@ impl ChannelBackend for HostBackend {
 
     async fn update_thread(
         &self,
-        _config: &ChannelsConfig,
+        config: &ChannelsConfig,
         channel: &str,
         thread_id: &str,
         action: &str,
     ) -> anyhow::Result<ChannelThreadResult> {
+        if let Some((api, chat_id)) = self.telegram_native(config, channel)? {
+            let chat_id = chat_id.ok_or_else(|| {
+                anyhow::anyhow!("Telegram threads need a default chat_id in the channel config")
+            })?;
+            let action = tinychannels::providers::telegram::TopicAction::parse(action)
+                .map_err(anyhow::Error::msg)?;
+            api.update_topic(&chat_id, thread_id, action).await?;
+            return Ok(ChannelThreadResult {
+                thread_id: thread_id.to_owned(),
+                title: None,
+                raw: None,
+            });
+        }
         match self
             .invoke(ChannelBackendRequest::UpdateThread {
                 channel: channel.to_owned(),
