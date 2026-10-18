@@ -75,6 +75,8 @@ fn legacy_model_help_ignores_stale_workspace_cache() {
         provider: "openai".into(),
         model: "configured-model".into(),
     };
+    assert!(load_cached_model_preview(tempdir.path(), "openai").is_empty());
+
     let model_help = build_models_help_response(&current, tempdir.path());
     assert!(model_help.contains("Current provider: `openai`"));
     assert!(model_help.contains("Model catalog is unavailable in this channel"));

@@ -73,6 +73,22 @@ pub fn resolve_provider_alias(name: &str, providers: &[ProviderDescriptor]) -> O
         .map(|provider| provider.name.clone())
 }
 
+/// Load model IDs from the legacy workspace cache.
+///
+/// Kept temporarily in its previous form to verify the stale-cache regression;
+/// the final compatibility implementation will return an empty preview.
+pub fn load_cached_model_preview(workspace_dir: &Path, provider_name: &str) -> Vec<String> {
+    let cache_path = workspace_dir.join("state").join("models_cache.json");
+    let Ok(raw) = std::fs::read_to_string(cache_path) else {
+        return Vec::new();
+    };
+    let Ok(state) = serde_json::from_str::<ModelCatalog>(&raw) else {
+        return Vec::new();
+    };
+
+    model_preview(&state, provider_name)
+}
+
 /// Select the first exact provider match and preserve its first ten model IDs.
 pub fn model_preview(catalog: &ModelCatalog, provider_name: &str) -> Vec<String> {
     catalog
