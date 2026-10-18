@@ -56,25 +56,44 @@ struct ThreadSpec {
     content: Option<String>,
 }
 
-impl Batch {
-    fn text_only(text: String) -> Self {
-        Self::Message {
-            text,
+/// Parts accumulated into the next Discord message.
+struct Acc {
+    text: String,
+    uploads: Vec<Upload>,
+    embeds: Vec<Value>,
+    components: Vec<Value>,
+    kind: MessageReceiptPartKind,
+}
+
+impl Acc {
+    fn new() -> Self {
+        Self {
+            text: String::new(),
             uploads: Vec::new(),
             embeds: Vec::new(),
             components: Vec::new(),
             kind: MessageReceiptPartKind::Text,
         }
     }
-}
 
-fn empty_message() -> Batch {
-    Batch::text_only(String::new())
-}
-
-fn is_empty_message(batch: &Batch) -> bool {
-    matches!(batch, Batch::Message { text, uploads, embeds, components, .. }
-        if text.is_empty() && uploads.is_empty() && embeds.is_empty() && components.is_empty())
+    /// Close the accumulated message, if it holds anything.
+    fn take(&mut self, batches: &mut Vec<Batch>) {
+        let acc = std::mem::replace(self, Self::new());
+        if acc.text.is_empty()
+            && acc.uploads.is_empty()
+            && acc.embeds.is_empty()
+            && acc.components.is_empty()
+        {
+            return;
+        }
+        batches.push(Batch::Message {
+            text: acc.text,
+            uploads: acc.uploads,
+            embeds: acc.embeds,
+            components: acc.components,
+            kind: acc.kind,
+        });
+    }
 }
 
 pub(super) fn target_for(message: &ChannelOutboundMessage) -> Result<Target, ChannelSendError> {
@@ -364,46 +383,31 @@ impl DiscordChannel {
         target: &Target,
     ) -> Result<Vec<Batch>, ChannelSendError> {
         let mut batches = Vec::new();
-        let mut current = empty_message();
-        let flush = |batches: &mut Vec<Batch>, current: &mut Batch| {
-            if !is_empty_message(current) {
-                batches.push(std::mem::replace(current, empty_message()));
-            }
-        };
+        let mut acc = Acc::new();
         for part in &message.parts {
-            let Batch::Message {
-                text,
-                uploads,
-                embeds,
-                components,
-                kind,
-            } = &mut current
-            else {
-                unreachable!("the accumulator is always a message");
-            };
             match part {
                 OutboundContentPart::Content { part } => match part {
                     ContentPart::Text { text: value, .. } => {
-                        if !text.is_empty() {
-                            text.push('\n');
-                        }
-                        text.push_str(value);
+                        push_caption(&mut acc.text, Some(value));
                     }
-                    ContentPart::Image { media, caption, alt_text: _ } => {
-                        uploads.push(self.resolve_upload(message, target, media, "image").await?);
-                        push_caption(text, caption.as_deref());
-                        *kind = MessageReceiptPartKind::Media;
+                    ContentPart::Image { media, caption, .. } => {
+                        acc.uploads
+                            .push(self.resolve_upload(message, target, media, "image").await?);
+                        push_caption(&mut acc.text, caption.as_deref());
+                        acc.kind = MessageReceiptPartKind::Media;
                     }
                     ContentPart::Video { media, caption, .. } => {
-                        uploads.push(self.resolve_upload(message, target, media, "video").await?);
-                        push_caption(text, caption.as_deref());
-                        *kind = MessageReceiptPartKind::Media;
+                        acc.uploads
+                            .push(self.resolve_upload(message, target, media, "video").await?);
+                        push_caption(&mut acc.text, caption.as_deref());
+                        acc.kind = MessageReceiptPartKind::Media;
                     }
                     ContentPart::Audio { media, title, transcript, .. } => {
-                        uploads.push(self.resolve_upload(message, target, media, "audio").await?);
-                        push_caption(text, title.as_deref());
-                        push_caption(text, transcript.as_deref());
-                        *kind = MessageReceiptPartKind::Media;
+                        acc.uploads
+                            .push(self.resolve_upload(message, target, media, "audio").await?);
+                        push_caption(&mut acc.text, title.as_deref());
+                        push_caption(&mut acc.text, transcript.as_deref());
+                        acc.kind = MessageReceiptPartKind::Media;
                     }
                     ContentPart::File { media, file_name, caption } => {
                         let mut upload =
@@ -411,24 +415,24 @@ impl DiscordChannel {
                         if let Some(name) = file_name {
                             upload.file_name = sanitize_file_name(Some(name), &upload.file_name);
                         }
-                        uploads.push(upload);
-                        push_caption(text, caption.as_deref());
-                        *kind = MessageReceiptPartKind::Media;
+                        acc.uploads.push(upload);
+                        push_caption(&mut acc.text, caption.as_deref());
+                        acc.kind = MessageReceiptPartKind::Media;
                     }
                     ContentPart::Buttons { rows } => {
-                        components.extend(button_rows(rows)?);
-                        if components.len() > MAX_ROWS {
+                        acc.components.extend(button_rows(rows)?);
+                        if acc.components.len() > MAX_ROWS {
                             return Err(pre_dispatch("Discord allows at most 5 button rows"));
                         }
                     }
                     ContentPart::Presentation { blocks } => {
                         let (embed, rows) = presentation_embed(blocks)?;
-                        embeds.push(embed);
-                        components.extend(rows);
-                        if components.len() > MAX_ROWS {
+                        acc.embeds.push(embed);
+                        acc.components.extend(rows);
+                        if acc.components.len() > MAX_ROWS {
                             return Err(pre_dispatch("Discord allows at most 5 button rows"));
                         }
-                        *kind = MessageReceiptPartKind::Card;
+                        acc.kind = MessageReceiptPartKind::Card;
                     }
                     ContentPart::Native { provider, data }
                         if tinychannels_bus::provider_id(provider) == "discord" =>
@@ -438,9 +442,7 @@ impl DiscordChannel {
                                 "Discord native data must be the only part of a send",
                             ));
                         }
-                        flush(&mut batches, &mut current);
                         batches.push(Batch::Thread(thread_spec(data)?));
-                        continue;
                     }
                     ContentPart::Native { .. } => {
                         return Err(unsupported("Discord ignores another provider's native data"));
@@ -456,7 +458,7 @@ impl DiscordChannel {
                     }
                 },
                 OutboundContentPart::Voice { voice } => {
-                    flush(&mut batches, &mut current);
+                    acc.take(&mut batches);
                     let OutboundVoice::Media { media, audio_base64, codec, duration_ms } = voice
                     else {
                         return Err(pre_dispatch(
@@ -477,12 +479,12 @@ impl DiscordChannel {
                 }
             }
         }
-        flush(&mut batches, &mut current);
+        acc.take(&mut batches);
         if batches.is_empty() {
             return Err(pre_dispatch("Discord send has no content"));
         }
         for batch in &batches {
-            if let Batch::Message { uploads, embeds, components, .. } = batch {
+            if let Batch::Message { uploads, embeds, .. } = batch {
                 if uploads.len() > MAX_FILES || embeds.len() > MAX_EMBEDS {
                     return Err(pre_dispatch("Discord allows 10 files and 10 embeds per message"));
                 }
@@ -490,7 +492,6 @@ impl DiscordChannel {
                 if total as u64 > MAX_UPLOAD_BYTES {
                     return Err(pre_dispatch("Discord attachments exceed the upload limit"));
                 }
-                let _ = components;
             }
         }
         Ok(batches)
