@@ -199,7 +199,7 @@ impl LongTailFixture {
         payload: OutboundPayload,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         let before = self.request_count().await;
-        let outcome = self.channel.send(self.intent(feature, payload)).await?;
+        let outcome = self.ChannelAdapter::send(channel, self.intent(feature, payload)).await?;
         self.record(feature, before).await;
         Ok(Some(outcome))
     }
@@ -272,7 +272,7 @@ impl AdapterFixture for LongTailFixture {
             }
             Feature::Image => {
                 self.refused(
-                    channel.send(self.intent(
+                    ChannelAdapter::send(channel, self.intent(
                         feature,
                         rich(ContentPart::Image {
                             media: media(MediaKind::Image),
@@ -284,7 +284,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Video => {
-                self.refused(channel.send(self.intent(
+                self.refused(ChannelAdapter::send(channel, self.intent(
                     feature,
                     rich(ContentPart::Video {
                         media: media(MediaKind::Video),
@@ -296,7 +296,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Audio => {
-                self.refused(channel.send(self.intent(
+                self.refused(ChannelAdapter::send(channel, self.intent(
                     feature,
                     rich(ContentPart::Audio {
                         media: media(MediaKind::Audio),
@@ -309,7 +309,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::File => {
-                self.refused(channel.send(self.intent(
+                self.refused(ChannelAdapter::send(channel, self.intent(
                     feature,
                     rich(ContentPart::File {
                         media: media(MediaKind::Document),
@@ -320,7 +320,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Sticker => {
-                self.refused(channel.send(self.intent(
+                self.refused(ChannelAdapter::send(channel, self.intent(
                     feature,
                     rich(ContentPart::Sticker {
                         media: Default::default(),
@@ -333,7 +333,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Location => {
-                self.refused(channel.send(self.intent(
+                self.refused(ChannelAdapter::send(channel, self.intent(
                     feature,
                     rich(ContentPart::Location {
                         latitude: 1.0,
@@ -347,7 +347,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Contact => {
-                self.refused(channel.send(self.intent(
+                self.refused(ChannelAdapter::send(channel, self.intent(
                     feature,
                     rich(ContentPart::Contact {
                         display_name: "k".into(),
@@ -359,7 +359,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Poll => {
-                self.refused(channel.send(self.intent(
+                self.refused(ChannelAdapter::send(channel, self.intent(
                     feature,
                     rich(ContentPart::Poll {
                         question: "q".into(),
@@ -372,7 +372,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Buttons => {
-                self.refused(channel.send(self.intent(
+                self.refused(ChannelAdapter::send(channel, self.intent(
                     feature,
                     rich(ContentPart::Buttons {
                         rows: vec![vec![tinychannels_bus::ButtonAction {
@@ -386,7 +386,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Presentation => {
-                self.refused(channel.send(self.intent(
+                self.refused(ChannelAdapter::send(channel, self.intent(
                     feature,
                     rich(ContentPart::Presentation {
                         blocks: json!({"kind": "approval", "id": "kit"}),
@@ -395,7 +395,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::NativeData => {
-                self.refused(channel.send(self.intent(
+                self.refused(ChannelAdapter::send(channel, self.intent(
                     feature,
                     OutboundPayload::NativeChannelData {
                         data: json!({"action": "create_thread"}),
@@ -404,7 +404,7 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::VoiceOut | Feature::VoiceSynthesis => {
-                self.refused(channel.send(self.intent(
+                self.refused(ChannelAdapter::send(channel, self.intent(
                     feature,
                     OutboundPayload::Voice {
                         voice: tinychannels_bus::OutboundVoice::Media {
