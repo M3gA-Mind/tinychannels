@@ -94,11 +94,8 @@ fn context_and_scope_strings_are_bounded_before_retention() {
 fn retained_context_byte_budget_rejects_new_turn_without_evicting_active_turns() {
     let mut registry = WebTurnRegistry::default();
     let mut first = None;
-    loop {
-        match registry.begin(large_begin()) {
-            Ok(handle) => first.get_or_insert(handle),
-            Err(_) => break,
-        };
+    while let Ok(handle) = registry.begin(large_begin()) {
+        first.get_or_insert(handle);
     }
     let first = first.expect("one maximum-sized context fits");
     let retained_bytes = registry.retained_bytes;
