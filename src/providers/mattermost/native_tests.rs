@@ -242,6 +242,29 @@ fn media_capabilities_require_host_scoped_storage() {
     assert!(!capabilities.content.video.outbound);
     assert!(!capabilities.content.audio.outbound);
     assert!(!capabilities.content.file.outbound);
+
+    let host_media = MattermostChannel::new(
+        "https://mattermost.invalid".into(),
+        "token".into(),
+        None,
+        vec![],
+        true,
+        false,
+    )
+    .with_media_repository(Arc::new(StubMedia::default()));
+    assert!(
+        !NativeProvider::declared_capabilities(&host_media)
+            .content
+            .image
+            .inbound
+    );
+    let host_media_and_events = host_media.with_events(Arc::new(RecordingEvents::delivering()));
+    assert!(
+        NativeProvider::declared_capabilities(&host_media_and_events)
+            .content
+            .image
+            .inbound
+    );
 }
 
 #[tokio::test]
@@ -337,6 +360,61 @@ async fn inbound_download_rejects_untrusted_file_ids_before_network_io() {
 }
 
 #[tokio::test]
+async fn generic_audio_attachment_is_typed_audio_not_a_voice_note() {
+    use tinychannels_bus::ContentPart;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/files/audio-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"audio-bytes"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let media = Arc::new(StubMedia::default());
+    let voice = Arc::new(StubVoice::default());
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        None,
+        vec!["*".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    )
+    .with_media_repository(media)
+    .with_voice_media_store(voice.clone())
+    .with_events(events.clone());
+    let post = json!({
+        "id": "audio-post",
+        "user_id": "user-2",
+        "message": "",
+        "create_at": 1_700_000_000_123_i64,
+        "root_id": "",
+        "file_ids": ["audio-1"],
+        "metadata": {"files": [{
+            "id": "audio-1", "mime_type": "audio/mp4", "name": "clip.m4a", "size": 11
+        }]}
+    });
+    let message = channel
+        .parse_mattermost_post(&post, "bot-1", "bot", 1_600_000_000_000_i64, "channel-9")
+        .unwrap();
+    let envelope = channel
+        .inbound_envelope(&post, "channel-9", &message)
+        .await
+        .unwrap();
+    assert!(crate::providers::native::inbound::publish(
+        "mattermost",
+        channel.events.as_ref(),
+        envelope,
+    )
+    .await);
+    let inbound = events.inbound();
+    assert!(matches!(inbound[0].parts[0], ContentPart::Audio { .. }));
+    assert!(voice.stored.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn inbound_file_download_enforces_the_limit_before_returning_bytes() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
@@ -355,4 +433,234 @@ async fn inbound_file_download_enforces_the_limit_before_returning_bytes() {
         reqwest::Client::builder().no_proxy().build().unwrap(),
     );
     assert!(channel.download_file("file-1", 10).await.is_none());
+}
+
+#[tokio::test]
+async fn empty_file_only_posts_are_not_published_when_ingress_cannot_store_media() {
+    let server = MockServer::start().await;
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        None,
+        vec!["*".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    )
+    .with_events(events.clone());
+    let post = json!({
+        "id": "post-no-store",
+        "user_id": "user-2",
+        "message": "",
+        "create_at": 1_700_000_000_123_i64,
+        "root_id": "",
+        "file_ids": ["file-1"],
+        "metadata": {"files": [{
+            "id": "file-1", "mime_type": "image/png", "name": "chart.png", "size": 20
+        }]}
+    });
+    let message = channel
+        .parse_mattermost_post(&post, "bot-1", "bot", 1_600_000_000_000_i64, "channel-9")
+        .unwrap();
+    let envelope = channel
+        .inbound_envelope(&post, "channel-9", &message)
+        .await;
+    if let Some(envelope) = envelope {
+        crate::providers::native::inbound::publish(
+            "mattermost",
+            channel.events.as_ref(),
+            envelope,
+        )
+        .await;
+    }
+    assert!(events.inbound().is_empty());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn file_only_posts_with_unusable_ids_are_not_published() {
+    let server = MockServer::start().await;
+    let media = Arc::new(StubMedia::default());
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        None,
+        vec!["*".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    )
+    .with_media_repository(media)
+    .with_events(events.clone());
+    let post = json!({
+        "id": "post-bad-id",
+        "user_id": "user-2",
+        "message": "",
+        "create_at": 1_700_000_000_123_i64,
+        "root_id": "",
+        "file_ids": ["../private"],
+        "metadata": {"files": [{
+            "id": "../private", "mime_type": "image/png", "name": "chart.png", "size": 20
+        }]}
+    });
+    let message = channel
+        .parse_mattermost_post(&post, "bot-1", "bot", 1_600_000_000_000_i64, "channel-9")
+        .unwrap();
+    let envelope = channel
+        .inbound_envelope(&post, "channel-9", &message)
+        .await;
+    if let Some(envelope) = envelope {
+        crate::providers::native::inbound::publish(
+            "mattermost",
+            channel.events.as_ref(),
+            envelope,
+        )
+        .await;
+    }
+    assert!(events.inbound().is_empty());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn file_only_posts_with_oversized_metadata_are_not_downloaded_or_published() {
+    let server = MockServer::start().await;
+    let media = Arc::new(StubMedia::default());
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        None,
+        vec!["*".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    )
+    .with_media_repository(media)
+    .with_events(events.clone());
+    let post = json!({
+        "id": "post-oversized",
+        "user_id": "user-2",
+        "message": "",
+        "create_at": 1_700_000_000_123_i64,
+        "root_id": "",
+        "file_ids": ["file-1"],
+        "metadata": {"files": [{
+            "id": "file-1", "mime_type": "image/png", "name": "chart.png",
+            "size": MAX_FILE_BYTES + 1
+        }]}
+    });
+    let message = channel
+        .parse_mattermost_post(&post, "bot-1", "bot", 1_600_000_000_000_i64, "channel-9")
+        .unwrap();
+    let envelope = channel
+        .inbound_envelope(&post, "channel-9", &message)
+        .await;
+    if let Some(envelope) = envelope {
+        crate::providers::native::inbound::publish(
+            "mattermost",
+            channel.events.as_ref(),
+            envelope,
+        )
+        .await;
+    }
+    assert!(events.inbound().is_empty());
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn file_only_posts_are_not_published_when_media_storage_fails() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/files/file-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"image-bytes"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let media = Arc::new(StubMedia {
+        fail_store: true,
+        ..Default::default()
+    });
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        None,
+        vec!["*".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    )
+    .with_media_repository(media)
+    .with_events(events.clone());
+    let post = json!({
+        "id": "post-store-error",
+        "user_id": "user-2",
+        "message": "",
+        "create_at": 1_700_000_000_123_i64,
+        "root_id": "",
+        "file_ids": ["file-1"],
+        "metadata": {"files": [{
+            "id": "file-1", "mime_type": "image/png", "name": "chart.png", "size": 11
+        }]}
+    });
+    let message = channel
+        .parse_mattermost_post(&post, "bot-1", "bot", 1_600_000_000_000_i64, "channel-9")
+        .unwrap();
+    let envelope = channel
+        .inbound_envelope(&post, "channel-9", &message)
+        .await;
+    if let Some(envelope) = envelope {
+        crate::providers::native::inbound::publish(
+            "mattermost",
+            channel.events.as_ref(),
+            envelope,
+        )
+        .await;
+    }
+    assert!(events.inbound().is_empty());
+}
+
+#[tokio::test]
+async fn text_post_survives_when_its_attachment_cannot_be_ingested() {
+    use tinychannels_bus::ContentPart;
+
+    let server = MockServer::start().await;
+    let media = Arc::new(StubMedia {
+        fail_store: true,
+        ..Default::default()
+    });
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        None,
+        vec!["*".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    )
+    .with_media_repository(media)
+    .with_events(events.clone());
+    let post = json!({
+        "id": "post-text-media",
+        "user_id": "user-2",
+        "message": "caption survives",
+        "create_at": 1_700_000_000_123_i64,
+        "root_id": "",
+        "file_ids": ["../bad-id"],
+        "metadata": {"files": [{
+            "id": "../bad-id", "mime_type": "image/png", "name": "chart.png", "size": 20
+        }]}
+    });
+    let message = channel
+        .parse_mattermost_post(&post, "bot-1", "bot", 1_600_000_000_000_i64, "channel-9")
+        .unwrap();
+    let envelope = channel
+        .inbound_envelope(&post, "channel-9", &message)
+        .await
+        .expect("text should remain deliverable");
+    assert_eq!(envelope.text, "caption survives");
+    assert!(matches!(envelope.parts.first(), Some(ContentPart::Text { .. })));
 }
