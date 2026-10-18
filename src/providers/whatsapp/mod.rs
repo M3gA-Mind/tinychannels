@@ -587,5 +587,9 @@ impl crate::channel::ChannelStreamingDraft for WhatsAppChannel {
 }
 
 #[cfg(test)]
+#[path = "conformance_tests.rs"]
+mod conformance;
+
+#[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
