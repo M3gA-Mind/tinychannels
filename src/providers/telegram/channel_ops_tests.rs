@@ -686,6 +686,8 @@ async fn listen_backs_off_when_webhook_delete_fails_and_on_transport_error() {
 #[tokio::test]
 async fn loopback_bot_api_retries_poll_then_routes_status_reply() {
     let api = BotApiFake::start().await;
+    // The current poll loop retries this API error using poll_error_backoff;
+    // retry_after is part of the realistic response shape, not a delay assertion.
     api.fail_next_poll(
         429,
         serde_json::json!({
