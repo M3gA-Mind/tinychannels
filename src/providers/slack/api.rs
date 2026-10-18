@@ -198,3 +198,7 @@ pub(crate) fn pre_dispatch(message: &str) -> ChannelSendError {
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+#[path = "api_tests.rs"]
+mod tests;

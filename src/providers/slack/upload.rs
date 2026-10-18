@@ -16,6 +16,7 @@ pub(crate) struct Upload<'a> {
 }
 
 /// The shared file and, when Slack reports it, the message that carries it.
+#[derive(Debug)]
 pub(crate) struct Uploaded {
     pub(crate) file_id: String,
     pub(crate) message_ts: Option<String>,
