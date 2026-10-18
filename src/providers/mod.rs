@@ -48,3 +48,7 @@ pub use yuanbao::YuanbaoChannel;
 #[cfg(test)]
 #[path = "http_test_support_tests.rs"]
 mod http_test_support;
+
+#[cfg(test)]
+#[path = "no_text_markers_tests.rs"]
+mod no_text_markers;

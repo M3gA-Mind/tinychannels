@@ -1065,7 +1065,7 @@ async fn an_ip_literal_imap_host_fails_before_tls() {
 fn a_text_attachment_is_used_when_there_is_no_body() {
     let raw = b"From: a@example.com\r\nSubject: Att\r\nContent-Type: multipart/mixed; boundary=\"b\"\r\n\r\n--b\r\nContent-Type: text/csv\r\nContent-Disposition: attachment; filename=\"data.csv\"\r\n\r\na,b\r\n--b--\r\n";
     let parsed = test_support::parse_email_fixture(raw).unwrap();
-    assert_eq!(parsed.text, "[Attachment: data.csv]\na,b");
+    assert_eq!(parsed.text, "a,b");
 }
 
 #[test]
