@@ -1,11 +1,9 @@
 //! Edits, deletes and streaming drafts over [`NativeProvider`].
 
-use super::outbound::{Sent, Target, send_typed};
+use super::outbound::send_typed;
 use super::{Address, NativeProvider, pre_dispatch, unsupported};
 use crate::providers::slack::text::strip_tool_call_tags;
-use tinychannels_bus::channel::{
-    ChannelRef, ChannelSendError, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind,
-};
+use tinychannels_bus::channel::{ChannelRef, ChannelSendError, MessageReceipt};
 use tinychannels_bus::{
     ChannelOutboundIntent, ChannelOutboundMessage, ContentPart, OutboundContentPart,
 };
@@ -160,22 +158,4 @@ pub(crate) async fn upsert_draft<P: NativeProvider + ?Sized>(
     let message = ChannelOutboundMessage::from_intent(&intent);
     let outcome = send_typed(provider, &message).await?;
     Ok(outcome.receipt)
-}
-
-/// A receipt for one already-sent message, for providers that edit by id.
-#[allow(dead_code)]
-pub(crate) fn single_receipt(target: &Target, id: &str, kind: MessageReceiptPartKind) -> MessageReceipt {
-    let _ = Sent::new(id, kind);
-    MessageReceipt {
-        channel: Some(target.channel.clone()),
-        conversation: Some(target.conversation.clone()),
-        primary_platform_message_id: Some(id.to_owned()),
-        platform_message_ids: vec![id.to_owned()],
-        parts: vec![MessageReceiptPart {
-            platform_message_id: id.to_owned(),
-            kind,
-            ..Default::default()
-        }],
-        ..Default::default()
-    }
 }

@@ -9,7 +9,7 @@
 //! `unsupported` error before any platform I/O, which is what the conformance
 //! kit requires of an undeclared feature.
 
-mod edit;
+pub(crate) mod edit;
 pub(crate) mod inbound;
 pub(crate) mod outbound;
 
