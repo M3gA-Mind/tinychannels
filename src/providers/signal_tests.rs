@@ -31,11 +31,14 @@ fn make_envelope(source_number: Option<&str>, message: Option<&str>) -> Envelope
             timestamp: Some(1_700_000_000_000),
             group_info: None,
             attachments: None,
-        }),
+..Default::default()
+}),
         story_message: None,
         timestamp: Some(1_700_000_000_000),
         source_name: None,
-    },
+..Default::default()
+},
+..Default::default(),
 ..Default::default()
 }
 
@@ -108,6 +111,7 @@ fn matches_group_no_group_id_accepts_all() {
         timestamp: Some(1000),
         group_info: None,
         attachments: None,
+..Default::default(),
 ..Default::default()
 };
     assert!(ch.matches_group(&dm));
@@ -119,6 +123,7 @@ fn matches_group_no_group_id_accepts_all() {
             group_id: Some("group123".to_string()),
         }),
         attachments: None,
+..Default::default(),
 ..Default::default()
 };
     assert!(ch.matches_group(&group));
@@ -134,6 +139,7 @@ fn matches_group_filters_group() {
             group_id: Some("group123".to_string()),
         }),
         attachments: None,
+..Default::default(),
 ..Default::default()
 };
     assert!(ch.matches_group(&matching));
@@ -145,6 +151,7 @@ fn matches_group_filters_group() {
             group_id: Some("other_group".to_string()),
         }),
         attachments: None,
+..Default::default(),
 ..Default::default()
 };
     assert!(!ch.matches_group(&non_matching));
@@ -158,6 +165,7 @@ fn matches_group_dm_keyword() {
         timestamp: Some(1000),
         group_info: None,
         attachments: None,
+..Default::default(),
 ..Default::default()
 };
     assert!(ch.matches_group(&dm));
@@ -169,6 +177,7 @@ fn matches_group_dm_keyword() {
             group_id: Some("group123".to_string()),
         }),
         attachments: None,
+..Default::default(),
 ..Default::default()
 };
     assert!(!ch.matches_group(&group));
@@ -182,6 +191,7 @@ fn reply_target_dm() {
         timestamp: Some(1000),
         group_info: None,
         attachments: None,
+..Default::default(),
 ..Default::default()
 };
     assert_eq!(ch.reply_target(&dm, "+1111111111"), "+1111111111");
@@ -197,6 +207,7 @@ fn reply_target_group() {
             group_id: Some("group123".to_string()),
         }),
         attachments: None,
+..Default::default(),
 ..Default::default()
 };
     assert_eq!(ch.reply_target(&group, "+1111111111"), "group:group123");
@@ -262,6 +273,7 @@ fn sender_prefers_source_number() {
         story_message: None,
         timestamp: Some(1000),
         source_name: None,
+..Default::default(),
 ..Default::default()
 };
     assert_eq!(SignalChannel::sender(&env), Some("+1111111111".to_string()));
@@ -276,6 +288,7 @@ fn sender_falls_back_to_source() {
         story_message: None,
         timestamp: Some(1000),
         source_name: None,
+..Default::default(),
 ..Default::default()
 };
     assert_eq!(SignalChannel::sender(&env), Some("uuid-123".to_string()));
@@ -300,10 +313,12 @@ fn process_envelope_uuid_sender_dm() {
             timestamp: Some(1_700_000_000_000),
             group_info: None,
             attachments: None,
-        }),
+..Default::default()
+}),
         story_message: None,
         timestamp: Some(1_700_000_000_000),
         source_name: None,
+..Default::default(),
 ..Default::default()
 };
     let msg = ch.process_envelope(&env).unwrap();
@@ -337,10 +352,12 @@ fn process_envelope_uuid_sender_in_group() {
                 group_id: Some("testgroup".to_string()),
             }),
             attachments: None,
-        }),
+..Default::default()
+}),
         story_message: None,
         timestamp: Some(1_700_000_000_000),
         source_name: None,
+..Default::default(),
 ..Default::default()
 };
     let msg = ch.process_envelope(&env).unwrap();
@@ -361,6 +378,7 @@ fn sender_none_when_both_missing() {
         story_message: None,
         timestamp: None,
         source_name: None,
+..Default::default(),
 ..Default::default()
 };
     assert_eq!(SignalChannel::sender(&env), None);
@@ -416,10 +434,12 @@ fn process_envelope_skips_attachment_only() {
             timestamp: Some(1_700_000_000_000),
             group_info: None,
             attachments: Some(vec![serde_json::json!({"contentType": "image/png"})]),
-        }),
+..Default::default()
+}),
         story_message: None,
         timestamp: Some(1_700_000_000_000),
         source_name: None,
+..Default::default(),
 ..Default::default()
 };
     assert!(ch.process_envelope(&env).is_none());
