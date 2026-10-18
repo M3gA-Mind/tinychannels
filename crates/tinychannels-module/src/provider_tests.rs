@@ -4064,3 +4064,73 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
     }
     running.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn configured_long_tail_adapter_sends_through_the_ordered_queue_and_refuses_the_rest() {
+    use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
+    use wiremock::matchers::{body_partial_json, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/posts"))
+        .and(body_partial_json(
+            serde_json::json!({"channel_id": "chan1", "root_id": "root1", "message": "native send"}),
+        ))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({"id": "p1"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let config = tinychannels_bus::ChannelsConfig {
+        mattermost: Some(tinychannels_bus::config::MattermostConfig {
+            url: server.uri(),
+            bot_token: "bot-token".into(),
+            channel_id: None,
+            allowed_users: vec![],
+            thread_replies: None,
+            mention_only: None,
+        }),
+        ..Default::default()
+    };
+    let channel = tinychannels::build_long_tail_channel(
+        &config,
+        &tinychannels::DefaultHttpClients,
+        "mattermost",
+    )
+    .expect("mattermost is configured");
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), "mattermost:team-a".into(), None);
+    let running = Running::start_long_tail("Mattermost", channel, hooks, host, None, true);
+    let handle = running.adapter_handle();
+    assert_eq!(handle.mode, AdapterMode::LongTailNativeV2);
+    let descriptor = handle.descriptor();
+    assert_eq!(descriptor.id, "mattermost");
+    assert_eq!(descriptor.account_id.as_deref(), Some("mattermost:team-a"));
+    assert!(handle.declared_capabilities().addressing.thread_id);
+
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "mm-native-op".into(),
+        channel_id: "mattermost".into(),
+        conversation_id: "chan1".into(),
+        thread_id: Some("root1".into()),
+        payload: OutboundPayload::Text {
+            text: "native send".into(),
+        },
+        ..Default::default()
+    };
+    let sent = handle.send(intent.clone()).await.unwrap();
+    assert!(sent.error.is_none());
+
+    let receipt = tinychannels_bus::channel::MessageReceipt::default();
+    assert!(
+        handle
+            .edits()
+            .unwrap()
+            .edit(&receipt, intent)
+            .await
+            .is_err()
+    );
+    assert!(handle.deletes().unwrap().delete(&receipt).await.is_err());
+    running.stop().await.unwrap();
+}
