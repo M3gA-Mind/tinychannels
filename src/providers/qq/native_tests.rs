@@ -109,6 +109,40 @@ async fn qq_inbound_attachment_rejects_non_tencent_urls_before_network_io() {
     assert!(server.requests.lock().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn qq_inbound_attachment_checks_sender_allowlist_before_network_io() {
+    let server = HttpsServer::start(|request| {
+        panic!("unexpected QQ attachment request: {}", request.target)
+    })
+    .await;
+    let channel = super::super::QQChannel::with_http_client(
+        "app-id".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    )
+    .with_media_repository(Arc::new(StubMedia::default()))
+    .with_events(Arc::new(
+        crate::providers::native::fixtures::RecordingEvents::delivering(),
+    ))
+    .with_attachment_http_client(server.client.clone());
+    let envelope = channel
+        .inbound_envelope(
+            "C2C_MESSAGE_CREATE",
+            &json!({
+                "id": "qq-inbound-forbidden-sender",
+                "author": {"user_openid": "mallory"},
+                "attachments": [{
+                    "content_type": "image/png",
+                    "url": "https://api.sgroup.qq.com/attachments/image-1"
+                }]
+            }),
+        )
+        .await;
+    assert!(envelope.is_none());
+    assert!(server.requests.lock().unwrap().is_empty());
+}
+
 struct QQVoiceStore;
 
 #[async_trait::async_trait]

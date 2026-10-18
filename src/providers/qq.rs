@@ -109,7 +109,7 @@ impl QQChannel {
 
     /// Replace the no-redirect attachment client, primarily for host-managed
     /// trust roots and deterministic local tests.
-    pub fn with_attachment_http_client(mut self, client: reqwest::Client) -> Self {
+    pub(crate) fn with_attachment_http_client(mut self, client: reqwest::Client) -> Self {
         self.attachment_http_client = client;
         self
     }
