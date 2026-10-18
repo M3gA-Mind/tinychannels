@@ -32,6 +32,7 @@ pub(crate) struct Limits {
 }
 
 /// One file ready to upload.
+#[derive(Debug)]
 pub(crate) struct FileStep {
     pub(crate) bytes: Vec<u8>,
     pub(crate) mime: String,
@@ -40,6 +41,7 @@ pub(crate) struct FileStep {
 }
 
 /// One validated unit of work, in message order.
+#[derive(Debug)]
 pub(crate) enum Step {
     Text(String),
     File(FileStep),

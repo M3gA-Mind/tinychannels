@@ -208,3 +208,137 @@ impl EventSink for RecordingEvents {
         Ok(self.deliver)
     }
 }
+
+/// A configurable [`NativeProvider`] that records what it is asked to deliver.
+pub(crate) struct FakeProvider {
+    pub(crate) media: Option<std::sync::Arc<dyn MediaRepository>>,
+    pub(crate) voice: Option<std::sync::Arc<dyn VoiceMediaStore>>,
+    pub(crate) synthesis: bool,
+    pub(crate) edits: bool,
+    pub(crate) drafts: bool,
+    pub(crate) caps: tinychannels_bus::ChannelCapabilities,
+    pub(crate) fail_after: Option<usize>,
+    pub(crate) delivered: Mutex<Vec<String>>,
+    pub(crate) edited: Mutex<Vec<(String, String)>>,
+    pub(crate) deleted: Mutex<Vec<String>>,
+}
+
+impl Default for FakeProvider {
+    fn default() -> Self {
+        let mut caps = tinychannels_bus::ChannelCapabilities::default();
+        caps.addressing.reply_to_id = true;
+        caps.addressing.thread_id = true;
+        Self {
+            media: None,
+            voice: None,
+            synthesis: false,
+            edits: true,
+            drafts: true,
+            caps,
+            fail_after: None,
+            delivered: Mutex::default(),
+            edited: Mutex::default(),
+            deleted: Mutex::default(),
+        }
+    }
+}
+
+#[async_trait]
+impl super::NativeProvider for FakeProvider {
+    fn id(&self) -> &'static str {
+        "fake"
+    }
+
+    fn display(&self) -> &'static str {
+        "Fake"
+    }
+
+    fn limits(&self) -> super::Limits {
+        super::Limits {
+            text_chars: 20,
+            file_bytes: 16,
+            voice_bytes: 8,
+        }
+    }
+
+    fn media_repository(&self) -> Option<&std::sync::Arc<dyn MediaRepository>> {
+        self.media.as_ref()
+    }
+
+    fn voice_media_store(&self) -> Option<&std::sync::Arc<dyn VoiceMediaStore>> {
+        self.voice.as_ref()
+    }
+
+    fn voice_synthesis(&self) -> bool {
+        self.synthesis
+    }
+
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.caps.clone()
+    }
+
+    fn can_edit(&self) -> bool {
+        self.edits
+    }
+
+    fn can_draft(&self) -> bool {
+        self.drafts
+    }
+
+    async fn deliver(
+        &self,
+        _target: &super::Target,
+        step: &super::Step,
+    ) -> Result<Vec<super::Sent>, tinychannels_bus::channel::ChannelSendError> {
+        let mut delivered = self.delivered.lock().unwrap();
+        if self
+            .fail_after
+            .is_some_and(|limit| delivered.len() >= limit)
+        {
+            return Err(super::pre_dispatch("platform said no"));
+        }
+        let (label, kind) = match step {
+            super::Step::Text(text) => (
+                format!("text:{text}"),
+                tinychannels_bus::channel::MessageReceiptPartKind::Text,
+            ),
+            super::Step::File(file) => (
+                format!("file:{}", file.name),
+                tinychannels_bus::channel::MessageReceiptPartKind::Media,
+            ),
+            super::Step::Voice(file) => (
+                format!("voice:{}", file.name),
+                tinychannels_bus::channel::MessageReceiptPartKind::Voice,
+            ),
+        };
+        delivered.push(label);
+        Ok(vec![
+            super::Sent::new(format!("m{}", delivered.len()), kind)
+                .editable(true)
+                .deletable(true),
+        ])
+    }
+
+    async fn edit_text(
+        &self,
+        address: &super::Address,
+        text: &str,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.edited
+            .lock()
+            .unwrap()
+            .push((address.message_id.clone(), text.to_owned()));
+        Ok(())
+    }
+
+    async fn delete_message(
+        &self,
+        address: &super::Address,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.deleted
+            .lock()
+            .unwrap()
+            .push(address.message_id.clone());
+        Ok(())
+    }
+}
