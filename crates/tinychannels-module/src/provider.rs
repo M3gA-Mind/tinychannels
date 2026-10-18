@@ -233,12 +233,59 @@ impl std::fmt::Display for RunningSendError {
     }
 }
 
+/// The stable account authority durable media is scoped by.
+///
+/// Most providers have it from configuration alone, so it is fixed when they
+/// start. A provider that only learns it from its authenticated session (a
+/// linked WhatsApp Web device) binds itself as the source and the scope is
+/// read from it on every use: unknown until linking, withdrawn for good if the
+/// session later reports another account, never taken from a mutable label.
+#[derive(Clone, Default)]
+pub(crate) struct MediaScope(Arc<MediaScopeInner>);
+
+#[derive(Default)]
+struct MediaScopeInner {
+    fixed: Option<String>,
+    source: std::sync::OnceLock<Arc<dyn Channel>>,
+}
+
+impl MediaScope {
+    pub(crate) fn fixed(scope: Option<String>) -> Self {
+        Self(Arc::new(MediaScopeInner {
+            fixed: scope,
+            source: std::sync::OnceLock::new(),
+        }))
+    }
+
+    /// Resolve the scope from `channel`'s authenticated identity from now on.
+    pub(crate) fn bind_source(&self, channel: Arc<dyn Channel>) {
+        let _ = self.0.source.set(channel);
+    }
+
+    /// The scope now, if the account is known.
+    pub(crate) fn current(&self) -> Option<String> {
+        if let Some(fixed) = &self.0.fixed {
+            return Some(fixed.clone());
+        }
+        let channel = self.0.source.get()?;
+        let identity = channel.media_account_identity()?;
+        media_scope_digest(
+            tinychannels_bus::provider_id(channel.name()),
+            &["linked-session".to_owned(), identity],
+        )
+    }
+}
+
+fn media_scope_digest(provider: &str, identity: &[String]) -> Option<String> {
+    media_scope_digest(provider, &identity)
+}
+
 /// Native hooks registered while the selected provider starts.
 #[derive(Default)]
 pub(crate) struct Hooks {
     hooks: StdMutex<Vec<ShutdownHook>>,
     configured_instance: StdMutex<Option<String>>,
-    media_account_scope: StdMutex<Option<String>>,
+    media_account_scope: StdMutex<MediaScope>,
 }
 impl LifecycleRegistry for Hooks {
     fn register_shutdown(&self, _name: &str, hook: ShutdownHook) {
@@ -253,7 +300,7 @@ impl Hooks {
         self: &Arc<Self>,
         callbacks: HostChannels,
         configured_instance: String,
-        media_account_scope: Option<String>,
+        media_account_scope: MediaScope,
     ) -> Arc<dyn tinychannels::host::ChannelHost> {
         *self
             .configured_instance
@@ -551,26 +598,14 @@ pub(crate) fn configured_media_account_scope(
         // Do not silently turn a provider name into cross-runtime authority.
         _ => return None,
     };
-    use sha2::{Digest, Sha256};
-    let mut digest = Sha256::new();
-    digest.update(b"tinychannels-media-account-v1\0");
-    digest.update((provider.len() as u64).to_le_bytes());
-    digest.update(provider.as_bytes());
-    for part in identity {
-        digest.update((part.len() as u64).to_le_bytes());
-        digest.update(part.as_bytes());
-    }
-    Some(format!(
-        "{provider}:media-v1:{}",
-        hex::encode(digest.finalize())
-    ))
+    media_scope_digest(provider, &identity)
 }
 
 #[derive(Clone)]
 pub(crate) struct ModuleMediaRepository(
     pub(crate) HostChannels,
     pub(crate) String,
-    pub(crate) Option<String>,
+    pub(crate) MediaScope,
 );
 
 fn bind_configured_media_scope(
@@ -596,7 +631,7 @@ fn bind_configured_voice_callback_scope(
 
 impl ModuleMediaRepository {
     fn bind_scope(&self, scope: &mut tinychannels::host::MediaScope) -> anyhow::Result<()> {
-        bind_configured_media_scope(scope, &self.1, self.2.as_deref())
+        bind_configured_media_scope(scope, &self.1, self.2.current().as_deref())
     }
 
     async fn scoped_store(&self) -> anyhow::Result<tinychannels::host::ScopedMediaStore> {
@@ -775,7 +810,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         let mut projection_scope = request.scope;
         bind_configured_voice_callback_scope(&mut projection_scope, &self.1);
         let mut storage_scope = projection_scope.clone();
-        bind_configured_media_scope(&mut storage_scope, &self.1, self.2.as_deref())?;
+        bind_configured_media_scope(&mut storage_scope, &self.1, self.2.current().as_deref())?;
         use base64::Engine;
         let audio = base64::engine::general_purpose::STANDARD
             .decode(request.audio_base64.as_bytes())
@@ -858,7 +893,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         bind_configured_voice_callback_scope(&mut scope, &self.1);
         if opaque_id.starts_with("tinychannels_media_v1_") {
             let mut storage_scope = scope;
-            bind_configured_media_scope(&mut storage_scope, &self.1, self.2.as_deref())?;
+            bind_configured_media_scope(&mut storage_scope, &self.1, self.2.current().as_deref())?;
             return read_scoped_voice_media(&self.0, storage_scope, opaque_id, 8 * 1024 * 1024)
                 .await;
         }
@@ -990,7 +1025,7 @@ impl tinychannels::host::EventSink for ModuleEvents {
                             bind_configured_media_scope(
                                 &mut storage_scope,
                                 &self.1,
-                                self.2.as_deref(),
+                                self.2.current().as_deref(),
                             )?;
                         }
                         match read_scoped_voice_media(
@@ -1131,7 +1166,7 @@ impl NativePorts {
 pub(crate) struct Running {
     pub(crate) channel: Arc<dyn Channel>,
     native_ports: Option<NativePorts>,
-    pub(crate) media_account_scope: Option<String>,
+    pub(crate) media_account_scope: MediaScope,
     configured_instance: String,
     send: mpsc::Sender<SendCommand>,
     cancel: watch::Sender<bool>,
