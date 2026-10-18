@@ -1,5 +1,24 @@
+//! Signal on the v2 adapter contract, over signal-cli's daemon JSON-RPC and SSE.
+//!
+//! Beyond text, the adapter ingests and sends attachments and voice notes,
+//! reactions, typing, edits and remote deletes, and surfaces read and delivery
+//! receipts as events. Inbound attachment bytes come from signal-cli's
+//! `getAttachment` JSON-RPC method (base64 `data`); outbound attachments are
+//! `data:` URIs in the `send` call's `attachments` array. Signal has no
+//! separate voice-note send flag in signal-cli, so outbound voice is an audio
+//! attachment (descriptor metadata `voiceOut=attachment`), while inbound audio
+//! flagged `voiceNote` becomes a typed voice note.
+
+mod capabilities;
+mod inbound;
+mod native;
+
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
+use parking_lot::Mutex;
+use std::collections::VecDeque;
+use std::sync::Arc;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
@@ -29,6 +48,19 @@ pub struct SignalChannel {
     ignore_attachments: bool,
     ignore_stories: bool,
     http_client: Client,
+    native: NativeState,
+}
+
+/// Host ports and bookkeeping for the v2 surface.
+#[derive(Clone, Default)]
+struct NativeState {
+    media_repository: Option<Arc<dyn MediaRepository>>,
+    voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
+    transcriber: Option<Arc<dyn Transcriber>>,
+    voice_synthesis: bool,
+    events: Option<Arc<dyn EventSink>>,
+    /// Remembered `sender:timestamp` pairs so a redelivered event is dropped.
+    seen: Arc<Mutex<VecDeque<String>>>,
 }
 
 // signal-cli SSE event JSON shapes.
@@ -39,7 +71,7 @@ struct SseEnvelope {
     envelope: Option<Envelope>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Envelope {
     #[serde(default)]
     source: Option<String>,
@@ -56,7 +88,7 @@ struct Envelope {
     timestamp: Option<u64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct DataMessage {
     #[serde(default)]
     message: Option<String>,
@@ -66,6 +98,10 @@ struct DataMessage {
     group_info: Option<GroupInfo>,
     #[serde(default)]
     attachments: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    reaction: Option<serde_json::Value>,
+    #[serde(rename = "remoteDelete", default)]
+    remote_delete: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +132,7 @@ impl SignalChannel {
             ignore_attachments,
             ignore_stories,
             http_client,
+            native: NativeState::default(),
         }
     }
 
@@ -117,7 +154,39 @@ impl SignalChannel {
             ignore_attachments,
             ignore_stories,
             http_client,
+            native: NativeState::default(),
         }
+    }
+
+    /// Scoped media storage; enables typed attachments in both directions.
+    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    /// Durable voice storage; enables voice notes in both directions.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
+    }
+
+    /// Host speech-to-text for inbound voice notes.
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.native.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Enable shared final-turn synthesis when the host provides TTS, a codec
+    /// and durable voice storage.
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.native.voice_synthesis = enabled;
+        self
+    }
+
+    /// Ordered ingress for typed inbound messages and lifecycle events.
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.native.events = Some(events);
+        self
     }
 
     fn http_client(&self) -> Client {
