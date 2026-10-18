@@ -498,3 +498,7 @@ crate::providers::long_tail::impl_long_tail_adapter!(QQChannel);
 #[cfg(test)]
 #[path = "qq_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "qq/native_tests.rs"]
+mod native_tests;
