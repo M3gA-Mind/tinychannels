@@ -9,7 +9,8 @@ use crate::providers::whatsapp_shared::plan::{
 use crate::providers::whatsapp_shared::text::split_text;
 use crate::providers::whatsapp_shared::vcard::{ContactCard, phone_digits};
 use serde_json::{Value, json};
-use tinychannels_bus::{ChannelOutboundMessage, MessageReceiptSourceResult};
+use tinychannels_bus::ChannelOutboundMessage;
+use tinychannels_bus::channel::MessageReceiptSourceResult;
 
 /// Longest text body the Cloud API accepts.
 pub(super) const TEXT_LIMIT: usize = 4096;
