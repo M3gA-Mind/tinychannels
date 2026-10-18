@@ -73,6 +73,7 @@ pub(crate) fn inbound_scope(provider: &str, conversation: &ConversationRef, mess
 }
 
 /// One downloaded attachment, before storage.
+#[derive(Debug)]
 pub(crate) struct DownloadedAttachment {
     pub bytes: Vec<u8>,
     pub content_type: String,

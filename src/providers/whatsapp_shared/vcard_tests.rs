@@ -9,7 +9,7 @@ fn card() -> ContactCard {
                 label: Some("work".into()),
             },
             ContactMethod {
-                value: "ext 5".into(),
+                value: "ext".into(),
                 label: Some("EVIL;X=1".into()),
             },
         ],
@@ -28,7 +28,7 @@ fn written_cards_escape_values_and_whitelist_type_tokens() {
     assert!(body.contains("FN:Ada\\; Lovelace\\, Countess\r\n"));
     assert!(body.contains("TEL;type=work;waid=15550100100:+1 (555) 010-0100\r\n"));
     // A hostile label falls back to a safe token and a digit-less number has no waid.
-    assert!(body.contains("TEL;type=CELL:ext 5\r\n"));
+    assert!(body.contains("TEL;type=CELL:ext\r\n"));
     assert!(!body.contains("EVIL"));
     assert!(body.contains("EMAIL;type=INTERNET:ada@example.invalid\r\n"));
     assert!(body.contains("ORG:Analytical Engines\r\n"));
