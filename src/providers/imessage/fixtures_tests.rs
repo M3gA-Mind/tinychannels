@@ -42,7 +42,7 @@ fn copy_converter(dir: &Path) -> Vec<String> {
         let script = dir.join("fake-afconvert.cmd");
         std::fs::write(
             &script,
-            "@echo off\r\ncopy /Y \"%~5\" \"%~6\" >NUL\r\nexit /b %ERRORLEVEL%\r\n",
+            "@echo off\r\ncopy /B /Y \"%~5\" \"%~6\" >NUL\r\nexit /b %ERRORLEVEL%\r\n",
         )
         .unwrap();
         vec![
