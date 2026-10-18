@@ -170,6 +170,16 @@ pub(super) fn read_body(message_id: &str, typing: bool) -> Value {
     body
 }
 
+fn attachment_name(kind: AttachmentKind) -> &'static str {
+    match kind {
+        AttachmentKind::Image => "image",
+        AttachmentKind::Video => "video",
+        AttachmentKind::Audio => "audio",
+        AttachmentKind::Document => "document",
+        AttachmentKind::Sticker => "sticker",
+    }
+}
+
 fn attachment_receipt_kind(kind: AttachmentKind) -> MessageReceiptPartKind {
     match kind {
         AttachmentKind::Audio => MessageReceiptPartKind::Voice,
@@ -214,82 +224,86 @@ impl WhatsAppChannel {
         }
     }
 
-    /// Send one planned part and return the provider's message id and kind.
+    /// Send one planned part. Returns every message the provider confirmed and,
+    /// separately, the failure that stopped the part, so a text split into
+    /// chunks never loses the ids of the chunks that were delivered.
     async fn send_planned(
         &self,
         to: &str,
         part: PlannedPart,
         reply_to: Option<&str>,
-    ) -> Result<Vec<(String, MessageReceiptPartKind)>, WaFailure> {
+    ) -> (Vec<(String, MessageReceiptPartKind)>, Option<WaFailure>) {
         let mut sent = Vec::new();
-        match part {
-            PlannedPart::Text(text) => {
-                for (index, chunk) in split_text(&text, TEXT_LIMIT).into_iter().enumerate() {
-                    let reply = if index == 0 { reply_to } else { None };
-                    let answer = self.post_messages(&text_body(to, &chunk, reply)).await;
-                    match answer.and_then(|answer| Self::answered_message_id(&answer)) {
-                        Ok(id) => sent.push((id, MessageReceiptPartKind::Text)),
-                        // Earlier chunks are already delivered; surface them.
-                        Err(error) if sent.is_empty() => return Err(error),
-                        Err(error) => return Err(Self::partial(sent, error)),
+        let outcome: Result<(), WaFailure> = async {
+            match part {
+                PlannedPart::Text(text) => {
+                    for (index, chunk) in split_text(&text, TEXT_LIMIT).into_iter().enumerate() {
+                        let reply = if index == 0 { reply_to } else { None };
+                        let answer = self.post_messages(&text_body(to, &chunk, reply)).await?;
+                        sent.push((
+                            Self::answered_message_id(&answer)?,
+                            MessageReceiptPartKind::Text,
+                        ));
                     }
                 }
+                PlannedPart::Attachment {
+                    kind,
+                    bytes,
+                    content_type,
+                    file_name,
+                    caption,
+                    ..
+                } => {
+                    let upload_name = file_name.clone().unwrap_or_else(|| attachment_name(kind).into());
+                    let media_id = self.upload_media(bytes, &content_type, &upload_name).await?;
+                    let body = media_body(
+                        to,
+                        kind,
+                        &media_id,
+                        caption.as_deref(),
+                        file_name.as_deref(),
+                        reply_to,
+                    );
+                    let id = Self::answered_message_id(&self.post_messages(&body).await?)?;
+                    sent.push((id, attachment_receipt_kind(kind)));
+                }
+                PlannedPart::Voice {
+                    bytes, content_type, ..
+                } => {
+                    // OGG/Opus uploaded as audio is what WhatsApp renders as a
+                    // voice message; the Cloud API has no waveform field.
+                    let media_id = self.upload_media(bytes, &content_type, "voice.ogg").await?;
+                    let body = media_body(to, AttachmentKind::Audio, &media_id, None, None, reply_to);
+                    let id = Self::answered_message_id(&self.post_messages(&body).await?)?;
+                    sent.push((id, MessageReceiptPartKind::Voice));
+                }
+                PlannedPart::Location {
+                    latitude,
+                    longitude,
+                    name,
+                    address,
+                } => {
+                    let body = location_body(
+                        to,
+                        latitude,
+                        longitude,
+                        name.as_deref(),
+                        address.as_deref(),
+                        reply_to,
+                    );
+                    let id = Self::answered_message_id(&self.post_messages(&body).await?)?;
+                    sent.push((id, MessageReceiptPartKind::Unknown));
+                }
+                PlannedPart::Contact(card) => {
+                    let body = contact_body(to, &card, reply_to);
+                    let id = Self::answered_message_id(&self.post_messages(&body).await?)?;
+                    sent.push((id, MessageReceiptPartKind::Unknown));
+                }
             }
-            PlannedPart::Attachment {
-                kind,
-                bytes,
-                content_type,
-                file_name,
-                caption,
-                ..
-            } => {
-                let upload_name = file_name.clone().unwrap_or_else(|| match kind {
-                    AttachmentKind::Image => "image".into(),
-                    AttachmentKind::Video => "video".into(),
-                    AttachmentKind::Audio => "audio".into(),
-                    AttachmentKind::Document => "document".into(),
-                    AttachmentKind::Sticker => "sticker".into(),
-                });
-                let media_id = self.upload_media(bytes, &content_type, &upload_name).await?;
-                let body = media_body(to, kind, &media_id, caption.as_deref(), file_name.as_deref(), reply_to);
-                let id = Self::answered_message_id(&self.post_messages(&body).await?)?;
-                sent.push((id, attachment_receipt_kind(kind)));
-            }
-            PlannedPart::Voice {
-                bytes, content_type, ..
-            } => {
-                // OGG/Opus uploaded as audio is what WhatsApp renders as a
-                // voice message; the Cloud API has no waveform field.
-                let media_id = self.upload_media(bytes, &content_type, "voice.ogg").await?;
-                let body = media_body(to, AttachmentKind::Audio, &media_id, None, None, reply_to);
-                let id = Self::answered_message_id(&self.post_messages(&body).await?)?;
-                sent.push((id, MessageReceiptPartKind::Voice));
-            }
-            PlannedPart::Location {
-                latitude,
-                longitude,
-                name,
-                address,
-            } => {
-                let body = location_body(to, latitude, longitude, name.as_deref(), address.as_deref(), reply_to);
-                let id = Self::answered_message_id(&self.post_messages(&body).await?)?;
-                sent.push((id, MessageReceiptPartKind::Unknown));
-            }
-            PlannedPart::Contact(card) => {
-                let id = Self::answered_message_id(
-                    &self.post_messages(&contact_body(to, &card, reply_to)).await?,
-                )?;
-                sent.push((id, MessageReceiptPartKind::Unknown));
-            }
+            Ok(())
         }
-        Ok(sent)
-    }
-
-    fn partial(sent: Vec<(String, MessageReceiptPartKind)>, error: WaFailure) -> WaFailure {
-        // A chunk failed after earlier chunks were delivered: the whole part is
-        // uncertain, never retryable as a unit.
-        let _ = sent;
-        WaFailure::uncertain(format!("WhatsApp delivered only part of the text: {error}"))
+        .await;
+        (sent, outcome.err())
     }
 
     /// Deliver `message` and return the provider's own receipt.
@@ -318,18 +332,17 @@ impl WhatsAppChannel {
             } else {
                 None
             };
-            match self.send_planned(&to, planned_part, reply).await {
-                Ok(sent) => {
-                    for (id, kind) in sent {
-                        let index = parts.len();
-                        parts.push(receipt_part(&id, kind, index, &scope, reply));
-                    }
+            let (sent, stopped) = self.send_planned(&to, planned_part, reply).await;
+            for (id, kind) in sent {
+                let index = parts.len();
+                parts.push(receipt_part(&id, kind, index, &scope, reply));
+            }
+            if let Some(error) = stopped {
+                if parts.is_empty() {
+                    return Err(error);
                 }
-                Err(error) if parts.is_empty() => return Err(error),
-                Err(error) => {
-                    failure = Some(error);
-                    break;
-                }
+                failure = Some(error);
+                break;
             }
         }
         let ids: Vec<String> = parts.iter().map(|part| part.platform_message_id.clone()).collect();
