@@ -23,7 +23,7 @@ pub(crate) struct Uploaded {
 
 fn not_sent(mut error: ChannelSendError) -> ChannelSendError {
     error.sent_before_error = false;
-    error.retryable = error.kind == SendErrorKind::RateLimited || error.retryable;
+    error.retryable = error.retryable || error.kind == SendErrorKind::Transient;
     error
 }
 
