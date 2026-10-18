@@ -2,7 +2,7 @@
 //! observation read from the requests a mock Graph server actually received.
 
 use super::*;
-use crate::channel::{ChannelDelete as _, ChannelEdit as _, ChannelStreamingDraft as _};
+use crate::channel::{ChannelEdit as _, ChannelStreamingDraft as _};
 use crate::providers::whatsapp::api::GRAPH_VERSION;
 use crate::providers::whatsapp_shared::fakes::{CollectingSink, MemoryMedia, MemoryVoices, ogg_bytes, png_bytes};
 use hmac::{Hmac, KeyInit, Mac};
