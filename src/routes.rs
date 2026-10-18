@@ -7,8 +7,7 @@ pub use tinychannels_bus::module_routes::{
     ChannelRuntimeCommand, ModelCatalog, ModelCatalogEntry, ProviderDescriptor,
 };
 
-const MODEL_CACHE_FILE: &str = "models_cache.json";
-const MODEL_CACHE_PREVIEW_LIMIT: usize = 10;
+const MODEL_PREVIEW_LIMIT: usize = 10;
 
 #[derive(Debug, Clone)]
 pub struct RouteCommandContext {
@@ -74,17 +73,6 @@ pub fn resolve_provider_alias(name: &str, providers: &[ProviderDescriptor]) -> O
         .map(|provider| provider.name.clone())
 }
 
-pub fn load_cached_model_preview(workspace_dir: &Path, provider_name: &str) -> Vec<String> {
-    let cache_path = workspace_dir.join("state").join(MODEL_CACHE_FILE);
-    let Ok(raw) = std::fs::read_to_string(cache_path) else {
-        return Vec::new();
-    };
-    let Ok(state) = serde_json::from_str::<ModelCatalog>(&raw) else {
-        return Vec::new();
-    };
-
-    model_preview(&state, provider_name)
-}
 
 /// Select the first exact provider match and preserve its first ten model IDs.
 pub fn model_preview(catalog: &ModelCatalog, provider_name: &str) -> Vec<String> {
@@ -96,7 +84,7 @@ pub fn model_preview(catalog: &ModelCatalog, provider_name: &str) -> Vec<String>
             entry
                 .models
                 .iter()
-                .take(MODEL_CACHE_PREVIEW_LIMIT)
+                .take(MODEL_PREVIEW_LIMIT)
                 .cloned()
                 .collect()
         })
@@ -104,8 +92,8 @@ pub fn model_preview(catalog: &ModelCatalog, provider_name: &str) -> Vec<String>
 }
 
 pub fn build_models_help_response(current: &ChannelRouteSelection, workspace_dir: &Path) -> String {
-    let models = load_cached_model_preview(workspace_dir, &current.provider);
-    models_help_from_preview(current, &models)
+    let _ = workspace_dir;
+    models_help_from_preview(current, &[])
 }
 
 /// Format model help from a host-resolved catalog without reading storage.
@@ -134,7 +122,7 @@ fn models_help_from_preview(current: &ChannelRouteSelection, cached_models: &[St
     } else {
         let _ = writeln!(
             response,
-            "\nCached model IDs (top {}):",
+            "\nAvailable model IDs (top {}):",
             cached_models.len()
         );
         for model in cached_models {
