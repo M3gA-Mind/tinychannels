@@ -619,6 +619,23 @@ impl WhatsAppWebChannel {
         Ok(client)
     }
 
+    /// The state the bot's event handler shares with this channel.
+    fn inbound_state(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> InboundState {
+        InboundState {
+            tx,
+            allowed_numbers: self.allowed_numbers.clone(),
+            connected: Arc::clone(&self.connected),
+            allowed_groups: Arc::clone(&self.allowed_groups),
+            events: self.events.clone(),
+            media_repository: self.media_repository.clone(),
+            voice_media_store: self.voice_media_store.clone(),
+            client: Arc::clone(&self.client),
+            seen: Arc::clone(&self.seen),
+            authors: Arc::clone(&self.authors),
+            identity: Arc::clone(&self.identity),
+        }
+    }
+
     /// Body of [`Channel::listen`] over an injected network stack: the
     /// transport the bot connects through and the HTTP client it fetches the
     /// app version with. Production passes the WebSocket transport and the
@@ -646,19 +663,7 @@ impl WhatsAppWebChannel {
 
         let backend = self.session_backend().await;
 
-        let state = InboundState {
-            tx,
-            allowed_numbers: self.allowed_numbers.clone(),
-            connected: Arc::clone(&self.connected),
-            allowed_groups: Arc::clone(&self.allowed_groups),
-            events: self.events.clone(),
-            media_repository: self.media_repository.clone(),
-            voice_media_store: self.voice_media_store.clone(),
-            client: Arc::clone(&self.client),
-            seen: Arc::clone(&self.seen),
-            authors: Arc::clone(&self.authors),
-            identity: Arc::clone(&self.identity),
-        };
+        let state = self.inbound_state(tx);
 
         let mut builder = Bot::builder()
             .with_backend_arc(backend)
