@@ -148,7 +148,6 @@ impl WhatsAppChannel {
         &self.verify_token
     }
 
-    /// Parse an incoming webhook payload from Meta and extract messages
     /// The profile name of the contact `wa_id` in a webhook `value`
     /// (`contacts[].profile.name`, the name the sender set for themselves).
     fn contact_name(value: &serde_json::Value, wa_id: &str) -> Option<String> {
@@ -165,6 +164,11 @@ impl WhatsAppChannel {
             .map(str::to_string)
     }
 
+    /// Parse an incoming webhook payload into text-only legacy messages.
+    ///
+    /// This is the v21 text projection and does not authenticate anything.
+    /// Production ingress is [`Channel::deliver_webhook`], which verifies the
+    /// signature, binds the destination and carries every content kind.
     pub fn parse_webhook_payload(&self, payload: &serde_json::Value) -> Vec<ChannelMessage> {
         let mut messages = Vec::new();
 
@@ -259,10 +263,34 @@ impl WhatsAppChannel {
     }
 }
 
+/// The failure class of an error produced by the Cloud adapter.
+fn failure_of(error: &anyhow::Error) -> WaFailure {
+    error
+        .downcast_ref::<WaFailure>()
+        .cloned()
+        .unwrap_or_else(|| WaFailure::uncertain("WhatsApp operation outcome is uncertain"))
+}
+
+fn unsupported(message: &str) -> crate::channel::ChannelSendError {
+    WaFailure::unsupported(message).into_send_error()
+}
+
 #[async_trait]
 impl Channel for WhatsAppChannel {
     fn name(&self) -> &str {
         "whatsapp"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        capabilities(&CapabilitySpec {
+            media: self.media_repository.is_some(),
+            voice_store: self.voice_media_store.is_some(),
+            voice_synthesis: self.voice_synthesis && self.voice_media_store.is_some(),
+            native_waveform: false,
+            edit_delete: false,
+            limits: Self::media_limits(),
+            text_limit: outbound::TEXT_LIMIT as u64,
+        })
     }
 
     fn supports_remote_control(&self) -> bool {
@@ -273,80 +301,277 @@ impl Channel for WhatsAppChannel {
         true
     }
 
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        // WhatsApp Cloud API: POST to /v18.0/{phone_number_id}/messages
-        let url = format!(
-            "https://graph.facebook.com/v18.0/{}/messages",
-            self.endpoint_id
-        );
-
-        // Normalize recipient (remove leading + if present for API)
-        let to = message
-            .recipient
-            .strip_prefix('+')
-            .unwrap_or(&message.recipient);
-
-        let body = serde_json::json!({
-            "messaging_product": "whatsapp",
-            "recipient_type": "individual",
-            "to": to,
-            "type": "text",
-            "text": {
-                "preview_url": false,
-                "body": message.content
-            }
-        });
-
-        ensure_https(&url)?;
-
-        let resp = self
-            .http_client()
-            .post(&url)
-            .bearer_auth(&self.access_token)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let error_body = resp.text().await.unwrap_or_default();
-            tracing::error!("WhatsApp send failed: {status} - {error_body}");
-            anyhow::bail!("WhatsApp API error: {status}");
-        }
-
-        Ok(())
+    fn supports_reactions(&self) -> bool {
+        true
     }
 
-    async fn listen(&self, _tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        // WhatsApp uses webhooks (push-based), not polling.
-        // This method keeps the channel "alive" but doesn't actively poll.
-        tracing::info!(
-            "WhatsApp channel active (webhook mode). \
-            Configure Meta to POST webhook events to your deployed HTTPS webhook URL."
-        );
+    fn supports_reply_to_id(&self) -> bool {
+        true
+    }
 
-        // Keep the task alive. It will be cancelled when the channel shuts down.
+    fn history_key_ignores_thread(&self) -> bool {
+        true
+    }
+
+    #[allow(
+        deprecated,
+        reason = "the v21 text send is kept as a projection of the typed send"
+    )]
+    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+        let typed = tinychannels_bus::ChannelOutboundMessage::from_legacy_message("whatsapp", message);
+        self.send_v2(&typed)
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::new)
+    }
+
+    async fn send_typed(&self, message: &tinychannels_bus::ChannelOutboundMessage) -> anyhow::Result<()> {
+        self.send_v2(message).await.map(|_| ()).map_err(anyhow::Error::new)
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
+        self.send_v2(message).await.map_err(anyhow::Error::new)
+    }
+
+    #[allow(
+        deprecated,
+        reason = "the listener seam is how a legacy host receives webhook ingress"
+    )]
+    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        // Inbound traffic is pushed by Meta to `deliver_webhook`; the listener
+        // only keeps the legacy sink so a host without typed ingress still
+        // receives it, then parks until the channel is cancelled.
+        *self.listener.lock() = Some(tx);
+        tracing::info!(
+            "[whatsapp] cloud channel active (webhook mode); authenticated deliveries are \
+            ingested through the module"
+        );
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
         }
     }
 
     async fn health_check(&self) -> bool {
-        // Check if we can reach the WhatsApp API
-        let url = format!("https://graph.facebook.com/v18.0/{}", self.endpoint_id);
-
-        if ensure_https(&url).is_err() {
+        let url = self.graph_url(&self.endpoint_id);
+        if api::ensure_secure(&url).is_err() {
             return false;
         }
-
         self.http_client()
             .get(&url)
             .bearer_auth(&self.access_token)
             .send()
             .await
-            .map(|r| r.status().is_success())
+            .map(|response| response.status().is_success())
             .unwrap_or(false)
+    }
+
+    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
+        let digits = outbound::recipient_digits(recipient)?;
+        // The Cloud API shows "typing" only against an inbound message.
+        let anchor = self.anchors.lock().latest(&format!("+{digits}"));
+        let Some(anchor) = anchor else {
+            return Err(anyhow::Error::new(WaFailure::rejected(
+                "WhatsApp typing needs a recent inbound message from this contact",
+            )));
+        };
+        self.post_messages(&outbound::read_body(&anchor, true))
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::new)
+    }
+
+    async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
+        // WhatsApp clears the indicator when a reply arrives or after 25 seconds.
+        Ok(())
+    }
+
+    async fn send_reaction(
+        &self,
+        conversation: &tinychannels_bus::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::ChannelReaction,
+        remove: bool,
+    ) -> anyhow::Result<()> {
+        if reaction.custom_emoji_id.is_some() {
+            return Err(anyhow::Error::new(WaFailure::unsupported(
+                "WhatsApp reactions are plain emoji",
+            )));
+        }
+        let to = outbound::recipient_digits(&conversation.id)?;
+        let emoji = if remove { "" } else { reaction.value.as_str() };
+        if !remove && emoji.trim().is_empty() {
+            return Err(anyhow::Error::new(WaFailure::rejected(
+                "WhatsApp reaction needs an emoji",
+            )));
+        }
+        self.post_messages(&outbound::reaction_body(&to, provider_message_id, emoji))
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::new)
+    }
+
+    async fn mark_read(
+        &self,
+        _conversation: &tinychannels_bus::ConversationRef,
+        provider_message_id: &str,
+    ) -> anyhow::Result<()> {
+        if provider_message_id.trim().is_empty() {
+            return Err(anyhow::Error::new(WaFailure::rejected(
+                "WhatsApp read receipt needs a message id",
+            )));
+        }
+        self.post_messages(&outbound::read_body(provider_message_id, false))
+            .await
+            .map(|_| ())
+            .map_err(anyhow::Error::new)
+    }
+
+    async fn deliver_webhook(
+        &self,
+        signature: Option<&str>,
+        body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        self.ingest_webhook(signature, body)
+            .await
+            .map_err(anyhow::Error::new)
+    }
+
+    fn verify_webhook(&self, mode: &str, verify_token: &str, challenge: &str) -> Option<String> {
+        self.verify_challenge(mode, verify_token, challenge)
+    }
+}
+
+#[async_trait]
+impl crate::channel::ChannelAdapter for WhatsAppChannel {
+    fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
+        tinychannels_bus::channel::ChannelDescriptor {
+            id: "whatsapp".into(),
+            display_name: "WhatsApp".into(),
+            metadata: std::collections::BTreeMap::from([
+                ("adapterMode".into(), "native-v2".into()),
+                ("backend".into(), "cloud".into()),
+            ]),
+            ..Default::default()
+        }
+    }
+
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        Channel::capabilities(self)
+    }
+
+    async fn start(
+        &self,
+        _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        // Webhook ingress is owned by the module runtime, which forwards each
+        // authenticated delivery to `deliver_webhook`.
+        Ok(())
+    }
+
+    async fn stop(&self) -> Result<(), crate::channel::ChannelSendError> {
+        Ok(())
+    }
+
+    async fn send(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
+        let message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+        self.send_v2(&message).await.map_err(WaFailure::into_send_error)
+    }
+
+    async fn status(
+        &self,
+    ) -> Result<tinychannels_runtime::controllers::ChannelAccountSnapshot, crate::channel::ChannelSendError>
+    {
+        Ok(tinychannels_bus::controllers::ChannelAccountSnapshot {
+            channel_id: "whatsapp".into(),
+            states: vec![
+                tinychannels_bus::controllers::ChannelAccountState::Configured,
+                tinychannels_bus::controllers::ChannelAccountState::Enabled,
+            ],
+            health_state: Some("unknown".into()),
+            ..Default::default()
+        })
+    }
+}
+
+#[async_trait]
+impl crate::channel::ChannelTypedSend for WhatsAppChannel {
+    async fn send_typed(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<crate::channel::ChannelSendOutcome, crate::channel::ChannelSendError> {
+        self.send_v2(message).await.map_err(WaFailure::into_send_error)
+    }
+}
+
+#[async_trait]
+impl crate::channel::ChannelTyping for WhatsAppChannel {
+    async fn start_typing(&self, conversation_id: &str) -> Result<(), crate::channel::ChannelSendError> {
+        Channel::start_typing(self, conversation_id)
+            .await
+            .map_err(|error| failure_of(&error).into_send_error())
+    }
+
+    async fn stop_typing(&self, conversation_id: &str) -> Result<(), crate::channel::ChannelSendError> {
+        Channel::stop_typing(self, conversation_id)
+            .await
+            .map_err(|error| failure_of(&error).into_send_error())
+    }
+}
+
+#[async_trait]
+impl crate::channel::ChannelReaction for WhatsAppChannel {
+    async fn send_reaction(
+        &self,
+        channel: &tinychannels_bus::channel::ChannelRef,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        if channel.id != "whatsapp" {
+            return Err(WaFailure::rejected("reaction channel does not match WhatsApp").into_send_error());
+        }
+        Channel::send_reaction(self, conversation, provider_message_id, reaction, remove)
+            .await
+            .map_err(|error| failure_of(&error).into_send_error())
+    }
+}
+
+#[async_trait]
+impl crate::channel::ChannelEdit for WhatsAppChannel {
+    async fn edit(
+        &self,
+        _receipt: &tinychannels_bus::channel::MessageReceipt,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError> {
+        Err(unsupported("the WhatsApp Cloud API cannot edit a sent message"))
+    }
+}
+
+#[async_trait]
+impl crate::channel::ChannelDelete for WhatsAppChannel {
+    async fn delete(
+        &self,
+        _receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        Err(unsupported("the WhatsApp Cloud API cannot unsend a message"))
+    }
+}
+
+#[async_trait]
+impl crate::channel::ChannelStreamingDraft for WhatsAppChannel {
+    async fn upsert_draft(
+        &self,
+        _previous: Option<&tinychannels_bus::channel::MessageReceipt>,
+        _intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<tinychannels_bus::channel::MessageReceipt, crate::channel::ChannelSendError> {
+        Err(unsupported("WhatsApp messages cannot be streamed as edited drafts"))
     }
 }
 
