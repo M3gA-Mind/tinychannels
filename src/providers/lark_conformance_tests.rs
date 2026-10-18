@@ -1,14 +1,13 @@
 //! Runs the shared channel conformance matrix against a host-aware Lark adapter.
 
 use super::api_tests::{FixtureVoiceCodec, fixture_client, is_token_request, token_ok};
-use super::*;
 use crate::channel::{
     ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
     ChannelTyping,
 };
 use crate::factory::{HttpClientFactory, build_long_tail_channel_with_host};
 use crate::host::ChannelHostBuilder;
-use crate::providers::http_test_support::{HttpsServer, Request};
+use crate::providers::http_test_support::HttpsServer;
 use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
 use async_trait::async_trait;
 use base64::Engine as _;
