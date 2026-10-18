@@ -173,6 +173,8 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         "tinychannels-module",
     )
     .unwrap();
+    assert_eq!(info.version, env!("CARGO_PKG_VERSION"));
+    assert_eq!(tinychannels_bus::CONTRACT_VERSION, 27);
     let interface = info
         .manifest
         .provides
