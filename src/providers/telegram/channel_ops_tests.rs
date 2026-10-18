@@ -3952,3 +3952,98 @@ async fn native_typing_transport_error_preserves_attempt_uncertainty() {
     assert!(error.sent_before_error);
     assert_eq!(json_bodies(&server, "sendChatAction").await.len(), 1);
 }
+
+#[test]
+fn typed_error_mapping_distinguishes_preflight_partial_and_ambiguous_failures() {
+    use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
+
+    let preflight = typed_send_error(anyhow::Error::new(TelegramPreDispatchError));
+    assert_eq!(preflight.kind, SendErrorKind::Forbidden);
+    assert!(!preflight.retryable);
+    assert!(!preflight.sent_before_error);
+
+    let unsupported = typed_send_error(anyhow::Error::new(TelegramUnsupportedError));
+    assert_eq!(unsupported.kind, SendErrorKind::BadFormat);
+    assert!(unsupported.unsupported);
+    assert!(!unsupported.sent_before_error);
+
+    let partial = ChannelSendError {
+        kind: SendErrorKind::RateLimited,
+        message: "partial delivery".into(),
+        retryable: true,
+        sent_before_error: true,
+        ..Default::default()
+    };
+    let mapped_partial = typed_send_error(anyhow::Error::new(
+        super::channel_send::PartialTextSendError {
+            message_ids: vec!["17".into()],
+            sent_before_error: true,
+            error: partial.clone(),
+        },
+    ));
+    assert_eq!(mapped_partial, partial);
+
+    let uncertain = typed_send_error(anyhow::anyhow!("transport disconnected"));
+    assert_eq!(uncertain.kind, SendErrorKind::Unknown);
+    assert!(!uncertain.retryable);
+    assert!(uncertain.sent_before_error);
+    assert!(!uncertain.message.contains("disconnected"));
+
+    let interaction_preflight = typed_interaction_error(
+        anyhow::Error::new(TelegramPreDispatchError),
+        "edit",
+    );
+    assert_eq!(interaction_preflight.kind, SendErrorKind::Forbidden);
+    assert!(!interaction_preflight.sent_before_error);
+    let interaction_uncertain =
+        typed_interaction_error(anyhow::anyhow!("token-bearing URL"), "delete");
+    assert_eq!(interaction_uncertain.kind, SendErrorKind::Unknown);
+    assert!(interaction_uncertain.sent_before_error);
+    assert!(!interaction_uncertain.message.contains("token-bearing"));
+}
+
+#[test]
+fn presentation_blocks_and_vcards_keep_only_supported_safe_content() {
+    let presentation = serde_json::json!([
+        {"type":"heading", "text":"Status"},
+        [{"type":"quote", "text":"Ready"}]
+    ]);
+    assert_eq!(
+        presentation_content(&presentation).unwrap(),
+        ("Status\nReady".into(), None)
+    );
+
+    let approval = serde_json::json!({
+        "kind":"approval", "id":"request-7", "prompt":"Run this?", "choices":["Allow", "Deny"]
+    });
+    let (prompt, markup) = presentation_content(&approval).unwrap();
+    assert_eq!(prompt, "Run this?");
+    assert_eq!(
+        markup.unwrap()["inline_keyboard"][1][0]["callback_data"],
+        "approval-v1:request-7:1"
+    );
+
+    for invalid in [
+        serde_json::json!({"title":"x", "action":"shell"}),
+        serde_json::json!({"type":"button", "text":"Run"}),
+        serde_json::json!({"type":7, "text":"Run"}),
+        serde_json::json!({"type":"text", "text":{"value":"Run"}}),
+        serde_json::json!(["   ", null]),
+        serde_json::json!({"kind":"approval", "id":"r", "prompt":" ", "choices":["Allow"]}),
+        serde_json::json!({"kind":"approval", "id":"r", "prompt":"Run?", "choices":[]}),
+        serde_json::json!({"kind":"approval", "id":"r", "prompt":"Run?", "choices":[""]}),
+        serde_json::json!({"kind":"approval", "id":"r", "prompt":"Run?", "choices":["Allow"], "extra":true}),
+    ] {
+        assert!(presentation_content(&invalid).is_err(), "accepted {invalid}");
+    }
+
+    assert_eq!(safe_vcard_type(Some(" cell "), "VOICE"), "cell");
+    assert_eq!(safe_vcard_type(Some("internet"), "VOICE"), "internet");
+    assert_eq!(safe_vcard_type(Some("CELL\nitem1.TEL"), "VOICE"), "VOICE");
+    assert_eq!(safe_vcard_type(None, "VOICE"), "VOICE");
+    assert_eq!(vcard_escape("a\\b;c,d\ne\r"), "a\\\\b\\;c\\,d\\ne");
+    assert!(response_status_ok(&serde_json::json!({"ok": true})));
+    for invalid in [serde_json::json!({}), serde_json::json!({"ok": false}), serde_json::json!({"ok": 1})] {
+        assert!(!response_status_ok(&invalid));
+    }
+}
