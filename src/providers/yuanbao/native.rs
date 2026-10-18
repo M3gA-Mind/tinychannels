@@ -76,7 +76,7 @@ impl NativeProvider for YuanbaoChannel {
             Step::File(file) => {
                 let body = self
                     .outbound
-                    .prepare_media_body(
+                    .prepare_media_body_with_caption(
                         &file.bytes,
                         &file.name,
                         &file.mime,
@@ -85,6 +85,7 @@ impl NativeProvider for YuanbaoChannel {
                         &self.config.token,
                         &self.config.api_domain,
                         &self.config.route_env,
+                        file.caption.as_deref(),
                     )
                     .await
                     .map_err(|_| upload_not_delivered())?;
@@ -110,7 +111,12 @@ impl NativeProvider for YuanbaoChannel {
         } else {
             crate::traits::Channel::stop_typing(self, conversation).await
         };
-        result.map_err(|_| uncertain("typing"))
+        result.map_err(|_| ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Transient,
+            message: "Yuanbao typing indicator failed".into(),
+            retryable: true,
+            ..Default::default()
+        })
     }
 
     async fn react(
