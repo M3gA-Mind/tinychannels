@@ -1263,6 +1263,33 @@ async fn ingress_fixture() -> (
     (HostChannels::new(client), callback, server, storage)
 }
 
+#[derive(Clone, Default)]
+struct RecordingDiscordVoiceStore(
+    Arc<Mutex<Vec<tinychannels_bus::HostVoiceScope>>>,
+);
+
+#[async_trait::async_trait]
+impl tinychannels::host::VoiceMediaStore for RecordingDiscordVoiceStore {
+    async fn store_voice(
+        &self,
+        request: tinychannels::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        self.0.lock().await.push(request.scope);
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some("discord-module-voice".into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                content_type: Some(request.mime_type),
+                file_name: request.file_name,
+                duration_ms: request.duration_ms,
+                codec: request.codec,
+                ..Default::default()
+            },
+            accessible_url: None,
+        })
+    }
+}
+
 fn inbound_voice(transcript: Option<tinychannels_bus::VoiceTranscript>) -> ChannelInboundEnvelope {
     ChannelInboundEnvelope {
         channel: tinychannels_bus::ChannelRef {
@@ -4305,7 +4332,8 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
     *callbacks.transcription_result.lock().await = Some("recognized words".into());
     let hooks = Arc::new(Hooks::default());
     let instance = "discord:account-a".to_owned();
-    let provider_host = hooks.host(host.clone(), instance.clone(), None);
+    let voice_scopes = RecordingDiscordVoiceStore::default();
+    let provider_host = hooks.host(host.clone(), instance.clone(), Some("discord:media-v1:test"));
     let rest_url = rest.uri();
     let gateway_ready = tokio::spawn(async move {
         let (socket, _) = websocket.accept().await.unwrap();
@@ -4385,7 +4413,7 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         .with_api_base(rest.uri())
         .with_events(provider_host.events().unwrap())
         .with_media_repository(provider_host.media_repository().unwrap())
-        .with_voice_media_store(provider_host.voice_media_store().unwrap())
+        .with_voice_media_store(Arc::new(voice_scopes.clone()))
         .with_transcriber(provider_host.transcriber().unwrap()),
     );
     let running = Running::start_native("Discord", channel, hooks, host, None, false);
@@ -4421,9 +4449,42 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         );
     }
     let voice = callbacks.inbound.lock().await[0].1.clone();
-    assert!(voice.to_string().contains("recognized words"));
+    assert_eq!(voice["parts"][0]["kind"], "voice_note");
+    assert_eq!(voice["parts"][0]["voiceNote"]["media"]["opaqueId"], "discord-module-voice");
+    assert_eq!(voice["parts"][0]["voiceNote"]["codec"], "ogg_opus");
+    assert_eq!(voice["parts"][0]["voiceNote"]["durationMs"], 200);
+    assert_eq!(
+        voice["parts"][0]["voiceNote"]["transcript"]["text"],
+        "recognized words"
+    );
+    let voice_scope = voice_scopes.0.lock().await[0].clone();
+    assert_eq!(voice_scope.configured_instance, "discord:account-a");
+    assert_eq!(voice_scope.conversation.id, THREAD);
+    assert_eq!(voice_scope.conversation.scope_id.as_deref(), Some(GUILD));
+    assert_eq!(voice_scope.conversation.parent_id.as_deref(), Some(CHANNEL));
+    assert_eq!(voice_scope.conversation.thread_id.as_deref(), Some(THREAD));
+    let stt_scope = callbacks.stt_requests.lock().await[0].scope.clone();
+    assert_eq!(stt_scope.configured_instance, "discord:account-a");
+    assert_eq!(stt_scope.conversation, voice_scope.conversation);
+    assert_eq!(stt_scope.turn_id, "discord_1111111111111111111");
     let reaction = callbacks.events.lock().await[0].clone();
     assert_eq!(reaction.channel.account_id.as_deref(), Some("discord:account-a"));
+    assert_eq!(reaction.conversation.as_ref().unwrap().id, THREAD);
+    assert_eq!(reaction.conversation.as_ref().unwrap().scope_id.as_deref(), Some(GUILD));
+    match reaction.event {
+        tinychannels_bus::ChannelEventKind::ReactionAdded {
+            message_id,
+            provider_message_id,
+            actor,
+            reaction,
+        } => {
+            assert_eq!(message_id, "discord_88");
+            assert_eq!(provider_message_id.as_deref(), Some("88"));
+            assert_eq!(actor.id, "42");
+            assert_eq!(reaction.value, "🔥");
+        }
+        other => panic!("expected inbound Discord reaction, got {other:?}"),
+    }
 
     let channel_ref = tinychannels_bus::ChannelRef {
         id: "discord".into(),
