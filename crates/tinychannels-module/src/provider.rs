@@ -233,12 +233,84 @@ impl std::fmt::Display for RunningSendError {
     }
 }
 
+/// The stable account authority durable media is scoped by.
+///
+/// Most providers have it from configuration alone, so it is fixed when they
+/// start. A provider that only learns it from its authenticated session (a
+/// linked WhatsApp Web device) binds itself as the source and the scope is
+/// read from it on every use: unknown until linking, withdrawn for good if the
+/// session later reports another account, never taken from a mutable label.
+#[derive(Clone, Default)]
+pub(crate) struct MediaScope(Arc<MediaScopeInner>);
+
+#[derive(Default)]
+struct MediaScopeInner {
+    fixed: Option<String>,
+    source: std::sync::OnceLock<Arc<dyn Channel>>,
+}
+
+impl From<Option<String>> for MediaScope {
+    fn from(scope: Option<String>) -> Self {
+        Self::fixed(scope)
+    }
+}
+
+impl std::fmt::Debug for MediaScope {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The scope names an account authority; never print it.
+        formatter.write_str("MediaScope(..)")
+    }
+}
+
+impl MediaScope {
+    pub(crate) fn fixed(scope: Option<String>) -> Self {
+        Self(Arc::new(MediaScopeInner {
+            fixed: scope,
+            source: std::sync::OnceLock::new(),
+        }))
+    }
+
+    /// Resolve the scope from `channel`'s authenticated identity from now on.
+    pub(crate) fn bind_source(&self, channel: Arc<dyn Channel>) {
+        let _ = self.0.source.set(channel);
+    }
+
+    /// The scope now, if the account is known.
+    pub(crate) fn current(&self) -> Option<String> {
+        if let Some(fixed) = &self.0.fixed {
+            return Some(fixed.clone());
+        }
+        let channel = self.0.source.get()?;
+        let identity = channel.media_account_identity()?;
+        media_scope_digest(
+            tinychannels_bus::provider_id(channel.name()),
+            &["linked-session".to_owned(), identity],
+        )
+    }
+}
+
+fn media_scope_digest(provider: &str, identity: &[String]) -> Option<String> {
+    use sha2::{Digest, Sha256};
+    let mut digest = Sha256::new();
+    digest.update(b"tinychannels-media-account-v1\0");
+    digest.update((provider.len() as u64).to_le_bytes());
+    digest.update(provider.as_bytes());
+    for part in identity {
+        digest.update((part.len() as u64).to_le_bytes());
+        digest.update(part.as_bytes());
+    }
+    Some(format!(
+        "{provider}:media-v1:{}",
+        hex::encode(digest.finalize())
+    ))
+}
+
 /// Native hooks registered while the selected provider starts.
 #[derive(Default)]
 pub(crate) struct Hooks {
     hooks: StdMutex<Vec<ShutdownHook>>,
     configured_instance: StdMutex<Option<String>>,
-    media_account_scope: StdMutex<Option<String>>,
+    media_account_scope: StdMutex<MediaScope>,
 }
 impl LifecycleRegistry for Hooks {
     fn register_shutdown(&self, _name: &str, hook: ShutdownHook) {
@@ -253,8 +325,9 @@ impl Hooks {
         self: &Arc<Self>,
         callbacks: HostChannels,
         configured_instance: String,
-        media_account_scope: Option<String>,
+        media_account_scope: impl Into<MediaScope>,
     ) -> Arc<dyn tinychannels::host::ChannelHost> {
+        let media_account_scope = media_account_scope.into();
         *self
             .configured_instance
             .lock()
@@ -551,26 +624,14 @@ pub(crate) fn configured_media_account_scope(
         // Do not silently turn a provider name into cross-runtime authority.
         _ => return None,
     };
-    use sha2::{Digest, Sha256};
-    let mut digest = Sha256::new();
-    digest.update(b"tinychannels-media-account-v1\0");
-    digest.update((provider.len() as u64).to_le_bytes());
-    digest.update(provider.as_bytes());
-    for part in identity {
-        digest.update((part.len() as u64).to_le_bytes());
-        digest.update(part.as_bytes());
-    }
-    Some(format!(
-        "{provider}:media-v1:{}",
-        hex::encode(digest.finalize())
-    ))
+    media_scope_digest(provider, &identity)
 }
 
 #[derive(Clone)]
 pub(crate) struct ModuleMediaRepository(
     pub(crate) HostChannels,
     pub(crate) String,
-    pub(crate) Option<String>,
+    pub(crate) MediaScope,
 );
 
 fn bind_configured_media_scope(
@@ -596,7 +657,7 @@ fn bind_configured_voice_callback_scope(
 
 impl ModuleMediaRepository {
     fn bind_scope(&self, scope: &mut tinychannels::host::MediaScope) -> anyhow::Result<()> {
-        bind_configured_media_scope(scope, &self.1, self.2.as_deref())
+        bind_configured_media_scope(scope, &self.1, self.2.current().as_deref())
     }
 
     async fn scoped_store(&self) -> anyhow::Result<tinychannels::host::ScopedMediaStore> {
@@ -762,7 +823,7 @@ impl tinychannels::host::SpeechSynthesizer for ModuleSynthesizer {
 pub(crate) struct ModuleVoiceMediaStore(
     pub(crate) HostChannels,
     pub(crate) String,
-    pub(crate) Option<String>,
+    pub(crate) MediaScope,
 );
 
 #[async_trait::async_trait]
@@ -775,7 +836,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         let mut projection_scope = request.scope;
         bind_configured_voice_callback_scope(&mut projection_scope, &self.1);
         let mut storage_scope = projection_scope.clone();
-        bind_configured_media_scope(&mut storage_scope, &self.1, self.2.as_deref())?;
+        bind_configured_media_scope(&mut storage_scope, &self.1, self.2.current().as_deref())?;
         use base64::Engine;
         let audio = base64::engine::general_purpose::STANDARD
             .decode(request.audio_base64.as_bytes())
@@ -858,7 +919,7 @@ impl tinychannels::host::VoiceMediaStore for ModuleVoiceMediaStore {
         bind_configured_voice_callback_scope(&mut scope, &self.1);
         if opaque_id.starts_with("tinychannels_media_v1_") {
             let mut storage_scope = scope;
-            bind_configured_media_scope(&mut storage_scope, &self.1, self.2.as_deref())?;
+            bind_configured_media_scope(&mut storage_scope, &self.1, self.2.current().as_deref())?;
             return read_scoped_voice_media(&self.0, storage_scope, opaque_id, 8 * 1024 * 1024)
                 .await;
         }
@@ -908,7 +969,7 @@ async fn read_scoped_voice_media(
 pub(crate) struct ModuleEvents(
     pub(crate) HostChannels,
     pub(crate) String,
-    pub(crate) Option<String>,
+    pub(crate) MediaScope,
 );
 
 #[async_trait::async_trait]
@@ -990,7 +1051,7 @@ impl tinychannels::host::EventSink for ModuleEvents {
                             bind_configured_media_scope(
                                 &mut storage_scope,
                                 &self.1,
-                                self.2.as_deref(),
+                                self.2.current().as_deref(),
                             )?;
                         }
                         match read_scoped_voice_media(
@@ -1085,6 +1146,8 @@ async fn listen_with_supervision(
 /// A resource is retained until its owning task acknowledges cleanup.
 #[derive(Clone)]
 struct NativePorts {
+    /// Display name used in operation errors ("Telegram", "Slack").
+    provider: &'static str,
     adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
     typed_send: Arc<dyn tinychannels::channel::ChannelTypedSend>,
     typing: Arc<dyn tinychannels::channel::ChannelTyping>,
@@ -1095,8 +1158,19 @@ struct NativePorts {
 }
 
 impl NativePorts {
-    fn telegram(channel: Arc<tinychannels::TelegramChannel>) -> Self {
+    fn native<T>(channel: Arc<T>, provider: &'static str) -> Self
+    where
+        T: tinychannels::channel::ChannelAdapter
+            + tinychannels::channel::ChannelTypedSend
+            + tinychannels::channel::ChannelTyping
+            + tinychannels::channel::ChannelReaction
+            + tinychannels::channel::ChannelEdit
+            + tinychannels::channel::ChannelDelete
+            + tinychannels::channel::ChannelStreamingDraft
+            + 'static,
+    {
         Self {
+            provider,
             adapter: channel.clone(),
             typed_send: channel.clone(),
             typing: channel.clone(),
@@ -1106,12 +1180,20 @@ impl NativePorts {
             drafts: channel,
         }
     }
+
+    fn telegram(channel: Arc<tinychannels::TelegramChannel>) -> Self {
+        Self::native(channel, "Telegram")
+    }
+
+    fn slack(channel: Arc<tinychannels::SlackChannel>) -> Self {
+        Self::native(channel, "Slack")
+    }
 }
 
 pub(crate) struct Running {
     pub(crate) channel: Arc<dyn Channel>,
     native_ports: Option<NativePorts>,
-    pub(crate) media_account_scope: Option<String>,
+    pub(crate) media_account_scope: MediaScope,
     configured_instance: String,
     send: mpsc::Sender<SendCommand>,
     cancel: watch::Sender<bool>,
@@ -1124,6 +1206,8 @@ pub(crate) struct Running {
 pub(crate) enum AdapterMode {
     LegacyBacked,
     TelegramNativeV2,
+    SlackNativeV2,
+    WhatsAppNativeV2,
 }
 
 pub(crate) struct ConfiguredAdapterHandle {
@@ -1132,7 +1216,7 @@ pub(crate) struct ConfiguredAdapterHandle {
     pub(crate) mode: AdapterMode,
     adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
     #[cfg(test)]
-    telegram_native: Option<Arc<TelegramNativeAdapter>>,
+    native: Option<Arc<NativeAdapter>>,
 }
 
 impl ConfiguredAdapterHandle {
@@ -1169,21 +1253,21 @@ impl ConfiguredAdapterHandle {
 
     #[cfg(test)]
     pub(crate) fn reactions(&self) -> Option<&dyn tinychannels::channel::ChannelReaction> {
-        self.telegram_native
+        self.native
             .as_deref()
             .map(|adapter| adapter as &dyn tinychannels::channel::ChannelReaction)
     }
 
     #[cfg(test)]
     pub(crate) fn edits(&self) -> Option<&dyn tinychannels::channel::ChannelEdit> {
-        self.telegram_native
+        self.native
             .as_deref()
             .map(|adapter| adapter as &dyn tinychannels::channel::ChannelEdit)
     }
 
     #[cfg(test)]
     pub(crate) fn deletes(&self) -> Option<&dyn tinychannels::channel::ChannelDelete> {
-        self.telegram_native
+        self.native
             .as_deref()
             .map(|adapter| adapter as &dyn tinychannels::channel::ChannelDelete)
     }
@@ -1191,17 +1275,29 @@ impl ConfiguredAdapterHandle {
 
 pub(crate) struct ConfiguredAdapterFactory;
 
-/// Configured Telegram v2 surface. The provider's native typed sender remains
+/// Configured native v2 surface (Telegram, Slack). The provider's native typed sender remains
 /// the implementation authority; this adapter submits every operation to the
 /// running provider's single ordered operation queue.
-struct TelegramNativeAdapter {
+struct NativeAdapter {
     running: Arc<Running>,
 }
 
-fn adapter_operation_error(error: RunningSendError) -> tinychannels::channel::ChannelSendError {
+impl NativeAdapter {
+    fn provider(&self) -> &'static str {
+        self.running
+            .native_ports
+            .as_ref()
+            .map_or("Provider", |ports| ports.provider)
+    }
+}
+
+fn adapter_operation_error(
+    provider: &str,
+    error: RunningSendError,
+) -> tinychannels::channel::ChannelSendError {
     tinychannels::channel::ChannelSendError {
         kind: tinychannels::channel::SendErrorKind::Unknown,
-        message: "Telegram operation failed".into(),
+        message: format!("{provider} operation failed"),
         retryable: matches!(error, RunningSendError::NotDispatched(_)),
         sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
         ..Default::default()
@@ -1209,13 +1305,13 @@ fn adapter_operation_error(error: RunningSendError) -> tinychannels::channel::Ch
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelAdapter for NativeAdapter {
     fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
         let mut descriptor = self
             .running
             .native_ports
             .as_ref()
-            .expect("Telegram native ports")
+            .expect("native ports")
             .adapter
             .descriptor();
         descriptor.account_id = Some(self.running.configured_instance.clone());
@@ -1230,7 +1326,7 @@ impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
         self.running
             .native_ports
             .as_ref()
-            .expect("Telegram native ports")
+            .expect("native ports")
             .adapter
             .declared_capabilities()
     }
@@ -1249,7 +1345,10 @@ impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
         Err(tinychannels::channel::ChannelSendError {
             kind: tinychannels::channel::SendErrorKind::Forbidden,
-            message: "Telegram polling is already owned by the configured module runtime".into(),
+            message: format!(
+                "{} polling is already owned by the configured module runtime",
+                self.provider()
+            ),
             retryable: false,
             ..Default::default()
         })
@@ -1261,7 +1360,7 @@ impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
             .await
             .map_err(|_error| tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Transient,
-                message: "Telegram runtime stop failed".into(),
+                message: format!("{} runtime stop failed", self.provider()),
                 retryable: false,
                 sent_before_error: true,
                 ..Default::default()
@@ -1289,7 +1388,7 @@ impl tinychannels::channel::ChannelAdapter for TelegramNativeAdapter {
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelTyping for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelTyping for NativeAdapter {
     async fn start_typing(
         &self,
         conversation_id: &str,
@@ -1300,7 +1399,7 @@ impl tinychannels::channel::ChannelTyping for TelegramNativeAdapter {
             })
             .await
             .map(|_| ())
-            .map_err(adapter_operation_error)
+            .map_err(|error| adapter_operation_error(self.provider(), error))
     }
 
     async fn stop_typing(
@@ -1313,12 +1412,12 @@ impl tinychannels::channel::ChannelTyping for TelegramNativeAdapter {
             })
             .await
             .map(|_| ())
-            .map_err(adapter_operation_error)
+            .map_err(|error| adapter_operation_error(self.provider(), error))
     }
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelReaction for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelReaction for NativeAdapter {
     async fn send_reaction(
         &self,
         channel: &tinychannels_bus::channel::ChannelRef,
@@ -1337,12 +1436,12 @@ impl tinychannels::channel::ChannelReaction for TelegramNativeAdapter {
             })
             .await
             .map(|_| ())
-            .map_err(adapter_operation_error)
+            .map_err(|error| adapter_operation_error(self.provider(), error))
     }
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelEdit for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelEdit for NativeAdapter {
     async fn edit(
         &self,
         receipt: &tinychannels_bus::channel::MessageReceipt,
@@ -1358,12 +1457,12 @@ impl tinychannels::channel::ChannelEdit for TelegramNativeAdapter {
                 intent,
             })
             .await
-            .map_err(adapter_operation_error)?
+            .map_err(|error| adapter_operation_error(self.provider(), error))?
         {
             tinychannels_bus::ChannelInteractionResult::Sent(outcome) => Ok(outcome.receipt),
             _ => Err(tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Unknown,
-                message: "Telegram edit returned no message receipt".into(),
+                message: format!("{} edit returned no message receipt", self.provider()),
                 retryable: false,
                 ..Default::default()
             }),
@@ -1372,7 +1471,7 @@ impl tinychannels::channel::ChannelEdit for TelegramNativeAdapter {
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelDelete for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelDelete for NativeAdapter {
     async fn delete(
         &self,
         receipt: &tinychannels_bus::channel::MessageReceipt,
@@ -1383,12 +1482,12 @@ impl tinychannels::channel::ChannelDelete for TelegramNativeAdapter {
             })
             .await
             .map(|_| ())
-            .map_err(adapter_operation_error)
+            .map_err(|error| adapter_operation_error(self.provider(), error))
     }
 }
 
 #[async_trait::async_trait]
-impl tinychannels::channel::ChannelStreamingDraft for TelegramNativeAdapter {
+impl tinychannels::channel::ChannelStreamingDraft for NativeAdapter {
     async fn upsert_draft(
         &self,
         previous: Option<&tinychannels_bus::channel::MessageReceipt>,
@@ -1400,7 +1499,7 @@ impl tinychannels::channel::ChannelStreamingDraft for TelegramNativeAdapter {
         self.running
             .upsert_native_draft(previous.cloned(), intent)
             .await
-            .map_err(adapter_operation_error)
+            .map_err(|error| adapter_operation_error(self.provider(), error))
     }
 }
 
@@ -1414,29 +1513,59 @@ impl ConfiguredAdapterFactory {
             mode: AdapterMode::LegacyBacked,
             adapter,
             #[cfg(test)]
-            telegram_native: None,
+            native: None,
         }
     }
 
     pub(crate) fn telegram(running: Arc<Running>) -> ConfiguredAdapterHandle {
+        Self::native(
+            running,
+            #[cfg(test)]
+            AdapterMode::TelegramNativeV2,
+        )
+    }
+
+    pub(crate) fn whatsapp(running: Arc<Running>) -> ConfiguredAdapterHandle {
+        Self::native(
+            running,
+            #[cfg(test)]
+            AdapterMode::WhatsAppNativeV2,
+        )
+    }
+
+    pub(crate) fn slack(running: Arc<Running>) -> ConfiguredAdapterHandle {
+        Self::native(
+            running,
+            #[cfg(test)]
+            AdapterMode::SlackNativeV2,
+        )
+    }
+
+    fn native(running: Arc<Running>, #[cfg(test)] mode: AdapterMode) -> ConfiguredAdapterHandle {
         let configured_instance = running.configured_instance.clone();
-        let native = Arc::new(TelegramNativeAdapter { running });
+        let native = Arc::new(NativeAdapter { running });
         let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = native.clone();
         ConfiguredAdapterHandle {
             configured_instance,
             #[cfg(test)]
-            mode: AdapterMode::TelegramNativeV2,
+            mode,
             adapter,
             #[cfg(test)]
-            telegram_native: Some(native),
+            native: Some(native),
         }
     }
 }
 
 impl Running {
     pub(crate) fn adapter_handle(self: &Arc<Self>) -> ConfiguredAdapterHandle {
-        if self.native_ports.is_some() {
-            ConfiguredAdapterFactory::telegram(self.clone())
+        if let Some(ports) = &self.native_ports {
+            if ports.provider == "Slack" {
+                ConfiguredAdapterFactory::slack(self.clone())
+            } else if ports.provider == "WhatsApp" {
+                ConfiguredAdapterFactory::whatsapp(self.clone())
+            } else {
+                ConfiguredAdapterFactory::telegram(self.clone())
+            }
         } else {
             ConfiguredAdapterFactory::legacy(self.clone())
         }
@@ -1479,6 +1608,55 @@ impl Running {
             supervision,
             outbound_only,
             Some(NativePorts::telegram(channel)),
+        )
+    }
+    /// Start a provider whose concrete object is both the listener and the
+    /// native v2 executor (the WhatsApp Cloud and Web adapters).
+    pub(crate) fn start_native<T>(
+        provider: &'static str,
+        channel: Arc<T>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: Option<ChannelSupervisionPolicy>,
+        outbound_only: bool,
+    ) -> Arc<Self>
+    where
+        T: Channel
+            + tinychannels::channel::ChannelAdapter
+            + tinychannels::channel::ChannelTypedSend
+            + tinychannels::channel::ChannelTyping
+            + tinychannels::channel::ChannelReaction
+            + tinychannels::channel::ChannelEdit
+            + tinychannels::channel::ChannelDelete
+            + tinychannels::channel::ChannelStreamingDraft
+            + 'static,
+    {
+        let channel_dyn: Arc<dyn Channel> = channel.clone();
+        Self::start_inner(
+            channel_dyn,
+            hooks,
+            host,
+            supervision,
+            outbound_only,
+            Some(NativePorts::native(channel, provider)),
+        )
+    }
+
+    pub(crate) fn start_slack(
+        channel: Arc<tinychannels::SlackChannel>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: Option<ChannelSupervisionPolicy>,
+        outbound_only: bool,
+    ) -> Arc<Self> {
+        let channel_dyn: Arc<dyn Channel> = channel.clone();
+        Self::start_inner(
+            channel_dyn,
+            hooks,
+            host,
+            supervision,
+            outbound_only,
+            Some(NativePorts::slack(channel)),
         )
     }
 
@@ -1713,6 +1891,12 @@ impl Running {
             finished,
         })
     }
+    fn native_provider(&self) -> &'static str {
+        self.native_ports
+            .as_ref()
+            .map_or("Provider", |ports| ports.provider)
+    }
+
     pub(crate) fn is_finished(&self) -> bool {
         self.finished.load(Ordering::SeqCst)
     }
@@ -1834,9 +2018,10 @@ impl Running {
                     .iter()
                     .any(|part| part.platform_message_id.trim().is_empty())
             {
-                return Err(RunningSendError::NotDispatched(
-                    "draft receipt scope does not match Telegram intent".into(),
-                ));
+                return Err(RunningSendError::NotDispatched(format!(
+                    "draft receipt scope does not match {} intent",
+                    self.native_provider()
+                )));
             }
         }
         match self
@@ -1910,6 +2095,19 @@ impl Running {
                         .into(),
                 ));
             }
+            tinychannels_bus::ChannelInteraction::MarkRead {
+                channel,
+                conversation,
+                provider_message_id,
+            } if channel != &expected_channel
+                || conversation.id.trim().is_empty()
+                || provider_message_id.trim().is_empty() =>
+            {
+                return Err(RunningSendError::NotDispatched(
+                    "provider read receipt scope is incomplete or does not match configured account"
+                        .into(),
+                ));
+            }
             tinychannels_bus::ChannelInteraction::EditMessage { receipt, intent }
                 if !valid_receipt(receipt)
                     || self.validate_adapter_intent(intent).is_err()
@@ -1930,6 +2128,16 @@ impl Running {
         }
         self.submit(ProviderOperation::Interaction(interaction))
             .await
+    }
+
+    /// Run a webhook interaction directly on the provider. Ingesting a
+    /// delivery can download media for seconds; it must not hold up the
+    /// ordered send queue, and its ordering against sends does not matter.
+    pub(crate) async fn webhook(
+        &self,
+        interaction: tinychannels_bus::ChannelInteraction,
+    ) -> Result<tinychannels_bus::ChannelInteractionResult> {
+        crate::interaction::dispatch(self.channel.as_ref(), interaction).await
     }
 
     async fn submit(
@@ -2071,7 +2279,7 @@ impl tinychannels::channel::ChannelAdapter for Running {
             tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Unknown,
                 message: if self.native_ports.is_some() {
-                    "Telegram send failed".into()
+                    format!("{} send failed", self.native_provider())
                 } else {
                     error.to_string()
                 },

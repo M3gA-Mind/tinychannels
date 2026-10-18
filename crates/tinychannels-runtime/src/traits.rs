@@ -3,6 +3,21 @@ pub use tinychannels_bus::{ChannelMessage, SendMessage};
 
 use async_trait::async_trait;
 
+/// A webhook delivery refused before any of it was ingested: the signature
+/// did not verify, the body was oversized or malformed, or it was addressed
+/// to another account. Hosts answer these with a client error rather than a
+/// retryable one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WebhookRejected(pub String);
+
+impl std::fmt::Display for WebhookRejected {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for WebhookRejected {}
+
 /// Provider-facing channel operations shared by the runtime and every host.
 ///
 /// This trait belongs to the runtime crate because its async provider methods
@@ -211,6 +226,39 @@ pub trait Channel: Send + Sync {
         _remove: bool,
     ) -> anyhow::Result<()> {
         anyhow::bail!("provider does not support native reactions")
+    }
+
+    /// A stable identifier for the account this provider is authenticated as,
+    /// when the provider learns it at runtime (a linked device's JID, for
+    /// example). `None` until it is known or if it changed mid-session, so
+    /// callers that scope durable media by account fail closed.
+    fn media_account_identity(&self) -> Option<String> {
+        None
+    }
+
+    /// Mark one inbound provider message as read by this account.
+    async fn mark_read(
+        &self,
+        _conversation: &tinychannels_bus::channel::ConversationRef,
+        _provider_message_id: &str,
+    ) -> anyhow::Result<()> {
+        anyhow::bail!("provider does not support read receipts")
+    }
+
+    /// Authenticate and ingest one raw provider webhook POST. `body` is the
+    /// exact received bytes; the provider owns signature policy and payload
+    /// semantics.
+    async fn deliver_webhook(
+        &self,
+        _signature: Option<&str>,
+        _body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        anyhow::bail!("provider has no webhook ingress")
+    }
+
+    /// Answer the provider's webhook subscription handshake. `None` rejects it.
+    fn verify_webhook(&self, _mode: &str, _verify_token: &str, _challenge: &str) -> Option<String> {
+        None
     }
 
     /// Edit a previously sent message using its provider receipt.

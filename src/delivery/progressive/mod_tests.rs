@@ -1489,6 +1489,7 @@ async fn approvals_and_voice_notes_are_delivered_as_ordered_typed_content() {
                     codec: voice.codec.clone(),
                     duration_ms: voice.duration_ms,
                     audio_base64: None,
+                    waveform: None,
                 },
             }
         );

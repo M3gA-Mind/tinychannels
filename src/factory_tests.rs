@@ -319,3 +319,164 @@ fn proxy_selectors_match_exact_services_and_prefixes() {
     .unwrap();
     let _ = proxied_signal.signal_client();
 }
+
+// ---------------------------------------------------------------------------
+// WhatsApp native builders
+// ---------------------------------------------------------------------------
+
+fn cloud_config(app_secret: Option<&str>) -> ChannelsConfig {
+    ChannelsConfig {
+        whatsapp: Some(WhatsAppConfig {
+            access_token: Some("token".into()),
+            phone_number_id: Some("123".into()),
+            verify_token: Some("verify".into()),
+            app_secret: app_secret.map(str::to_owned),
+            allowed_numbers: vec!["*".into()],
+            ..whatsapp_blank()
+        }),
+        ..Default::default()
+    }
+}
+
+fn whatsapp_blank() -> WhatsAppConfig {
+    WhatsAppConfig {
+        access_token: None,
+        phone_number_id: None,
+        verify_token: None,
+        app_secret: None,
+        session_path: None,
+        pair_phone: None,
+        pair_code: None,
+        allowed_numbers: Vec::new(),
+    }
+}
+
+fn signed(secret: &str, body: &[u8]) -> String {
+    use hmac::{Hmac, KeyInit, Mac};
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(body);
+    format!("sha256={}", hex::encode(mac.finalize().into_bytes()))
+}
+
+/// The Meta app secret in the config must reach the Cloud runtime, or no
+/// webhook POST could ever be authenticated.
+#[tokio::test]
+async fn the_cloud_builder_carries_the_app_secret_into_the_webhook_authenticator() {
+    use crate::providers::whatsapp_shared::fakes::CollectingSink;
+    let sink = Arc::new(CollectingSink::new());
+    let host: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
+        .events(sink.clone())
+        .build();
+    let body = serde_json::to_vec(&serde_json::json!({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": {
+            "metadata": {"phone_number_id": "123"},
+            "messages": [{"from": "15550001111", "id": "wamid.1", "timestamp": "1", "type": "text", "text": {"body": "hi"}}]
+        }}]}]
+    }))
+    .unwrap();
+
+    let with_secret =
+        build_whatsapp_cloud_channel(&cloud_config(Some("s3cret")), &host, &DefaultHttpClients)
+            .expect("a complete Cloud config builds");
+    let outcome = crate::Channel::deliver_webhook(
+        with_secret.as_ref(),
+        Some(&signed("s3cret", &body)),
+        &body,
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome.messages, 1);
+
+    let without_secret =
+        build_whatsapp_cloud_channel(&cloud_config(None), &host, &DefaultHttpClients).unwrap();
+    assert!(
+        crate::Channel::deliver_webhook(
+            without_secret.as_ref(),
+            Some(&signed("s3cret", &body)),
+            &body
+        )
+        .await
+        .is_err(),
+        "a verify token is not a POST signature, and no secret means no ingress"
+    );
+}
+
+#[test]
+fn the_cloud_builder_wires_the_host_ports_into_the_declared_capabilities() {
+    use crate::providers::whatsapp_shared::fakes::{MemoryMedia, MemoryVoices};
+    let bare =
+        build_whatsapp_cloud_channel(&cloud_config(None), &host(), &DefaultHttpClients).unwrap();
+    assert!(
+        !bare.capabilities().content.image.outbound && !bare.capabilities().voice_out.supported
+    );
+    let wired_host: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
+        .media_repository(Arc::new(MemoryMedia::default()))
+        .voice_media_store(Arc::new(MemoryVoices::default()))
+        .build();
+    let wired = build_whatsapp_cloud_channel(&cloud_config(None), &wired_host, &DefaultHttpClients)
+        .unwrap();
+    assert!(wired.capabilities().content.image.outbound);
+    assert!(wired.capabilities().voice_out.supported);
+    // Anything but a complete Cloud stanza is not a Cloud channel.
+    let incomplete = ChannelsConfig {
+        whatsapp: Some(WhatsAppConfig {
+            phone_number_id: Some("123".into()),
+            ..whatsapp_blank()
+        }),
+        ..Default::default()
+    };
+    assert!(build_whatsapp_cloud_channel(&incomplete, &host(), &DefaultHttpClients).is_none());
+    assert!(
+        build_whatsapp_cloud_channel(&ChannelsConfig::default(), &host(), &DefaultHttpClients)
+            .is_none()
+    );
+}
+
+#[cfg(feature = "whatsapp-web")]
+#[test]
+fn the_web_builder_wires_ports_and_refuses_cloud_shaped_stanzas() {
+    use crate::providers::whatsapp_shared::fakes::{MemoryMedia, MemoryVoices};
+    let web = |phone_number_id: Option<&str>, session: Option<&str>| ChannelsConfig {
+        whatsapp: Some(WhatsAppConfig {
+            session_path: session.map(str::to_owned),
+            phone_number_id: phone_number_id.map(str::to_owned),
+            ..whatsapp_blank()
+        }),
+        ..Default::default()
+    };
+    let wired_host: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
+        .media_repository(Arc::new(MemoryMedia::default()))
+        .voice_media_store(Arc::new(MemoryVoices::default()))
+        .build();
+    let channel = build_whatsapp_web_channel(&web(None, Some("label")), &wired_host).unwrap();
+    assert!(
+        crate::Channel::capabilities(channel.as_ref())
+            .content
+            .image
+            .outbound
+    );
+    assert!(build_whatsapp_web_channel(&web(None, None), &wired_host).is_none());
+    // A stanza that names a phone number id is a Cloud stanza, never a session.
+    assert!(build_whatsapp_web_channel(&web(Some("123"), Some("label")), &wired_host).is_none());
+    assert!(build_whatsapp_web_channel(&ChannelsConfig::default(), &wired_host).is_none());
+}
+
+#[test]
+fn the_slack_stanza_builds_a_socket_mode_provider_only_when_configured() {
+    let none = ChannelsConfig::default();
+    assert!(build_slack_channel(&none, &host(), &DefaultHttpClients).is_none());
+    let config: ChannelsConfig = serde_json::from_value(serde_json::json!({
+        "slack": {"bot_token": "token", "app_token": "app", "channel_id": "C1", "allowed_users": ["*"]}
+    }))
+    .unwrap();
+    let slack = build_slack_channel(&config, &host(), &DefaultHttpClients).unwrap();
+    assert_eq!(slack.name(), "slack");
+    assert_eq!(slack.proactive_target().as_deref(), Some("C1"));
+    let capabilities = slack.capabilities();
+    assert!(capabilities.addressing.thread_id && capabilities.reactions);
+    assert!(
+        !capabilities.content.image.outbound,
+        "no media port on the no-op host"
+    );
+}

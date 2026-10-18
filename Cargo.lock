@@ -2821,6 +2821,7 @@ dependencies = [
  "base64 0.23.1",
  "futures-util",
  "hex",
+ "hmac 0.13.0",
  "log",
  "serde",
  "serde_json",

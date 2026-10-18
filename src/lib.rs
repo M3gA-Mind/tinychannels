@@ -68,9 +68,12 @@ pub use delivery::progressive::{
 };
 
 pub use backend::{ChannelBackend, ChannelManager};
+#[cfg(feature = "whatsapp-web")]
+pub use factory::build_whatsapp_web_channel;
 pub use factory::{
     ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
-    build_discord_channel, build_telegram_channel,
+    build_discord_channel, build_slack_channel, build_telegram_channel,
+    build_whatsapp_cloud_channel,
 };
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
 pub use providers::{
@@ -96,7 +99,7 @@ pub use tinychannels_runtime::channel::{
     deprecated,
     reason = "re-export one-release v21 send compatibility adapter"
 )]
-pub use tinychannels_runtime::{Channel, ChannelSendExt, SendMessageExt};
+pub use tinychannels_runtime::{Channel, ChannelSendExt, SendMessageExt, WebhookRejected};
 // Re-exported separately so each can follow its provider's feature gate.
 #[cfg(feature = "email-send")]
 pub use providers::EmailChannel;

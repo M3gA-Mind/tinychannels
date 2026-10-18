@@ -211,6 +211,7 @@ impl ProgressiveReply {
                         audio_base64: None,
                         codec: voice.codec.clone(),
                         duration_ms: voice.duration_ms,
+                        waveform: voice.waveform.clone(),
                     },
                 });
                 match self.send_content_parts(&outbound, "").await {

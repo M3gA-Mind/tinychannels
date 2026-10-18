@@ -18,6 +18,7 @@ pub mod signal;
 pub mod slack;
 pub mod telegram;
 pub mod whatsapp;
+pub(crate) mod whatsapp_shared;
 pub mod whatsapp_web;
 pub mod yuanbao;
 
