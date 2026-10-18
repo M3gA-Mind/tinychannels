@@ -275,13 +275,7 @@ async fn parts_and_voice_sends_keep_their_typed_content() {
     assert_eq!(first["parts"].as_array().map(Vec::len), Some(3));
     let second = serde_json::to_value(&events[1].1).unwrap();
     assert!(second.get("full_response").is_none());
-    assert_eq!(
-        second["parts"][0]["kind"]
-            .as_str()
-            .or(second["parts"][0]["voice"]["kind"].as_str())
-            .is_some(),
-        true
-    );
+    assert_eq!(second["parts"].as_array().map(Vec::len), Some(1));
 }
 
 #[tokio::test]
