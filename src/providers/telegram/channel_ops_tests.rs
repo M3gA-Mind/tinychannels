@@ -4234,7 +4234,7 @@ async fn adapter_start_stop_and_stop_typing_are_noops_without_provider_io() {
     impl crate::channel::ChannelInboundSink for NullSink {
         async fn push(
             &self,
-            _event: crate::channel::ChannelIngress,
+            _event: tinychannels_bus::ChannelIngress,
         ) -> Result<(), crate::channel::ChannelSendError> {
             Ok(())
         }
