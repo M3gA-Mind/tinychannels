@@ -123,7 +123,7 @@ fn models_help_from_preview(current: &ChannelRouteSelection, cached_models: &[St
     } else {
         let _ = writeln!(
             response,
-            "\nAvailable model IDs (top {}):",
+            "\nCached model IDs (top {}):",
             cached_models.len()
         );
         for model in cached_models {
