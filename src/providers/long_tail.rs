@@ -66,6 +66,32 @@ pub(crate) fn text_capabilities(spec: TextSpec) -> ChannelCapabilities {
     }
 }
 
+/// A configured provider object that serves both the legacy listener and every
+/// portable v2 adapter trait. The module keeps one such object per account.
+pub trait LongTailNative:
+    Channel
+    + crate::channel::ChannelAdapter
+    + crate::channel::ChannelTypedSend
+    + crate::channel::ChannelTyping
+    + crate::channel::ChannelReaction
+    + crate::channel::ChannelEdit
+    + crate::channel::ChannelDelete
+    + crate::channel::ChannelStreamingDraft
+{
+}
+
+impl<T> LongTailNative for T where
+    T: Channel
+        + crate::channel::ChannelAdapter
+        + crate::channel::ChannelTypedSend
+        + crate::channel::ChannelTyping
+        + crate::channel::ChannelReaction
+        + crate::channel::ChannelEdit
+        + crate::channel::ChannelDelete
+        + crate::channel::ChannelStreamingDraft
+{
+}
+
 /// A provider that is also a v2 text adapter.
 pub(crate) trait LongTail: Channel {
     /// Stable provider id (`mattermost`).
