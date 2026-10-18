@@ -32,14 +32,33 @@ fn recording_runner(out: &Path) -> Vec<String> {
     ]
 }
 
-/// A converter that copies its input (`$5`) to its output (`$6`).
-fn copy_converter() -> Vec<String> {
-    vec![
-        "sh".into(),
-        "-c".into(),
-        "cp \"$5\" \"$6\"".into(),
-        "fake-afconvert".into(),
-    ]
+/// A converter that copies its input (the fifth argument) to its output (the
+/// sixth), matching the shape of `afconvert -f m4af -d aac <input> <output>`.
+fn copy_converter(dir: &Path) -> Vec<String> {
+    if cfg!(windows) {
+        // The iMessage conversion fixture runs on Windows CI too. Keep the
+        // fake conversion on the Windows command interpreter there so paths
+        // such as `D:\a\...` are passed to the native `copy` command intact.
+        let script = dir.join("fake-afconvert.cmd");
+        std::fs::write(
+            &script,
+            "@echo off\r\ncopy /Y \"%~5\" \"%~6\" >NUL\r\nexit /b %ERRORLEVEL%\r\n",
+        )
+        .unwrap();
+        vec![
+            "cmd.exe".into(),
+            "/D".into(),
+            "/C".into(),
+            script.to_string_lossy().into_owned(),
+        ]
+    } else {
+        vec![
+            "sh".into(),
+            "-c".into(),
+            "cp \"$5\" \"$6\"".into(),
+            "fake-afconvert".into(),
+        ]
+    }
 }
 
 pub(super) fn rig() -> Rig {
@@ -66,7 +85,7 @@ pub(super) fn rig() -> Rig {
     channel.db_path = Some(db_path.clone());
     channel.poll_interval = Duration::from_millis(5);
     channel.script_command = recording_runner(&out);
-    channel.converter_command = copy_converter();
+    channel.converter_command = copy_converter(dir.path());
     channel.resolve_timeout = Duration::from_secs(5);
     Rig {
         dir,
