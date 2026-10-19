@@ -239,18 +239,22 @@ async fn public_adapter_webhook_authenticates_admits_deduplicates_and_restarts()
         port: u16,
         payload: &serde_json::Value,
     ) -> reqwest::Response {
-        for _ in 0..100 {
-            match client
-                .post(format!("http://127.0.0.1:{port}/lark"))
-                .json(payload)
-                .send()
-                .await
-            {
-                Ok(response) => return response,
-                Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+        tokio::time::timeout(GUARD, async {
+            for _ in 0..100 {
+                match client
+                    .post(format!("http://127.0.0.1:{port}/lark"))
+                    .json(payload)
+                    .send()
+                    .await
+                {
+                    Ok(response) => return response,
+                    Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+                }
             }
-        }
-        panic!("public Lark webhook did not become ready");
+            panic!("public Lark webhook did not become ready");
+        })
+        .await
+        .expect("public Lark webhook readiness request must finish within the guard")
     }
 
     fn challenge(token: &str, value: &str) -> serde_json::Value {
@@ -301,7 +305,11 @@ async fn public_adapter_webhook_authenticates_admits_deduplicates_and_restarts()
     let adapter: Arc<dyn ChannelAdapter> = channel;
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let sink = RecordingInboundSink(tx);
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(GUARD)
+        .build()
+        .unwrap();
 
     let mut listener = tokio::spawn({
         let adapter = adapter.clone();
@@ -350,16 +358,34 @@ async fn public_adapter_webhook_authenticates_admits_deduplicates_and_restarts()
         .await;
         assert_eq!(accepted.status(), reqwest::StatusCode::OK);
     }
-    let ingress = tokio::time::timeout(GUARD, rx.recv())
+    let barrier = post_until_ready(
+        &client,
+        port,
+        &message("om-barrier", "ou-alice", "verify-token", "after duplicate"),
+    )
+    .await;
+    assert_eq!(barrier.status(), reqwest::StatusCode::OK);
+    let first_ingress = tokio::time::timeout(GUARD, rx.recv())
         .await
         .expect("admitted webhook message should reach the supplied sink")
         .expect("test sink remains connected");
-    let ChannelIngress::Inbound(envelope) = ingress else {
+    let ChannelIngress::Inbound(envelope) = first_ingress else {
         panic!("Lark webhook messages must use typed inbound ingress");
     };
     assert_eq!(envelope.message_id, "om-accepted");
     assert_eq!(envelope.sender.id, "ou-alice");
+    assert_eq!(envelope.conversation.id, "oc-webhook-chat");
     assert_eq!(envelope.text, "admitted");
+    let barrier_ingress = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("barrier event should follow the first admitted event")
+        .expect("test sink remains connected");
+    let ChannelIngress::Inbound(envelope) = barrier_ingress else {
+        panic!("Lark webhook messages must use typed inbound ingress");
+    };
+    assert_eq!(envelope.message_id, "om-barrier");
+    assert_eq!(envelope.conversation.id, "oc-webhook-chat");
+    assert_eq!(envelope.text, "after duplicate");
     assert!(matches!(
         rx.try_recv(),
         Err(tokio::sync::mpsc::error::TryRecvError::Empty)
@@ -405,6 +431,7 @@ async fn public_adapter_webhook_authenticates_admits_deduplicates_and_restarts()
         panic!("Lark webhook messages must use typed inbound ingress");
     };
     assert_eq!(envelope.message_id, "om-after-restart");
+    assert_eq!(envelope.conversation.id, "oc-webhook-chat");
     adapter.stop().await.unwrap();
     tokio::time::timeout(GUARD, &mut restarted)
         .await
