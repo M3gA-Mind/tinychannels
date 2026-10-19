@@ -277,9 +277,9 @@ async fn accepted_post_without_an_id_is_reported_as_unknown_delivery() {
     assert!(!error.retryable);
 }
 
-#[test]
-fn packed_thread_address_cannot_conflict_with_the_canonical_thread() {
-    let server = MockServer::new();
+#[tokio::test]
+async fn packed_thread_address_cannot_conflict_with_the_canonical_thread() {
+    let server = MockServer::start().await;
     let channel = channel(&server, Arc::new(StubMedia::default()));
     let mut message = image_message("channel-1:root-1");
     message.conversation_ref.as_mut().unwrap().thread_id = Some("root-2".into());
@@ -290,9 +290,9 @@ fn packed_thread_address_cannot_conflict_with_the_canonical_thread() {
     assert!(!error.sent_before_error);
 }
 
-#[test]
-fn descriptor_advertises_voice_attachment_only_when_host_voice_storage_exists() {
-    let server = MockServer::new();
+#[tokio::test]
+async fn descriptor_advertises_voice_attachment_only_when_host_voice_storage_exists() {
+    let server = MockServer::start().await;
     let without_voice = channel(&server, Arc::new(StubMedia::default()));
     assert!(
         !ChannelAdapter::descriptor(&without_voice)
