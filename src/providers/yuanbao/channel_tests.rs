@@ -20,7 +20,7 @@ fn channel_construction_validates() {
 #[test]
 fn stale_listener_registration_cannot_clear_a_replacement_owner() {
     let listener = Arc::new(std::sync::Mutex::new(None));
-    let (old_cancel, mut old_cancelled) = watch::channel(false);
+    let (old_cancel, old_cancelled) = watch::channel(false);
     let stale_registration = YuanbaoListenerRegistration {
         listener: Arc::clone(&listener),
         id: 1,
