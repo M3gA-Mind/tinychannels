@@ -101,7 +101,7 @@ impl NativeProvider for DingTalkChannel {
     }
 
     fn voice_synthesis(&self) -> bool {
-        false
+        self.native.voice_synthesis
     }
 
     fn voice_caption_supported(&self) -> bool {
@@ -170,6 +170,7 @@ impl NativeProvider for DingTalkChannel {
             caps.voice_out.supported = true;
             caps.voice_out.accepted_codecs = vec!["amr_nb".into()];
             caps.voice_out.max_size_bytes = Some(MAX_VOICE_BYTES);
+            caps.voice_out.synthesis = self.native.voice_synthesis;
         }
         caps
     }

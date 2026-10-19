@@ -84,6 +84,13 @@ impl DingTalkChannel {
         self
     }
 
+    /// Enable shared final-turn synthesis when the host has TTS, a codec,
+    /// and durable scoped voice storage.
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.native.voice_synthesis = enabled;
+        self
+    }
+
     /// Attach the host's speech-to-text service for media that carries no transcript.
     pub fn with_transcriber(mut self, transcriber: Arc<dyn crate::host::Transcriber>) -> Self {
         self.native.transcriber = Some(transcriber);
