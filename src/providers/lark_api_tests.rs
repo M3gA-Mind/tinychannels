@@ -36,6 +36,74 @@ fn native_audio_requires_an_ogg_opus_identification_packet() {
 }
 
 #[tokio::test]
+async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request() {
+    use crate::channel::ChannelTypedSend;
+    use crate::providers::native::fixtures::{StubMedia, stored_media};
+    use tinychannels_bus::{
+        ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
+    };
+
+    let server = HttpsServer::start(|request| {
+        if is_token_request(request) {
+            token_ok("t-1")
+        } else if request.target == "/open-apis/im/v1/messages" {
+            (
+                200,
+                serde_json::json!({"code": 0, "data": {"message_id": "om-text-1"}})
+                    .to_string(),
+            )
+        } else {
+            panic!("unexpected Lark request: {}", request.target)
+        }
+    })
+    .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(
+        MediaKind::Document,
+        "application/pdf",
+        b"pdf-content",
+    ));
+    let channel = channel_with(&server, true).with_media_repository(media);
+    let message = ChannelOutboundMessage {
+        channel_id: "lark".into(),
+        conversation_id: "oc_chat_1".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-1".into()),
+        idempotency_key: "text-captioned-file".into(),
+        parts: vec![
+            OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "send this only if the whole message is valid".into(),
+                    markdown_dialect: None,
+                },
+            },
+            OutboundContentPart::Content {
+                part: ContentPart::File {
+                    media: MediaReference {
+                        opaque_id: Some("opaque-file-1".into()),
+                        kind: MediaKind::Document,
+                        content_type: Some("application/pdf".into()),
+                        ..Default::default()
+                    },
+                    file_name: Some("report.pdf".into()),
+                    caption: Some("unsupported caption".into()),
+                },
+            },
+        ],
+    };
+
+    let result = channel.send_typed(&message).await;
+    assert!(
+        server.requests.lock().unwrap().is_empty(),
+        "invalid provider-specific attachment must be rejected before text delivery"
+    );
+    assert!(result.is_err(), "unsupported file caption should fail the whole send");
+}
+
+#[tokio::test]
 async fn native_inbound_applies_allowlist_bot_and_group_mention_filters_before_download() {
     let server = HttpsServer::start(|_| (500, "unexpected request".into())).await;
     let mut channel = channel_with(&server, true);
