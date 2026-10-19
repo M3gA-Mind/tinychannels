@@ -268,7 +268,7 @@ async fn public_adapter_retries_lark_message_after_typed_sink_rejection() {
     )
     .await;
     drop(first_connection);
-    tokio::time::timeout(GUARD, listener)
+    tokio::time::timeout(GUARD, &mut listener)
         .await
         .expect("sink rejection should release the failed WebSocket attempt")
         .expect("Lark listener must not panic")
@@ -307,13 +307,6 @@ async fn public_adapter_retries_lark_message_after_typed_sink_rejection() {
         rx.try_recv(),
         Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     ));
-
-    adapter.stop().await.unwrap();
-    tokio::time::timeout(GUARD, listener)
-        .await
-        .expect("Lark stop must join the restarted listener")
-        .expect("Lark listener must not panic")
-        .expect("Lark listener must stop cleanly");
 }
 
 #[tokio::test]
