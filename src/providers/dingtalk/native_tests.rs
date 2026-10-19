@@ -84,6 +84,69 @@ async fn direct_send_uses_staff_id_and_provider_receipt() {
 }
 
 #[tokio::test]
+async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    let server = HttpsServer::start_with_bytes(
+        |request| match (request.method.as_str(), request.target.as_str()) {
+            ("POST", "/v1.0/oauth2/accessToken") => {
+                (200, json!({"accessToken":"token"}).to_string().into_bytes())
+            }
+            ("POST", target) if target.starts_with("/media/upload?access_token=token&type=file") => {
+                assert!(request.headers.to_ascii_lowercase().contains("multipart/form-data"));
+                (200, json!({"media_id":"uploaded-file-12"}).to_string().into_bytes())
+            }
+            ("POST", "/v1.0/robot/groupMessages/send") => {
+                assert_eq!(request.body["robotCode"], "group-robot");
+                assert_eq!(request.body["openConversationId"], "open-group-12");
+                assert_eq!(request.body["msgKey"], "sampleFile");
+                let params: serde_json::Value = serde_json::from_str(
+                    request.body["msgParam"].as_str().expect("msgParam is JSON text"),
+                )
+                .unwrap();
+                assert_eq!(params["mediaId"], "uploaded-file-12");
+                assert_eq!(params["fileName"], "report.pdf");
+                assert_eq!(params["fileType"], "pdf");
+                (200, json!({"processQueryKey":"group-receipt-12"}).to_string().into_bytes())
+            }
+            _ => panic!("unexpected DingTalk request: {request:?}"),
+        },
+        "application/json",
+    )
+    .await;
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    );
+    channel.robot_contexts.write().await.insert(
+        conversation_context_key(ConversationKind::Group, "open-group-12"),
+        json!({"robotCode":"group-robot"}),
+    );
+
+    let sent = channel
+        .deliver(
+            &target(ConversationKind::Group, "open-group-12"),
+            &Step::File(FileStep {
+                bytes: b"pdf fixture".to_vec(),
+                mime: "application/pdf".into(),
+                name: "report.pdf".into(),
+                caption: None,
+                #[cfg(feature = "lark")]
+                kind: tinychannels_bus::MediaKind::Document,
+            }),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].id, "group-receipt-12");
+    assert_eq!(sent[0].kind, MessageReceiptPartKind::Media);
+    assert_eq!(server.requests.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
 async fn direct_send_rejection_lists_override_a_success_shaped_receipt() {
     use crate::providers::http_test_support::HttpsServer;
 
