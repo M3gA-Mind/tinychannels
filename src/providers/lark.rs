@@ -124,11 +124,14 @@ struct LarkMessage {
     mentions: Vec<serde_json::Value>,
 }
 
-struct LarkListenerRegistration<'a>(&'a LarkChannel);
+struct LarkListenerRegistration<'a> {
+    channel: &'a LarkChannel,
+    id: Uuid,
+}
 
 impl Drop for LarkListenerRegistration<'_> {
     fn drop(&mut self) {
-        self.0.end_listener();
+        self.channel.end_listener(self.id);
     }
 }
 
@@ -186,7 +189,7 @@ pub struct LarkChannel {
     /// Dedup set: WS message_ids seen in last ~30 min to prevent double-dispatch
     ws_seen_ids: Arc<RwLock<HashMap<String, Instant>>>,
     /// The typed adapter owns one listener at a time across all provider clones.
-    listener_cancel: Arc<StdMutex<Option<watch::Sender<bool>>>>,
+    listener_cancel: Arc<StdMutex<Option<(Uuid, watch::Sender<bool>)>>>,
 }
 
 impl LarkChannel {
@@ -269,7 +272,7 @@ impl LarkChannel {
 
     fn begin_listener(
         &self,
-    ) -> Result<watch::Receiver<bool>, tinychannels_bus::channel::ChannelSendError> {
+    ) -> Result<(watch::Receiver<bool>, Uuid), tinychannels_bus::channel::ChannelSendError> {
         let mut active = self
             .listener_cancel
             .lock()
@@ -283,16 +286,30 @@ impl LarkChannel {
             });
         }
         let (cancel, receiver) = watch::channel(false);
-        *active = Some(cancel);
-        Ok(receiver)
+        let id = Uuid::new_v4();
+        *active = Some((id, cancel));
+        Ok((receiver, id))
     }
 
-    fn end_listener(&self) {
-        if let Some(cancel) = self
+    fn end_listener(&self, id: Uuid) {
+        let mut active = self
+            .listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if active
+            .as_ref()
+            .is_some_and(|(active_id, _)| *active_id == id)
+        {
+            active.take();
+        }
+    }
+
+    fn cancel_listener(&self) {
+        if let Some((_, cancel)) = self
             .listener_cancel
             .lock()
             .unwrap_or_else(|error| error.into_inner())
-            .take()
+            .as_ref()
         {
             cancel.send_replace(true);
         }
@@ -550,9 +567,10 @@ impl LarkChannel {
 
                     let lark_msg = &recv.message;
 
-                    // Dedup before decoding or downloading content, including when
-                    // the same provider message is delivered through both modes.
-                    if !self.mark_ws_message_seen(&lark_msg.message_id).await {
+                    // Check dedup before downloading content. Typed events are
+                    // recorded only after publication succeeds so a rejected
+                    // sink can receive the provider retry after reconnect.
+                    if self.ws_message_was_seen(&lark_msg.message_id).await {
                         tracing::debug!("Lark WS: dup {}", lark_msg.message_id);
                         continue;
                     }
@@ -561,16 +579,21 @@ impl LarkChannel {
                         if let Some(envelope) = self
                             .inbound_envelope_for_listener(&event_payload, true)
                             .await
-                            && sink
+                        {
+                            if sink
                                 .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
                                 .await
                                 .is_err()
-                        {
-                            tracing::warn!("Lark WS: typed ingress sink rejected an event");
-                            break;
+                            {
+                                tracing::warn!("Lark WS: typed ingress sink rejected an event");
+                                break;
+                            }
                         }
+                        self.mark_ws_message_seen(&lark_msg.message_id).await;
                         continue;
                     }
+
+                    self.mark_ws_message_seen(&lark_msg.message_id).await;
 
                     if let Some(envelope) = self.inbound_envelope(&event_payload).await
                         && crate::providers::native::inbound::publish(
@@ -1091,35 +1114,47 @@ impl LarkChannel {
                 }
                 result = &mut server => return result.map_err(Into::into),
                 Some(request) = events.recv() => {
-                    let message_id = request
-                        .event
-                        .pointer("/message/message_id")
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default()
-                        .to_owned();
-                    let result = if !self.is_event_admitted(&request.event) || message_id.is_empty() {
-                        TypedWebhookResult::Acknowledged
-                    } else if self.ws_message_was_seen(&message_id).await {
-                        TypedWebhookResult::Acknowledged
-                    } else if let Some(envelope) = self
-                        .inbound_envelope_for_listener(&request.event, true)
-                        .await
-                    {
-                        match sink
-                            .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
-                            .await
-                        {
-                            Ok(()) => {
-                                self.mark_ws_message_seen(&message_id).await;
+                    let result = tokio::select! {
+                        biased;
+                        changed = cancellation.changed() => {
+                            let _ = request.reply.send(TypedWebhookResult::Retry);
+                            if changed.is_err() || *cancellation.borrow() {
+                                return Ok(());
+                            }
+                            continue;
+                        }
+                        result = async {
+                            let message_id = request
+                                .event
+                                .pointer("/message/message_id")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned();
+                            if !self.is_event_admitted(&request.event) || message_id.is_empty() {
+                                TypedWebhookResult::Acknowledged
+                            } else if self.ws_message_was_seen(&message_id).await {
+                                TypedWebhookResult::Acknowledged
+                            } else if let Some(envelope) = self
+                                .inbound_envelope_for_listener(&request.event, true)
+                                .await
+                            {
+                                match sink
+                                    .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        self.mark_ws_message_seen(&message_id).await;
+                                        TypedWebhookResult::Acknowledged
+                                    }
+                                    Err(error) => {
+                                        tracing::debug!(error = %error.message, "Lark typed webhook sink rejected an event");
+                                        TypedWebhookResult::Retry
+                                    }
+                                }
+                            } else {
                                 TypedWebhookResult::Acknowledged
                             }
-                            Err(error) => {
-                                tracing::debug!(error = %error.message, "Lark typed webhook sink rejected an event");
-                                TypedWebhookResult::Retry
-                            }
-                        }
-                    } else {
-                        TypedWebhookResult::Acknowledged
+                        } => result,
                     };
                     let _ = request.reply.send(result);
                 }
@@ -1272,8 +1307,8 @@ impl crate::providers::long_tail::LongTail for LarkChannel {
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-        let mut cancellation = self.begin_listener()?;
-        let _registration = LarkListenerRegistration(self);
+        let (mut cancellation, id) = self.begin_listener()?;
+        let _registration = LarkListenerRegistration { channel: self, id };
         let result = match self.receive_mode {
             crate::config::LarkReceiveMode::Websocket => {
                 tokio::select! {
@@ -1298,7 +1333,7 @@ impl crate::providers::long_tail::LongTail for LarkChannel {
     }
 
     async fn stop_listener(&self) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-        self.end_listener();
+        self.cancel_listener();
         Ok(())
     }
 }

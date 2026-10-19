@@ -173,6 +173,218 @@ impl ChannelInboundSink for RecordingInboundSink {
     }
 }
 
+struct RejectFirstInboundSink {
+    attempts: std::sync::atomic::AtomicUsize,
+    tx: tokio::sync::mpsc::UnboundedSender<ChannelIngress>,
+}
+
+#[async_trait::async_trait]
+impl ChannelInboundSink for RejectFirstInboundSink {
+    async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        if self
+            .attempts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            == 0
+        {
+            return Err(ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "retry this event".into(),
+                retryable: true,
+                ..Default::default()
+            });
+        }
+        self.tx.send(ingress).map_err(|_| ChannelSendError {
+            kind: SendErrorKind::Transient,
+            message: "test sink closed".into(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
+}
+
+struct BlockingInboundSink(tokio::sync::Notify);
+
+#[async_trait::async_trait]
+impl ChannelInboundSink for BlockingInboundSink {
+    async fn push(&self, _ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        self.0.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn stale_lark_listener_cleanup_does_not_release_a_new_owner() {
+    let channel = LarkChannel::new(
+        "cli_app".into(),
+        "secret".into(),
+        "token".into(),
+        None,
+        vec!["*".into()],
+    );
+    let (_old_cancel, old_id) = channel.begin_listener().unwrap();
+    let old_registration = LarkListenerRegistration {
+        channel: &channel,
+        id: old_id,
+    };
+    channel.cancel_listener();
+    channel.end_listener(old_id);
+
+    let (_new_cancel, new_id) = channel.begin_listener().unwrap();
+    let new_registration = LarkListenerRegistration {
+        channel: &channel,
+        id: new_id,
+    };
+    drop(old_registration);
+    assert!(channel.begin_listener().is_err());
+
+    channel.cancel_listener();
+    drop(new_registration);
+    assert!(channel.begin_listener().is_ok());
+}
+
+#[tokio::test]
+async fn public_adapter_retries_lark_message_after_typed_sink_rejection() {
+    let gateway = gateway(vec!["ou_alice".into()]).await;
+    let adapter: Arc<dyn ChannelAdapter> = Arc::new(gateway.channel.clone());
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(RejectFirstInboundSink {
+        attempts: std::sync::atomic::AtomicUsize::new(0),
+        tx,
+    });
+    let sink_trait: Arc<dyn ChannelInboundSink> = sink;
+    let listener = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink_trait.clone();
+        async move { adapter.start(sink.as_ref()).await }
+    });
+
+    let mut first_connection = accept(&gateway.listener).await;
+    let initial_ping = next_frame(&mut first_connection).await;
+    send_event(
+        &mut first_connection,
+        initial_ping.seq_id + 1,
+        event("om-retry", "ou_alice", text("retry me")),
+    )
+    .await;
+    let mut retry_connection = accept(&gateway.listener).await;
+    let retry_ping = next_frame(&mut retry_connection).await;
+    send_event(
+        &mut retry_connection,
+        retry_ping.seq_id + 1,
+        event("om-retry", "ou_alice", text("retry me")),
+    )
+    .await;
+    let ingress = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("the retry should reach the sink")
+        .expect("test sink remains connected");
+    let ChannelIngress::Inbound(envelope) = ingress else {
+        panic!("Lark retry should arrive as typed ingress");
+    };
+    assert_eq!(envelope.message_id, "om-retry");
+    assert_eq!(envelope.text, "retry me");
+
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("Lark stop must join the retried listener")
+        .expect("Lark listener must not panic")
+        .expect("Lark listener must stop cleanly");
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+}
+
+#[tokio::test]
+async fn public_webhook_stop_cancels_blocked_lark_sink() {
+    use crate::config::{LarkConfig, LarkReceiveMode};
+
+    let port_probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = port_probe.local_addr().unwrap().port();
+    drop(port_probe);
+    let channel = Arc::new(LarkChannel::from_config(&LarkConfig {
+        app_id: "app-id".into(),
+        app_secret: "app-secret".into(),
+        encrypt_key: None,
+        verification_token: Some("verify-token".into()),
+        allowed_users: vec!["ou-alice".into()],
+        use_feishu: true,
+        receive_mode: LarkReceiveMode::Webhook,
+        port: Some(port),
+    }));
+    let adapter: Arc<dyn ChannelAdapter> = channel;
+    let sink = Arc::new(BlockingInboundSink(tokio::sync::Notify::new()));
+    let sink_trait: Arc<dyn ChannelInboundSink> = sink.clone();
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .timeout(GUARD)
+        .build()
+        .unwrap();
+    let listener = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink_trait.clone();
+        async move { adapter.start(sink.as_ref()).await }
+    });
+
+    let payload = serde_json::json!({
+        "header": {"event_type": "im.message.receive_v1", "token": "verify-token"},
+        "event": {
+            "sender": {"sender_type": "user", "sender_id": {"open_id": "ou-alice"}},
+            "message": {
+                "message_id": "om-blocked", "chat_id": "oc-chat", "chat_type": "p2p",
+                "message_type": "text", "content": "{\"text\":\"blocked\"}",
+                "create_time": "1760900000000"
+            }
+        }
+    });
+    let challenge = serde_json::json!({
+        "type": "url_verification", "challenge": "ready", "token": "verify-token"
+    });
+    tokio::time::timeout(GUARD, async {
+        loop {
+            if client
+                .post(format!("http://127.0.0.1:{port}/lark"))
+                .json(&challenge)
+                .send()
+                .await
+                .is_ok()
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("Lark webhook should bind before the event request");
+    let request = tokio::spawn(async move {
+        client
+            .post(format!("http://127.0.0.1:{port}/lark"))
+            .json(&payload)
+            .send()
+            .await
+    });
+    tokio::time::timeout(GUARD, sink.0.notified())
+        .await
+        .expect("listener should enter the blocked sink");
+
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("stop must cancel processing blocked in the typed sink")
+        .expect("Lark listener must not panic")
+        .expect("Lark listener must stop cleanly");
+    assert_eq!(
+        tokio::time::timeout(GUARD, request)
+            .await
+            .expect("webhook handler must be released when listener stops")
+            .expect("request task must not panic")
+            .expect("local webhook request must complete")
+            .status(),
+        reqwest::StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
 #[tokio::test]
 async fn public_adapter_start_owns_lark_websocket_until_stop_and_restart() {
     let gateway = gateway(vec!["ou_alice".into()]).await;
