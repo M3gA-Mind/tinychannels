@@ -75,7 +75,10 @@ impl NativeProvider for YuanbaoChannel {
             caps.content.file.outbound = true;
             caps.content.file.max_size_bytes = Some(max_bytes);
         }
-        if self.native.voice_media_store.is_some() && self.native.events.is_some() {
+        // Native voice ingress is published through the supplied
+        // ChannelInboundSink, so the adapter only needs the scoped voice
+        // store; the legacy EventSink is not part of this path.
+        if self.native.voice_media_store.is_some() {
             caps.voice_in.supported = true;
             caps.voice_in.accepted_codecs = vec!["m4a_aac".into(), "mp3".into(), "ogg_opus".into()];
             caps.voice_in.max_size_bytes = Some(self.limits().file_bytes);
