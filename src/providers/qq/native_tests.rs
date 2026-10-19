@@ -1403,3 +1403,123 @@ async fn public_adapter_start_owns_qq_gateway_until_stop_and_restart() {
         .expect("mock QQ gateway should observe both adapter stops")
         .expect("mock QQ gateway task must not panic");
 }
+
+#[tokio::test]
+async fn public_adapter_stop_cancels_a_blocked_typed_sink() {
+    use crate::providers::http_test_support::HttpsServer;
+    use futures_util::{SinkExt, StreamExt};
+    use std::future::pending;
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    const GUARD: Duration = Duration::from_secs(8);
+
+    struct BlockingSink(tokio::sync::oneshot::Sender<()>);
+
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for BlockingSink {
+        async fn push(
+            &self,
+            _ingress: ChannelIngress,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            let _ = self.0.send(());
+            pending::<()>().await;
+            Ok(())
+        }
+    }
+
+    let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_address = gateway_listener.local_addr().unwrap();
+    let gateway = HttpsServer::start(move |request| match request.target.as_str() {
+        "/app/getAppAccessToken" => (
+            200,
+            serde_json::json!({"access_token": "qq-test-token", "expires_in": "7200"}).to_string(),
+        ),
+        "/gateway" => (
+            200,
+            serde_json::json!({"url": format!("ws://{gateway_address}/")}).to_string(),
+        ),
+        other => panic!("unexpected QQ API request: {other}"),
+    })
+    .await;
+    let mock_gateway = tokio::spawn(async move {
+        let (socket, _) = tokio::time::timeout(GUARD, gateway_listener.accept())
+            .await
+            .expect("QQ adapter should connect to its gateway")
+            .unwrap();
+        let mut websocket = tokio::time::timeout(GUARD, accept_async(socket))
+            .await
+            .expect("QQ WebSocket handshake should complete")
+            .unwrap();
+        websocket
+            .send(Message::Text(
+                serde_json::json!({"op": 10, "d": {"heartbeat_interval": 60000}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        for expected_op in [2, 1] {
+            let frame = tokio::time::timeout(GUARD, websocket.next())
+                .await
+                .expect("QQ adapter should identify and heartbeat")
+                .unwrap()
+                .unwrap();
+            let value: serde_json::Value = frame.to_text().unwrap().parse().unwrap();
+            assert_eq!(value["op"], expected_op);
+        }
+        websocket
+            .send(Message::Text(
+                serde_json::json!({
+                    "op": 0,
+                    "s": 1,
+                    "t": "C2C_MESSAGE_CREATE",
+                    "d": {
+                        "id": "qq-blocked-sink",
+                        "timestamp": "2024-07-03T09:46:40+00:00",
+                        "content": "block publication",
+                        "author": {"user_openid": "alice"}
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let close = tokio::time::timeout(GUARD, websocket.next())
+            .await
+            .expect("stop should close the gateway despite a blocked sink")
+            .expect("gateway connection should close")
+            .expect("close frame should be valid");
+        assert!(matches!(close, Message::Close(_)));
+    });
+
+    let channel = Arc::new(super::super::QQChannel::with_http_client(
+        "app-id".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        gateway.client.clone(),
+    ));
+    let adapter: Arc<dyn ChannelAdapter> = channel;
+    let (blocked_tx, blocked_rx) = tokio::sync::oneshot::channel();
+    let sink = BlockingSink(blocked_tx);
+    let mut listener = tokio::spawn({
+        let adapter = adapter.clone();
+        async move { adapter.start(&sink).await }
+    });
+    tokio::time::timeout(GUARD, blocked_rx)
+        .await
+        .expect("QQ event should enter the typed sink")
+        .expect("blocking sink must signal entry");
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(GUARD, &mut listener)
+        .await
+        .expect("stop must cancel blocked typed publication and join")
+        .expect("listener task must not panic")
+        .expect("explicit stop should be clean");
+    tokio::time::timeout(GUARD, mock_gateway)
+        .await
+        .expect("mock gateway should observe graceful shutdown")
+        .expect("mock gateway task must not panic");
+}
