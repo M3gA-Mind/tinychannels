@@ -4,7 +4,7 @@ use crate::channel::ChannelAdapter;
 use crate::factory::{HttpClientFactory, build_long_tail_channel_with_host};
 use crate::host::{ChannelHostBuilder, VoiceMediaRequest, VoiceMediaStore};
 use crate::providers::native::fixtures::{StubMedia, stored_media};
-use crate::providers::native::{NativeProvider, Target};
+use crate::providers::native::{FileStep, NativeProvider, Step, Target};
 use base64::Engine as _;
 use serde_json::json;
 use std::sync::Arc;
@@ -164,6 +164,39 @@ fn qq_target_validation_rejects_threads_invalid_ids_and_non_chat_targets() {
             .kind,
         tinychannels_bus::channel::SendErrorKind::BadFormat
     );
+}
+
+#[tokio::test]
+async fn qq_preflights_unsupported_voice_mime_before_delivery() {
+    let channel = super::super::QQChannel::new("app-id".into(), "app-secret".into(), vec![]);
+    let target = Target {
+        channel: ChannelRef {
+            id: "qq".into(),
+            account_id: None,
+        },
+        conversation: ConversationRef {
+            kind: ConversationKind::Dm,
+            id: "user-1".into(),
+            ..Default::default()
+        },
+        reply_to: None,
+        thread: None,
+    };
+    let mut steps = [Step::Voice(FileStep {
+        #[cfg(feature = "lark")]
+        kind: MediaKind::Audio,
+        bytes: b"not a supported voice codec".to_vec(),
+        mime: "audio/flac".into(),
+        name: "voice.flac".into(),
+        caption: None,
+    })];
+
+    let error = NativeProvider::prepare_steps(&channel, &target, &mut steps)
+        .await
+        .unwrap_err();
+
+    assert!(error.unsupported);
+    assert!(!error.sent_before_error);
 }
 
 #[tokio::test]

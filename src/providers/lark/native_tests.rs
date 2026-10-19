@@ -91,3 +91,44 @@ fn lark_rejects_threaded_outbound_targets_before_delivery() {
     assert!(error.unsupported);
     assert!(!error.sent_before_error);
 }
+
+#[tokio::test]
+async fn lark_preflights_audio_that_needs_a_host_codec_before_delivery() {
+    let channel = super::super::LarkChannel::new(
+        "app-id".into(),
+        "app-secret".into(),
+        "verify-token".into(),
+        None,
+        vec!["*".into()],
+    );
+    let target = Target {
+        channel: ChannelRef {
+            id: "lark".into(),
+            account_id: None,
+        },
+        conversation: ConversationRef {
+            id: "chat-1".into(),
+            ..Default::default()
+        },
+        reply_to: None,
+        thread: None,
+    };
+    let mut steps = [Step::File(FileStep {
+        kind: MediaKind::Audio,
+        bytes: b"wav audio".to_vec(),
+        mime: "audio/wav".into(),
+        name: "voice.wav".into(),
+        caption: None,
+    })];
+
+    let error = NativeProvider::prepare_steps(&channel, &target, &mut steps)
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
+    assert!(!error.sent_before_error);
+    assert!(error.message.contains("host voice codec"));
+}

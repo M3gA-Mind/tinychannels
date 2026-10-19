@@ -1,10 +1,10 @@
 use super::*;
-use crate::channel::ChannelTypedSend;
+use crate::channel::{ChannelAdapter, ChannelTypedSend};
 use crate::providers::native::NativeProvider;
 use crate::providers::native::fixtures::RecordingEvents;
 use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
 use serde_json::json;
-use tinychannels_bus::channel::{ChannelAdapter, ConversationRef, SendErrorKind};
+use tinychannels_bus::channel::{ConversationRef, SendErrorKind};
 use tinychannels_bus::{
     ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind, MediaKind, MediaReference,
     OutboundContentPart, OutboundVoice,
@@ -235,6 +235,27 @@ async fn upload_without_a_file_id_does_not_attempt_to_create_a_post() {
     Mock::given(method("POST"))
         .and(path("/api/v4/files"))
         .respond_with(ResponseTemplate::new(201).set_body_json(json!({"file_infos": [{}]})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(MediaKind::Image, "image/png", b"image"));
+
+    let error = ChannelTypedSend::send_typed(&channel(&server, media), &image_message("chan"))
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.kind, SendErrorKind::Unknown);
+    assert!(!error.sent_before_error);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn unreadable_upload_receipt_does_not_attempt_to_create_a_post() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/files"))
+        .respond_with(ResponseTemplate::new(201).set_body_string("not-json"))
         .expect(1)
         .mount(&server)
         .await;
