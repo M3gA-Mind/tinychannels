@@ -721,13 +721,24 @@ impl MattermostChannel {
         bot_username: &str,
         last_create_at: i64,
     ) -> Option<AdmittedPost> {
-        let id = post.get("id")?.as_str()?.to_owned();
-        let user_id = post.get("user_id")?.as_str()?.to_owned();
+        let id = post
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        let user_id = post
+            .get("user_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         let text = post
             .get("message")
             .and_then(|message| message.as_str())
             .unwrap_or("");
-        let create_at = post.get("create_at")?.as_i64()?;
+        let create_at = post
+            .get("create_at")
+            .and_then(serde_json::Value::as_i64)
+            .unwrap_or(0);
         let root_id = post
             .get("root_id")
             .and_then(serde_json::Value::as_str)
