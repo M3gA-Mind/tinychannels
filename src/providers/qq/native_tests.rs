@@ -1415,7 +1415,7 @@ async fn public_adapter_stop_cancels_a_blocked_typed_sink() {
 
     const GUARD: Duration = Duration::from_secs(8);
 
-    struct BlockingSink(tokio::sync::oneshot::Sender<()>);
+    struct BlockingSink(Arc<tokio::sync::Notify>);
 
     #[async_trait::async_trait]
     impl ChannelInboundSink for BlockingSink {
@@ -1423,7 +1423,7 @@ async fn public_adapter_stop_cancels_a_blocked_typed_sink() {
             &self,
             _ingress: ChannelIngress,
         ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-            let _ = self.0.send(());
+            self.0.notify_one();
             pending::<()>().await;
             Ok(())
         }
@@ -1502,16 +1502,15 @@ async fn public_adapter_stop_cancels_a_blocked_typed_sink() {
         gateway.client.clone(),
     ));
     let adapter: Arc<dyn ChannelAdapter> = channel;
-    let (blocked_tx, blocked_rx) = tokio::sync::oneshot::channel();
-    let sink = BlockingSink(blocked_tx);
+    let blocked = Arc::new(tokio::sync::Notify::new());
+    let sink = BlockingSink(blocked.clone());
     let mut listener = tokio::spawn({
         let adapter = adapter.clone();
         async move { adapter.start(&sink).await }
     });
-    tokio::time::timeout(GUARD, blocked_rx)
+    tokio::time::timeout(GUARD, blocked.notified())
         .await
-        .expect("QQ event should enter the typed sink")
-        .expect("blocking sink must signal entry");
+        .expect("QQ event should enter the typed sink");
     adapter.stop().await.unwrap();
     tokio::time::timeout(GUARD, &mut listener)
         .await
