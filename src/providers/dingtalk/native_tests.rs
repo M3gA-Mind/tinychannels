@@ -2,9 +2,9 @@ use super::*;
 use crate::channel::{ChannelAdapter, ChannelInboundSink};
 use crate::providers::native::NativeProvider;
 use serde_json::json;
-use tinychannels_bus::channel::{ConversationKind, ConversationRef, SendErrorKind};
-use tinychannels_bus::ChannelIngress;
 use std::sync::Arc;
+use tinychannels_bus::ChannelIngress;
+use tinychannels_bus::channel::{ConversationKind, ConversationRef, SendErrorKind};
 
 #[derive(Clone)]
 struct RecordingInboundSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
