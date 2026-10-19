@@ -78,10 +78,16 @@ impl YuanbaoChannel {
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
         use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
 
-        let id = self.listener_generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let id = self
+            .listener_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            + 1;
         let (cancel, mut cancellation) = watch::channel(false);
         {
-            let mut active = self.listener.lock().unwrap_or_else(|error| error.into_inner());
+            let mut active = self
+                .listener
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
             if active.is_some() {
                 return Err(ChannelSendError {
                     kind: SendErrorKind::Transient,
@@ -98,10 +104,16 @@ impl YuanbaoChannel {
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
         self.connection.set_inbound_sender(inbound_tx);
         *self.inbound_rx.lock().await = Some(inbound_rx);
-        let mut inbound_rx = self.inbound_rx.lock().await.take().expect("new listener receiver");
+        let mut inbound_rx = self
+            .inbound_rx
+            .lock()
+            .await
+            .take()
+            .expect("new listener receiver");
         let connection = Arc::clone(&self.connection);
         let connection_cancel = cancellation.clone();
-        let mut connection_task = tokio::spawn(async move { connection.run(connection_cancel).await });
+        let mut connection_task =
+            tokio::spawn(async move { connection.run(connection_cancel).await });
 
         loop {
             tokio::select! {
@@ -133,7 +145,10 @@ impl YuanbaoChannel {
             }
         }
         cancel.send_replace(true);
-        if tokio::time::timeout(Duration::from_secs(2), &mut connection_task).await.is_err() {
+        if tokio::time::timeout(Duration::from_secs(2), &mut connection_task)
+            .await
+            .is_err()
+        {
             connection_task.abort();
             let _ = connection_task.await;
         }
@@ -141,7 +156,12 @@ impl YuanbaoChannel {
     }
 
     fn stop_typed_listener(&self) {
-        if let Some((_, cancel)) = self.listener.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        if let Some((_, cancel)) = self
+            .listener
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+        {
             cancel.send_replace(true);
         }
     }
@@ -576,13 +596,19 @@ impl YuanbaoChannel {
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
         use tinychannels_bus::channel::{ChannelSendError, ConversationKind, SendErrorKind};
-        use tinychannels_bus::{ChannelInboundEnvelope, ChannelIngress, ChannelRef, ConversationRef, SenderRef};
+        use tinychannels_bus::{
+            ChannelInboundEnvelope, ChannelIngress, ChannelRef, ConversationRef, SenderRef,
+        };
 
         if frame.data.is_empty() {
             return Ok(());
         }
         let unwrapped = match decode_push_msg(&frame.data) {
-            Ok(push) if (!push.cmd.is_empty() || !push.module.is_empty()) && !push.data.is_empty() => Some(push.data),
+            Ok(push)
+                if (!push.cmd.is_empty() || !push.module.is_empty()) && !push.data.is_empty() =>
+            {
+                Some(push.data)
+            }
             _ => None,
         };
         let body = unwrapped.as_deref().unwrap_or(&frame.data);
@@ -606,18 +632,31 @@ impl YuanbaoChannel {
             let reply_target = ctx.source.reply_target();
             let short_sender = shorten_account_id(&sender_id);
             let short_reply_target = shorten_reply_target(&reply_target);
-            self.register_recipient_alias(&short_sender, &sender_id).await;
-            self.register_recipient_alias(&short_reply_target, &reply_target).await;
+            self.register_recipient_alias(&short_sender, &sender_id)
+                .await;
+            self.register_recipient_alias(&short_reply_target, &reply_target)
+                .await;
             ChannelInboundEnvelope {
-                channel: ChannelRef { id: "yuanbao".into(), account_id: Some(self.config.bot_id.clone()) },
+                channel: ChannelRef {
+                    id: "yuanbao".into(),
+                    account_id: Some(self.config.bot_id.clone()),
+                },
                 message_id: ctx.msg.msg_id.clone(),
                 timestamp_unix_ms: Some(u64::from(ctx.msg.msg_time) * 1000),
                 conversation: ConversationRef {
-                    kind: if ctx.source.is_group { ConversationKind::Group } else { ConversationKind::Dm },
+                    kind: if ctx.source.is_group {
+                        ConversationKind::Group
+                    } else {
+                        ConversationKind::Dm
+                    },
                     id: short_reply_target,
                     ..Default::default()
                 },
-                sender: SenderRef { id: sender_id, name: Some(ctx.msg.sender_nickname.clone()), ..Default::default() },
+                sender: SenderRef {
+                    id: sender_id,
+                    name: Some(ctx.msg.sender_nickname.clone()),
+                    ..Default::default()
+                },
                 text: ctx.text.clone(),
                 raw: Some(serde_json::json!({"providerMessageId": ctx.msg.msg_id})),
                 ..Default::default()
@@ -651,7 +690,9 @@ impl YuanbaoChannel {
         &self,
         ctx: &super::inbound::PipelineCtx,
     ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
-        use crate::providers::native::inbound::{InboundFile, Ingest, Ingested, assemble, media_of};
+        use crate::providers::native::inbound::{
+            InboundFile, Ingest, Ingested, assemble, media_of,
+        };
         use tinychannels_bus::{ChannelInboundEnvelope, ChannelRef, ConversationRef, SenderRef};
 
         let store = self.native.voice_media_store.as_ref()?;
@@ -816,7 +857,12 @@ fn no_redirect_client() -> reqwest::Client {
 impl Drop for YuanbaoChannel {
     fn drop(&mut self) {
         let _ = self.shutdown_tx.send(true);
-        if let Some((_, cancel)) = self.listener.get_mut().unwrap_or_else(|error| error.into_inner()).take() {
+        if let Some((_, cancel)) = self
+            .listener
+            .get_mut()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
             cancel.send_replace(true);
         }
     }

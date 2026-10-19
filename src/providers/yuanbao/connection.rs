@@ -566,7 +566,12 @@ impl YuanbaoConnection {
             "[yuanbao] push forwarded to listener cmd={} module={} seq={}",
             frame.cmd, frame.module, frame.seq_no
         );
-        if self.inbound_tx.lock().send(InboundEvent::Push(frame)).is_err() {
+        if self
+            .inbound_tx
+            .lock()
+            .send(InboundEvent::Push(frame))
+            .is_err()
+        {
             error!("[yuanbao] inbound channel closed — listener gone");
         }
     }
