@@ -133,8 +133,7 @@ async fn typed_send_rejects_missing_admission_or_robot_context_before_http() {
         let error = channel
             .send_typed(&message)
             .await
-            .err()
-            .expect("unadmitted conversation cannot receive a provider send");
+            .expect_err("unadmitted conversation cannot receive a provider send");
         assert_eq!(error.kind, SendErrorKind::BadFormat, "{id}");
         assert!(!error.sent_before_error, "{id}");
     }
