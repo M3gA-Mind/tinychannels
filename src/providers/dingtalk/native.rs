@@ -362,7 +362,7 @@ fn response_lists_user(response: &serde_json::Value, field: &str, user_id: &str)
         .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(user_id)))
 }
 
-pub(super) fn conversation_context_key(kind: ConversationKind, id: &str) -> String {
+fn conversation_context_key(kind: ConversationKind, id: &str) -> String {
     format!(
         "{}:{id}",
         if kind == ConversationKind::Group {
