@@ -513,13 +513,9 @@ fn dingtalk_factory_wires_host_voice_store_and_ordered_ingress() {
         .voice_media_store(Arc::new(StubVoice::default()))
         .voice_codec(Arc::new(FactoryVoiceCodec))
         .build();
-    let codec_only = build_long_tail_channel_with_host(
-        &config,
-        &with_codec,
-        &DefaultHttpClients,
-        "dingtalk",
-    )
-    .unwrap();
+    let codec_only =
+        build_long_tail_channel_with_host(&config, &with_codec, &DefaultHttpClients, "dingtalk")
+            .unwrap();
     assert!(codec_only.capabilities().voice_out.supported);
     assert!(!codec_only.capabilities().voice_out.synthesis);
 
