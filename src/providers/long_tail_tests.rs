@@ -350,13 +350,24 @@ async fn configured_accounts_report_enabled_status() {
 #[tokio::test]
 async fn legacy_noop_lifecycle_hooks_remain_compatible() {
     let config = config("http://mm.invalid");
-    // IRC owns a real network listener now. Its start/stop lifecycle is pinned
-    // by the mock TLS peer tests in `providers::irc`; this generic compatibility
-    // check covers only providers that still expose no-op lifecycle hooks.
-    for (id, _) in PROVIDERS {
-        if id == "irc" {
-            continue;
-        }
+    // IRC and Mattermost own real listeners now. Mattermost's public start,
+    // abort/restart, equal-timestamp ordering, admission, and configured
+    // attachment delivery are pinned by the five local-server tests in
+    // `providers::mattermost::native_tests`; IRC has equivalent TLS-peer tests
+    // in `providers::irc_listen_tests`. Keep this list explicit as the
+    // remaining adapters migrate; the non-empty assertion prevents this
+    // compatibility check from silently becoming vacuous.
+    #[cfg(feature = "lark")]
+    const LEGACY_NOOP_PROVIDERS: [&str; 4] = ["lark", "qq", "dingtalk", "yuanbao"];
+    #[cfg(not(feature = "lark"))]
+    const LEGACY_NOOP_PROVIDERS: [&str; 3] = ["qq", "dingtalk", "yuanbao"];
+
+    let mut checked = 0;
+    for id in LEGACY_NOOP_PROVIDERS {
+        assert!(
+            PROVIDERS.iter().any(|(provider, _)| *provider == id),
+            "legacy lifecycle provider {id} must remain in the configured provider set"
+        );
         let channel = build(&config, id);
         struct Sink;
         #[async_trait::async_trait]
@@ -372,7 +383,12 @@ async fn legacy_noop_lifecycle_hooks_remain_compatible() {
             .await
             .unwrap();
         ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+        checked += 1;
     }
+    assert!(
+        checked > 0,
+        "at least one legacy no-op provider must be tested"
+    );
 }
 
 #[tokio::test]

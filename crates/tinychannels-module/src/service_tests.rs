@@ -2410,7 +2410,7 @@ async fn inbound_preparation_preserves_escaped_persisted_keys_and_provider_threa
     assert_eq!(prepared.envelope.text, "fixture content");
     assert_eq!(
         prepared.session_key,
-        "openhuman:discord:default:unknown:room#b:thread/c"
+        "v22|namespace=p9:openhuman|channel=p7:discord|account=a|kind=p7:unknown|scope=a|conversation=p6:room#b|parent=a|topic=a|thread=p8:thread/c|participant=a"
     );
     service.shutdown().await.unwrap();
 }
@@ -2618,14 +2618,14 @@ async fn prepared_envelope_preserves_media_account_and_group_isolation_policy() 
     assert_eq!(prepared.message.sender_name.as_deref(), Some("Display"));
     assert_eq!(
         prepared.session_key,
-        "tenant:discord:account:group:room:thread"
+        "v22|namespace=p6:tenant|channel=p7:discord|account=p7:account|kind=p5:group|scope=a|conversation=p4:room|parent=a|topic=a|thread=p6:thread|participant=a"
     );
     let mut per_user = request;
     per_user.session_policy.thread_sessions_per_user = true;
     let prepared = service.prepare_channel_inbound(per_user).await.unwrap();
     assert_eq!(
         prepared.session_key,
-        "tenant:discord:account:group:room:thread:user"
+        "v22|namespace=p6:tenant|channel=p7:discord|account=p7:account|kind=p5:group|scope=a|conversation=p4:room|parent=a|topic=a|thread=p6:thread|participant=p4:user"
     );
     service.shutdown().await.unwrap();
 }

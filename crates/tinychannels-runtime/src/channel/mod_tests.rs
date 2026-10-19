@@ -291,7 +291,10 @@ fn session_keys_include_scope_topic_and_default_thread_sharing() {
         &sender,
         SessionKeyPolicy::default(),
     );
-    assert_eq!(key, "main:telegram:bot-a:group:tenant-a:-100123:topic-99");
+    assert_eq!(
+        key,
+        "v22|namespace=p4:main|channel=p8:telegram|account=p5:bot-a|kind=p5:group|scope=p8:tenant-a|conversation=p7:-100123|parent=a|topic=p8:topic-99|thread=a|participant=a"
+    );
 
     let isolated = build_session_key(
         "main",
@@ -305,7 +308,7 @@ fn session_keys_include_scope_topic_and_default_thread_sharing() {
     );
     assert_eq!(
         isolated,
-        "main:telegram:bot-a:group:tenant-a:-100123:topic-99:alice"
+        "v22|namespace=p4:main|channel=p8:telegram|account=p5:bot-a|kind=p5:group|scope=p8:tenant-a|conversation=p7:-100123|parent=a|topic=p8:topic-99|thread=a|participant=p5:alice"
     );
 }
 
@@ -344,7 +347,7 @@ fn session_keys_do_not_collide_when_components_contain_separators() {
 }
 
 #[test]
-fn empty_topic_falls_back_to_a_nonempty_thread_id() {
+fn empty_topic_and_nonempty_thread_are_both_preserved() {
     let key = build_session_key(
         "main",
         &ChannelRef {
@@ -362,7 +365,10 @@ fn empty_topic_falls_back_to_a_nonempty_thread_id() {
         SessionKeyPolicy::default(),
     );
 
-    assert_eq!(key, "main:discord:default:group:room:thread-1");
+    assert_eq!(
+        key,
+        "v22|namespace=p4:main|channel=p7:discord|account=a|kind=p5:group|scope=a|conversation=p4:room|parent=a|topic=p0:|thread=p8:thread-1|participant=a"
+    );
 }
 
 #[test]
@@ -390,7 +396,7 @@ fn session_keys_build_from_inbound_envelopes() {
         build_session_key_for_inbound_envelope("default", &envelope, SessionKeyPolicy::default());
     assert_eq!(
         shared,
-        "main:telegram:bot-a:group:tenant-a:-100123:topic-99"
+        "v22|namespace=p4:main|channel=p8:telegram|account=p5:bot-a|kind=p5:group|scope=p8:tenant-a|conversation=p7:-100123|parent=a|topic=p8:topic-99|thread=a|participant=a"
     );
 
     let isolated = build_session_key_for_inbound_envelope(
@@ -403,7 +409,7 @@ fn session_keys_build_from_inbound_envelopes() {
     );
     assert_eq!(
         isolated,
-        "main:telegram:bot-a:group:tenant-a:-100123:topic-99:alice"
+        "v22|namespace=p4:main|channel=p8:telegram|account=p5:bot-a|kind=p5:group|scope=p8:tenant-a|conversation=p7:-100123|parent=a|topic=p8:topic-99|thread=a|participant=p5:alice"
     );
 }
 
