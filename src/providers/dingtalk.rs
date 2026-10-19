@@ -217,18 +217,48 @@ impl DingTalkChannel {
         ingress: DingTalkIngress<'_>,
         mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> anyhow::Result<()> {
+        let legacy_tx = match &ingress {
+            DingTalkIngress::Legacy(tx) => Some(tx),
+            DingTalkIngress::Typed(_) => None,
+        };
         tracing::info!("DingTalk: registering gateway connection...");
 
-        let gw = self.register_connection().await?;
+        let Some(gw) = until_listener_cancelled(&mut cancellation, self.register_connection()).await
+        else {
+            return Ok(());
+        };
+        let gw = gw?;
         let ws_url = format!("{}?ticket={}", gw.endpoint, gw.ticket);
 
         tracing::info!("DingTalk: connecting to stream WebSocket...");
-        let (ws_stream, _) = tokio_tungstenite::connect_async(&ws_url).await?;
+        let Some(connection) =
+            until_listener_cancelled(&mut cancellation, tokio_tungstenite::connect_async(&ws_url))
+                .await
+        else {
+            return Ok(());
+        };
+        let (ws_stream, _) = connection?;
         let (mut write, mut read) = ws_stream.split();
 
         tracing::info!("DingTalk: connected and listening for messages...");
 
-        while let Some(msg) = read.next().await {
+        let mut stopped = false;
+        'stream: loop {
+            let next = tokio::select! {
+                biased;
+                () = listener_cancelled(&mut cancellation) => {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        write.send(Message::Close(None)),
+                    ).await;
+                    stopped = true;
+                    break 'stream;
+                }
+                message = read.next() => message,
+            };
+            let Some(msg) = next else {
+                break;
+            };
             let msg = match msg {
                 Ok(Message::Text(t)) => t,
                 Ok(Message::Close(_)) => break,
@@ -265,7 +295,13 @@ impl DingTalkChannel {
                         "data": "",
                     });
 
-                    if let Err(e) = write.send(Message::Text(pong.to_string().into())).await {
+                    if let Err(e) = tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        write.send(Message::Text(pong.to_string().into())),
+                    )
+                    .await
+                    .unwrap_or_else(|_| Err(anyhow::anyhow!("DingTalk pong timed out")))
+                    {
                         tracing::warn!("DingTalk: failed to send pong: {e}");
                         break;
                     }
@@ -414,7 +450,11 @@ impl DingTalkChannel {
             }
         }
 
-        anyhow::bail!("DingTalk WebSocket stream ended")
+        if stopped {
+            Ok(())
+        } else {
+            anyhow::bail!("DingTalk WebSocket stream ended")
+        }
     
     }
 }
