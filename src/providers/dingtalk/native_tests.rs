@@ -1,7 +1,30 @@
 use super::*;
+use crate::channel::{ChannelAdapter, ChannelInboundSink};
 use crate::providers::native::NativeProvider;
 use serde_json::json;
 use tinychannels_bus::channel::{ConversationKind, ConversationRef, SendErrorKind};
+use tinychannels_bus::ChannelIngress;
+use std::sync::Arc;
+
+#[derive(Clone)]
+struct RecordingInboundSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
+
+#[async_trait::async_trait]
+impl ChannelInboundSink for RecordingInboundSink {
+    async fn push(
+        &self,
+        ingress: ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.0
+            .send(ingress)
+            .map_err(|_| tinychannels_bus::channel::ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "test sink closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+    }
+}
 
 fn target(kind: ConversationKind, id: &str) -> Target {
     Target {
