@@ -243,6 +243,12 @@ async fn public_adapter_rejects_a_second_concurrent_listener() {
         async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
     });
     let _peer = Peer::accept(&listener, &acceptor).await;
+    let (legacy_tx, _legacy_rx) = mpsc::channel(1);
+    let legacy = channel
+        .listen(legacy_tx)
+        .await
+        .expect_err("legacy and native starts must share one listener owner");
+    assert!(legacy.to_string().contains("already running"));
     let second = crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await;
     let error = second.expect_err("the provider must have one listener owner");
     assert!(
