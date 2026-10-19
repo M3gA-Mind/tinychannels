@@ -899,13 +899,13 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
     assert_eq!(sent.receipt.parts.len(), 2);
     assert_eq!(sent.receipt.parts[0].kind, MessageReceiptPartKind::Text);
     assert_eq!(
-        sent.receipt.parts[0].platform_message_id.as_deref(),
-        Some("receipt-sampleText")
+        sent.receipt.parts[0].platform_message_id,
+        "receipt-sampleText"
     );
     assert_eq!(sent.receipt.parts[1].kind, MessageReceiptPartKind::Voice);
     assert_eq!(
-        sent.receipt.parts[1].platform_message_id.as_deref(),
-        Some("receipt-sampleAudio")
+        sent.receipt.parts[1].platform_message_id,
+        "receipt-sampleAudio"
     );
     let requests = server.requests.lock().unwrap();
     assert_eq!(
