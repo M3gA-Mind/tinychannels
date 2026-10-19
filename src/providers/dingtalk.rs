@@ -22,6 +22,31 @@ pub struct DingTalkChannel {
     attachment_http_client: reqwest::Client,
     native: crate::providers::native::HostPorts,
     robot_contexts: Arc<RwLock<HashMap<String, serde_json::Value>>>,
+    /// Single-owner cancellation for the public Stream listener.
+    listener: std::sync::Mutex<Option<(Uuid, tokio::sync::watch::Sender<bool>)>>,
+}
+
+struct ListenerRegistration<'a> {
+    channel: &'a DingTalkChannel,
+    id: Uuid,
+}
+
+impl Drop for ListenerRegistration<'_> {
+    fn drop(&mut self) {
+        let mut listener = self
+            .channel
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if listener.as_ref().is_some_and(|(id, _)| *id == self.id) {
+            *listener = None;
+        }
+    }
+}
+
+enum DingTalkIngress<'a> {
+    Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
+    Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
 }
 
 /// Response from DingTalk gateway connection registration.
@@ -42,6 +67,7 @@ impl DingTalkChannel {
             attachment_http_client: no_redirect_client(),
             native: crate::providers::native::HostPorts::default(),
             robot_contexts: Arc::new(RwLock::new(HashMap::new())),
+            listener: std::sync::Mutex::new(None),
         }
     }
 
@@ -60,6 +86,7 @@ impl DingTalkChannel {
             attachment_http_client: no_redirect_client(),
             native: crate::providers::native::HostPorts::default(),
             robot_contexts: Arc::new(RwLock::new(HashMap::new())),
+            listener: std::sync::Mutex::new(None),
         }
     }
 
@@ -168,6 +195,41 @@ impl DingTalkChannel {
 
         let gw: GatewayResponse = resp.json().await?;
         Ok(gw)
+    }
+
+    fn begin_listener(
+        &self,
+    ) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
+        let mut listener = self.listener.lock().unwrap_or_else(|error| error.into_inner());
+        if listener.is_some() {
+            anyhow::bail!("DingTalk listener is already running");
+        }
+        let id = Uuid::new_v4();
+        let (cancel, receiver) = tokio::sync::watch::channel(false);
+        *listener = Some((id, cancel));
+        Ok((id, receiver))
+    }
+}
+
+async fn listener_cancelled(
+    cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>,
+) {
+    match cancellation {
+        Some(receiver) => {
+            let _ = receiver.changed().await;
+        }
+        None => std::future::pending::<()>().await,
+    }
+}
+
+async fn until_listener_cancelled<F: std::future::Future>(
+    cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>,
+    future: F,
+) -> Option<F::Output> {
+    tokio::select! {
+        biased;
+        () = listener_cancelled(cancellation) => None,
+        output = future => Some(output),
     }
 }
 
