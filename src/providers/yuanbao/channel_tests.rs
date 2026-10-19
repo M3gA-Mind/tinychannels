@@ -119,6 +119,9 @@ async fn alias_map_clears_when_cap_is_hit() {
 fn supports_draft_updates_is_true() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     assert!(ch.supports_draft_updates());
+    assert!(Channel::supports_remote_control(&ch));
+    assert!(Channel::supports_chat_approvals(&ch));
+    assert!(Channel::typing_supported(&ch));
     let capabilities = ch.capabilities();
     assert!(capabilities.streaming_reply_pipeline);
     assert!(!capabilities.progressive_edits);
