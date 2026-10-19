@@ -102,19 +102,6 @@ async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
             ("POST", target)
                 if target.starts_with("/media/upload?access_token=token&type=file") =>
             {
-                assert!(
-                    request
-                        .headers
-                        .to_ascii_lowercase()
-                        .contains("multipart/form-data")
-                );
-                assert!(
-                    request
-                        .raw_body
-                        .windows(FILE_BYTES.len())
-                        .any(|window| window == FILE_BYTES)
-                );
-                assert!(String::from_utf8_lossy(&request.raw_body).contains("report.pdf"));
                 (
                     200,
                     json!({"media_id":"uploaded-file-12"})
@@ -192,14 +179,39 @@ async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
         }],
     };
 
-    let sent = channel.send_typed(&message).await.unwrap();
+    let sent = channel.send_typed(&message).await;
+    assert!(
+        sent.is_ok(),
+        "typed send failed: {:?}; observed requests: {:#?}",
+        sent.as_ref().err(),
+        server.requests.lock().unwrap()
+    );
+    let sent = sent.unwrap();
     assert_eq!(
         sent.receipt.primary_platform_message_id.as_deref(),
         Some("group-receipt-12")
     );
     assert_eq!(sent.receipt.parts[0].kind, MessageReceiptPartKind::Media);
     assert_eq!(media.scopes.lock().unwrap()[0].turn_id, "turn-file-upload");
-    assert_eq!(server.requests.lock().unwrap().len(), 3);
+    let requests = server.requests.lock().unwrap();
+    let upload = requests
+        .iter()
+        .find(|request| request.target.starts_with("/media/upload?"))
+        .expect("file upload request must be observed");
+    assert!(
+        upload
+            .headers
+            .to_ascii_lowercase()
+            .contains("multipart/form-data")
+    );
+    assert!(
+        upload
+            .raw_body
+            .windows(FILE_BYTES.len())
+            .any(|window| window == FILE_BYTES)
+    );
+    assert!(String::from_utf8_lossy(&upload.raw_body).contains("report.pdf"));
+    assert_eq!(requests.len(), 3);
 }
 
 #[tokio::test]
@@ -354,6 +366,62 @@ async fn token_and_upload_server_errors_are_retryable_before_message_delivery() 
                 .iter()
                 .all(|request| { !request.target.starts_with("/v1.0/robot/groupMessages/send") })
         );
+    }
+}
+
+#[tokio::test]
+async fn invalid_upload_receipts_never_dispatch_a_group_message() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    for upload_body in [b"not-json".as_slice(), br#"{"media_id":""}"#] {
+        let upload_body = upload_body.to_vec();
+        let server = HttpsServer::start_with_bytes(
+            move |request| match (request.method.as_str(), request.target.as_str()) {
+                ("POST", "/v1.0/oauth2/accessToken") => {
+                    (200, json!({"accessToken":"token"}).to_string().into_bytes())
+                }
+                ("POST", target) if target.starts_with("/media/upload?") => {
+                    (200, upload_body.clone())
+                }
+                _ => panic!("invalid upload receipt must stop before message send: {request:?}"),
+            },
+            "application/json",
+        )
+        .await;
+        let channel = DingTalkChannel::with_http_client(
+            "app-key".into(),
+            "app-secret".into(),
+            vec!["alice".into()],
+            server.client.clone(),
+        );
+        channel.robot_contexts.write().await.insert(
+            conversation_context_key(ConversationKind::Group, "conversation-1"),
+            json!({"robotCode":"robot-from-callback"}),
+        );
+        let error = channel
+            .deliver(
+                &target(ConversationKind::Group, "conversation-1"),
+                &Step::File(FileStep {
+                    bytes: b"%PDF fixture".to_vec(),
+                    mime: "application/pdf".into(),
+                    name: "report.pdf".into(),
+                    caption: None,
+                    #[cfg(feature = "lark")]
+                    kind: tinychannels_bus::MediaKind::Document,
+                }),
+            )
+            .await
+            .err()
+            .expect("an upload without a provider media ID cannot be sent");
+        assert_eq!(
+            error.kind,
+            SendErrorKind::BadFormat,
+            "{}; observed requests: {:#?}",
+            error.message,
+            server.requests.lock().unwrap()
+        );
+        assert!(!error.sent_before_error);
+        assert_eq!(server.requests.lock().unwrap().len(), 2);
     }
 }
 

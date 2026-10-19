@@ -4,7 +4,51 @@
 #[allow(unused_imports)]
 use super::*;
 use std::sync::{Arc, Mutex};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+
+async fn read_chunked_body<R: AsyncRead + Unpin>(stream: &mut R, pending: &mut Vec<u8>) -> Vec<u8> {
+    let mut body = Vec::new();
+    loop {
+        let line_end = loop {
+            if let Some(end) = pending.windows(2).position(|window| window == b"\r\n") {
+                break end;
+            }
+            let mut buffer = [0; 4096];
+            let count = stream.read(&mut buffer).await.unwrap();
+            assert!(count > 0, "connection closed before chunk-size line");
+            pending.extend_from_slice(&buffer[..count]);
+        };
+        let line = String::from_utf8(pending.drain(..line_end).collect()).unwrap();
+        pending.drain(..2);
+        let size = usize::from_str_radix(line.split(';').next().unwrap().trim(), 16).unwrap();
+        if size == 0 {
+            loop {
+                let line_end = loop {
+                    if let Some(end) = pending.windows(2).position(|window| window == b"\r\n") {
+                        break end;
+                    }
+                    let mut buffer = [0; 4096];
+                    let count = stream.read(&mut buffer).await.unwrap();
+                    assert!(count > 0, "connection closed before chunk trailers");
+                    pending.extend_from_slice(&buffer[..count]);
+                };
+                let empty = line_end == 0;
+                pending.drain(..line_end + 2);
+                if empty {
+                    return body;
+                }
+            }
+        }
+        while pending.len() < size + 2 {
+            let mut buffer = [0; 4096];
+            let count = stream.read(&mut buffer).await.unwrap();
+            assert!(count > 0, "connection closed before chunk data");
+            pending.extend_from_slice(&buffer[..count]);
+        }
+        body.extend(pending.drain(..size));
+        assert_eq!(pending.drain(..2).collect::<Vec<_>>(), b"\r\n");
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct Request {
@@ -105,14 +149,21 @@ impl HttpsServer {
                             let (name, value) = line.split_once(':')?;
                             name.eq_ignore_ascii_case("content-length")
                                 .then(|| value.trim().parse::<usize>().unwrap())
-                        }).unwrap_or(0);
-                        while bytes.len() < header_end + length {
-                            let count = stream.read(&mut buffer).await.unwrap();
-                            assert!(count > 0, "connection closed before HTTP body");
-                            bytes.extend_from_slice(&buffer[..count]);
-                        }
+                        });
+                        let raw_body = if let Some(length) = length {
+                            while bytes.len() < header_end + length {
+                                let count = stream.read(&mut buffer).await.unwrap();
+                                assert!(count > 0, "connection closed before HTTP body");
+                                bytes.extend_from_slice(&buffer[..count]);
+                            }
+                            bytes[header_end..header_end + length].to_vec()
+                        } else if headers.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+                            let mut pending = bytes[header_end..].to_vec();
+                            read_chunked_body(&mut stream, &mut pending).await
+                        } else {
+                            Vec::new()
+                        };
                         let mut first_line = headers.lines().next().unwrap().split_whitespace();
-                        let raw_body = bytes[header_end..header_end + length].to_vec();
                         let request = Request {
                             method: first_line.next().unwrap().to_string(),
                             target: first_line.next().unwrap().to_string(),
