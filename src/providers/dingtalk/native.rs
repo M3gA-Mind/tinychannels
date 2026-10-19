@@ -17,6 +17,7 @@ use tinychannels_bus::{ChannelCapabilities, ContentCapability};
 use tinychannels_bus::{VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState};
 
 const MAX_MEDIA_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_VOICE_BYTES: u64 = 2 * 1024 * 1024;
 const DINGTALK_API: &str = "https://api.dingtalk.com";
 const DINGTALK_UPLOAD: &str = "https://oapi.dingtalk.com/media/upload";
 
@@ -87,7 +88,7 @@ impl NativeProvider for DingTalkChannel {
         Limits {
             text_chars: 20_000,
             file_bytes: MAX_MEDIA_BYTES,
-            voice_bytes: MAX_MEDIA_BYTES,
+            voice_bytes: MAX_VOICE_BYTES,
         }
     }
 
@@ -140,16 +141,21 @@ impl NativeProvider for DingTalkChannel {
             caps.content.file = file;
         }
         if self.native.events.is_some() && self.native.voice_media_store.is_some() {
-            caps.content.parts.push("voice".into());
             caps.content.audio = ContentCapability {
                 inbound: true,
-                accepted_types: vec!["audio/ogg".into(), "audio/mpeg".into(), "audio/mp4".into()],
-                max_size_bytes: Some(MAX_MEDIA_BYTES),
+                accepted_types: vec!["audio/amr".into()],
+                max_size_bytes: Some(MAX_VOICE_BYTES),
                 ..Default::default()
             };
             caps.voice_in.supported = true;
-            caps.voice_in.accepted_codecs = vec!["ogg_opus".into(), "mp3".into(), "m4a_aac".into()];
-            caps.voice_in.max_size_bytes = Some(MAX_MEDIA_BYTES);
+            caps.voice_in.accepted_codecs = vec!["amr_nb".into()];
+            caps.voice_in.max_size_bytes = Some(MAX_VOICE_BYTES);
+        }
+        if self.native.voice_media_store.is_some() {
+            caps.content.parts.push("voice".into());
+            caps.voice_out.supported = true;
+            caps.voice_out.accepted_codecs = vec!["amr_nb".into()];
+            caps.voice_out.max_size_bytes = Some(MAX_VOICE_BYTES);
         }
         caps
     }
@@ -178,10 +184,26 @@ impl NativeProvider for DingTalkChannel {
                     validate_file(file)?;
                 }
                 Step::Text(_) => {}
-                Step::Voice(_) => {
-                    return Err(unsupported(
-                        "DingTalk voice upload codec has not been verified for App Bot media",
-                    ));
+                Step::Voice(voice) => {
+                    if voice.mime != "audio/amr" || !voice.bytes.starts_with(b"#!AMR\n") {
+                        return Err(pre_dispatch(
+                            "DingTalk App Bot voice must be an AMR-NB audio stream",
+                        ));
+                    }
+                    if voice.duration_ms.is_none() {
+                        return Err(pre_dispatch(
+                            "DingTalk App Bot voice requires measured duration metadata",
+                        ));
+                    }
+                    if voice
+                        .caption
+                        .as_deref()
+                        .is_some_and(|caption| !caption.is_empty())
+                    {
+                        return Err(unsupported(
+                            "DingTalk App Bot voice captions are not supported",
+                        ));
+                    }
                 }
             }
         }
@@ -225,8 +247,16 @@ impl NativeProvider for DingTalkChannel {
                     MessageReceiptPartKind::Media,
                 )
             }
-            Step::Voice(_) => {
-                return Err(unsupported("DingTalk voice media is not configured"));
+            Step::Voice(voice) => {
+                let media_id = self.upload_voice(&token, voice).await?;
+                (
+                    "sampleAudio",
+                    serde_json::json!({
+                        "mediaId": media_id,
+                        "duration": voice.duration_ms.expect("validated voice duration").to_string(),
+                    }),
+                    MessageReceiptPartKind::Voice,
+                )
             }
         };
         let mut request = serde_json::json!({
@@ -371,6 +401,19 @@ impl DingTalkChannel {
     }
 
     async fn upload_file(&self, token: &str, file: &FileStep) -> Result<String, ChannelSendError> {
+        self.upload_media(token, file, "file").await
+    }
+
+    async fn upload_voice(&self, token: &str, voice: &FileStep) -> Result<String, ChannelSendError> {
+        self.upload_media(token, voice, "voice").await
+    }
+
+    async fn upload_media(
+        &self,
+        token: &str,
+        file: &FileStep,
+        media_type: &str,
+    ) -> Result<String, ChannelSendError> {
         let part = reqwest::multipart::Part::bytes(file.bytes.clone())
             .file_name(file.name.clone())
             .mime_str(&file.mime)
@@ -378,7 +421,7 @@ impl DingTalkChannel {
         let form = reqwest::multipart::Form::new().part("media", part);
         let response = self
             .http_client()
-            .post(format!("{DINGTALK_UPLOAD}?access_token={token}&type=file"))
+            .post(format!("{DINGTALK_UPLOAD}?access_token={token}&type={media_type}"))
             .multipart(form)
             .send()
             .await
@@ -470,8 +513,9 @@ impl DingTalkChannel {
             }
             .and_then(serde_json::Value::as_str)?;
             let robot_code = data.get("robotCode")?.as_str()?;
+            let media_limit = if voice { MAX_VOICE_BYTES } else { MAX_MEDIA_BYTES };
             let (bytes, mime) = self
-                .download_media(download_code, robot_code, MAX_MEDIA_BYTES)
+                .download_media(download_code, robot_code, media_limit)
                 .await?;
             let image = message_type == "picture";
             let transcript = content
@@ -494,7 +538,7 @@ impl DingTalkChannel {
                 voice_store: self.native.voice_media_store.as_ref(),
                 transcriber: self.native.transcriber.as_ref(),
                 file_bytes: MAX_MEDIA_BYTES,
-                voice_bytes: MAX_MEDIA_BYTES,
+                voice_bytes: MAX_VOICE_BYTES,
             }
             .add(
                 &mut ingested,

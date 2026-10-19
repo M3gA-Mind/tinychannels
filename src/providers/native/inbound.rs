@@ -68,6 +68,7 @@ pub(crate) fn normalize_mime(mime: &str) -> String {
 /// Codec name the shared voice pipeline knows for an audio MIME type.
 pub(crate) fn codec_for(mime: &str) -> Option<String> {
     match mime {
+        "audio/amr" => Some("amr_nb".into()),
         "audio/mp4" | "audio/m4a" | "audio/x-m4a" | "audio/aac" => Some("m4a_aac".into()),
         "audio/mpeg" | "audio/mp3" => Some("mp3".into()),
         "audio/ogg" | "audio/opus" => Some("ogg_opus".into()),

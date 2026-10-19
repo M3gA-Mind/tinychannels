@@ -189,6 +189,7 @@ async fn qq_preflights_unsupported_voice_mime_before_delivery() {
         mime: "audio/flac".into(),
         name: "voice.flac".into(),
         caption: None,
+        duration_ms: None,
     })];
 
     let error = NativeProvider::prepare_steps(&channel, &target, &mut steps)

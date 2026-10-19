@@ -603,6 +603,7 @@ async fn token_and_upload_server_errors_are_retryable_before_message_delivery() 
                 mime: "application/pdf".into(),
                 name: "report.pdf".into(),
                 caption: None,
+                duration_ms: None,
                 #[cfg(feature = "lark")]
                 kind: tinychannels_bus::MediaKind::Document,
             })
@@ -672,6 +673,7 @@ async fn invalid_upload_receipts_never_dispatch_a_group_message() {
                     mime: "application/pdf".into(),
                     name: "report.pdf".into(),
                     caption: None,
+                    duration_ms: None,
                     #[cfg(feature = "lark")]
                     kind: tinychannels_bus::MediaKind::Document,
                 }),
@@ -701,6 +703,7 @@ async fn file_caption_is_rejected_before_any_send_step() {
             mime: "application/pdf".into(),
             name: "report.pdf".into(),
             caption: Some("caption that App Bot cannot preserve".into()),
+            duration_ms: None,
             #[cfg(feature = "lark")]
             kind: tinychannels_bus::MediaKind::Document,
         }),

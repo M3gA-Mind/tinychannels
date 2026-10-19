@@ -42,6 +42,8 @@ pub(crate) struct FileStep {
     pub(crate) mime: String,
     pub(crate) name: String,
     pub(crate) caption: Option<String>,
+    /// Measured duration carried by a stored voice note, when present.
+    pub(crate) duration_ms: Option<u64>,
 }
 
 /// One validated unit of work, in message order.
@@ -247,10 +249,15 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                     name: stored.file_name.unwrap_or_else(|| name.to_owned()),
                     bytes: stored.bytes,
                     caption: caption.map(|caption| strip_tool_call_tags(&caption)),
+                    duration_ms: None,
                 }));
             }
             OutboundContentPart::Voice {
-                voice: OutboundVoice::Media { media, .. },
+                voice: OutboundVoice::Media {
+                    media,
+                    duration_ms,
+                    ..
+                },
             } => {
                 let store = provider.voice_media_store().ok_or_else(|| {
                     unsupported(&format!("{display} voice needs host voice storage"))
@@ -302,6 +309,7 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                     name: resolved.file_name.unwrap_or_else(|| "voice.m4a".into()),
                     bytes: audio,
                     caption: Some(caption).filter(|c| !c.trim().is_empty()),
+                    duration_ms: *duration_ms,
                 }));
             }
             OutboundContentPart::Voice { .. } => {

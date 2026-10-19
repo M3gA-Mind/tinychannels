@@ -391,6 +391,7 @@ impl tinychannels::host::VoiceCodec for ModuleVoiceCodec {
             "ogg_opus" | "audio/ogg" => Ok(AudioCodec::OggOpus),
             "m4a_aac" | "audio/mp4" => Ok(AudioCodec::M4aAac),
             "mp3" | "audio/mpeg" => Ok(AudioCodec::Mp3),
+            "amr_nb" | "audio/amr" => Ok(AudioCodec::AmrNb),
             _ => anyhow::bail!("unsupported TinyVoice codec format"),
         };
         let result = self
