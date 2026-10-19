@@ -39,6 +39,16 @@ const REPLY_HEARTBEAT_INTERVAL_SECS: u64 = 2;
 /// dragging in an LRU dependency. See `register_recipient_alias`.
 const RECIPIENT_ALIAS_CAP: usize = 4096;
 
+type ListenerSlot = Arc<std::sync::Mutex<Option<YuanbaoListenerState>>>;
+
+struct YuanbaoListenerState {
+    id: u64,
+    cancel: watch::Sender<bool>,
+    connection_started: bool,
+    connection_done: bool,
+    abandoned: bool,
+}
+
 /// The yuanbao channel — owns one WebSocket and one inbound pipeline.
 pub struct YuanbaoChannel {
     config: YuanbaoConfig,
@@ -67,7 +77,7 @@ pub struct YuanbaoChannel {
     native: NativeState,
     voice_http: reqwest::Client,
     /// Single-owner cancellation for the native typed listener.
-    listener: Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>,
+    listener: ListenerSlot,
     listener_generation: std::sync::atomic::AtomicU64,
 }
 
@@ -96,16 +106,18 @@ impl YuanbaoChannel {
                     ..Default::default()
                 });
             }
-            *active = Some((id, cancel.clone()));
+            *active = Some(YuanbaoListenerState {
+                id,
+                cancel: cancel.clone(),
+                connection_started: false,
+                connection_done: false,
+                abandoned: false,
+            });
         }
         let mut registration = YuanbaoListenerRegistration {
             listener: Arc::clone(&self.listener),
             id,
             cancel: cancel.clone(),
-            abandoned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            connection_done: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            connection_started: false,
-            completed: false,
         };
         self.shutdown_tx.send_replace(false);
 
@@ -123,14 +135,20 @@ impl YuanbaoChannel {
         let completion = YuanbaoConnectionRegistration {
             listener: Arc::clone(&self.listener),
             id,
-            abandoned: Arc::clone(&registration.abandoned),
-            connection_done: Arc::clone(&registration.connection_done),
         };
         let mut connection_task = tokio::spawn(async move {
             let _completion = completion;
             connection.run(connection_cancel).await;
         });
-        registration.connection_started = true;
+        if let Some(active) = self
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_mut()
+            .filter(|active| active.id == id)
+        {
+            active.connection_started = true;
+        }
 
         loop {
             tokio::select! {
@@ -148,7 +166,6 @@ impl YuanbaoChannel {
                                         connection_task.abort();
                                         let _ = connection_task.await;
                                     }
-                                    registration.completed = true;
                                     return Err(error);
                                 }
                             }
@@ -170,7 +187,6 @@ impl YuanbaoChannel {
             connection_task.abort();
             let _ = connection_task.await;
         }
-        registration.completed = true;
         Ok(())
     }
 
