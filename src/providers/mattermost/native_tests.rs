@@ -2,6 +2,7 @@ use super::*;
 use crate::channel::ChannelTypedSend;
 use crate::providers::native::fixtures::RecordingEvents;
 use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
+use crate::providers::native::NativeProvider;
 use serde_json::json;
 use tinychannels_bus::channel::{ConversationRef, SendErrorKind};
 use tinychannels_bus::{
@@ -274,6 +275,19 @@ async fn accepted_post_without_an_id_is_reported_as_unknown_delivery() {
     assert_eq!(error.kind, SendErrorKind::Unknown);
     assert!(error.sent_before_error);
     assert!(!error.retryable);
+}
+
+#[test]
+fn packed_thread_address_cannot_conflict_with_the_canonical_thread() {
+    let server = MockServer::new();
+    let channel = channel(&server, Arc::new(StubMedia::default()));
+    let mut message = image_message("channel-1:root-1");
+    message.conversation_ref.as_mut().unwrap().thread_id = Some("root-2".into());
+
+    let error = NativeProvider::normalized_target(&channel, &message).unwrap_err();
+
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(!error.sent_before_error);
 }
 
 #[test]
