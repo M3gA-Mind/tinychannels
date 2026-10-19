@@ -948,17 +948,18 @@ async fn public_adapter_stores_url_backed_voice_and_publishes_typed_media() {
         envelope.parts.as_slice(),
         [ContentPart::VoiceNote { .. }]
     ));
-    let stored = voice_store.stored.lock().unwrap();
-    assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].scope.turn_id, "voice-public-1");
-    assert_eq!(stored[0].mime_type, "audio/ogg");
-    assert_eq!(
-        base64::engine::general_purpose::STANDARD
-            .decode(&stored[0].audio_base64)
-            .unwrap(),
-        voice_fixture
-    );
-    drop(stored);
+    {
+        let stored = voice_store.stored.lock().unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].scope.turn_id, "voice-public-1");
+        assert_eq!(stored[0].mime_type, "audio/ogg");
+        assert_eq!(
+            base64::engine::general_purpose::STANDARD
+                .decode(&stored[0].audio_base64)
+                .unwrap(),
+            voice_fixture
+        );
+    }
     assert_eq!(media_server.requests.lock().unwrap().len(), 1);
 
     channel.stop().await.unwrap();

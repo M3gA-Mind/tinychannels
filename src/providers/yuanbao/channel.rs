@@ -191,13 +191,13 @@ impl YuanbaoChannel {
     }
 
     fn stop_typed_listener(&self) {
-        if let Some((_, cancel)) = self
+        if let Some(active) = self
             .listener
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()
         {
-            cancel.send_replace(true);
+            active.cancel.send_replace(true);
         }
     }
 
@@ -731,22 +731,16 @@ impl YuanbaoChannel {
         use tinychannels_bus::{ChannelInboundEnvelope, ChannelRef, ConversationRef, SenderRef};
 
         let store = self.native.voice_media_store.as_ref()?;
-        let Some(sound) = ctx
+        let sound = ctx
             .msg
             .msg_body
             .iter()
-            .find(|element| element.msg_type == super::proto_constants::tim::SOUND)
-        else {
-            return None;
-        };
-        let Some(url) = sound
+            .find(|element| element.msg_type == super::proto_constants::tim::SOUND)?;
+        let url = sound
             .msg_content
             .url
             .as_deref()
-            .filter(|url| !url.trim().is_empty())
-        else {
-            return None;
-        };
+            .filter(|url| !url.trim().is_empty())?;
         let Ok(url) = reqwest::Url::parse(url) else {
             return None;
         };
@@ -862,60 +856,46 @@ impl YuanbaoChannel {
 }
 
 struct YuanbaoListenerRegistration {
-    listener: Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>,
+    listener: ListenerSlot,
     id: u64,
     cancel: watch::Sender<bool>,
-    abandoned: Arc<std::sync::atomic::AtomicBool>,
-    connection_done: Arc<std::sync::atomic::AtomicBool>,
-    connection_started: bool,
-    completed: bool,
 }
 
 impl Drop for YuanbaoListenerRegistration {
     fn drop(&mut self) {
         self.cancel.send_replace(true);
-        if self.connection_started && !self.completed {
-            self.abandoned
-                .store(true, std::sync::atomic::Ordering::Release);
-            if !self
-                .connection_done
-                .load(std::sync::atomic::Ordering::Acquire)
-            {
+        let mut slot = self
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(active) = slot.as_mut().filter(|active| active.id == self.id) {
+            if active.connection_started && !active.connection_done {
+                active.abandoned = true;
                 return;
             }
         }
-        clear_yuanbao_listener(&self.listener, self.id);
+        slot.take();
     }
 }
 
 impl Drop for YuanbaoConnectionRegistration {
     fn drop(&mut self) {
-        self.connection_done
-            .store(true, std::sync::atomic::Ordering::Release);
-        if self.abandoned.load(std::sync::atomic::Ordering::Acquire) {
-            clear_yuanbao_listener(&self.listener, self.id);
+        let mut slot = self
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if let Some(active) = slot.as_mut().filter(|active| active.id == self.id) {
+            active.connection_done = true;
+            if active.abandoned {
+                slot.take();
+            }
         }
     }
 }
 
 struct YuanbaoConnectionRegistration {
-    listener: Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>,
+    listener: ListenerSlot,
     id: u64,
-    abandoned: Arc<std::sync::atomic::AtomicBool>,
-    connection_done: Arc<std::sync::atomic::AtomicBool>,
-}
-
-fn clear_yuanbao_listener(
-    listener: &std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>,
-    id: u64,
-) {
-    let mut active = listener.lock().unwrap_or_else(|error| error.into_inner());
-    if active
-        .as_ref()
-        .is_some_and(|(active_id, _)| *active_id == id)
-    {
-        active.take();
-    }
 }
 
 fn no_redirect_client() -> reqwest::Client {
@@ -929,13 +909,13 @@ fn no_redirect_client() -> reqwest::Client {
 impl Drop for YuanbaoChannel {
     fn drop(&mut self) {
         let _ = self.shutdown_tx.send(true);
-        if let Some((_, cancel)) = self
+        if let Some(active) = self
             .listener
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take()
         {
-            cancel.send_replace(true);
+            active.cancel.send_replace(true);
         }
     }
 }

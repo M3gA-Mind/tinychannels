@@ -216,14 +216,14 @@ impl YuanbaoConnection {
         // A listener can be cancelled while another task is sending a frame.
         // Bound both lock acquisition and websocket close so an abandoned
         // listener registration cannot retain its owner forever.
-        if let Ok(mut guard) = time::timeout(Duration::from_secs(1), self.sender.lock()).await {
-            if let Some(mut sender) = guard.take() {
-                let _ = time::timeout(Duration::from_secs(1), async {
-                    let _ = sender.send(Message::Close(None)).await;
-                    let _ = sender.close().await;
-                })
-                .await;
-            }
+        if let Ok(mut guard) = time::timeout(Duration::from_secs(1), self.sender.lock()).await
+            && let Some(mut sender) = guard.take()
+        {
+            let _ = time::timeout(Duration::from_secs(1), async {
+                let _ = sender.send(Message::Close(None)).await;
+                let _ = sender.close().await;
+            })
+            .await;
         }
         // Drop all pending waiters so callers stop hanging.
         let mut pending = self.pending.lock();
@@ -257,7 +257,15 @@ impl YuanbaoConnection {
                 ConnectionState::Reconnecting
             });
 
-            let outcome = self.connect_once(&mut shutdown).await;
+            let mut cancellation = shutdown.clone();
+            let outcome = tokio::select! {
+                biased;
+                _ = cancellation.changed() => {
+                    self.shutdown().await;
+                    return;
+                }
+                outcome = self.connect_once(&mut shutdown) => outcome,
+            };
             match outcome {
                 Ok(Some(code)) if NO_RECONNECT_CLOSE_CODES.contains(&code) => {
                     error!("[yuanbao] no-reconnect close code {} — stopping", code);
