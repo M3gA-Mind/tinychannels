@@ -336,6 +336,80 @@ async fn lark_image_upload_rejections_stop_before_message_delivery() {
 }
 
 #[tokio::test]
+async fn lark_image_and_message_receipt_failures_keep_delivery_certainty() {
+    use crate::providers::native::fixtures::{StubMedia, stored_media};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tinychannels_bus::{
+        ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
+    };
+
+    let image_attempts = Arc::new(AtomicUsize::new(0));
+    let message_attempts = Arc::new(AtomicUsize::new(0));
+    let server_image_attempts = image_attempts.clone();
+    let server_message_attempts = message_attempts.clone();
+    let server = HttpsServer::start(move |request| {
+        if is_token_request(request) {
+            token_ok("t-receipt-errors")
+        } else if request.target == "/open-apis/im/v1/images" {
+            if server_image_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                (503, r#"{"code":99991663}"#.into())
+            } else {
+                (200, r#"{"code":0,"data":{"image_key":"image-key"}}"#.into())
+            }
+        } else if request.target.starts_with("/open-apis/im/v1/messages?") {
+            if server_message_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                (200, r#"{"code":0,"data":{}}"#.into())
+            } else {
+                (400, r#"{"code":99991663,"msg":"rejected"}"#.into())
+            }
+        } else {
+            panic!("unexpected Lark request: {}", request.target)
+        }
+    })
+    .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(MediaKind::Image, "image/png", b"small-png"));
+    let channel = channel_with(&server, true).with_media_repository(media);
+    let message = ChannelOutboundMessage {
+        channel_id: "lark".into(),
+        conversation_id: "oc_chat_1".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-receipt-errors".into()),
+        idempotency_key: "receipt-errors".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("image-1".into()),
+                    kind: MediaKind::Image,
+                    content_type: Some("image/png".into()),
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+        }],
+    };
+
+    let upload_error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+    assert!(!upload_error.sent_before_error);
+    let missing_id_error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+    assert!(missing_id_error.sent_before_error);
+    let rejected_error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+    assert!(!rejected_error.sent_before_error);
+    assert_eq!(image_attempts.load(Ordering::SeqCst), 3);
+    assert_eq!(message_attempts.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn lark_host_voice_store_delivers_voice_without_file_repository() {
     let server = HttpsServer::start(|request| {
         if is_token_request(request) {
