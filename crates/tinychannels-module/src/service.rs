@@ -848,12 +848,28 @@ impl Channels {
         {
             return Err(BusError::failed("channel message exceeds its limit"));
         }
-        let intent = match request {
+        let (intent, legacy_message) = match request {
             ChannelMessagePreparation::Legacy(message) => {
-                tinychannels::outbound_intent_from_legacy_message(channel, message)
+                let intent = tinychannels::outbound_intent_from_legacy_message(channel, message);
+                let legacy_message =
+                    tinychannels::legacy_message_value_from_outbound_intent(&intent);
+                (intent, legacy_message)
             }
             ChannelMessagePreparation::Typed(message) => {
-                tinychannels::outbound_intent_from_send_message(channel, &message)
+                let mut intent = tinychannels::outbound_intent_from_send_message(channel, &message);
+                // Keep the legacy JSON projection and its deterministic key for
+                // existing callers, but do not label a typed SendMessage as
+                // arbitrary provider-native data. V22 providers consume this
+                // compatibility input as canonical text. Subject-bearing
+                // messages keep their legacy payload for mail-style providers.
+                let legacy_message =
+                    tinychannels::legacy_message_value_from_outbound_intent(&intent);
+                if message.subject.is_none() {
+                    intent.payload = tinychannels_bus::OutboundPayload::Text {
+                        text: message.content,
+                    };
+                }
+                (intent, legacy_message)
             }
             ChannelMessagePreparation::Intent(intent) => {
                 if intent.channel_id != channel {
@@ -861,11 +877,13 @@ impl Channels {
                         "intent destination does not match channel",
                     ));
                 }
-                intent
+                let legacy_message =
+                    tinychannels::legacy_message_value_from_outbound_intent(&intent);
+                (intent, legacy_message)
             }
         };
         Ok(PreparedChannelIntent {
-            legacy_message: tinychannels::legacy_message_value_from_outbound_intent(&intent),
+            legacy_message,
             intent,
         })
     }
