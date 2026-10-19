@@ -336,7 +336,8 @@ async fn typed_voice_send_forwards_amr_bytes_and_declared_duration() {
     use tinychannels_bus::channel::MessageReceiptPartKind;
     use tinychannels_runtime::channel::ChannelTypedSend;
 
-    const AMR_BYTES: &[u8] = b"#!AMR\nprovider AMR voice bytes";
+    const AMR_BYTES: &[u8] =
+        include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr");
 
     let server = HttpsServer::start_with_bytes(
         |request| match (request.method.as_str(), request.target.as_str()) {
@@ -469,6 +470,8 @@ fn typed_voice_capabilities_advertise_amr_when_host_ports_are_available() {
             .any(|mime| mime == "audio/amr")
     );
     assert!(caps.voice_out.supported);
+    assert_eq!(caps.voice_out.accepted_codecs, ["amr_nb"]);
+    assert_eq!(caps.voice_out.max_size_bytes, Some(2 * 1024 * 1024));
 }
 
 #[tokio::test]

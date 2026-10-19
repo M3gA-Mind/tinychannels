@@ -24,7 +24,7 @@ tinychannels = { path = "../..", features = ["email", "lark", "whatsapp-web"] }
 tinychannels-bus = { path = "../tinychannels-bus" }
 tinychannels-runtime = { path = "../tinychannels-runtime" }
 # Codec vocabulary only; audio work runs in TinyVoice's compiled TinyBus module.
-tinyvoice-bus = { git = "https://github.com/tinyhumansai/tinyvoice", rev = "7a8e3ac5b31a11e9c061541b336c666ee10fa190" }
+tinyvoice-bus = { git = "https://github.com/tinyhumansai/tinyvoice", rev = "321014b01a5d45fc75703e0a800d9c7f3354cc89" }
 # TinyBus provides the typed service interface and dynamic module host ABI.
 tinybus = { version = ">=0.1.4, <0.2", default-features = false, features = ["macros", "modules"] }
 # The module-side SDK owns its runtime and exports the stable C entrypoints.

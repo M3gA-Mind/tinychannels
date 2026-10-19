@@ -67,6 +67,7 @@ fn mime_helpers_classify_and_name_codecs() {
     assert_eq!(kind_for_mime("application/pdf"), MediaKind::Document);
     assert_eq!(normalize_mime(" Audio/MP4 ; codecs=aac"), "audio/mp4");
     for (mime, codec) in [
+        ("audio/amr", Some("amr_nb")),
         ("audio/mp4", Some("m4a_aac")),
         ("audio/aac", Some("m4a_aac")),
         ("audio/mpeg", Some("mp3")),

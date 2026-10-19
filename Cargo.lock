@@ -2961,8 +2961,8 @@ checksum = "fd3ca314f692efd6c868f8408f53fe444634a845f96c028b97d35f6a1f79f0ee"
 
 [[package]]
 name = "tinyvoice-bus"
-version = "0.1.4"
-source = "git+https://github.com/tinyhumansai/tinyvoice?rev=7a8e3ac5b31a11e9c061541b336c666ee10fa190#7a8e3ac5b31a11e9c061541b336c666ee10fa190"
+version = "0.2.0"
+source = "git+https://github.com/tinyhumansai/tinyvoice?rev=321014b01a5d45fc75703e0a800d9c7f3354cc89#321014b01a5d45fc75703e0a800d9c7f3354cc89"
 dependencies = [
  "serde",
  "serde_json",
