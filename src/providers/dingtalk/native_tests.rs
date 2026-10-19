@@ -774,6 +774,7 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
         .await
         .unwrap();
     assert_eq!(measured.codec, tinyvoice_bus::codec::AudioCodec::AmrNb);
+    assert_ne!(measured.duration_ms, 7_777);
     assert_eq!(prepared.note.duration_ms, Some(measured.duration_ms));
     let expected_bytes = Arc::new(stored.bytes);
     let expected_duration = measured.duration_ms.to_string();
@@ -799,12 +800,17 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
                     .1
                     .trim()
                     .trim_matches('"');
-                let payload_start = request
+                let media_header = b"filename=\"voice.amr\"";
+                let media_header_at = request
                     .raw_body
+                    .windows(media_header.len())
+                    .position(|window| window == media_header)
+                    .expect("multipart voice filename");
+                let payload_start = request.raw_body[media_header_at..]
                     .windows(4)
                     .position(|window| window == b"\r\n\r\n")
-                    .expect("multipart media headers")
-                    + 4;
+                    .map(|offset| media_header_at + offset + 4)
+                    .expect("multipart voice headers");
                 let end_marker = format!("\r\n--{boundary}");
                 let payload_end = request.raw_body[payload_start..]
                     .windows(end_marker.len())
@@ -816,7 +822,6 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
                     bytes_capture.as_slice(),
                     "uploaded AMR must exactly match the bytes read from scoped storage"
                 );
-                assert!(String::from_utf8_lossy(&request.raw_body).contains("voice.amr"));
                 (
                     200,
                     json!({"media_id":"loaded-amr-media"})
