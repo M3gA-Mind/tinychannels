@@ -20,8 +20,7 @@ pub fn build_session_key(
         .map(String::as_str)
         .filter(|s| !s.is_empty())
         .or_else(|| (!sender.id.is_empty()).then_some(sender.id.as_str()));
-    let has_thread_address =
-        conversation.topic_id.is_some() || conversation.thread_id.is_some();
+    let has_thread_address = conversation.topic_id.is_some() || conversation.thread_id.is_some();
     let isolate_participant = match conversation.kind {
         ConversationKind::Dm => false,
         _ if has_thread_address => policy.thread_sessions_per_user,
