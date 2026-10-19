@@ -266,12 +266,10 @@ async fn accepted_post_without_an_id_is_reported_as_unknown_delivery() {
         },
     }];
 
-    let error = ChannelTypedSend::send_typed(
-        &channel(&server, Arc::new(StubMedia::default())),
-        &message,
-    )
-    .await
-    .unwrap_err();
+    let error =
+        ChannelTypedSend::send_typed(&channel(&server, Arc::new(StubMedia::default())), &message)
+            .await
+            .unwrap_err();
 
     assert_eq!(error.kind, SendErrorKind::Unknown);
     assert!(error.sent_before_error);

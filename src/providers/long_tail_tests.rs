@@ -74,9 +74,21 @@ fn typed_receipt_uses_reported_ids_and_falls_back_to_message_routing() {
     );
 
     assert_eq!(receipt.idempotency_key.as_deref(), Some("k"));
-    assert_eq!(receipt.channel.as_ref().map(|channel| channel.id.as_str()), Some("fixture"));
-    assert_eq!(receipt.conversation.as_ref().map(|conversation| conversation.id.as_str()), Some("room-1"));
-    assert_eq!(receipt.primary_platform_message_id.as_deref(), Some("platform-1"));
+    assert_eq!(
+        receipt.channel.as_ref().map(|channel| channel.id.as_str()),
+        Some("fixture")
+    );
+    assert_eq!(
+        receipt
+            .conversation
+            .as_ref()
+            .map(|conversation| conversation.id.as_str()),
+        Some("room-1")
+    );
+    assert_eq!(
+        receipt.primary_platform_message_id.as_deref(),
+        Some("platform-1")
+    );
     assert_eq!(receipt.platform_message_ids, ["platform-1", "platform-2"]);
     assert_eq!(receipt.parts.len(), 2);
     assert_eq!(receipt.parts[1].index, 1);
