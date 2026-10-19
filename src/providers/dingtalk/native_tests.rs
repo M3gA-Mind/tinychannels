@@ -86,6 +86,13 @@ async fn direct_send_uses_staff_id_and_provider_receipt() {
 #[tokio::test]
 async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
     use crate::providers::http_test_support::HttpsServer;
+    use crate::providers::native::fixtures::{StubMedia, stored_media};
+    use tinychannels_bus::{
+        ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
+    };
+    use tinychannels_runtime::channel::ChannelTypedSend;
+
+    const FILE_BYTES: &[u8] = b"%PDF-1.7\nactual fixture bytes\n";
 
     let server = HttpsServer::start_with_bytes(
         |request| match (request.method.as_str(), request.target.as_str()) {
@@ -101,6 +108,13 @@ async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
                         .to_ascii_lowercase()
                         .contains("multipart/form-data")
                 );
+                assert!(
+                    request
+                        .raw_body
+                        .windows(FILE_BYTES.len())
+                        .any(|window| window == FILE_BYTES)
+                );
+                assert!(String::from_utf8_lossy(&request.raw_body).contains("report.pdf"));
                 (
                     200,
                     json!({"media_id":"uploaded-file-12"})
@@ -133,35 +147,58 @@ async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
         "application/json",
     )
     .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(
+        MediaKind::Document,
+        "application/pdf",
+        FILE_BYTES,
+    ));
     let channel = DingTalkChannel::with_http_client(
         "app-key".into(),
         "app-secret".into(),
         vec!["alice".into()],
         server.client.clone(),
-    );
+    )
+    .with_media_repository(media.clone());
     channel.robot_contexts.write().await.insert(
         conversation_context_key(ConversationKind::Group, "open-group-12"),
         json!({"robotCode":"group-robot"}),
     );
 
-    let sent = channel
-        .deliver(
-            &target(ConversationKind::Group, "open-group-12"),
-            &Step::File(FileStep {
-                bytes: b"pdf fixture".to_vec(),
-                mime: "application/pdf".into(),
-                name: "report.pdf".into(),
+    let message = ChannelOutboundMessage {
+        channel_id: "dingtalk".into(),
+        conversation_id: "open-group-12".into(),
+        channel_ref: None,
+        conversation_ref: Some(ConversationRef {
+            kind: ConversationKind::Group,
+            id: "open-group-12".into(),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-file-upload".into()),
+        idempotency_key: "file-upload".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::File {
+                media: MediaReference {
+                    opaque_id: Some("stored-file-12".into()),
+                    kind: MediaKind::Document,
+                    content_type: Some("application/pdf".into()),
+                    ..Default::default()
+                },
+                file_name: Some("report.pdf".into()),
                 caption: None,
-                #[cfg(feature = "lark")]
-                kind: tinychannels_bus::MediaKind::Document,
-            }),
-        )
-        .await
-        .unwrap();
+            },
+        }],
+    };
 
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].id, "group-receipt-12");
-    assert_eq!(sent[0].kind, MessageReceiptPartKind::Media);
+    let sent = channel.send_typed(&message).await.unwrap();
+    assert_eq!(
+        sent.receipt.primary_platform_message_id.as_deref(),
+        Some("group-receipt-12")
+    );
+    assert_eq!(sent.receipt.parts[0].kind, MessageReceiptPartKind::Media);
+    assert_eq!(media.scopes.lock().unwrap()[0].turn_id, "turn-file-upload");
     assert_eq!(server.requests.lock().unwrap().len(), 3);
 }
 

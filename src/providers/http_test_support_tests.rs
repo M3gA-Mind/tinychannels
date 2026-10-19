@@ -12,6 +12,7 @@ pub(super) struct Request {
     pub target: String,
     pub headers: String,
     pub body: serde_json::Value,
+    pub raw_body: Vec<u8>,
 }
 
 pub(super) struct HttpsServer {
@@ -111,12 +112,13 @@ impl HttpsServer {
                             bytes.extend_from_slice(&buffer[..count]);
                         }
                         let mut first_line = headers.lines().next().unwrap().split_whitespace();
+                        let raw_body = bytes[header_end..header_end + length].to_vec();
                         let request = Request {
                             method: first_line.next().unwrap().to_string(),
                             target: first_line.next().unwrap().to_string(),
                             headers,
-                            body: serde_json::from_slice(&bytes[header_end..header_end + length])
-                                .unwrap_or(serde_json::Value::Null),
+                            body: serde_json::from_slice(&raw_body).unwrap_or(serde_json::Value::Null),
+                            raw_body,
                         };
                         let (status, body) = respond(&request);
                         captured.lock().unwrap().push(request);
