@@ -510,6 +510,36 @@ async fn typed_voice_send_preserves_transcript_as_an_ordered_text_message() {
     assert_eq!(sent.receipt.parts[0].platform_message_id, "text-receipt");
     assert_eq!(sent.receipt.parts[1].kind, MessageReceiptPartKind::Voice);
     assert_eq!(sent.receipt.parts[1].platform_message_id, "voice-receipt");
+
+    let mut reverse_order = voice_message("open-group-amr");
+    reverse_order.parts.push(OutboundContentPart::Content {
+        part: ContentPart::Text {
+            text: "voice transcript".into(),
+            markdown_dialect: None,
+        },
+    });
+    let sent = channel
+        .send_typed(&reverse_order)
+        .await
+        .expect("DingTalk should preserve transcript following the voice part");
+    assert_eq!(sent.receipt.parts.len(), 2);
+    assert_eq!(sent.receipt.parts[0].kind, MessageReceiptPartKind::Voice);
+    assert_eq!(sent.receipt.parts[0].platform_message_id, "voice-receipt");
+    assert_eq!(sent.receipt.parts[1].kind, MessageReceiptPartKind::Text);
+    assert_eq!(sent.receipt.parts[1].platform_message_id, "text-receipt");
+
+    let send_order = server
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|request| request.target == "/v1.0/robot/groupMessages/send")
+        .map(|request| request.body["msgKey"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        send_order,
+        ["sampleText", "sampleAudio", "sampleAudio", "sampleText"]
+    );
 }
 
 #[tokio::test]

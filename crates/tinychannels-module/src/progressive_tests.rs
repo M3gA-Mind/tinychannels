@@ -4662,7 +4662,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
 }
 
 #[tokio::test]
-async fn dingtalk_final_voice_pipeline_keeps_transcript_and_measured_codec_metadata() {
+async fn dingtalk_final_voice_pipeline_keeps_transcript_and_codec_metadata() {
     const AMR_BYTES: &[u8] = include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr");
 
     let bus = MemoryBus::new();
