@@ -69,7 +69,9 @@ impl NativeProvider for LarkChannel {
                 Step::Text(_) => continue,
                 Step::File(file) if file.kind == MediaKind::Image => {
                     if file.bytes.len() as u64 > IMAGE_LIMIT {
-                        return Err(known_unsent("Lark image exceeds the 10 MiB limit"));
+                        return Err(crate::providers::native::pre_dispatch(
+                            "Lark image exceeds the 10 MiB limit",
+                        ));
                     }
                     if !matches!(
                         file.mime.as_str(),
@@ -93,7 +95,9 @@ impl NativeProvider for LarkChannel {
                 ));
             }
             if file.bytes.len() as u64 > FILE_LIMIT {
-                return Err(known_unsent("Lark file exceeds the 30 MiB limit"));
+                return Err(crate::providers::native::pre_dispatch(
+                    "Lark file exceeds the 30 MiB limit",
+                ));
             }
             if file.kind == MediaKind::Video && file.mime != "video/mp4" {
                 return Err(crate::providers::native::unsupported("Lark video type"));
