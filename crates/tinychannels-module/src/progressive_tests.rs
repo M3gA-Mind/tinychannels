@@ -147,6 +147,9 @@ impl StubTinyVoiceCodec {
         let bytes = match request.target {
             tinyvoice_bus::codec::AudioCodec::OggOpus => progressive_test_ogg(),
             tinyvoice_bus::codec::AudioCodec::WavPcm16 => progressive_test_wav(),
+            tinyvoice_bus::codec::AudioCodec::AmrNb => {
+                include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr").to_vec()
+            }
             _ => return Err(tinybus::Error::failed("unsupported fixture target codec")),
         };
         Ok(tinyvoice_bus::codec::CodecOutput {
@@ -161,11 +164,21 @@ impl StubTinyVoiceCodec {
         Ok(tinyvoice_bus::codec::CodecInfo {
             codec: if request.audio_base64.starts_with("T2dnUw") {
                 tinyvoice_bus::codec::AudioCodec::OggOpus
+            } else if request.audio_base64.starts_with("IyFBTVIK") {
+                tinyvoice_bus::codec::AudioCodec::AmrNb
             } else {
                 tinyvoice_bus::codec::AudioCodec::WavPcm16
             },
-            duration_ms: 1_500,
-            sample_rate: 48_000,
+            duration_ms: if request.audio_base64.starts_with("IyFBTVIK") {
+                500
+            } else {
+                1_500
+            },
+            sample_rate: if request.audio_base64.starts_with("IyFBTVIK") {
+                8_000
+            } else {
+                48_000
+            },
             channels: 1,
         })
     }
@@ -4646,6 +4659,152 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         .await
         .expect("mid-turn approval delivery");
     assert_eq!(callback.synthesis_calls.load(Ordering::SeqCst), before);
+}
+
+#[tokio::test]
+async fn dingtalk_final_voice_pipeline_keeps_transcript_and_measured_codec_metadata() {
+    const AMR_BYTES: &[u8] =
+        include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr");
+
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let _broker_task = broker.spawn(bus.clone());
+    let server = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let callback = Callback::default();
+    *callback.voice_policy.lock().await = Some(tinychannels_bus::HostVoiceReplyPolicy {
+        mode: tinychannels_bus::HostVoiceReplyMode::Always,
+        inbound_has_voice: false,
+        explicitly_requested: false,
+    });
+    let codec_ops = Arc::new(AtomicUsize::new(0));
+    server
+        .serve_at(
+            tinychannels_bus::HOST_OBJECT_PATH.try_into().unwrap(),
+            callback.clone(),
+        )
+        .await
+        .unwrap();
+    server
+        .serve_at(
+            tinyvoice_bus::OBJECT_PATH.try_into().unwrap(),
+            StubTinyVoiceCodec(codec_ops.clone()),
+        )
+        .await
+        .unwrap();
+    server
+        .request_name(tinychannels_bus::HOST_BUS_NAME)
+        .await
+        .unwrap();
+    server.request_name(tinyvoice_bus::BUS_NAME).await.unwrap();
+    let _storage = crate::storage_fixture::StorageHost::serve(&server, "dingtalk-amr").await;
+    let client = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let host = HostChannels::new(client);
+    let context = ProgressiveOutputContext {
+        turn_id: "dingtalk-amr-turn".into(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "dingtalk".into(),
+            account_id: Some("dingtalk:robot-1".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Group,
+            id: "open-group-amr".into(),
+            ..Default::default()
+        },
+    };
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
+    capabilities.voice_out.supported = true;
+    capabilities.voice_out.synthesis = true;
+    capabilities.voice_out.accepted_codecs = vec!["amr_nb".into()];
+    capabilities.voice_out.max_size_bytes = Some(2 * 1024 * 1024);
+    capabilities.voice_out.max_duration_ms = Some(10_000);
+    let sender = Arc::new(Sender {
+        media_account_scope: crate::provider::MediaScope::fixed(Some(
+            "dingtalk:media-v1:robot-1".into(),
+        )),
+        host: host.clone(),
+        context: Some(context.clone()),
+        capabilities: capabilities.clone(),
+        channel: "dingtalk:robot-1".into(),
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    });
+    let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
+        sender,
+        "dingtalk:robot-1",
+        capabilities,
+        context.clone(),
+    );
+    reply
+        .send_parts(
+            &[tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "spoken response".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            "spoken response",
+        )
+        .await
+        .expect("final DingTalk voice is represented by typed text and audio parts");
+
+    let requests = callback.requests.lock().await;
+    let sent_parts = requests
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                turn_id: Some(turn_id),
+                parts,
+                ..
+            } if turn_id == "dingtalk-amr-turn" => Some(parts),
+            _ => None,
+        })
+        .expect("final voice dispatch uses the typed transport");
+    assert!(matches!(
+        sent_parts.as_slice(),
+        [
+            tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text { text, .. }
+            },
+            tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    codec: Some(codec),
+                    duration_ms: Some(500),
+                    media,
+                    ..
+                }
+            }
+        ] if text == "spoken response"
+            && codec == "amr_nb"
+            && media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
+    ), "unexpected DingTalk final voice parts: {sent_parts:?}");
+    assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
+    drop(requests);
+
+    let media = sent_parts[1].as_voice_media().expect("voice part");
+    let mut scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "dingtalk:robot-1".into(),
+        channel: context.channel.clone(),
+        conversation: context.conversation.clone(),
+        turn_id: context.turn_id.clone(),
+    };
+    scope.channel.account_id = Some("dingtalk:media-v1:robot-1".into());
+    let storage = host.storage().await.expect("host storage available");
+    let media_store = tinychannels::host::ScopedMediaStore::new(
+        Arc::clone(storage.documents()),
+        Arc::clone(storage.blobs()),
+    );
+    let stored = media_store
+        .read(
+            scope,
+            media.opaque_id.as_deref().expect("stored opaque media id"),
+            2 * 1024 * 1024,
+        )
+        .await
+        .expect("AMR voice is persisted under the scoped host media store");
+    assert_eq!(stored.bytes, AMR_BYTES);
 }
 
 #[tokio::test]
