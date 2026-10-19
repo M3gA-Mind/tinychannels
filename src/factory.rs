@@ -543,12 +543,25 @@ fn build_long_tail_channel_inner(
         }
         "dingtalk" => {
             let dt = config.dingtalk.as_ref()?;
-            Some(Arc::new(DingTalkChannel::with_http_client(
+            let mut channel = DingTalkChannel::with_http_client(
                 dt.client_id.clone(),
                 dt.client_secret.clone(),
                 dt.allowed_users.clone(),
                 http.client_for("channel.dingtalk"),
-            )))
+            );
+            if let Some(repository) = host.and_then(|host| host.media_repository()) {
+                channel = channel.with_media_repository(repository);
+            }
+            if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+                channel = channel.with_voice_media_store(store);
+            }
+            if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+                channel = channel.with_transcriber(transcriber);
+            }
+            if let Some(events) = host.and_then(|host| host.events()) {
+                channel = channel.with_events(events);
+            }
+            Some(Arc::new(channel))
         }
         "qq" => {
             let qq = config.qq.as_ref()?;
@@ -581,6 +594,12 @@ fn build_long_tail_channel_inner(
                     }
                     if let Some(store) = host.and_then(|host| host.voice_media_store()) {
                         channel = channel.with_voice_media_store(store);
+                    }
+                    if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+                        channel = channel.with_transcriber(transcriber);
+                    }
+                    if let Some(events) = host.and_then(|host| host.events()) {
+                        channel = channel.with_events(events);
                     }
                     Some(Arc::new(channel))
                 }

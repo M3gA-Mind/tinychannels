@@ -1,0 +1,332 @@
+use super::*;
+use crate::providers::native::NativeProvider;
+use serde_json::json;
+use tinychannels_bus::channel::{ConversationKind, ConversationRef, SendErrorKind};
+
+fn target(kind: ConversationKind, id: &str) -> Target {
+    Target {
+        channel: tinychannels_bus::ChannelRef {
+            id: "dingtalk".into(),
+            account_id: Some("account-1".into()),
+        },
+        conversation: ConversationRef {
+            kind,
+            id: id.into(),
+            ..Default::default()
+        },
+        reply_to: None,
+        thread: None,
+    }
+}
+
+#[tokio::test]
+async fn direct_send_uses_staff_id_and_provider_receipt() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    let server = HttpsServer::start_with_bytes(
+        |request| match (request.method.as_str(), request.target.as_str()) {
+            ("POST", "/v1.0/oauth2/accessToken") => {
+                (200, json!({"accessToken":"token"}).to_string().into_bytes())
+            }
+            ("POST", "/v1.0/robot/oToMessages/batchSend") => {
+                assert_eq!(request.body["robotCode"], "robot-from-callback");
+                assert_eq!(request.body["userIds"], json!(["alice-staff-id"]));
+                (
+                    200,
+                    json!({"processQueryKey":"provider-message-91"})
+                        .to_string()
+                        .into_bytes(),
+                )
+            }
+            _ => panic!("unexpected DingTalk request: {request:?}"),
+        },
+        "application/json",
+    )
+    .await;
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice-staff-id".into()],
+        server.client.clone(),
+    );
+    channel.robot_contexts.write().await.insert(
+        conversation_context_key(ConversationKind::Group, "alice-staff-id"),
+        json!({"robotCode":"wrong-group-robot","senderId":"wrong-group-user"}),
+    );
+    channel.robot_contexts.write().await.insert(
+        conversation_context_key(ConversationKind::Dm, "alice-staff-id"),
+        json!({
+            "robotCode":"robot-from-callback",
+            "senderId":"$:union-user-id",
+            "senderStaffId":"alice-staff-id"
+        }),
+    );
+    let sent = channel
+        .deliver(
+            &target(ConversationKind::Dm, "alice-staff-id"),
+            &Step::Text("hello".into()),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0].id, "provider-message-91");
+    assert_eq!(
+        server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|request| request.target == "/v1.0/robot/oToMessages/batchSend")
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn direct_send_rejection_lists_override_a_success_shaped_receipt() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    for (field, error_kind, retryable) in [
+        ("flowControlledStaffIdList", SendErrorKind::Transient, true),
+        ("invalidStaffIdList", SendErrorKind::BadFormat, false),
+        ("filteredStaffIdList", SendErrorKind::BadFormat, false),
+    ] {
+        let server = HttpsServer::start_with_bytes(
+            move |request| match (request.method.as_str(), request.target.as_str()) {
+                ("POST", "/v1.0/oauth2/accessToken") => {
+                    (200, json!({"accessToken":"token"}).to_string().into_bytes())
+                }
+                ("POST", "/v1.0/robot/oToMessages/batchSend") => {
+                    assert_eq!(request.body["userIds"], json!(["alice-staff-id"]));
+                    let mut response = json!({"processQueryKey":"provider-query-1"});
+                    response[field] = json!(["alice-staff-id"]);
+                    (200, response.to_string().into_bytes())
+                }
+                _ => panic!("unexpected DingTalk request: {request:?}"),
+            },
+            "application/json",
+        )
+        .await;
+        let channel = DingTalkChannel::with_http_client(
+            "app-key".into(),
+            "app-secret".into(),
+            vec!["alice-staff-id".into()],
+            server.client.clone(),
+        );
+        channel.robot_contexts.write().await.insert(
+            conversation_context_key(ConversationKind::Dm, "alice-staff-id"),
+            json!({
+                "robotCode":"robot-from-callback",
+                "senderId":"$:union-user-id",
+                "senderStaffId":"alice-staff-id"
+            }),
+        );
+        let error = channel
+            .deliver(
+                &target(ConversationKind::Dm, "alice-staff-id"),
+                &Step::Text("hello".into()),
+            )
+            .await
+            .err()
+            .expect("a provider rejection must not return a receipt");
+        assert_eq!(error.kind, error_kind, "{field}");
+        assert_eq!(error.retryable, retryable, "{field}");
+        assert!(!error.sent_before_error, "{field}");
+    }
+}
+
+#[tokio::test]
+async fn final_send_server_error_is_reported_as_ambiguous() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    let server = HttpsServer::start_with_bytes(
+        |request| match (request.method.as_str(), request.target.as_str()) {
+            ("POST", "/v1.0/oauth2/accessToken") => {
+                (200, json!({"accessToken":"token"}).to_string().into_bytes())
+            }
+            ("POST", "/v1.0/robot/groupMessages/send") => (500, b"retry later".to_vec()),
+            _ => panic!("unexpected DingTalk request: {request:?}"),
+        },
+        "application/json",
+    )
+    .await;
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    );
+    channel.robot_contexts.write().await.insert(
+        conversation_context_key(ConversationKind::Group, "conversation-1"),
+        json!({"robotCode":"robot-from-callback"}),
+    );
+    let error = channel
+        .deliver(
+            &target(ConversationKind::Group, "conversation-1"),
+            &Step::Text("hello".into()),
+        )
+        .await
+        .err()
+        .expect("a provider rejection must not return a receipt");
+
+    assert_eq!(error.kind, SendErrorKind::Unknown);
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+}
+
+#[tokio::test]
+async fn token_and_upload_server_errors_are_retryable_before_message_delivery() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    for failing_path in ["token", "upload"] {
+        let server = HttpsServer::start_with_bytes(
+            move |request| match (request.method.as_str(), request.target.as_str()) {
+                ("POST", "/v1.0/oauth2/accessToken") if failing_path == "token" => {
+                    (503, b"temporarily unavailable".to_vec())
+                }
+                ("POST", "/v1.0/oauth2/accessToken") => {
+                    (200, json!({"accessToken":"token"}).to_string().into_bytes())
+                }
+                ("POST", target) if target.starts_with("/media/upload?") => {
+                    assert_eq!(failing_path, "upload");
+                    (503, b"temporarily unavailable".to_vec())
+                }
+                _ => panic!("message send must not follow an earlier failure: {request:?}"),
+            },
+            "application/json",
+        )
+        .await;
+        let channel = DingTalkChannel::with_http_client(
+            "app-key".into(),
+            "app-secret".into(),
+            vec!["alice".into()],
+            server.client.clone(),
+        );
+        channel.robot_contexts.write().await.insert(
+            conversation_context_key(ConversationKind::Group, "conversation-1"),
+            json!({"robotCode":"robot-from-callback"}),
+        );
+        let step = if failing_path == "token" {
+            Step::Text("hello".into())
+        } else {
+            Step::File(FileStep {
+                bytes: b"pdf-bytes".to_vec(),
+                mime: "application/pdf".into(),
+                name: "report.pdf".into(),
+                caption: None,
+                #[cfg(feature = "lark")]
+                kind: tinychannels_bus::MediaKind::Document,
+            })
+        };
+        let error = channel
+            .deliver(&target(ConversationKind::Group, "conversation-1"), &step)
+            .await
+            .err()
+            .expect("a pre-send failure must not return a receipt");
+        assert_eq!(error.kind, SendErrorKind::Transient, "{failing_path}");
+        assert!(error.retryable, "{failing_path}");
+        assert!(!error.sent_before_error, "{failing_path}");
+        assert!(
+            server
+                .requests
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|request| { !request.target.starts_with("/v1.0/robot/groupMessages/send") })
+        );
+    }
+}
+
+#[tokio::test]
+async fn file_caption_is_rejected_before_any_send_step() {
+    let channel = DingTalkChannel::new("app-key".into(), "app-secret".into(), vec![]);
+    let mut steps = [
+        Step::Text("preceding text".into()),
+        Step::File(FileStep {
+            bytes: b"file".to_vec(),
+            mime: "application/pdf".into(),
+            name: "report.pdf".into(),
+            caption: Some("caption that App Bot cannot preserve".into()),
+            #[cfg(feature = "lark")]
+            kind: tinychannels_bus::MediaKind::Document,
+        }),
+    ];
+
+    let error = channel
+        .prepare_steps(
+            &target(ConversationKind::Group, "conversation-1"),
+            &mut steps,
+        )
+        .await
+        .unwrap_err();
+    assert!(error.unsupported);
+    assert!(!error.sent_before_error);
+}
+
+#[tokio::test]
+async fn typed_mixed_text_and_captioned_file_fails_before_platform_requests() {
+    use crate::providers::http_test_support::HttpsServer;
+    use crate::providers::native::fixtures::{StubMedia, stored_media};
+    use tinychannels_bus::{
+        ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
+    };
+    use tinychannels_runtime::channel::ChannelTypedSend;
+
+    let server = HttpsServer::start(|request| {
+        panic!("caption preflight must not make platform requests: {request:?}")
+    })
+    .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(
+        MediaKind::Document,
+        "application/pdf",
+        b"pdf-bytes",
+    ));
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec![],
+        server.client.clone(),
+    )
+    .with_media_repository(media);
+    let message = ChannelOutboundMessage {
+        channel_id: "dingtalk".into(),
+        conversation_id: "open-conversation-1".into(),
+        channel_ref: None,
+        conversation_ref: Some(ConversationRef {
+            kind: ConversationKind::Group,
+            id: "open-conversation-1".into(),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-caption-check".into()),
+        idempotency_key: "caption-check".into(),
+        parts: vec![
+            OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "must not send before validation".into(),
+                    markdown_dialect: None,
+                },
+            },
+            OutboundContentPart::Content {
+                part: ContentPart::File {
+                    media: MediaReference {
+                        opaque_id: Some("file-1".into()),
+                        kind: MediaKind::Document,
+                        content_type: Some("application/pdf".into()),
+                        ..Default::default()
+                    },
+                    file_name: Some("report.pdf".into()),
+                    caption: Some("DingTalk cannot preserve this caption".into()),
+                },
+            },
+        ],
+    };
+
+    let error = channel.send_typed(&message).await.unwrap_err();
+    assert!(error.unsupported);
+    assert!(!error.sent_before_error);
+    assert!(server.requests.lock().unwrap().is_empty());
+}

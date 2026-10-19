@@ -19,6 +19,9 @@ pub struct DingTalkChannel {
     /// DingTalk provides a unique webhook URL with each incoming message.
     session_webhooks: Arc<RwLock<HashMap<String, String>>>,
     http_client: reqwest::Client,
+    attachment_http_client: reqwest::Client,
+    native: crate::providers::native::HostPorts,
+    robot_contexts: Arc<RwLock<HashMap<String, serde_json::Value>>>,
 }
 
 /// Response from DingTalk gateway connection registration.
@@ -36,6 +39,9 @@ impl DingTalkChannel {
             allowed_users,
             session_webhooks: Arc::new(RwLock::new(HashMap::new())),
             http_client: reqwest::Client::new(),
+            attachment_http_client: no_redirect_client(),
+            native: crate::providers::native::HostPorts::default(),
+            robot_contexts: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -51,7 +57,43 @@ impl DingTalkChannel {
             allowed_users,
             session_webhooks: Arc::new(RwLock::new(HashMap::new())),
             http_client,
+            attachment_http_client: no_redirect_client(),
+            native: crate::providers::native::HostPorts::default(),
+            robot_contexts: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    /// Enable native typed media ingress and upload through host-scoped storage.
+    pub fn with_media_repository(
+        mut self,
+        repository: Arc<dyn crate::host::MediaRepository>,
+    ) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    /// Attach the host's ordered typed-ingress path.
+    pub fn with_events(mut self, events: Arc<dyn crate::host::EventSink>) -> Self {
+        self.native.events = Some(events);
+        self
+    }
+
+    /// Enable native voice ingress through the host's scoped voice store.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
+    }
+
+    /// Attach the host's speech-to-text service for media that carries no transcript.
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn crate::host::Transcriber>) -> Self {
+        self.native.transcriber = Some(transcriber);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_attachment_http_client(mut self, client: reqwest::Client) -> Self {
+        self.attachment_http_client = client;
+        self
     }
 
     fn http_client(&self) -> reqwest::Client {
@@ -122,10 +164,18 @@ impl DingTalkChannel {
     }
 }
 
+fn no_redirect_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("building the DingTalk attachment HTTP client should succeed")
+}
+
 #[async_trait]
 impl Channel for DingTalkChannel {
     fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::long_tail::LongTail::declared(self)
+        crate::providers::native::NativeProvider::declared_capabilities(self)
     }
 
     fn name(&self) -> &str {
@@ -247,10 +297,6 @@ impl Channel for DingTalkChannel {
                         .unwrap_or("")
                         .trim();
 
-                    if content.is_empty() {
-                        continue;
-                    }
-
                     let sender_id = data
                         .get("senderStaffId")
                         .and_then(|s| s.as_str())
@@ -260,6 +306,31 @@ impl Channel for DingTalkChannel {
                         tracing::warn!(
                             "DingTalk: ignoring message from unauthorized user: {sender_id}"
                         );
+                        continue;
+                    }
+
+                    let provider_message_id = data
+                        .get("msgId")
+                        .and_then(serde_json::Value::as_str)
+                        .filter(|id| !id.is_empty());
+                    if provider_message_id
+                        .is_some_and(|id| self.native.has_seen(&format!("dingtalk:{id}")))
+                    {
+                        let message_id = frame
+                            .get("headers")
+                            .and_then(|headers| headers.get("messageId"))
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("");
+                        let ack = serde_json::json!({
+                            "code": 200,
+                            "headers": {
+                                "contentType": "application/json",
+                                "messageId": message_id,
+                            },
+                            "message": "OK",
+                            "data": "",
+                        });
+                        let _ = write.send(Message::Text(ack.to_string().into())).await;
                         continue;
                     }
 
@@ -273,6 +344,40 @@ impl Channel for DingTalkChannel {
                         // Use both keys so reply routing works for both group and private flows.
                         webhooks.insert(chat_id.clone(), webhook.clone());
                         webhooks.insert(sender_id.to_string(), webhook);
+                    }
+
+                    if let Some(envelope) = self.inbound_envelope(&data).await {
+                        let provider_message_id = envelope.message_id.clone();
+                        if crate::providers::native::inbound::publish(
+                            "dingtalk",
+                            self.native.events.as_ref(),
+                            envelope,
+                        )
+                        .await
+                        {
+                            self.native
+                                .mark_seen(format!("dingtalk:{provider_message_id}"));
+                            let message_id = frame
+                                .get("headers")
+                                .and_then(|h| h.get("messageId"))
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("");
+                            let ack = serde_json::json!({
+                                "code": 200,
+                                "headers": {
+                                    "contentType": "application/json",
+                                    "messageId": message_id,
+                                },
+                                "message": "OK",
+                                "data": "",
+                            });
+                            let _ = write.send(Message::Text(ack.to_string().into())).await;
+                            continue;
+                        }
+                    }
+
+                    if content.is_empty() {
+                        continue;
                     }
 
                     // Acknowledge the event
@@ -326,17 +431,10 @@ impl Channel for DingTalkChannel {
     }
 }
 
-impl crate::providers::long_tail::LongTail for DingTalkChannel {
-    const ID: &'static str = "dingtalk";
-    const DISPLAY: &'static str = "DingTalk";
+#[path = "dingtalk/native.rs"]
+mod native;
 
-    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
-        use crate::providers::long_tail::{TextSpec, text_capabilities};
-        text_capabilities(TextSpec::default())
-    }
-}
-
-crate::providers::long_tail::impl_long_tail_adapter!(DingTalkChannel);
+crate::providers::native::native_v2_adapter!(DingTalkChannel);
 
 #[cfg(test)]
 #[path = "dingtalk_tests.rs"]

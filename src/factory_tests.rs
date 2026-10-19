@@ -480,3 +480,30 @@ fn the_slack_stanza_builds_a_socket_mode_provider_only_when_configured() {
         "no media port on the no-op host"
     );
 }
+
+#[test]
+fn dingtalk_factory_wires_host_voice_store_and_ordered_ingress() {
+    use crate::providers::native::fixtures::{RecordingEvents, StubVoice};
+    let config = ChannelsConfig {
+        dingtalk: Some(tinychannels_bus::config::DingTalkConfig {
+            client_id: "app-key".into(),
+            client_secret: "app-secret".into(),
+            allowed_users: vec!["*".into()],
+        }),
+        ..Default::default()
+    };
+    let bare = build_long_tail_channel_with_host(&config, &host(), &DefaultHttpClients, "dingtalk")
+        .expect("configured App Bot should build");
+    assert!(!bare.capabilities().voice_in.supported);
+
+    let wired_host: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
+        .voice_media_store(Arc::new(StubVoice::default()))
+        .events(Arc::new(RecordingEvents::delivering()))
+        .build();
+    let wired =
+        build_long_tail_channel_with_host(&config, &wired_host, &DefaultHttpClients, "dingtalk")
+            .expect("configured App Bot should build with host ports");
+    let capabilities = wired.capabilities();
+    assert!(capabilities.voice_in.supported);
+    assert_eq!(capabilities.voice_in.max_size_bytes, Some(10 * 1024 * 1024));
+}

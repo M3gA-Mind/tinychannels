@@ -103,6 +103,44 @@ async fn full_dm_dispatch() {
     );
 }
 
+#[tokio::test]
+async fn sound_element_with_a_download_url_survives_the_empty_text_filter() {
+    let mut config = cfg("bot1");
+    config.dm_access = "open".into();
+    let pipeline = InboundPipeline::new(PipelineState::new(&config, "bot1".into()));
+    let body = serde_json::json!({
+        "from_account": "alice",
+        "to_account": "bot1",
+        "msg_id": "voice-message-7",
+        "msg_body": [{
+            "msg_type": "TIMSoundElem",
+            "msg_content": {
+                "sound": "voice-uuid-7",
+                "url": "https://media.example.test/voice.ogg",
+                "file_size": 321,
+                "file_name": "voice.ogg"
+            }
+        }]
+    })
+    .to_string();
+
+    match pipeline.process(body.as_bytes()).await {
+        PipelineOutcome::Dispatch(ctx) => {
+            assert_eq!(ctx.msg.msg_id, "voice-message-7");
+            assert_eq!(ctx.kind, MessageKind::Voice);
+            assert_eq!(
+                ctx.msg.msg_body[0].msg_content.sound.as_deref(),
+                Some("voice-uuid-7")
+            );
+            assert_eq!(
+                ctx.msg.msg_body[0].msg_content.url.as_deref(),
+                Some("https://media.example.test/voice.ogg")
+            );
+        }
+        outcome => panic!("downloadable TIMSoundElem should dispatch, got {outcome:?}"),
+    }
+}
+
 #[test]
 fn pipeline_orders_trust_and_filter_stages_before_dispatch_enrichment() {
     let pipeline = InboundPipeline::new(PipelineState::new(&cfg("bot1"), "bot1".into()));

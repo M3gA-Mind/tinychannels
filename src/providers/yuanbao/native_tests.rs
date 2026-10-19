@@ -66,6 +66,34 @@ fn media_is_advertised_only_when_scoped_host_storage_is_injected() {
 }
 
 #[test]
+fn inbound_voice_is_advertised_only_with_store_and_ordered_events() {
+    let store_only = channel().with_voice_media_store(Arc::new(
+        crate::providers::native::fixtures::StubVoice::default(),
+    ));
+    assert!(
+        !NativeProvider::declared_capabilities(&store_only)
+            .voice_in
+            .supported
+    );
+
+    let host_ready = channel()
+        .with_voice_media_store(Arc::new(
+            crate::providers::native::fixtures::StubVoice::default(),
+        ))
+        .with_events(Arc::new(
+            crate::providers::native::fixtures::RecordingEvents::delivering(),
+        ));
+    let capabilities = NativeProvider::declared_capabilities(&host_ready);
+    assert!(capabilities.voice_in.supported);
+    assert!(
+        capabilities
+            .voice_in
+            .accepted_codecs
+            .contains(&"ogg_opus".into())
+    );
+}
+
+#[test]
 fn configured_media_limit_does_not_exceed_yuanbao_wire_size() {
     let mut config = crate::providers::yuanbao::YuanbaoConfig::default();
     config.app_key = "app".into();
