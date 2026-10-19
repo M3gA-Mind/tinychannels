@@ -1383,20 +1383,25 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
         staff_id: &str,
         text: &str,
     ) -> tokio_tungstenite::tungstenite::Message {
+        let data = json!({
+            "msgId": provider_id,
+            "msgtype": "text",
+            "robotCode": "robot-account-1",
+            "senderStaffId": staff_id,
+            "senderId": "$:union-user-1",
+            "conversationType": "2",
+            "conversationId": "open-group-1",
+            "text": {"content": text}
+        })
+        .to_string();
         tokio_tungstenite::tungstenite::Message::Text(
             json!({
                 "type": "CALLBACK",
-                "headers": {"messageId": frame_id},
-                "data": {
-                    "msgId": provider_id,
-                    "msgtype": "text",
-                    "robotCode": "robot-account-1",
-                    "senderStaffId": staff_id,
-                    "senderId": "$:union-user-1",
-                    "conversationType": "2",
-                    "conversationId": "open-group-1",
-                    "text": {"content": text}
-                }
+                "headers": {
+                    "messageId": frame_id,
+                    "topic": "/v1.0/im/bot/messages/get"
+                },
+                "data": data
             })
             .to_string()
             .into(),
@@ -1489,7 +1494,10 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
                 .send(Message::Text(
                     json!({
                         "type": "SYSTEM",
-                        "headers": {"messageId": format!("ping-{session}")}
+                        "headers": {
+                            "messageId": format!("ping-{session}"),
+                            "topic": "ping"
+                        }
                     })
                     .to_string()
                     .into(),
