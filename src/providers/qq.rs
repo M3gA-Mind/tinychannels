@@ -568,11 +568,11 @@ impl QQChannel {
                                 sender_name: None,
                             };
 
-                            if let Some(tx) = legacy_tx {
-                                if tx.send(channel_msg).await.is_err() {
-                                    tracing::warn!("QQ: message channel closed");
-                                    break;
-                                }
+                            if let Some(tx) = legacy_tx
+                                && tx.send(channel_msg).await.is_err()
+                            {
+                                tracing::warn!("QQ: message channel closed");
+                                break;
                             }
                         }
                         "GROUP_AT_MESSAGE_CREATE" => {
@@ -660,11 +660,11 @@ impl QQChannel {
                                 sender_name: None,
                             };
 
-                            if let Some(tx) = legacy_tx {
-                                if tx.send(channel_msg).await.is_err() {
-                                    tracing::warn!("QQ: message channel closed");
-                                    break;
-                                }
+                            if let Some(tx) = legacy_tx
+                                && tx.send(channel_msg).await.is_err()
+                            {
+                                tracing::warn!("QQ: message channel closed");
+                                break;
                             }
                         }
                         _ => {}
