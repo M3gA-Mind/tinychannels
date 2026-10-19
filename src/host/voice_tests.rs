@@ -362,7 +362,10 @@ async fn prepare_voice_reply_can_encode_measured_amr_for_app_bot() {
     assert_eq!(stored.file_name.as_deref(), Some("voice.amr"));
     assert_eq!(stored.duration_ms, Some(1_240));
     assert_eq!(prepared.note.media.opaque_id.as_deref(), Some("amr-media"));
-    assert_eq!(prepared.note.media.content_type.as_deref(), Some("audio/amr"));
+    assert_eq!(
+        prepared.note.media.content_type.as_deref(),
+        Some("audio/amr")
+    );
     assert_eq!(prepared.note.media.codec.as_deref(), Some("amr_nb"));
     assert_eq!(prepared.note.duration_ms, Some(1_240));
 }

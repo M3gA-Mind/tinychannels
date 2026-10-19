@@ -336,8 +336,7 @@ async fn typed_voice_send_forwards_amr_bytes_and_declared_duration() {
     use tinychannels_bus::channel::MessageReceiptPartKind;
     use tinychannels_runtime::channel::ChannelTypedSend;
 
-    const AMR_BYTES: &[u8] =
-        include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr");
+    const AMR_BYTES: &[u8] = include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr");
 
     let server = HttpsServer::start_with_bytes(
         |request| match (request.method.as_str(), request.target.as_str()) {
@@ -417,6 +416,103 @@ async fn typed_voice_send_forwards_amr_bytes_and_declared_duration() {
 }
 
 #[tokio::test]
+async fn typed_voice_send_preserves_transcript_as_an_ordered_text_message() {
+    use crate::providers::http_test_support::HttpsServer;
+    use tinychannels_bus::channel::MessageReceiptPartKind;
+    use tinychannels_bus::{ContentPart, OutboundContentPart};
+    use tinychannels_runtime::channel::ChannelTypedSend;
+
+    const AMR_BYTES: &[u8] = include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr");
+    let server = HttpsServer::start_with_bytes(
+        |request| match (request.method.as_str(), request.target.as_str()) {
+            ("POST", "/v1.0/oauth2/accessToken") => {
+                (200, json!({"accessToken":"token"}).to_string().into_bytes())
+            }
+            ("POST", target) if target.starts_with("/media/upload?") => {
+                assert!(target.contains("type=voice"));
+                assert!(
+                    request
+                        .raw_body
+                        .windows(AMR_BYTES.len())
+                        .any(|w| w == AMR_BYTES)
+                );
+                (
+                    200,
+                    json!({"media_id":"voice-media-id"})
+                        .to_string()
+                        .into_bytes(),
+                )
+            }
+            ("POST", "/v1.0/robot/groupMessages/send") => {
+                let params: serde_json::Value = serde_json::from_str(
+                    request.body["msgParam"]
+                        .as_str()
+                        .expect("msgParam is JSON text"),
+                )
+                .unwrap();
+                match request.body["msgKey"].as_str() {
+                    Some("sampleText") => {
+                        assert_eq!(params["content"], "voice transcript");
+                        (
+                            200,
+                            json!({"processQueryKey":"text-receipt"})
+                                .to_string()
+                                .into_bytes(),
+                        )
+                    }
+                    Some("sampleAudio") => {
+                        assert_eq!(params["mediaId"], "voice-media-id");
+                        assert_eq!(params["duration"], "1240");
+                        (
+                            200,
+                            json!({"processQueryKey":"voice-receipt"})
+                                .to_string()
+                                .into_bytes(),
+                        )
+                    }
+                    other => panic!("unexpected DingTalk message template: {other:?}"),
+                }
+            }
+            _ => panic!("unexpected DingTalk request: {request:?}"),
+        },
+        "application/json",
+    )
+    .await;
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    )
+    .with_voice_media_store(Arc::new(ReadableAmrVoice(AMR_BYTES.to_vec())));
+    channel.robot_contexts.write().await.insert(
+        conversation_context_key(ConversationKind::Group, "open-group-amr"),
+        json!({"robotCode":"group-robot"}),
+    );
+    let mut message = voice_message("open-group-amr");
+    message.parts.insert(
+        0,
+        OutboundContentPart::Content {
+            part: ContentPart::Text {
+                text: "voice transcript".into(),
+                markdown_dialect: None,
+            },
+        },
+    );
+
+    let sent = channel
+        .send_typed(&message)
+        .await
+        .expect("DingTalk should preserve transcript and voice as separate messages");
+
+    assert_eq!(sent.receipt.parts.len(), 2);
+    assert_eq!(sent.receipt.parts[0].kind, MessageReceiptPartKind::Text);
+    assert_eq!(sent.receipt.parts[0].platform_message_id, "text-receipt");
+    assert_eq!(sent.receipt.parts[1].kind, MessageReceiptPartKind::Voice);
+    assert_eq!(sent.receipt.parts[1].platform_message_id, "voice-receipt");
+}
+
+#[tokio::test]
 async fn typed_voice_over_two_mib_is_rejected_before_platform_requests() {
     use crate::providers::http_test_support::HttpsServer;
     use tinychannels_runtime::channel::ChannelTypedSend;
@@ -469,9 +565,24 @@ fn typed_voice_capabilities_advertise_amr_when_host_ports_are_available() {
             .iter()
             .any(|mime| mime == "audio/amr")
     );
-    assert!(caps.content.audio.accepted_types.contains(&"audio/ogg".into()));
-    assert!(caps.content.audio.accepted_types.contains(&"audio/mpeg".into()));
-    assert!(caps.content.audio.accepted_types.contains(&"audio/mp4".into()));
+    assert!(
+        caps.content
+            .audio
+            .accepted_types
+            .contains(&"audio/ogg".into())
+    );
+    assert!(
+        caps.content
+            .audio
+            .accepted_types
+            .contains(&"audio/mpeg".into())
+    );
+    assert!(
+        caps.content
+            .audio
+            .accepted_types
+            .contains(&"audio/mp4".into())
+    );
     assert!(caps.voice_out.supported);
     assert_eq!(caps.voice_out.accepted_codecs, ["amr_nb"]);
     assert_eq!(caps.voice_out.max_size_bytes, Some(2 * 1024 * 1024));

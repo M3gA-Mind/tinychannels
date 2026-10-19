@@ -104,6 +104,10 @@ impl NativeProvider for DingTalkChannel {
         false
     }
 
+    fn voice_caption_supported(&self) -> bool {
+        false
+    }
+
     fn declared_capabilities(&self) -> ChannelCapabilities {
         let mut caps = crate::providers::long_tail::text_capabilities(
             crate::providers::long_tail::TextSpec::default(),
@@ -419,7 +423,11 @@ impl DingTalkChannel {
         self.upload_media(token, file, "file").await
     }
 
-    async fn upload_voice(&self, token: &str, voice: &FileStep) -> Result<String, ChannelSendError> {
+    async fn upload_voice(
+        &self,
+        token: &str,
+        voice: &FileStep,
+    ) -> Result<String, ChannelSendError> {
         self.upload_media(token, voice, "voice").await
     }
 
@@ -436,7 +444,9 @@ impl DingTalkChannel {
         let form = reqwest::multipart::Form::new().part("media", part);
         let response = self
             .http_client()
-            .post(format!("{DINGTALK_UPLOAD}?access_token={token}&type={media_type}"))
+            .post(format!(
+                "{DINGTALK_UPLOAD}?access_token={token}&type={media_type}"
+            ))
             .multipart(form)
             .send()
             .await

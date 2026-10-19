@@ -178,8 +178,9 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
             OutboundContentPart::Content {
                 part: ContentPart::Text { .. },
             } => {
-                // With a voice clip the text is the transcript caption.
-                if voice_count == 0
+                // Providers without voice captions receive transcript text as
+                // its own ordered step before or after the voice upload.
+                if (voice_count == 0 || !provider.voice_caption_supported())
                     && let Some(text) = text_of(part).filter(|text| !text.trim().is_empty())
                 {
                     for chunk in chunk_text(&text, limits.text_chars) {
@@ -253,11 +254,10 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                 }));
             }
             OutboundContentPart::Voice {
-                voice: OutboundVoice::Media {
-                    media,
-                    duration_ms,
-                    ..
-                },
+                voice:
+                    OutboundVoice::Media {
+                        media, duration_ms, ..
+                    },
             } => {
                 let store = provider.voice_media_store().ok_or_else(|| {
                     unsupported(&format!("{display} voice needs host voice storage"))
@@ -313,7 +313,10 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                     mime: resolved.mime_type,
                     name: resolved.file_name.unwrap_or_else(|| default_name.into()),
                     bytes: audio,
-                    caption: Some(caption).filter(|c| !c.trim().is_empty()),
+                    caption: provider
+                        .voice_caption_supported()
+                        .then_some(caption)
+                        .filter(|c| !c.trim().is_empty()),
                     duration_ms: *duration_ms,
                 }));
             }
