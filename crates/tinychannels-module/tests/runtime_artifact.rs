@@ -417,7 +417,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     assert_eq!(prepared.client_id, "inbound:discord:user");
     assert_eq!(
         prepared.session_key,
-        "tenant:discord:default:unknown:room:user"
+        "v22|namespace=p6:tenant|channel=p7:discord|account=a|kind=p7:unknown|scope=a|conversation=p4:room|parent=a|topic=a|thread=a|participant=p4:user"
     );
     assert_eq!(prepared.envelope.text, "fixture");
 
