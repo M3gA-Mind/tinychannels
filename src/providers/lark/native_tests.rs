@@ -132,3 +132,46 @@ async fn lark_preflights_audio_that_needs_a_host_codec_before_delivery() {
     assert!(!error.sent_before_error);
     assert!(error.message.contains("host voice codec"));
 }
+
+#[tokio::test]
+async fn lark_preflights_unsupported_image_and_video_formats() {
+    let channel = super::super::LarkChannel::new(
+        "app-id".into(),
+        "app-secret".into(),
+        "verify-token".into(),
+        None,
+        vec!["*".into()],
+    );
+    let target = Target {
+        channel: ChannelRef {
+            id: "lark".into(),
+            account_id: None,
+        },
+        conversation: ConversationRef {
+            id: "chat-1".into(),
+            ..Default::default()
+        },
+        reply_to: None,
+        thread: None,
+    };
+
+    for (kind, mime, bytes) in [
+        (MediaKind::Image, "image/svg+xml", vec![0; 1]),
+        (MediaKind::Image, "image/png", vec![0; 10 * 1024 * 1024 + 1]),
+        (MediaKind::Video, "video/quicktime", vec![0; 1]),
+    ] {
+        let mut steps = [Step::File(FileStep {
+            kind,
+            bytes,
+            mime: mime.into(),
+            name: "attachment.bin".into(),
+            caption: None,
+        })];
+        let error = NativeProvider::prepare_steps(&channel, &target, &mut steps)
+            .await
+            .unwrap_err();
+
+        assert!(!error.sent_before_error);
+        assert!(!error.retryable);
+    }
+}
