@@ -469,9 +469,14 @@ fn typed_voice_capabilities_advertise_amr_when_host_ports_are_available() {
             .iter()
             .any(|mime| mime == "audio/amr")
     );
+    assert!(caps.content.audio.accepted_types.contains(&"audio/ogg".into()));
+    assert!(caps.content.audio.accepted_types.contains(&"audio/mpeg".into()));
+    assert!(caps.content.audio.accepted_types.contains(&"audio/mp4".into()));
     assert!(caps.voice_out.supported);
     assert_eq!(caps.voice_out.accepted_codecs, ["amr_nb"]);
     assert_eq!(caps.voice_out.max_size_bytes, Some(2 * 1024 * 1024));
+    assert!(caps.voice_in.accepted_codecs.contains(&"ogg_opus".into()));
+    assert_eq!(caps.voice_in.max_size_bytes, Some(10 * 1024 * 1024));
 }
 
 #[tokio::test]

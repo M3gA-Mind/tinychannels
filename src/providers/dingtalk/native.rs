@@ -143,13 +143,23 @@ impl NativeProvider for DingTalkChannel {
         if self.native.events.is_some() && self.native.voice_media_store.is_some() {
             caps.content.audio = ContentCapability {
                 inbound: true,
-                accepted_types: vec!["audio/amr".into()],
-                max_size_bytes: Some(MAX_VOICE_BYTES),
+                accepted_types: vec![
+                    "audio/ogg".into(),
+                    "audio/mpeg".into(),
+                    "audio/mp4".into(),
+                    "audio/amr".into(),
+                ],
+                max_size_bytes: Some(MAX_MEDIA_BYTES),
                 ..Default::default()
             };
             caps.voice_in.supported = true;
-            caps.voice_in.accepted_codecs = vec!["amr_nb".into()];
-            caps.voice_in.max_size_bytes = Some(MAX_VOICE_BYTES);
+            caps.voice_in.accepted_codecs = vec![
+                "ogg_opus".into(),
+                "mp3".into(),
+                "m4a_aac".into(),
+                "amr_nb".into(),
+            ];
+            caps.voice_in.max_size_bytes = Some(MAX_MEDIA_BYTES);
         }
         if self.native.voice_media_store.is_some() {
             caps.content.parts.push("voice".into());
@@ -185,6 +195,11 @@ impl NativeProvider for DingTalkChannel {
                 }
                 Step::Text(_) => {}
                 Step::Voice(voice) => {
+                    if voice.bytes.is_empty() || voice.bytes.len() as u64 > MAX_VOICE_BYTES {
+                        return Err(pre_dispatch(
+                            "DingTalk App Bot voice exceeds the 2 MiB upload limit",
+                        ));
+                    }
                     if voice.mime != "audio/amr" || !voice.bytes.starts_with(b"#!AMR\n") {
                         return Err(pre_dispatch(
                             "DingTalk App Bot voice must be an AMR-NB audio stream",
@@ -513,9 +528,8 @@ impl DingTalkChannel {
             }
             .and_then(serde_json::Value::as_str)?;
             let robot_code = data.get("robotCode")?.as_str()?;
-            let media_limit = if voice { MAX_VOICE_BYTES } else { MAX_MEDIA_BYTES };
             let (bytes, mime) = self
-                .download_media(download_code, robot_code, media_limit)
+                .download_media(download_code, robot_code, MAX_MEDIA_BYTES)
                 .await?;
             let image = message_type == "picture";
             let transcript = content
@@ -538,7 +552,7 @@ impl DingTalkChannel {
                 voice_store: self.native.voice_media_store.as_ref(),
                 transcriber: self.native.transcriber.as_ref(),
                 file_bytes: MAX_MEDIA_BYTES,
-                voice_bytes: MAX_VOICE_BYTES,
+                voice_bytes: MAX_MEDIA_BYTES,
             }
             .add(
                 &mut ingested,

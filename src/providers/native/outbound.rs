@@ -302,11 +302,16 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                     .ok_or_else(|| {
                         pre_dispatch(&format!("{display} voice media failed upload validation"))
                     })?;
+                let default_name = if resolved.mime_type == "audio/amr" {
+                    "voice.amr"
+                } else {
+                    "voice.m4a"
+                };
                 steps.push(Step::Voice(FileStep {
                     #[cfg(feature = "lark")]
                     kind: MediaKind::Audio,
                     mime: resolved.mime_type,
-                    name: resolved.file_name.unwrap_or_else(|| "voice.m4a".into()),
+                    name: resolved.file_name.unwrap_or_else(|| default_name.into()),
                     bytes: audio,
                     caption: Some(caption).filter(|c| !c.trim().is_empty()),
                     duration_ms: *duration_ms,
