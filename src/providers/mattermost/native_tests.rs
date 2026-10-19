@@ -284,7 +284,9 @@ async fn packed_thread_address_cannot_conflict_with_the_canonical_thread() {
     let mut message = image_message("channel-1:root-1");
     message.conversation_ref.as_mut().unwrap().thread_id = Some("root-2".into());
 
-    let error = NativeProvider::normalized_target(&channel, &message).unwrap_err();
+    let error = NativeProvider::normalized_target(&channel, &message)
+        .err()
+        .expect("conflicting thread roots must be rejected before upload");
 
     assert_eq!(error.kind, SendErrorKind::BadFormat);
     assert!(!error.sent_before_error);

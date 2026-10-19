@@ -19,7 +19,7 @@ const MAX_INBOUND_ATTACHMENTS: usize = 10;
 const DIRECT_UPLOAD_LIMIT: u64 = 5 * 1024 * 1024;
 const TEXT_LIMIT: usize = 2000;
 
-fn timestamp_unix_ms(value: &serde_json::Value) -> Option<u64> {
+pub(super) fn timestamp_unix_ms(value: &serde_json::Value) -> Option<u64> {
     if let Some(timestamp) = value.as_u64() {
         return Some(timestamp);
     }
