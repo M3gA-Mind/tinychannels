@@ -44,13 +44,16 @@ struct LarkFixture {
     server: HttpsServer,
     media: Arc<StubMedia>,
     observations: Mutex<Vec<WireObservation>>,
+    issued_message_ids: Arc<Mutex<Vec<String>>>,
 }
 
 impl LarkFixture {
     async fn start() -> Self {
         let next_id = Arc::new(AtomicUsize::new(1));
+        let issued_message_ids = Arc::new(Mutex::new(Vec::new()));
         let server = HttpsServer::start({
             let next_id = next_id.clone();
+            let issued = issued_message_ids.clone();
             move |request| {
                 if is_token_request(request) {
                     token_ok("t-conformance")
@@ -65,10 +68,11 @@ impl LarkFixture {
                         r#"{"code":0,"data":{"file_key":"file-conformance"}}"#.into(),
                     )
                 } else if request.target.starts_with("/open-apis/im/v1/messages?") {
-                    let id = next_id.fetch_add(1, Ordering::SeqCst);
+                    let id = format!("om-{}", next_id.fetch_add(1, Ordering::SeqCst));
+                    issued.lock().push(id.clone());
                     (
                         200,
-                        format!(r#"{{"code":0,"data":{{"message_id":"om-{id}"}}}}"#),
+                        format!(r#"{{"code":0,"data":{{"message_id":"{id}"}}}}"#),
                     )
                 } else {
                     (
@@ -110,6 +114,7 @@ impl LarkFixture {
             server,
             media,
             observations: Mutex::new(Vec::new()),
+            issued_message_ids,
         }
     }
 
@@ -140,7 +145,13 @@ impl LarkFixture {
         payload: OutboundPayload,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         let before = self.request_count().await;
+        let issued_before = self.issued_message_ids.lock().len();
         let outcome = ChannelAdapter::send(self.channel.as_ref(), self.intent(payload)).await?;
+        let issued_ids = self.issued_message_ids.lock()[issued_before..].to_vec();
+        assert_eq!(
+            outcome.receipt.platform_message_ids, issued_ids,
+            "adapter receipt must match IDs returned by the mocked Lark API"
+        );
         let requests = self.server.requests.lock().unwrap().clone();
         let request = requests[before..]
             .iter()
@@ -177,7 +188,7 @@ impl LarkFixture {
             reply_to_id: None,
             thread_id: None,
             payload_kinds: vec![payload_kind.into()],
-            platform_message_ids: outcome.receipt.platform_message_ids.clone(),
+            platform_message_ids: issued_ids,
             request: request.body.clone(),
         });
         Ok(Some(result))
