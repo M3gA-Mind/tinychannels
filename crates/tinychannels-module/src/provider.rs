@@ -1143,6 +1143,16 @@ pub(crate) struct NativePorts {
     edits: Arc<dyn tinychannels::channel::ChannelEdit>,
     deletes: Arc<dyn tinychannels::channel::ChannelDelete>,
     drafts: Arc<dyn tinychannels::channel::ChannelStreamingDraft>,
+    listener_mode: LongTailListenerMode,
+}
+
+/// Which listener implementation owns inbound delivery for a long-tail
+/// provider. Migrated providers run their typed adapter directly; the others
+/// keep their existing legacy listener until their own migration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LongTailListenerMode {
+    Legacy,
+    Adapter,
 }
 
 impl NativePorts {
@@ -1166,12 +1176,17 @@ impl NativePorts {
             edits: channel.clone(),
             deletes: channel.clone(),
             drafts: channel,
+            listener_mode: LongTailListenerMode::Legacy,
         }
     }
 
     /// Ports over one long-tail provider object (Lark, Mattermost, IRC, QQ,
     /// DingTalk, Yuanbao); `provider` is its display name in errors.
-    fn long_tail(channel: Arc<dyn tinychannels::LongTailNative>, provider: &'static str) -> Self {
+    fn long_tail(
+        channel: Arc<dyn tinychannels::LongTailNative>,
+        provider: &'static str,
+        listener_mode: LongTailListenerMode,
+    ) -> Self {
         Self {
             provider,
             adapter: channel.clone(),
@@ -1181,6 +1196,7 @@ impl NativePorts {
             edits: channel.clone(),
             deletes: channel.clone(),
             drafts: channel,
+            listener_mode,
         }
     }
 
@@ -1699,6 +1715,7 @@ impl Running {
         host: HostChannels,
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
+        listener_mode: LongTailListenerMode,
     ) -> Arc<Self> {
         let channel_dyn: Arc<dyn Channel> = channel.clone();
         Self::start_inner(
@@ -1707,7 +1724,7 @@ impl Running {
             host,
             supervision,
             outbound_only,
-            Some(NativePorts::long_tail(channel, provider)),
+            Some(NativePorts::long_tail(channel, provider, listener_mode)),
         )
     }
 
