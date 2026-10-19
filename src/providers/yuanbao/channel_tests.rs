@@ -18,6 +18,38 @@ fn channel_construction_validates() {
 }
 
 #[test]
+fn stale_listener_registration_cannot_clear_a_replacement_owner() {
+    let listener = Arc::new(std::sync::Mutex::new(None));
+    let (old_cancel, mut old_cancelled) = watch::channel(false);
+    let stale_registration = YuanbaoListenerRegistration {
+        listener: Arc::clone(&listener),
+        id: 1,
+        cancel: old_cancel,
+    };
+    let (replacement_cancel, _replacement_receiver) = watch::channel(false);
+    *listener.lock().unwrap() = Some(YuanbaoListenerState {
+        id: 2,
+        cancel: replacement_cancel,
+        connection_started: false,
+        connection_done: false,
+        abandoned: false,
+    });
+
+    drop(stale_registration);
+
+    let slot = listener.lock().unwrap();
+    assert_eq!(
+        slot.as_ref().map(|owner| owner.id),
+        Some(2),
+        "a stale registration must not erase the newer listener generation"
+    );
+    assert!(
+        *old_cancelled.borrow(),
+        "dropping the stale owner still cancels it"
+    );
+}
+
+#[test]
 fn host_voice_store_is_retained_for_native_inbound_services() {
     let store = Arc::new(crate::providers::native::fixtures::StubVoice::default());
     let channel = YuanbaoChannel::new(good_cfg())

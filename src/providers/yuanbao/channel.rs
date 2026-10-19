@@ -868,10 +868,13 @@ impl Drop for YuanbaoListenerRegistration {
             .listener
             .lock()
             .unwrap_or_else(|error| error.into_inner());
-        if let Some(active) = slot.as_mut().filter(|active| active.id == self.id)
-            && active.connection_started
-            && !active.connection_done
-        {
+        let Some(active) = slot.as_mut() else {
+            return;
+        };
+        if active.id != self.id {
+            return;
+        }
+        if active.connection_started && !active.connection_done {
             active.abandoned = true;
             return;
         }
