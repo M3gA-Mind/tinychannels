@@ -5369,21 +5369,21 @@ async fn configured_mattermost_launch_delivers_scoped_attachment_only_posts() {
         .and(path("/api/v4/channels/channel-1/posts"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "posts": {
-                "post-1": {
-                    "id": "post-1",
-                    "user_id": "alice",
-                    "message": "",
-                    "create_at": create_at,
-                    "root_id": "thread-1",
-                    "file_ids": ["file-1"]
-                },
                 "post-denied": {
                     "id": "post-denied",
                     "user_id": "mallory",
                     "message": "",
-                    "create_at": create_at + 1,
+                    "create_at": create_at,
                     "root_id": "",
                     "file_ids": ["file-denied"]
+                },
+                "post-1": {
+                    "id": "post-1",
+                    "user_id": "alice",
+                    "message": "",
+                    "create_at": create_at + 1,
+                    "root_id": "thread-1",
+                    "file_ids": ["file-1"]
                 }
             }
         })))

@@ -271,19 +271,34 @@ async fn public_adapter_start_owns_mattermost_polling_until_stop_and_restart() {
     )
     .unwrap()
         + 10 * 60 * 1000;
+    let poll_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let poll_sequence = Arc::clone(&poll_count);
     Mock::given(method("GET"))
         .and(path("/api/v4/channels/channel-1/posts"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "posts": {
-                "post-1": {
-                    "id": "post-1",
-                    "user_id": "alice",
-                    "message": "hello through the typed listener",
-                    "create_at": create_at,
-                    "root_id": "thread-1"
+        .respond_with(move |_request: &wiremock::Request| {
+            let (id, text, thread, timestamp) =
+                if poll_sequence.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                    ("post-1", "first typed delivery", "thread-1", create_at)
+                } else {
+                    (
+                        "post-2",
+                        "delivery after restart",
+                        "thread-2",
+                        create_at + 1,
+                    )
+                };
+            ResponseTemplate::new(200).set_body_json(json!({
+                "posts": {
+                    (id): {
+                        "id": id,
+                        "user_id": "alice",
+                        "message": text,
+                        "create_at": timestamp,
+                        "root_id": thread
+                    }
                 }
-            }
-        })))
+            }))
+        })
         .mount(&server)
         .await;
 
@@ -319,14 +334,37 @@ async fn public_adapter_start_owns_mattermost_polling_until_stop_and_restart() {
         };
         assert_eq!(envelope.channel.id, "mattermost");
         assert_eq!(envelope.conversation.id, "channel-1");
-        assert_eq!(envelope.conversation.thread_id.as_deref(), Some("thread-1"));
-        assert_eq!(envelope.message_id, "post-1");
+        let expected_id = if expected_delivery == 1 {
+            "post-1"
+        } else {
+            "post-2"
+        };
+        let expected_thread = if expected_delivery == 1 {
+            "thread-1"
+        } else {
+            "thread-2"
+        };
+        let expected_text = if expected_delivery == 1 {
+            "first typed delivery"
+        } else {
+            "delivery after restart"
+        };
+        let expected_timestamp = if expected_delivery == 1 {
+            create_at
+        } else {
+            create_at + 1
+        };
+        assert_eq!(
+            envelope.conversation.thread_id.as_deref(),
+            Some(expected_thread)
+        );
+        assert_eq!(envelope.message_id, expected_id);
         assert_eq!(envelope.sender.id, "alice");
         assert_eq!(
             envelope.timestamp_unix_ms,
-            Some(u64::try_from(create_at).unwrap())
+            Some(u64::try_from(expected_timestamp).unwrap())
         );
-        assert_eq!(envelope.text, "hello through the typed listener");
+        assert_eq!(envelope.text, expected_text);
 
         adapter.stop().await.unwrap();
         tokio::time::timeout(GUARD, &mut listener)
@@ -334,7 +372,13 @@ async fn public_adapter_start_owns_mattermost_polling_until_stop_and_restart() {
             .expect("Mattermost stop must join its polling listener")
             .expect("Mattermost listener must not panic")
             .expect("Mattermost listener must stop cleanly");
-        assert!(rx.try_recv().is_err(), "one poll must publish only once");
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+            ),
+            "one poll must publish only once"
+        );
     }
 
     let requests = server.received_requests().await.unwrap();
@@ -374,19 +418,11 @@ async fn public_mattermost_listener_admits_before_fetching_attachments() {
         .and(path("/api/v4/channels/channel-1/posts"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
             "posts": {
-                "post-allowed": {
-                    "id": "post-allowed",
-                    "user_id": "alice",
-                    "message": "@mattermost-bot keep this",
-                    "create_at": create_at,
-                    "root_id": "",
-                    "file_ids": ["file-allowed"]
-                },
                 "post-unmentioned": {
                     "id": "post-unmentioned",
                     "user_id": "alice",
                     "message": "do not fetch this file",
-                    "create_at": create_at + 1,
+                    "create_at": create_at,
                     "root_id": "",
                     "file_ids": ["file-unmentioned"]
                 },
@@ -394,9 +430,17 @@ async fn public_mattermost_listener_admits_before_fetching_attachments() {
                     "id": "post-denied",
                     "user_id": "mallory",
                     "message": "@mattermost-bot denied",
-                    "create_at": create_at + 2,
+                    "create_at": create_at + 1,
                     "root_id": "",
                     "file_ids": ["file-denied"]
+                },
+                "post-allowed": {
+                    "id": "post-allowed",
+                    "user_id": "alice",
+                    "message": "@mattermost-bot keep this",
+                    "create_at": create_at + 2,
+                    "root_id": "",
+                    "file_ids": ["file-allowed"]
                 }
             }
         })))
