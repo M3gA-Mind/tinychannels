@@ -83,6 +83,19 @@ impl Peer {
         line.trim_end_matches(['\r', '\n']).to_string()
     }
 
+    async fn is_closed(&mut self) -> bool {
+        let mut line = String::new();
+        match tokio::time::timeout(GUARD, self.reader.read_line(&mut line))
+            .await
+            .expect("peer should observe listener cleanup")
+        {
+            Ok(0) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => true,
+            Ok(_) => false,
+            Err(error) => panic!("unexpected TLS peer read error: {error}"),
+        }
+    }
+
     async fn expect(&mut self, want: &str) {
         assert_eq!(self.next_line().await, want);
     }
@@ -251,10 +264,8 @@ async fn public_adapter_cleans_up_after_sink_failure_and_can_restart() {
     assert_eq!(error.message, "IRC listener stopped");
     assert!(!error.message.contains("private sink failure detail"));
     assert!(
-        tokio::time::timeout(GUARD, peer.next_line())
-            .await
-            .expect("the failed listener must close its socket")
-            .is_empty()
+        peer.is_closed().await,
+        "the failed listener must close its socket"
     );
 
     // A second start on the same adapter proves the failed run released its
