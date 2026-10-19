@@ -46,7 +46,7 @@ async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request(
     let server = HttpsServer::start(|request| {
         if is_token_request(request) {
             token_ok("t-1")
-        } else if request.target == "/open-apis/im/v1/messages" {
+        } else if request.target == "/open-apis/im/v1/messages?receive_id_type=chat_id" {
             (
                 200,
                 serde_json::json!({"code": 0, "data": {"message_id": "om-text-1"}}).to_string(),
