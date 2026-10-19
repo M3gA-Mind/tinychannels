@@ -292,7 +292,7 @@ impl LongTailFixture {
     fn intent(&self, feature: Feature, payload: OutboundPayload) -> ChannelOutboundIntent {
         let conversation = if self.id == "qq" {
             ConversationRef {
-                id: CHANNEL.into(),
+                id: format!("user:{CHANNEL}"),
                 ..Default::default()
             }
         } else {
@@ -301,7 +301,11 @@ impl LongTailFixture {
         ChannelOutboundIntent {
             idempotency_key: format!("kit-{feature:?}"),
             channel_id: self.id.into(),
-            conversation_id: CHANNEL.into(),
+            conversation_id: if self.id == "qq" {
+                format!("user:{CHANNEL}")
+            } else {
+                CHANNEL.into()
+            },
             channel_ref: Some(account(self.id)),
             conversation_ref: Some(conversation.clone()),
             thread_id: conversation.thread_id.clone(),
