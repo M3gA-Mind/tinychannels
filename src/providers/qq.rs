@@ -396,27 +396,24 @@ impl QQChannel {
 
         let mut sequence: i64 = -1;
 
-        // Spawn heartbeat timer
-        let (hb_tx, mut hb_rx) = tokio::sync::mpsc::channel::<()>(1);
-        let hb_interval = heartbeat_interval;
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_millis(hb_interval));
-            loop {
-                interval.tick().await;
-                if hb_tx.send(()).await.is_err() {
-                    break;
-                }
-            }
-        });
+        // Keep the heartbeat timer in this task so cancellation cannot leave
+        // a detached timer sleeping after the gateway connection closes.
+        let mut heartbeat =
+            tokio::time::interval(std::time::Duration::from_millis(heartbeat_interval));
+        let mut stopped = false;
 
-        loop {
+        'gateway: loop {
             tokio::select! {
                 biased;
                 () = listener_cancelled(&mut cancellation) => {
-                    let _ = write.send(Message::Close(None)).await;
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(1),
+                        write.send(Message::Close(None)),
+                    ).await;
+                    stopped = true;
                     break;
                 }
-                _ = hb_rx.recv() => {
+                _ = heartbeat.tick() => {
                     let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
                     let hb = json!({"op": 1, "d": d});
                     if write
@@ -491,15 +488,34 @@ impl QQChannel {
                                 if self.has_duplicate(msg_id).await {
                                     continue;
                                 }
-                                let Some(envelope) = self
-                                    .inbound_envelope_for_listener("C2C_MESSAGE_CREATE", d)
-                                    .await
-                                else {
+                                let envelope = tokio::select! {
+                                    biased;
+                                    () = listener_cancelled(&mut cancellation) => {
+                                        let _ = tokio::time::timeout(
+                                            std::time::Duration::from_secs(1),
+                                            write.send(Message::Close(None)),
+                                        ).await;
+                                        stopped = true;
+                                        break 'gateway;
+                                    }
+                                    envelope = self.inbound_envelope_for_listener("C2C_MESSAGE_CREATE", d) => envelope,
+                                };
+                                let Some(envelope) = envelope else {
                                     continue;
                                 };
-                                sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
-                                    .await
-                                    .map_err(|error| anyhow::anyhow!(error.message))?;
+                                let published = tokio::select! {
+                                    biased;
+                                    () = listener_cancelled(&mut cancellation) => {
+                                        let _ = tokio::time::timeout(
+                                            std::time::Duration::from_secs(1),
+                                            write.send(Message::Close(None)),
+                                        ).await;
+                                        stopped = true;
+                                        break 'gateway;
+                                    }
+                                    result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
+                                };
+                                published.map_err(|error| anyhow::anyhow!(error.message))?;
                                 self.mark_duplicate(msg_id).await;
                                 continue;
                             }
@@ -565,15 +581,34 @@ impl QQChannel {
                                 if self.has_duplicate(msg_id).await {
                                     continue;
                                 }
-                                let Some(envelope) = self
-                                    .inbound_envelope_for_listener("GROUP_AT_MESSAGE_CREATE", d)
-                                    .await
-                                else {
+                                let envelope = tokio::select! {
+                                    biased;
+                                    () = listener_cancelled(&mut cancellation) => {
+                                        let _ = tokio::time::timeout(
+                                            std::time::Duration::from_secs(1),
+                                            write.send(Message::Close(None)),
+                                        ).await;
+                                        stopped = true;
+                                        break 'gateway;
+                                    }
+                                    envelope = self.inbound_envelope_for_listener("GROUP_AT_MESSAGE_CREATE", d) => envelope,
+                                };
+                                let Some(envelope) = envelope else {
                                     continue;
                                 };
-                                sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
-                                    .await
-                                    .map_err(|error| anyhow::anyhow!(error.message))?;
+                                let published = tokio::select! {
+                                    biased;
+                                    () = listener_cancelled(&mut cancellation) => {
+                                        let _ = tokio::time::timeout(
+                                            std::time::Duration::from_secs(1),
+                                            write.send(Message::Close(None)),
+                                        ).await;
+                                        stopped = true;
+                                        break 'gateway;
+                                    }
+                                    result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
+                                };
+                                published.map_err(|error| anyhow::anyhow!(error.message))?;
                                 self.mark_duplicate(msg_id).await;
                                 continue;
                             }
@@ -638,7 +673,11 @@ impl QQChannel {
             }
         }
 
-        anyhow::bail!("QQ WebSocket connection closed")
+        if stopped {
+            Ok(())
+        } else {
+            anyhow::bail!("QQ WebSocket connection closed")
+        }
     }
 }
 
