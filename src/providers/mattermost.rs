@@ -38,6 +38,24 @@ struct AdmittedPost {
     content: String,
 }
 
+struct ListenerRegistration<'a> {
+    channel: &'a MattermostChannel,
+    cancel: tokio::sync::watch::Sender<bool>,
+}
+
+impl Drop for ListenerRegistration<'_> {
+    fn drop(&mut self) {
+        self.cancel.send_replace(true);
+        let mut active = self.channel.listener_cancel.lock();
+        if active
+            .as_ref()
+            .is_some_and(|cancel| cancel.same_channel(&self.cancel))
+        {
+            *active = None;
+        }
+    }
+}
+
 impl MattermostChannel {
     pub fn new(
         base_url: String,
@@ -400,6 +418,8 @@ impl MattermostChannel {
             let Some(posts) = data.get("posts").and_then(serde_json::Value::as_object) else {
                 continue;
             };
+            let batch_cursor = last_create_at;
+            let mut next_cursor = batch_cursor;
             let mut post_list: Vec<_> = posts.values().collect();
             post_list.sort_by_key(|post| {
                 post.get("create_at")
@@ -410,17 +430,16 @@ impl MattermostChannel {
                 if *cancellation.borrow() {
                     return Ok(());
                 }
-                let cursor = last_create_at;
                 let create_at = post
                     .get("create_at")
                     .and_then(serde_json::Value::as_i64)
-                    .unwrap_or(last_create_at);
-                let Some(admitted) = self.admitted_post(post, &bot_user_id, &bot_username, cursor)
+                    .unwrap_or(batch_cursor);
+                next_cursor = next_cursor.max(create_at);
+                let Some(admitted) =
+                    self.admitted_post(post, &bot_user_id, &bot_username, batch_cursor)
                 else {
-                    last_create_at = last_create_at.max(create_at);
                     continue;
                 };
-                last_create_at = last_create_at.max(create_at);
                 let envelope = tokio::select! {
                     _ = cancellation.changed() => return Ok(()),
                     envelope = self.inbound_envelope_from_text(
@@ -440,6 +459,7 @@ impl MattermostChannel {
                     }
                 }
             }
+            last_create_at = next_cursor;
         }
     }
 
@@ -977,11 +997,13 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
                     ..Default::default()
                 });
             }
-            *active = Some(cancel);
+            *active = Some(cancel.clone());
         }
-        let result = self.listen_typed(sink, &mut cancellation).await;
-        self.listener_cancel.lock().take();
-        result
+        let _registration = ListenerRegistration {
+            channel: self,
+            cancel,
+        };
+        self.listen_typed(sink, &mut cancellation).await
     }
 
     async fn stop_listener(
