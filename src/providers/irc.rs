@@ -377,15 +377,21 @@ impl IrcChannel {
     }
 
     async fn stop_writer(&self) -> anyhow::Result<()> {
-        let mut guard = self.writer.lock().await;
-        let Some(mut writer) = guard.take() else {
+        let Some(mut writer) = self.writer.lock().await.take() else {
             return Ok(());
         };
-        let quit = Self::send_raw(&mut writer, "QUIT :OpenHuman stopping").await;
-        let shutdown = writer.shutdown().await;
-        quit?;
-        shutdown?;
-        Ok(())
+        match tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            Self::send_raw(&mut writer, "QUIT :OpenHuman stopping").await?;
+            writer.shutdown().await?;
+            Ok::<(), anyhow::Error>(())
+        })
+        .await
+        {
+            Ok(result) => result,
+            // The write half is already detached from shared state. Dropping it
+            // closes the socket even when a peer has stopped reading.
+            Err(_) => Ok(()),
+        }
     }
 
     async fn listen_loop(&self, ingress: IrcIngress<'_>) -> anyhow::Result<()> {
@@ -714,7 +720,10 @@ impl Channel for IrcChannel {
     }
 
     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        self.listen_owned(IrcIngress::Legacy(tx), None).await
+        let cancellation = self.begin_listener()?;
+        let _registration = ListenerRegistration(self);
+        self.listen_owned(IrcIngress::Legacy(tx), Some(cancellation))
+            .await
     }
 
     async fn health_check(&self) -> bool {
