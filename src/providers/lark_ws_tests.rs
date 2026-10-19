@@ -3,7 +3,9 @@
 //! URL served by a scripted pbbp2 gateway.
 
 use super::*;
+use crate::channel::{ChannelAdapter, ChannelInboundSink};
 use crate::providers::http_test_support::HttpsServer;
+use tinychannels_bus::channel::{ChannelIngress, ChannelSendError, SendErrorKind};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::WebSocketStream;
 
@@ -153,6 +155,75 @@ async fn send_data(
 
 async fn send_event(ws: &mut WebSocketStream<TcpStream>, seq_id: u64, payload: Vec<u8>) {
     send_data(ws, seq_id, &[("type", "event")], payload).await;
+}
+
+#[derive(Clone)]
+struct RecordingInboundSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
+
+#[async_trait::async_trait]
+impl ChannelInboundSink for RecordingInboundSink {
+    async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        self.0.send(ingress).map_err(|_| ChannelSendError {
+            kind: SendErrorKind::Transient,
+            message: "test sink closed".into(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn public_adapter_start_owns_lark_websocket_until_stop_and_restart() {
+    let gateway = gateway(vec!["ou_alice".into()]).await;
+    let channel = Arc::new(gateway.channel.clone());
+    let adapter: Arc<dyn ChannelAdapter> = channel;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = RecordingInboundSink(tx);
+
+    for (message_id, text) in [("om-first", "first connection"), ("om-second", "after restart")] {
+        let mut listener = tokio::spawn({
+            let adapter = adapter.clone();
+            let sink = sink.clone();
+            async move { adapter.start(&sink).await }
+        });
+        let mut ws = tokio::select! {
+            result = &mut listener => panic!("Lark adapter start returned before WebSocket ownership: {result:?}"),
+            socket = accept(&gateway.listener) => socket,
+        };
+        let initial_ping = next_frame(&mut ws).await;
+        assert_eq!(initial_ping.header_value("type"), "ping");
+
+        send_event(
+            &mut ws,
+            initial_ping.seq_id + 1,
+            event(message_id, "ou_alice", text(text)),
+        )
+        .await;
+        let ingress = tokio::select! {
+            result = &mut listener => panic!("Lark adapter returned before typed ingress: {result:?}"),
+            received = tokio::time::timeout(GUARD, rx.recv()) => received
+                .expect("admitted Lark event should reach supplied typed sink")
+                .expect("test sink remains connected"),
+        };
+        let ChannelIngress::Inbound(envelope) = ingress else {
+            panic!("Lark message must arrive as typed inbound ingress");
+        };
+        assert_eq!(envelope.message_id, message_id);
+        assert_eq!(envelope.sender.id, "ou_alice");
+        assert_eq!(envelope.conversation.id, "oc_chat");
+        assert_eq!(envelope.text, text);
+
+        adapter.stop().await.unwrap();
+        tokio::time::timeout(GUARD, &mut listener)
+            .await
+            .expect("Lark stop must join its WebSocket listener")
+            .expect("Lark listener must not panic")
+            .expect("Lark listener must stop cleanly");
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+        ));
+    }
 }
 
 #[tokio::test]
