@@ -502,9 +502,6 @@ impl Channel for QQChannel {
                             }
 
                             let content = d.get("content").and_then(|c| c.as_str()).unwrap_or("").trim();
-                            if content.is_empty() {
-                                continue;
-                            }
 
                             let author_id = d.get("author").and_then(|a| a.get("member_openid")).and_then(|m| m.as_str()).unwrap_or("unknown");
 
