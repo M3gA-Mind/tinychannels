@@ -211,90 +211,12 @@ impl DingTalkChannel {
     }
 }
 
-async fn listener_cancelled(
-    cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>,
-) {
-    match cancellation {
-        Some(receiver) => {
-            let _ = receiver.changed().await;
-        }
-        None => std::future::pending::<()>().await,
-    }
-}
-
-async fn until_listener_cancelled<F: std::future::Future>(
-    cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>,
-    future: F,
-) -> Option<F::Output> {
-    tokio::select! {
-        biased;
-        () = listener_cancelled(cancellation) => None,
-        output = future => Some(output),
-    }
-}
-
-fn no_redirect_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .expect("building the DingTalk attachment HTTP client should succeed")
-}
-
-#[async_trait]
-impl Channel for DingTalkChannel {
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::native::NativeProvider::declared_capabilities(self)
-    }
-
-    fn name(&self) -> &str {
-        "dingtalk"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let webhooks = self.session_webhooks.read().await;
-        let webhook_url = webhooks.get(&message.recipient).ok_or_else(|| {
-            anyhow::anyhow!(
-                "No session webhook found for chat {}. \
-                 The user must send a message first to establish a session.",
-                message.recipient
-            )
-        })?;
-
-        let title = message.subject.as_deref().unwrap_or("OpenHuman");
-        let body = serde_json::json!({
-            "msgtype": "markdown",
-            "markdown": {
-                "title": title,
-                "text": message.content,
-            }
-        });
-
-        let resp = self
-            .http_client()
-            .post(webhook_url)
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let err = resp.text().await.unwrap_or_default();
-            anyhow::bail!("DingTalk webhook reply failed ({status}): {err}");
-        }
-
-        Ok(())
-    }
-
-    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+impl DingTalkChannel {
+    async fn listen_owned(
+        &self,
+        ingress: DingTalkIngress<'_>,
+        mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> anyhow::Result<()> {
         tracing::info!("DingTalk: registering gateway connection...");
 
         let gw = self.register_connection().await?;
@@ -493,6 +415,97 @@ impl Channel for DingTalkChannel {
         }
 
         anyhow::bail!("DingTalk WebSocket stream ended")
+    
+    }
+}
+
+async fn listener_cancelled(
+    cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>,
+) {
+    match cancellation {
+        Some(receiver) => {
+            let _ = receiver.changed().await;
+        }
+        None => std::future::pending::<()>().await,
+    }
+}
+
+async fn until_listener_cancelled<F: std::future::Future>(
+    cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>,
+    future: F,
+) -> Option<F::Output> {
+    tokio::select! {
+        biased;
+        () = listener_cancelled(cancellation) => None,
+        output = future => Some(output),
+    }
+}
+
+fn no_redirect_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .expect("building the DingTalk attachment HTTP client should succeed")
+}
+
+#[async_trait]
+impl Channel for DingTalkChannel {
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        crate::providers::native::NativeProvider::declared_capabilities(self)
+    }
+
+    fn name(&self) -> &str {
+        "dingtalk"
+    }
+
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
+    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+        let webhooks = self.session_webhooks.read().await;
+        let webhook_url = webhooks.get(&message.recipient).ok_or_else(|| {
+            anyhow::anyhow!(
+                "No session webhook found for chat {}. \
+                 The user must send a message first to establish a session.",
+                message.recipient
+            )
+        })?;
+
+        let title = message.subject.as_deref().unwrap_or("OpenHuman");
+        let body = serde_json::json!({
+            "msgtype": "markdown",
+            "markdown": {
+                "title": title,
+                "text": message.content,
+            }
+        });
+
+        let resp = self
+            .http_client()
+            .post(webhook_url)
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err = resp.text().await.unwrap_or_default();
+            anyhow::bail!("DingTalk webhook reply failed ({status}): {err}");
+        }
+
+        Ok(())
+    }
+
+    async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        let (id, cancellation) = self.begin_listener()?;
+        let _registration = ListenerRegistration { channel: self, id };
+        self.listen_owned(DingTalkIngress::Legacy(tx), Some(cancellation)).await
     }
 
     async fn health_check(&self) -> bool {
