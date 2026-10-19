@@ -37,7 +37,6 @@ fn native_audio_requires_an_ogg_opus_identification_packet() {
 
 #[tokio::test]
 async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request() {
-    use crate::channel::ChannelTypedSend;
     use crate::providers::native::fixtures::{StubMedia, stored_media};
     use tinychannels_bus::{
         ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
