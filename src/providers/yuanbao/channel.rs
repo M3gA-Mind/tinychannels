@@ -785,6 +785,26 @@ impl YuanbaoChannel {
     }
 }
 
+struct YuanbaoListenerRegistration<'a> {
+    channel: &'a YuanbaoChannel,
+    id: u64,
+}
+
+impl Drop for YuanbaoListenerRegistration<'_> {
+    fn drop(&mut self) {
+        let mut active = self
+            .channel
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if active.as_ref().is_some_and(|(id, _)| *id == self.id) {
+            if let Some((_, cancel)) = active.take() {
+                cancel.send_replace(true);
+            }
+        }
+    }
+}
+
 fn no_redirect_client() -> reqwest::Client {
     reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::none())
@@ -796,6 +816,9 @@ fn no_redirect_client() -> reqwest::Client {
 impl Drop for YuanbaoChannel {
     fn drop(&mut self) {
         let _ = self.shutdown_tx.send(true);
+        if let Some((_, cancel)) = self.listener.get_mut().unwrap_or_else(|error| error.into_inner()).take() {
+            cancel.send_replace(true);
+        }
     }
 }
 

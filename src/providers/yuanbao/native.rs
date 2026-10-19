@@ -42,6 +42,18 @@ impl NativeProvider for YuanbaoChannel {
         false
     }
 
+    async fn start_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        self.start_typed_listener(sink).await
+    }
+
+    async fn stop_listener(&self) -> Result<(), ChannelSendError> {
+        self.stop_typed_listener();
+        Ok(())
+    }
+
     fn declared_capabilities(&self) -> ChannelCapabilities {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
         let mut caps = text_capabilities(TextSpec {
