@@ -250,6 +250,29 @@ impl crate::channel::ChannelInboundSink for RecordingInboundSink {
 }
 
 #[tokio::test]
+async fn public_listener_rejects_missing_channel_id_before_http_and_releases_registration() {
+    let server = MockServer::start().await;
+    let channel = channel(&server, Arc::new(StubMedia::default()));
+    let (events, _received) = tokio::sync::mpsc::unbounded_channel();
+    let sink = RecordingInboundSink(events);
+
+    for _ in 0..2 {
+        let error = ChannelAdapter::start(&channel, &sink)
+            .await
+            .expect_err("listening without a channel id must be rejected");
+        assert_eq!(error.kind, SendErrorKind::BadFormat);
+        assert!(!error.retryable);
+        assert!(!error.sent_before_error);
+        assert!(error.message.contains("channel_id"));
+    }
+
+    assert!(
+        server.received_requests().await.unwrap().is_empty(),
+        "invalid listener configuration must fail before any HTTP request"
+    );
+}
+
+#[tokio::test]
 async fn public_adapter_start_owns_mattermost_polling_until_stop_and_restart() {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
