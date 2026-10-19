@@ -376,16 +376,20 @@ async fn native_inbound_downloads_and_stores_a_file_before_building_the_envelope
 
 #[tokio::test]
 async fn lark_voice_store_only_ingests_voice_without_file_repository() {
-    let server = HttpsServer::start_with_content_type(|request| {
-        if is_token_request(request) {
-            token_ok("t-voice-in")
-        } else if request.target == "/open-apis/im/v1/messages/om-voice/resources/file-1?type=file"
-        {
-            (200, "voice attachment bytes".into())
-        } else {
-            panic!("unexpected Lark request: {}", request.target)
-        }
-    }, "audio/ogg")
+    let server = HttpsServer::start_with_content_type(
+        |request| {
+            if is_token_request(request) {
+                token_ok("t-voice-in")
+            } else if request.target
+                == "/open-apis/im/v1/messages/om-voice/resources/file-1?type=file"
+            {
+                (200, "voice attachment bytes".into())
+            } else {
+                panic!("unexpected Lark request: {}", request.target)
+            }
+        },
+        "audio/ogg",
+    )
     .await;
     let voice = Arc::new(crate::providers::native::fixtures::StubVoice::default());
     let channel = channel_with(&server, true)
