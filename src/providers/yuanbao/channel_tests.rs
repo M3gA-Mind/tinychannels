@@ -848,9 +848,15 @@ async fn public_adapter_stores_url_backed_voice_and_publishes_typed_media() {
 
     let envelope = next_public_yuanbao_message(&mut received).await;
     assert_eq!(envelope.message_id, "voice-public-1");
-    assert_eq!(envelope.channel.account_id.as_deref(), Some("bot-id"));
-    assert!(envelope.text.is_empty(), "signed voice URL must not become model text");
-    assert!(matches!(envelope.parts.as_slice(), [ContentPart::VoiceNote { .. }]));
+    assert_eq!(envelope.channel.account_id.as_deref(), Some("bot1"));
+    assert!(
+        envelope.text.is_empty(),
+        "signed voice URL must not become model text"
+    );
+    assert!(matches!(
+        envelope.parts.as_slice(),
+        [ContentPart::VoiceNote { .. }]
+    ));
     let stored = voice_store.stored.lock().unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].scope.turn_id, "voice-public-1");
@@ -870,5 +876,112 @@ async fn public_adapter_stores_url_backed_voice_and_publishes_typed_media() {
         .expect("stopping the typed listener should join it")
         .expect("listener task should not panic")
         .expect("listener should stop cleanly");
+    assert!(received.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn public_adapter_retries_a_message_after_the_supplied_sink_rejects_it() {
+    use crate::channel::ChannelAdapter;
+    use crate::providers::yuanbao::connection::test_support::{MockGateway, gateway_config};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tinychannels_bus::ChannelIngress;
+    use tinychannels_bus::channel::SendErrorKind;
+
+    struct RejectFirstSink {
+        attempts: AtomicUsize,
+        accepted: tokio::sync::mpsc::UnboundedSender<ChannelIngress>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::channel::ChannelInboundSink for RejectFirstSink {
+        async fn push(
+            &self,
+            ingress: ChannelIngress,
+        ) -> Result<(), crate::channel::ChannelSendError> {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(crate::channel::ChannelSendError {
+                    kind: SendErrorKind::Transient,
+                    message: "temporary sink rejection".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            self.accepted
+                .send(ingress)
+                .map_err(|_| crate::channel::ChannelSendError {
+                    kind: SendErrorKind::Transient,
+                    message: "test receiver closed".into(),
+                    retryable: true,
+                    ..Default::default()
+                })
+        }
+    }
+
+    let gateway = MockGateway::bind().await;
+    let channel = Arc::new(YuanbaoChannel::new(gateway_config(&gateway.url)).unwrap());
+    let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(RejectFirstSink {
+        attempts: AtomicUsize::new(0),
+        accepted: events,
+    });
+
+    let first_start = {
+        let channel = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        tokio::spawn(async move { channel.start(sink.as_ref()).await })
+    };
+    let mut first_session = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        gateway.accept_authed("reject-first"),
+    )
+    .await
+    .expect("first listener should connect");
+    first_session
+        .send(tokio_tungstenite::tungstenite::Message::Binary(
+            yuanbao_push("retry-after-sink-error", "alice", "retry me").into(),
+        ))
+        .await;
+    expect_yuanbao_push_ack(&mut first_session, "retry-after-sink-error").await;
+    let first_error = tokio::time::timeout(std::time::Duration::from_secs(3), first_start)
+        .await
+        .expect("a rejected typed publication must end this listener attempt")
+        .expect("listener task should not panic");
+    assert!(
+        first_error.is_err(),
+        "sink rejection must not be reported as accepted"
+    );
+    assert!(
+        received.try_recv().is_err(),
+        "rejected publication must not leak to the sink"
+    );
+
+    let restarted = {
+        let channel = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        tokio::spawn(async move { channel.start(sink.as_ref()).await })
+    };
+    let mut second_session = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        gateway.accept_authed("retry-same-id"),
+    )
+    .await
+    .expect("the failed listener should release ownership for retry");
+    second_session
+        .send(tokio_tungstenite::tungstenite::Message::Binary(
+            yuanbao_push("retry-after-sink-error", "alice", "retry me").into(),
+        ))
+        .await;
+    expect_yuanbao_push_ack(&mut second_session, "retry-after-sink-error").await;
+    let accepted = next_public_yuanbao_message(&mut received).await;
+    assert_eq!(accepted.message_id, "retry-after-sink-error");
+    assert_eq!(accepted.text, "retry me");
+    assert_eq!(sink.attempts.load(Ordering::SeqCst), 2);
+
+    channel.stop().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), restarted)
+        .await
+        .expect("stopping retry listener should join it")
+        .expect("retry listener task should not panic")
+        .expect("retry listener should stop cleanly");
     assert!(received.try_recv().is_err());
 }
