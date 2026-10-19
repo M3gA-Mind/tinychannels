@@ -94,7 +94,7 @@ async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request(
         ],
     };
 
-    let result = channel.send_typed(&message).await;
+    let result = crate::channel::ChannelTypedSend::send_typed(&channel, &message).await;
     assert!(
         server.requests.lock().unwrap().is_empty(),
         "invalid provider-specific attachment must be rejected before text delivery"
