@@ -321,6 +321,8 @@ fn voice_message(conversation_id: &str) -> tinychannels_bus::ChannelOutboundMess
                 },
                 audio_base64: None,
                 codec: Some("amr_nb".into()),
+                // Verify this stored metadata is forwarded. Codec-derived
+                // duration is tested at the TinyVoice module boundary.
                 duration_ms: Some(1_240),
                 waveform: None,
             },
@@ -329,7 +331,7 @@ fn voice_message(conversation_id: &str) -> tinychannels_bus::ChannelOutboundMess
 }
 
 #[tokio::test]
-async fn typed_voice_upload_uses_amr_sample_audio_with_uploaded_media_id_and_duration() {
+async fn typed_voice_send_forwards_amr_bytes_and_declared_duration() {
     use crate::providers::http_test_support::HttpsServer;
     use tinychannels_bus::channel::MessageReceiptPartKind;
     use tinychannels_runtime::channel::ChannelTypedSend;
@@ -342,16 +344,36 @@ async fn typed_voice_upload_uses_amr_sample_audio_with_uploaded_media_id_and_dur
                 (200, json!({"accessToken":"token"}).to_string().into_bytes())
             }
             ("POST", target) if target.starts_with("/media/upload?") => {
-                assert!(target.contains("type=voice"), "voice must use the voice upload type");
-                assert!(request.headers.to_ascii_lowercase().contains("multipart/form-data"));
-                assert!(request.raw_body.windows(AMR_BYTES.len()).any(|w| w == AMR_BYTES));
+                assert!(
+                    target.contains("type=voice"),
+                    "voice must use the voice upload type"
+                );
+                assert!(
+                    request
+                        .headers
+                        .to_ascii_lowercase()
+                        .contains("multipart/form-data")
+                );
+                assert!(
+                    request
+                        .raw_body
+                        .windows(AMR_BYTES.len())
+                        .any(|w| w == AMR_BYTES)
+                );
                 assert!(String::from_utf8_lossy(&request.raw_body).contains("reply.amr"));
-                (200, json!({"media_id":"uploaded-amr-voice"}).to_string().into_bytes())
+                (
+                    200,
+                    json!({"media_id":"uploaded-amr-voice"})
+                        .to_string()
+                        .into_bytes(),
+                )
             }
             ("POST", "/v1.0/robot/groupMessages/send") => {
                 assert_eq!(request.body["msgKey"], "sampleAudio");
                 let params: serde_json::Value = serde_json::from_str(
-                    request.body["msgParam"].as_str().expect("msgParam is JSON text"),
+                    request.body["msgParam"]
+                        .as_str()
+                        .expect("msgParam is JSON text"),
                 )
                 .unwrap();
                 assert_eq!(params["mediaId"], "uploaded-amr-voice");
@@ -420,7 +442,7 @@ async fn typed_voice_over_two_mib_is_rejected_before_platform_requests() {
 }
 
 #[test]
-fn dingtalk_voice_capabilities_advertise_amr_when_host_ports_are_available() {
+fn typed_voice_capabilities_advertise_amr_when_host_ports_are_available() {
     use crate::providers::native::fixtures::RecordingEvents;
 
     let channel = DingTalkChannel::new("app-key".into(), "app-secret".into(), vec![])
@@ -429,8 +451,19 @@ fn dingtalk_voice_capabilities_advertise_amr_when_host_ports_are_available() {
     let caps = NativeProvider::declared_capabilities(&channel);
 
     assert!(caps.voice_in.supported);
-    assert!(caps.voice_in.accepted_codecs.iter().any(|codec| codec == "amr_nb"));
-    assert!(caps.content.audio.accepted_types.iter().any(|mime| mime == "audio/amr"));
+    assert!(
+        caps.voice_in
+            .accepted_codecs
+            .iter()
+            .any(|codec| codec == "amr_nb")
+    );
+    assert!(
+        caps.content
+            .audio
+            .accepted_types
+            .iter()
+            .any(|mime| mime == "audio/amr")
+    );
     assert!(caps.voice_out.supported);
 }
 

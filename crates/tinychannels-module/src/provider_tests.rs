@@ -3853,6 +3853,8 @@ async fn voice_codec_maps_known_formats_and_surfaces_missing_module_errors() {
         ("m4a_aac", "mp3"),
         ("audio/ogg", "audio/wav"),
         ("audio/amr", "audio/wav"),
+        ("amr_nb", "audio/wav"),
+        ("audio/wav", "amr_nb"),
     ] {
         let error = codec.transcode(request(from, target)).await.unwrap_err();
         assert!(
