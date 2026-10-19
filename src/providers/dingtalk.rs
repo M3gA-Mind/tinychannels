@@ -32,6 +32,19 @@ struct GatewayResponse {
 }
 
 impl DingTalkChannel {
+    #[cfg(test)]
+    pub(crate) async fn set_test_robot_context(
+        &self,
+        kind: tinychannels_bus::channel::ConversationKind,
+        conversation_id: &str,
+        context: serde_json::Value,
+    ) {
+        self.robot_contexts.write().await.insert(
+            crate::providers::dingtalk::native::conversation_context_key(kind, conversation_id),
+            context,
+        );
+    }
+
     pub fn new(client_id: String, client_secret: String, allowed_users: Vec<String>) -> Self {
         Self {
             client_id,
