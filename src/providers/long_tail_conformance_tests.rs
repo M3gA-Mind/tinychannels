@@ -14,7 +14,8 @@ use crate::channel::{
     ChannelTyping,
 };
 use crate::factory::{
-    DefaultHttpClients, build_long_tail_channel, build_long_tail_channel_with_host,
+    DefaultHttpClients, HttpClientFactory, build_long_tail_channel,
+    build_long_tail_channel_with_host,
 };
 use crate::host::{
     MediaRepository, MediaScope, MediaStoreRequest, StoredMedia, VoiceMediaRequest, VoiceMediaStore,
@@ -123,9 +124,17 @@ impl VoiceMediaStore for ConformanceVoice {
         use base64::Engine as _;
         Ok(tinychannels_bus::HostReadVoiceMediaResult {
             audio_base64: base64::engine::general_purpose::STANDARD.encode(b"conformance-audio"),
-            mime_type: "audio/mp4".into(),
+            mime_type: "audio/ogg".into(),
             file_name: Some("voice.m4a".into()),
         })
+    }
+}
+
+struct FixtureHttpClients(reqwest::Client);
+
+impl HttpClientFactory for FixtureHttpClients {
+    fn client_for(&self, _channel: &str) -> reqwest::Client {
+        self.0.clone()
     }
 }
 
@@ -157,6 +166,7 @@ struct LongTailFixture {
     id: &'static str,
     channel: Arc<dyn LongTailNative>,
     server: Option<MockServer>,
+    fixed_server: Option<crate::providers::http_test_support::HttpsServer>,
     /// Message ids the mock returned, in response order.
     response_ids: Arc<Mutex<Vec<String>>>,
     observed: Mutex<Vec<WireObservation>>,
@@ -164,6 +174,9 @@ struct LongTailFixture {
 
 impl LongTailFixture {
     async fn start(id: &'static str) -> Self {
+        if id == "qq" {
+            return Self::start_qq().await;
+        }
         let server = MockServer::start().await;
         let response_ids = Arc::new(Mutex::new(Vec::new()));
         let counter = Arc::new(AtomicU64::new(7000));
@@ -209,6 +222,56 @@ impl LongTailFixture {
             channel: build_long_tail_channel_with_host(&config, &host, &DefaultHttpClients, id)
                 .unwrap(),
             server: Some(server),
+            fixed_server: None,
+            response_ids,
+            observed: Mutex::new(Vec::new()),
+        }
+    }
+
+    async fn start_qq() -> Self {
+        use crate::providers::http_test_support::HttpsServer;
+
+        let response_ids = Arc::new(Mutex::new(Vec::new()));
+        let next_id = Arc::new(AtomicU64::new(7000));
+        let issued = response_ids.clone();
+        let counter = next_id.clone();
+        let server = HttpsServer::start(move |request| {
+            if request.target == "/app/getAppAccessToken" {
+                (
+                    200,
+                    r#"{"access_token":"fixture-token","expires_in":"7200"}"#.into(),
+                )
+            } else if request.target.ends_with("/files") {
+                (200, r#"{"file_info":"fixture-file"}"#.into())
+            } else if request.target.ends_with("/messages") {
+                let id = counter.fetch_add(1, Ordering::SeqCst).to_string();
+                issued.lock().push(id.clone());
+                (200, format!(r#"{{"id":"{id}"}}"#))
+            } else {
+                (404, r#"{"error":"unexpected request"}"#.into())
+            }
+        })
+        .await;
+        let host: Arc<dyn crate::host::ChannelHost> = crate::ChannelHostBuilder::new()
+            .media_repository(Arc::new(ConformanceMedia))
+            .voice_media_store(Arc::new(ConformanceVoice))
+            .build();
+        let config = ChannelsConfig {
+            qq: Some(QQConfig {
+                app_id: "fixture-app".into(),
+                app_secret: "fixture-secret".into(),
+                allowed_users: vec!["*".into()],
+            }),
+            ..Default::default()
+        };
+        let clients = FixtureHttpClients(server.client.clone());
+        let channel = build_long_tail_channel_with_host(&config, &host, &clients, "qq")
+            .expect("configured QQ adapter built through provider factory");
+        Self {
+            id: "qq",
+            channel,
+            server: None,
+            fixed_server: Some(server),
             response_ids,
             observed: Mutex::new(Vec::new()),
         }
@@ -220,19 +283,28 @@ impl LongTailFixture {
             id,
             channel: build_long_tail_channel(config, &DefaultHttpClients, id).unwrap(),
             server: None,
+            fixed_server: None,
             response_ids: Arc::default(),
             observed: Mutex::new(Vec::new()),
         }
     }
 
     fn intent(&self, feature: Feature, payload: OutboundPayload) -> ChannelOutboundIntent {
+        let conversation = if self.id == "qq" {
+            ConversationRef {
+                id: CHANNEL.into(),
+                ..Default::default()
+            }
+        } else {
+            conversation()
+        };
         ChannelOutboundIntent {
             idempotency_key: format!("kit-{feature:?}"),
             channel_id: self.id.into(),
             conversation_id: CHANNEL.into(),
             channel_ref: Some(account(self.id)),
-            conversation_ref: Some(conversation()),
-            thread_id: Some(ROOT.into()),
+            conversation_ref: Some(conversation.clone()),
+            thread_id: conversation.thread_id.clone(),
             turn_id: Some("conformance-turn".into()),
             payload,
             ..Default::default()
@@ -242,7 +314,10 @@ impl LongTailFixture {
     async fn request_count(&self) -> usize {
         match &self.server {
             Some(server) => server.received_requests().await.unwrap().len(),
-            None => 0,
+            None => self
+                .fixed_server
+                .as_ref()
+                .map_or(0, |server| server.requests.lock().unwrap().len()),
         }
     }
 
@@ -259,6 +334,10 @@ impl LongTailFixture {
 
     /// Turn every request the mock received since `before` into observations.
     async fn record(&self, feature: Feature, before: usize) {
+        if self.fixed_server.is_some() {
+            self.record_fixed(feature, before);
+            return;
+        }
         let Some(server) = &self.server else { return };
         let requests = server.received_requests().await.unwrap();
         let mut ids = std::mem::take(&mut *self.response_ids.lock()).into_iter();
@@ -322,6 +401,51 @@ impl LongTailFixture {
         }
     }
 
+    fn record_fixed(&self, feature: Feature, before: usize) {
+        let Some(server) = &self.fixed_server else {
+            return;
+        };
+        let requests = server.requests.lock().unwrap();
+        let mut ids = std::mem::take(&mut *self.response_ids.lock()).into_iter();
+        let mut uploaded_kind = None;
+        for request in &requests[before..] {
+            if request.target.ends_with("/files") {
+                let file_type = request.body["file_type"].as_u64();
+                uploaded_kind = match file_type {
+                    Some(1) => Some("image"),
+                    Some(2) => Some("video"),
+                    Some(3) => Some("voice"),
+                    Some(4) => Some("file"),
+                    _ => None,
+                };
+                continue;
+            }
+            if !request.target.ends_with("/messages") {
+                continue;
+            }
+            let payload_kinds = if request.body["msg_type"].as_u64() == Some(0) {
+                vec!["text".to_owned()]
+            } else {
+                uploaded_kind
+                    .take()
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect()
+            };
+            self.observed.lock().push(WireObservation {
+                feature,
+                operation: "send".into(),
+                channel: account(self.id),
+                conversation: self.expected_scope(feature).conversation,
+                reply_to_id: None,
+                thread_id: None,
+                payload_kinds,
+                platform_message_ids: ids.next().into_iter().collect(),
+                request: request.body.clone(),
+            });
+        }
+    }
+
     async fn send_and_record(
         &self,
         feature: Feature,
@@ -366,7 +490,14 @@ impl AdapterFixture for LongTailFixture {
     fn expected_scope(&self, _feature: Feature) -> ExpectedScope {
         ExpectedScope {
             channel: account(self.id),
-            conversation: conversation(),
+            conversation: if self.id == "qq" {
+                ConversationRef {
+                    id: CHANNEL.into(),
+                    ..Default::default()
+                }
+            } else {
+                conversation()
+            },
             reply_to_id: None,
             thread_id: Some(ROOT.into()),
         }
@@ -669,6 +800,30 @@ async fn the_mattermost_adapter_passes_the_full_conformance_matrix() {
     assert_eq!(results.len(), Feature::ALL.len());
     let failed = failures(&results);
     assert!(failed.is_empty(), "conformance failures: {failed:#?}");
+}
+
+#[tokio::test]
+async fn the_factory_built_qq_adapter_passes_the_full_conformance_matrix() {
+    let fixture = LongTailFixture::start("qq").await;
+    let results = check_all_features(&fixture).await;
+    assert_eq!(results.len(), Feature::ALL.len());
+    let failed = failures(&results);
+    assert!(failed.is_empty(), "QQ conformance failures: {failed:#?}");
+    let observations = fixture.observations();
+    for feature in [
+        Feature::Text,
+        Feature::Image,
+        Feature::Video,
+        Feature::File,
+        Feature::VoiceOut,
+    ] {
+        assert!(
+            observations
+                .iter()
+                .any(|observation| observation.feature == feature),
+            "declared QQ feature {feature:?} was not observed on the wire"
+        );
+    }
 }
 
 #[tokio::test]
