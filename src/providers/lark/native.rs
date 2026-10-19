@@ -6,7 +6,7 @@ use crate::providers::native::{FileStep, Limits, NativeProvider, Sent, Step, Tar
 use async_trait::async_trait;
 use base64::Engine as _;
 use std::sync::Arc;
-use tinychannels_bus::channel::{ChannelReaction, ChannelSendError, MessageReceiptPartKind};
+use tinychannels_bus::channel::{ChannelSendError, MessageReceiptPartKind};
 use tinychannels_bus::{
     ChannelCapabilities, ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef,
     MediaKind, SenderRef,
@@ -196,16 +196,6 @@ impl NativeProvider for LarkChannel {
                 Ok(vec![Sent::new(id, kind)])
             }
         }
-    }
-
-    async fn react(
-        &self,
-        _conversation: &tinychannels_bus::channel::ConversationRef,
-        _provider_message_id: &str,
-        _reaction: &ChannelReaction,
-        _remove: bool,
-    ) -> Result<(), ChannelSendError> {
-        Err(crate::providers::native::unsupported("Lark reactions"))
     }
 }
 

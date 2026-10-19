@@ -514,6 +514,42 @@ async fn lark_host_voice_store_delivers_voice_without_file_repository() {
 }
 
 #[tokio::test]
+async fn lark_public_reaction_extension_reports_unsupported_without_network_io() {
+    let server = HttpsServer::start(|request| {
+        panic!(
+            "unsupported Lark reaction must not make a request: {}",
+            request.target
+        )
+    })
+    .await;
+    let channel = channel_with(&server, true);
+    let error = crate::channel::ChannelReaction::send_reaction(
+        &channel,
+        &tinychannels_bus::channel::ChannelRef {
+            id: "lark".into(),
+            account_id: None,
+        },
+        &tinychannels_bus::channel::ConversationRef {
+            id: "chat-1".into(),
+            ..Default::default()
+        },
+        "message-1",
+        &tinychannels_bus::channel::ChannelReaction {
+            value: "👍".into(),
+            custom_emoji_id: None,
+        },
+        false,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.unsupported);
+    assert!(!error.retryable);
+    assert!(!error.sent_before_error);
+    assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn native_inbound_applies_allowlist_bot_and_group_mention_filters_before_download() {
     let server = HttpsServer::start(|_| (500, "unexpected request".into())).await;
     let mut channel = channel_with(&server, true);
