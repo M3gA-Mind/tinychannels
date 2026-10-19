@@ -527,6 +527,84 @@ async fn host_scoped_image_media_uploads_then_sends_the_server_file_info() {
 }
 
 #[tokio::test]
+async fn qq_rejects_text_with_captioned_media_before_sending_any_step() {
+    use crate::providers::native::fixtures::stored_media;
+
+    let server = HttpsServer::start(|request| match request.target.as_str() {
+        "/app/getAppAccessToken" => (
+            200,
+            json!({"access_token": "qq-token", "expires_in": "7200"}).to_string(),
+        ),
+        "/v2/users/user-1/messages" => (200, json!({"id": "qq-text-1"}).to_string()),
+        other => panic!("unexpected QQ request: {other}"),
+    })
+    .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(
+        MediaKind::Image,
+        "image/png",
+        b"exact-image-bytes",
+    ));
+    let host = ChannelHostBuilder::new()
+        .media_repository(media)
+        .build();
+    let config = tinychannels_bus::ChannelsConfig {
+        qq: Some(tinychannels_bus::config::QQConfig {
+            app_id: "app-id".into(),
+            app_secret: "app-secret".into(),
+            allowed_users: vec!["*".into()],
+        }),
+        ..Default::default()
+    };
+    let channel = build_long_tail_channel_with_host(
+        &config,
+        &host,
+        &FixtureHttpClients(server.client.clone()),
+        "qq",
+    )
+    .expect("configured QQ adapter");
+    let message = ChannelOutboundMessage {
+        channel_id: "qq".into(),
+        conversation_id: "user:user-1".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-captioned-image".into()),
+        idempotency_key: "captioned-image".into(),
+        parts: vec![
+            OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "must not be sent before validation".into(),
+                    markdown_dialect: None,
+                },
+            },
+            OutboundContentPart::Content {
+                part: ContentPart::Image {
+                    media: MediaReference {
+                        opaque_id: Some("opaque-image-1".into()),
+                        kind: MediaKind::Image,
+                        content_type: Some("image/png".into()),
+                        ..Default::default()
+                    },
+                    caption: Some("QQ cannot preserve this caption".into()),
+                    alt_text: None,
+                },
+            },
+        ],
+    };
+
+    let result = tinychannels_runtime::channel::ChannelTypedSend::send_typed(
+        channel.as_ref(),
+        &message,
+    )
+    .await;
+
+    assert!(result.is_err(), "QQ must reject an unrepresentable caption");
+    assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn host_voice_store_uploads_native_voice_and_sends_its_opaque_file_info() {
     let server = HttpsServer::start(|request| match request.target.as_str() {
         "/app/getAppAccessToken" => (
