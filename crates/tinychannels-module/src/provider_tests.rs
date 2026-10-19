@@ -5061,6 +5061,41 @@ async fn configured_irc_launch_publishes_one_scoped_native_ingress_and_stops() {
 }
 
 #[tokio::test]
+async fn configured_irc_listener_does_not_connect_after_cancellation_precedes_start() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = Arc::new(
+        tinychannels::IrcChannel::new(tinychannels::IrcChannelConfig {
+            server: "127.0.0.1".into(),
+            port,
+            nickname: "bot".into(),
+            username: None,
+            channels: vec![],
+            allowed_users: vec![],
+            server_password: None,
+            nickserv_password: None,
+            sasl_password: None,
+            verify_tls: false,
+        }),
+    );
+    let (host, _callbacks, _server, _storage) = ingress_fixture().await;
+    let sink = Arc::new(ModuleEvents(
+        host.clone(),
+        "irc:team-a".into(),
+        MediaScope::default(),
+    ));
+    let (cancel, receiver) = tokio::sync::watch::channel(true);
+    let result =
+        listen_adapter_with_supervision(adapter, sink, host, "irc".into(), None, receiver).await;
+    assert!(result.is_ok());
+    assert!(
+        listener.try_accept().is_err(),
+        "pre-cancelled adapter startup must not open a provider connection"
+    );
+    drop(cancel);
+}
+
+#[tokio::test]
 async fn configured_long_tail_adapter_sends_through_the_ordered_queue_and_refuses_the_rest() {
     use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
     use wiremock::matchers::{body_partial_json, method, path};
