@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as ProstMessage;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, watch};
 use tokio_tungstenite::tungstenite::Message as WsMsg;
 use uuid::Uuid;
 
@@ -124,6 +124,35 @@ struct LarkMessage {
     mentions: Vec<serde_json::Value>,
 }
 
+struct LarkListenerRegistration<'a> {
+    channel: &'a LarkChannel,
+    id: Uuid,
+}
+
+type LarkListenerCancel = Arc<StdMutex<Option<(Uuid, watch::Sender<bool>)>>>;
+
+impl Drop for LarkListenerRegistration<'_> {
+    fn drop(&mut self) {
+        self.channel.end_listener(self.id);
+    }
+}
+
+enum LarkIngress<'a> {
+    Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
+    Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
+}
+
+struct TypedWebhookEvent {
+    event: serde_json::Value,
+    reply: tokio::sync::oneshot::Sender<TypedWebhookResult>,
+}
+
+#[derive(Clone, Copy)]
+enum TypedWebhookResult {
+    Acknowledged,
+    Retry,
+}
+
 /// Heartbeat timeout for WS connection — must be larger than ping_interval (default 120 s).
 /// If no binary frame (pong or event) is received within this window, reconnect.
 const WS_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -161,6 +190,8 @@ pub struct LarkChannel {
     tenant_token: Arc<RwLock<Option<String>>>,
     /// Dedup set: WS message_ids seen in last ~30 min to prevent double-dispatch
     ws_seen_ids: Arc<RwLock<HashMap<String, Instant>>>,
+    /// The typed adapter owns one listener at a time across all provider clones.
+    listener_cancel: LarkListenerCancel,
 }
 
 impl LarkChannel {
@@ -184,6 +215,7 @@ impl LarkChannel {
             voice_codec: None,
             tenant_token: Arc::new(RwLock::new(None)),
             ws_seen_ids: Arc::new(RwLock::new(HashMap::new())),
+            listener_cancel: Arc::new(StdMutex::new(None)),
         }
     }
 
@@ -240,6 +272,69 @@ impl LarkChannel {
         self.http_client.clone()
     }
 
+    fn begin_listener(
+        &self,
+    ) -> Result<(watch::Receiver<bool>, Uuid), tinychannels_bus::channel::ChannelSendError> {
+        let mut active = self
+            .listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if active.is_some() {
+            return Err(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
+                message: "Lark listener is already running".into(),
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        let (cancel, receiver) = watch::channel(false);
+        let id = Uuid::new_v4();
+        *active = Some((id, cancel));
+        Ok((receiver, id))
+    }
+
+    fn end_listener(&self, id: Uuid) {
+        let mut active = self
+            .listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if active
+            .as_ref()
+            .is_some_and(|(active_id, _)| *active_id == id)
+        {
+            active.take();
+        }
+    }
+
+    fn cancel_listener(&self) {
+        if let Some((_, cancel)) = self
+            .listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            cancel.send_replace(true);
+        }
+    }
+
+    async fn mark_ws_message_seen(&self, message_id: &str) -> bool {
+        let now = Instant::now();
+        let mut seen = self.ws_seen_ids.write().await;
+        seen.retain(|_, received| now.duration_since(*received) < Duration::from_secs(30 * 60));
+        if seen.contains_key(message_id) {
+            return false;
+        }
+        seen.insert(message_id.to_owned(), now);
+        true
+    }
+
+    async fn ws_message_was_seen(&self, message_id: &str) -> bool {
+        let now = Instant::now();
+        let mut seen = self.ws_seen_ids.write().await;
+        seen.retain(|_, received| now.duration_since(*received) < Duration::from_secs(30 * 60));
+        seen.contains_key(message_id)
+    }
+
     fn api_base(&self) -> &'static str {
         if self.use_feishu {
             FEISHU_BASE_URL
@@ -294,7 +389,7 @@ impl LarkChannel {
     /// WS long-connection event loop.  Returns Ok(()) when the connection closes
     /// (the caller reconnects).
     #[allow(clippy::too_many_lines)]
-    async fn listen_ws(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+    async fn listen_ws(&self, ingress: LarkIngress<'_>) -> anyhow::Result<()> {
         let (wss_url, client_config) = self.get_ws_endpoint().await?;
         let service_id = wss_url
             .split('?')
@@ -457,28 +552,48 @@ impl LarkChannel {
                         Err(e) => { tracing::error!("Lark: payload parse: {e}"); continue; }
                     };
 
-                    if recv.sender.sender_type == "app" || recv.sender.sender_type == "bot" { continue; }
-
-                    let sender_open_id = recv.sender.sender_id.open_id.as_deref().unwrap_or("");
-                    if !self.is_user_allowed(sender_open_id) {
-                        tracing::warn!("Lark WS: ignoring {sender_open_id} (not in allowed_users)");
-                        continue;
+                    if matches!(&ingress, LarkIngress::Typed(_)) {
+                        if !self.is_event_admitted(&event_payload) {
+                            continue;
+                        }
+                    } else {
+                        if recv.sender.sender_type == "app" || recv.sender.sender_type == "bot" {
+                            continue;
+                        }
+                        let sender_open_id = recv.sender.sender_id.open_id.as_deref().unwrap_or("");
+                        if !self.is_user_allowed(sender_open_id) {
+                            tracing::warn!("Lark WS: ignoring {sender_open_id} (not in allowed_users)");
+                            continue;
+                        }
                     }
 
                     let lark_msg = &recv.message;
 
-                    // Dedup
-                    {
-                        let now = Instant::now();
-                        let mut seen = self.ws_seen_ids.write().await;
-                        // GC
-                        seen.retain(|_, t| now.duration_since(*t) < Duration::from_secs(30 * 60));
-                        if seen.contains_key(&lark_msg.message_id) {
-                            tracing::debug!("Lark WS: dup {}", lark_msg.message_id);
-                            continue;
-                        }
-                        seen.insert(lark_msg.message_id.clone(), now);
+                    // Check dedup before downloading content. Typed events are
+                    // recorded only after publication succeeds so a rejected
+                    // sink can receive the provider retry after reconnect.
+                    if self.ws_message_was_seen(&lark_msg.message_id).await {
+                        tracing::debug!("Lark WS: dup {}", lark_msg.message_id);
+                        continue;
                     }
+
+                    if let LarkIngress::Typed(sink) = &ingress {
+                        if let Some(envelope) = self
+                            .inbound_envelope_for_listener(&event_payload, true)
+                            .await
+                            && sink
+                                .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                                .await
+                                .is_err()
+                        {
+                            tracing::warn!("Lark WS: typed ingress sink rejected an event");
+                            break;
+                        }
+                        self.mark_ws_message_seen(&lark_msg.message_id).await;
+                        continue;
+                    }
+
+                    self.mark_ws_message_seen(&lark_msg.message_id).await;
 
                     if let Some(envelope) = self.inbound_envelope(&event_payload).await
                         && crate::providers::native::inbound::publish(
@@ -537,6 +652,9 @@ impl LarkChannel {
                     };
 
                     tracing::debug!("Lark WS: message in {}", lark_msg.chat_id);
+                    let LarkIngress::Legacy(tx) = &ingress else {
+                        unreachable!("typed Lark ingress returned above")
+                    };
                     if tx.send(channel_msg).await.is_err() { break; }
                 }
             }
@@ -547,6 +665,32 @@ impl LarkChannel {
     /// Check if a user open_id is allowed
     fn is_user_allowed(&self, open_id: &str) -> bool {
         self.allowed_users.iter().any(|u| u == "*" || u == open_id)
+    }
+
+    fn is_event_admitted(&self, event: &serde_json::Value) -> bool {
+        let sender_id = event
+            .pointer("/sender/sender_id/open_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let sender_type = event
+            .pointer("/sender/sender_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let chat_type = event
+            .pointer("/message/chat_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        !sender_id.is_empty()
+            && self.is_user_allowed(sender_id)
+            && !matches!(sender_type, "app" | "bot")
+            && (chat_type != "group"
+                || should_respond_in_group(
+                    event
+                        .pointer("/message/mentions")
+                        .and_then(serde_json::Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                ))
     }
 
     /// Get or refresh tenant access token
@@ -794,7 +938,7 @@ impl Channel for LarkChannel {
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         use crate::config::LarkReceiveMode;
         match self.receive_mode {
-            LarkReceiveMode::Websocket => self.listen_ws(tx).await,
+            LarkReceiveMode::Websocket => self.listen_ws(LarkIngress::Legacy(tx)).await,
             LarkReceiveMode::Webhook => self.listen_http(tx).await,
         }
     }
@@ -808,7 +952,8 @@ impl Channel for LarkChannel {
 struct LarkWebhookState {
     verification_token: String,
     channel: Arc<LarkChannel>,
-    tx: tokio::sync::mpsc::Sender<ChannelMessage>,
+    tx: Option<tokio::sync::mpsc::Sender<ChannelMessage>>,
+    typed_tx: Option<tokio::sync::mpsc::Sender<TypedWebhookEvent>>,
 }
 
 async fn handle_lark_webhook(
@@ -835,6 +980,36 @@ async fn handle_lark_webhook(
         return (StatusCode::OK, axum::Json(resp)).into_response();
     }
 
+    if let Some(typed_tx) = &state.typed_tx {
+        if payload
+            .pointer("/header/event_type")
+            .and_then(serde_json::Value::as_str)
+            != Some("im.message.receive_v1")
+        {
+            return (StatusCode::OK, "ok").into_response();
+        }
+        let Some(event) = payload.get("event") else {
+            return (StatusCode::OK, "ok").into_response();
+        };
+        let (reply, response) = tokio::sync::oneshot::channel();
+        if typed_tx
+            .send(TypedWebhookEvent {
+                event: event.clone(),
+                reply,
+            })
+            .await
+            .is_err()
+        {
+            return (StatusCode::SERVICE_UNAVAILABLE, "listener stopped").into_response();
+        }
+        return match response.await {
+            Ok(TypedWebhookResult::Acknowledged) => (StatusCode::OK, "ok").into_response(),
+            Ok(TypedWebhookResult::Retry) | Err(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "listener unavailable").into_response()
+            }
+        };
+    }
+
     let messages = state.channel.parse_event_payload(&payload);
     if payload
         .pointer("/header/event_type")
@@ -852,7 +1027,10 @@ async fn handle_lark_webhook(
         return (StatusCode::OK, "ok").into_response();
     }
     for msg in messages {
-        if state.tx.send(msg).await.is_err() {
+        let Some(tx) = &state.tx else {
+            break;
+        };
+        if tx.send(msg).await.is_err() {
             tracing::warn!("Lark: message channel closed");
             break;
         }
@@ -880,7 +1058,8 @@ impl LarkChannel {
         let state = LarkWebhookState {
             verification_token: self.verification_token.clone(),
             channel: Arc::new(self.clone()),
-            tx,
+            tx: Some(tx),
+            typed_tx: None,
         };
 
         let app = Router::new()
@@ -894,6 +1073,94 @@ impl LarkChannel {
         axum::serve(listener, app).await?;
 
         Ok(())
+    }
+
+    async fn listen_http_typed(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        cancellation: &mut watch::Receiver<bool>,
+    ) -> anyhow::Result<()> {
+        use axum::{Router, routing::post};
+
+        let port = self.port.ok_or_else(|| {
+            anyhow::anyhow!("Lark webhook mode requires `port` to be set in [channels_config.lark]")
+        })?;
+        if self.verification_token.is_empty() {
+            anyhow::bail!("Lark webhook mode requires `verification_token`");
+        }
+
+        let (typed_tx, mut events) = tokio::sync::mpsc::channel(128);
+        let state = LarkWebhookState {
+            verification_token: self.verification_token.clone(),
+            channel: Arc::new(self.clone()),
+            tx: None,
+            typed_tx: Some(typed_tx),
+        };
+        let app = Router::new()
+            .route("/lark", post(handle_lark_webhook))
+            .with_state(state);
+        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let server = axum::serve(listener, app).into_future();
+        tokio::pin!(server);
+
+        loop {
+            tokio::select! {
+                biased;
+                changed = cancellation.changed() => {
+                    if changed.is_err() || *cancellation.borrow() {
+                        return Ok(());
+                    }
+                }
+                result = &mut server => return result.map_err(Into::into),
+                Some(request) = events.recv() => {
+                    let result = tokio::select! {
+                        biased;
+                        changed = cancellation.changed() => {
+                            let _ = request.reply.send(TypedWebhookResult::Retry);
+                            if changed.is_err() || *cancellation.borrow() {
+                                return Ok(());
+                            }
+                            continue;
+                        }
+                        result = async {
+                            let message_id = request
+                                .event
+                                .pointer("/message/message_id")
+                                .and_then(serde_json::Value::as_str)
+                                .unwrap_or_default()
+                                .to_owned();
+                            if !self.is_event_admitted(&request.event)
+                                || message_id.is_empty()
+                                || self.ws_message_was_seen(&message_id).await
+                            {
+                                TypedWebhookResult::Acknowledged
+                            } else if let Some(envelope) = self
+                                .inbound_envelope_for_listener(&request.event, true)
+                                .await
+                            {
+                                match sink
+                                    .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                                    .await
+                                {
+                                    Ok(()) => {
+                                        self.mark_ws_message_seen(&message_id).await;
+                                        TypedWebhookResult::Acknowledged
+                                    }
+                                    Err(error) => {
+                                        tracing::debug!(error = %error.message, "Lark typed webhook sink rejected an event");
+                                        TypedWebhookResult::Retry
+                                    }
+                                }
+                            } else {
+                                TypedWebhookResult::Acknowledged
+                            }
+                        } => result,
+                    };
+                    let _ = request.reply.send(result);
+                }
+            }
+        }
     }
 }
 
@@ -1035,6 +1302,40 @@ impl crate::providers::long_tail::LongTail for LarkChannel {
         tinychannels_bus::channel::ChannelSendError,
     > {
         crate::providers::native::outbound::send_typed(self, message).await
+    }
+
+    async fn start_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        let (mut cancellation, id) = self.begin_listener()?;
+        let _registration = LarkListenerRegistration { channel: self, id };
+        let result = match self.receive_mode {
+            crate::config::LarkReceiveMode::Websocket => {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.changed() => Ok(()),
+                    result = self.listen_ws(LarkIngress::Typed(sink)) => result,
+                }
+            }
+            crate::config::LarkReceiveMode::Webhook => {
+                self.listen_http_typed(sink, &mut cancellation).await
+            }
+        };
+        result.map_err(|error| {
+            tracing::debug!(%error, "Lark typed listener stopped");
+            tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "Lark listener stopped".into(),
+                retryable: true,
+                ..Default::default()
+            }
+        })
+    }
+
+    async fn stop_listener(&self) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.cancel_listener();
+        Ok(())
     }
 }
 
