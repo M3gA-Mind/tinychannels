@@ -1,7 +1,32 @@
 use super::*;
+use crate::channel::{ChannelAdapter, ChannelInboundSink};
 use crate::providers::native::NativeProvider;
 use serde_json::json;
+use std::sync::Arc;
+use tinychannels_bus::ChannelIngress;
 use tinychannels_bus::channel::{ConversationKind, ConversationRef, SendErrorKind};
+
+const PUBLIC_LISTENER_GUARD: std::time::Duration = std::time::Duration::from_secs(8);
+
+#[derive(Clone)]
+struct RecordingInboundSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
+
+#[async_trait::async_trait]
+impl ChannelInboundSink for RecordingInboundSink {
+    async fn push(
+        &self,
+        ingress: ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.0
+            .send(ingress)
+            .map_err(|_| tinychannels_bus::channel::ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "test sink closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+    }
+}
 
 fn target(kind: ConversationKind, id: &str) -> Target {
     Target {
@@ -1342,4 +1367,574 @@ async fn typed_mixed_text_and_captioned_file_fails_before_platform_requests() {
     assert!(error.unsupported);
     assert!(!error.sent_before_error);
     assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
+    use crate::providers::http_test_support::HttpsServer;
+    use futures_util::{SinkExt, StreamExt};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
+
+    fn callback(
+        frame_id: &str,
+        provider_id: &str,
+        staff_id: &str,
+        text: &str,
+    ) -> tokio_tungstenite::tungstenite::Message {
+        let data = json!({
+            "msgId": provider_id,
+            "msgtype": "text",
+            "robotCode": "robot-account-1",
+            "senderStaffId": staff_id,
+            "senderId": "$:union-user-1",
+            "conversationType": "2",
+            "conversationId": "open-group-1",
+            "text": {"content": text}
+        })
+        .to_string();
+        tokio_tungstenite::tungstenite::Message::Text(
+            json!({
+                "type": "CALLBACK",
+                "headers": {
+                    "messageId": frame_id,
+                    "topic": "/v1.0/im/bot/messages/get"
+                },
+                "data": data
+            })
+            .to_string()
+            .into(),
+        )
+    }
+
+    async fn read_ack(
+        websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
+        message_id: &str,
+    ) {
+        let response = tokio::time::timeout(PUBLIC_LISTENER_GUARD, websocket.next())
+            .await
+            .expect("DingTalk Stream acknowledgement should arrive")
+            .expect("DingTalk Stream connection should remain open")
+            .expect("DingTalk Stream acknowledgement should be valid WebSocket data");
+        let acknowledgement: serde_json::Value =
+            serde_json::from_str(response.to_text().expect("acknowledgement is text")).unwrap();
+        assert_eq!(acknowledgement["code"], 200);
+        assert_eq!(acknowledgement["headers"]["messageId"], message_id);
+    }
+
+    let stream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let stream_address = stream_listener.local_addr().unwrap();
+    let ticket_counter = Arc::new(AtomicUsize::new(0));
+    let response_counter = ticket_counter.clone();
+    let gateway = HttpsServer::start(move |request| {
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.target, "/v1.0/gateway/connections/open");
+        assert_eq!(
+            request.body,
+            json!({
+                "clientId": "app-key",
+                "clientSecret": "app-secret",
+                "subscriptions": [{
+                    "type": "CALLBACK",
+                    "topic": "/v1.0/im/bot/messages/get"
+                }]
+            })
+        );
+        let sequence = response_counter.fetch_add(1, Ordering::SeqCst) + 1;
+        (
+            200,
+            json!({
+                "endpoint": format!("ws://{stream_address}/"),
+                "ticket": format!("stream-ticket-{sequence}")
+            })
+            .to_string(),
+        )
+    })
+    .await;
+
+    let (ready_tx, mut ready_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mock_stream = tokio::spawn(async move {
+        for (session, ticket, accepted_id, accepted_text) in [
+            (
+                1_u8,
+                "stream-ticket-1",
+                "provider-message-1",
+                "first stream message",
+            ),
+            (
+                2_u8,
+                "stream-ticket-2",
+                "provider-message-2",
+                "after restart",
+            ),
+        ] {
+            let (socket, _) = tokio::time::timeout(PUBLIC_LISTENER_GUARD, stream_listener.accept())
+                .await
+                .expect("DingTalk adapter should connect to the local Stream gateway")
+                .unwrap();
+            #[allow(clippy::result_large_err)]
+            let mut websocket = tokio::time::timeout(
+                PUBLIC_LISTENER_GUARD,
+                accept_hdr_async(
+                    socket,
+                    move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                          response| {
+                        let expected_query = format!("ticket={ticket}");
+                        assert_eq!(request.uri().query(), Some(expected_query.as_str()));
+                        Ok(response)
+                    },
+                ),
+            )
+            .await
+            .expect("DingTalk Stream WebSocket handshake should complete")
+            .unwrap();
+
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "SYSTEM",
+                        "headers": {
+                            "messageId": format!("ping-{session}"),
+                            "topic": "ping"
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            let pong = tokio::time::timeout(PUBLIC_LISTENER_GUARD, websocket.next())
+                .await
+                .expect("DingTalk Stream SYSTEM ping should be acknowledged")
+                .unwrap()
+                .unwrap();
+            let pong: serde_json::Value = serde_json::from_str(pong.to_text().unwrap()).unwrap();
+            assert_eq!(pong["code"], 200);
+            assert_eq!(pong["headers"]["messageId"], format!("ping-{session}"));
+            ready_tx.send(session).unwrap();
+
+            if session == 1 {
+                websocket
+                    .send(callback(
+                        "frame-denied",
+                        "provider-denied",
+                        "mallory",
+                        "filtered",
+                    ))
+                    .await
+                    .unwrap();
+                websocket
+                    .send(callback(
+                        "frame-accepted",
+                        accepted_id,
+                        "alice",
+                        accepted_text,
+                    ))
+                    .await
+                    .unwrap();
+                read_ack(&mut websocket, "frame-accepted").await;
+                websocket
+                    .send(callback(
+                        "frame-duplicate",
+                        accepted_id,
+                        "alice",
+                        "duplicate must not publish",
+                    ))
+                    .await
+                    .unwrap();
+                read_ack(&mut websocket, "frame-duplicate").await;
+                websocket
+                    .send(callback(
+                        "frame-barrier",
+                        "provider-barrier",
+                        "alice",
+                        "after duplicate",
+                    ))
+                    .await
+                    .unwrap();
+                read_ack(&mut websocket, "frame-barrier").await;
+            } else {
+                websocket
+                    .send(callback(
+                        "frame-restarted",
+                        accepted_id,
+                        "alice",
+                        accepted_text,
+                    ))
+                    .await
+                    .unwrap();
+                read_ack(&mut websocket, "frame-restarted").await;
+            }
+
+            let closed = tokio::time::timeout(PUBLIC_LISTENER_GUARD, websocket.next())
+                .await
+                .expect("DingTalk stop should close its Stream WebSocket");
+            assert!(matches!(closed, None | Some(Ok(Message::Close(_)))));
+        }
+    });
+
+    let channel = Arc::new(DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        gateway.client.clone(),
+    ));
+    let adapter: Arc<dyn ChannelAdapter> = channel;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = RecordingInboundSink(tx);
+
+    let mut listener = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink.clone();
+        async move { adapter.start(&sink).await }
+    });
+    let session = tokio::select! {
+        result = &mut listener => panic!("DingTalk adapter start returned before Stream ownership: {result:?}"),
+        session = tokio::time::timeout(PUBLIC_LISTENER_GUARD, ready_rx.recv()) => session
+            .expect("DingTalk Stream handshake should finish within the guard")
+            .expect("mock Stream readiness sender remains connected"),
+    };
+    assert_eq!(session, 1);
+    let duplicate_start = tokio::time::timeout(PUBLIC_LISTENER_GUARD, adapter.start(&sink))
+        .await
+        .expect("duplicate DingTalk start should reject promptly")
+        .expect_err("a second listener must not replace the active Stream owner");
+    assert_eq!(duplicate_start.kind, SendErrorKind::Forbidden);
+
+    let first = tokio::time::timeout(PUBLIC_LISTENER_GUARD, rx.recv())
+        .await
+        .expect("admitted DingTalk callback should reach the supplied typed sink")
+        .expect("test sink remains connected");
+    let ChannelIngress::Inbound(first) = first else {
+        panic!("DingTalk callbacks must arrive as typed inbound ingress");
+    };
+    assert_eq!(first.message_id, "provider-message-1");
+    assert_eq!(first.sender.id, "alice");
+    assert_eq!(first.conversation.id, "open-group-1");
+    assert_eq!(first.text, "first stream message");
+
+    let barrier = tokio::time::timeout(PUBLIC_LISTENER_GUARD, rx.recv())
+        .await
+        .expect("barrier callback should follow the accepted DingTalk callback")
+        .expect("test sink remains connected");
+    let ChannelIngress::Inbound(barrier) = barrier else {
+        panic!("DingTalk callbacks must arrive as typed inbound ingress");
+    };
+    assert_eq!(barrier.message_id, "provider-barrier");
+    assert_eq!(barrier.sender.id, "alice");
+    assert_eq!(barrier.conversation.id, "open-group-1");
+    assert_eq!(barrier.text, "after duplicate");
+
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(PUBLIC_LISTENER_GUARD, &mut listener)
+        .await
+        .expect("DingTalk stop must join the Stream listener")
+        .expect("DingTalk listener must not panic")
+        .expect("DingTalk listener must stop cleanly");
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+
+    let mut restarted = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink.clone();
+        async move { adapter.start(&sink).await }
+    });
+    let session = tokio::select! {
+        result = &mut restarted => panic!("DingTalk restart returned before Stream ownership: {result:?}"),
+        session = tokio::time::timeout(PUBLIC_LISTENER_GUARD, ready_rx.recv()) => session
+            .expect("restarted DingTalk Stream handshake should finish within the guard")
+            .expect("mock Stream readiness sender remains connected"),
+    };
+    assert_eq!(session, 2);
+    let restarted_ingress = tokio::time::timeout(PUBLIC_LISTENER_GUARD, rx.recv())
+        .await
+        .expect("restarted DingTalk Stream should publish admitted callbacks")
+        .expect("test sink remains connected");
+    let ChannelIngress::Inbound(restarted_ingress) = restarted_ingress else {
+        panic!("DingTalk callbacks must arrive as typed inbound ingress");
+    };
+    assert_eq!(restarted_ingress.message_id, "provider-message-2");
+    assert_eq!(restarted_ingress.sender.id, "alice");
+    assert_eq!(restarted_ingress.conversation.id, "open-group-1");
+    assert_eq!(restarted_ingress.text, "after restart");
+
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(PUBLIC_LISTENER_GUARD, &mut restarted)
+        .await
+        .expect("DingTalk stop must join the restarted Stream listener")
+        .expect("restarted DingTalk listener must not panic")
+        .expect("restarted DingTalk listener must stop cleanly");
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+    tokio::time::timeout(PUBLIC_LISTENER_GUARD, mock_stream)
+        .await
+        .expect("mock DingTalk Stream gateway should observe both stops")
+        .expect("mock Stream gateway task must not panic");
+}
+
+#[tokio::test]
+async fn cancelled_listener_does_not_open_gateway_after_registration() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    let server = HttpsServer::start(|request| {
+        panic!("a cancelled DingTalk listener must not register: {request:?}")
+    })
+    .await;
+    let channel = Arc::new(DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    ));
+    let adapter: Arc<dyn ChannelAdapter> = channel.clone();
+    let (id, cancellation) = channel.begin_listener().unwrap();
+    let _registration = super::super::ListenerRegistration {
+        channel: &channel,
+        id,
+    };
+    adapter.stop().await.unwrap();
+
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = RecordingInboundSink(tx);
+    tokio::time::timeout(
+        PUBLIC_LISTENER_GUARD,
+        channel.listen_owned(
+            super::super::DingTalkIngress::Typed(&sink),
+            Some(cancellation),
+        ),
+    )
+    .await
+    .expect("a pre-cancelled DingTalk listener must return promptly")
+    .expect("cancellation before registration is a clean stop");
+    assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn public_adapter_does_not_ack_or_deduplicate_rejected_typed_callbacks() {
+    use crate::providers::http_test_support::HttpsServer;
+    use futures_util::{SinkExt, StreamExt};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
+
+    struct RejectOnceSink {
+        attempts: AtomicUsize,
+        accepted: tokio::sync::mpsc::UnboundedSender<ChannelIngress>,
+    }
+
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for RejectOnceSink {
+        async fn push(
+            &self,
+            ingress: ChannelIngress,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(tinychannels_bus::channel::ChannelSendError {
+                    kind: SendErrorKind::Transient,
+                    message: "temporary typed sink failure".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            self.accepted
+                .send(ingress)
+                .map_err(|_| tinychannels_bus::channel::ChannelSendError {
+                    kind: SendErrorKind::Transient,
+                    message: "test receiver closed".into(),
+                    retryable: true,
+                    ..Default::default()
+                })
+        }
+    }
+
+    fn callback(frame_id: &str) -> Message {
+        let data = json!({
+            "msgId": "provider-message-retry",
+            "msgtype": "text",
+            "robotCode": "robot-account-1",
+            "senderStaffId": "alice",
+            "senderId": "$:union-user-1",
+            "conversationType": "2",
+            "conversationId": "open-group-1",
+            "text": {"content": "retry after sink rejection"}
+        })
+        .to_string();
+        Message::Text(
+            json!({
+                "type": "CALLBACK",
+                "headers": {
+                    "messageId": frame_id,
+                    "topic": "/v1.0/im/bot/messages/get"
+                },
+                "data": data
+            })
+            .to_string()
+            .into(),
+        )
+    }
+
+    let stream_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let stream_address = stream_listener.local_addr().unwrap();
+    let ticket_counter = Arc::new(AtomicUsize::new(0));
+    let response_counter = ticket_counter.clone();
+    let gateway = HttpsServer::start(move |request| {
+        assert_eq!(request.method, "POST");
+        match request.target.as_str() {
+            "/v1.0/gateway/connections/open" => {
+                let sequence = response_counter.fetch_add(1, Ordering::SeqCst) + 1;
+                (
+                    200,
+                    json!({
+                        "endpoint": format!("ws://{stream_address}/"),
+                        "ticket": format!("retry-ticket-{sequence}")
+                    })
+                    .to_string(),
+                )
+            }
+            other => panic!("unexpected DingTalk request: {other}"),
+        }
+    })
+    .await;
+
+    let mock_stream = tokio::spawn(async move {
+        for session in 1..=2 {
+            let (socket, _) = tokio::time::timeout(PUBLIC_LISTENER_GUARD, stream_listener.accept())
+                .await
+                .expect("DingTalk should reconnect after sink rejection")
+                .unwrap();
+            #[allow(clippy::result_large_err)]
+            let mut websocket = tokio::time::timeout(
+                PUBLIC_LISTENER_GUARD,
+                accept_hdr_async(
+                    socket,
+                    move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+                          response| {
+                        let expected_query = format!("ticket=retry-ticket-{session}");
+                        assert_eq!(request.uri().query(), Some(expected_query.as_str()));
+                        Ok(response)
+                    },
+                ),
+            )
+            .await
+            .expect("DingTalk Stream handshake should complete")
+            .unwrap();
+            websocket
+                .send(Message::Text(
+                    json!({
+                        "type": "SYSTEM",
+                        "headers": {
+                            "messageId": format!("ping-{session}"),
+                            "topic": "ping"
+                        }
+                    })
+                    .to_string()
+                    .into(),
+                ))
+                .await
+                .unwrap();
+            let pong = tokio::time::timeout(PUBLIC_LISTENER_GUARD, websocket.next())
+                .await
+                .expect("DingTalk should answer the stream ping")
+                .unwrap()
+                .unwrap();
+            let pong: serde_json::Value = serde_json::from_str(pong.to_text().unwrap()).unwrap();
+            assert_eq!(pong["headers"]["messageId"], format!("ping-{session}"));
+
+            websocket
+                .send(callback(if session == 1 {
+                    "frame-rejected"
+                } else {
+                    "frame-retried"
+                }))
+                .await
+                .unwrap();
+            if session == 1 {
+                loop {
+                    let received = tokio::time::timeout(PUBLIC_LISTENER_GUARD, websocket.next())
+                        .await
+                        .expect("rejected publication should terminate its stream");
+                    match received {
+                        Some(Ok(Message::Text(text))) => {
+                            let response: serde_json::Value =
+                                serde_json::from_str(text.as_ref()).unwrap();
+                            assert_ne!(
+                                response["headers"]["messageId"], "frame-rejected",
+                                "a rejected typed callback must not receive a success ACK"
+                            );
+                        }
+                        None | Some(Err(_)) | Some(Ok(Message::Close(_))) => break,
+                        _ => {}
+                    }
+                }
+            } else {
+                let response = tokio::time::timeout(PUBLIC_LISTENER_GUARD, websocket.next())
+                    .await
+                    .expect("accepted callback should receive a stream ACK")
+                    .expect("DingTalk connection remains open")
+                    .expect("ACK frame should be valid");
+                let response: serde_json::Value =
+                    serde_json::from_str(response.to_text().unwrap()).unwrap();
+                assert_eq!(response["code"], 200);
+                assert_eq!(response["headers"]["messageId"], "frame-retried");
+                let closed = tokio::time::timeout(PUBLIC_LISTENER_GUARD, websocket.next())
+                    .await
+                    .expect("stop should close the restarted stream");
+                assert!(matches!(closed, None | Some(Ok(Message::Close(_)))));
+            }
+        }
+    });
+
+    let channel = Arc::new(DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        gateway.client.clone(),
+    ));
+    let adapter: Arc<dyn ChannelAdapter> = channel;
+    let (accepted, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(RejectOnceSink {
+        attempts: AtomicUsize::new(0),
+        accepted,
+    });
+
+    let rejected = tokio::time::timeout(PUBLIC_LISTENER_GUARD, adapter.start(sink.as_ref()))
+        .await
+        .expect("rejected typed publication should release the listener")
+        .unwrap_err();
+    assert_eq!(rejected.kind, SendErrorKind::Transient);
+    assert!(rejected.retryable);
+    assert!(rx.is_empty());
+
+    let restarted = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink.clone();
+        async move { adapter.start(sink.as_ref()).await }
+    });
+    let accepted = tokio::time::timeout(PUBLIC_LISTENER_GUARD, rx.recv())
+        .await
+        .expect("same provider message should be retried after rejection")
+        .expect("test receiver remains connected");
+    let ChannelIngress::Inbound(accepted) = accepted else {
+        panic!("DingTalk callbacks must arrive as typed inbound ingress");
+    };
+    assert_eq!(accepted.message_id, "provider-message-retry");
+    assert_eq!(accepted.sender.id, "alice");
+    assert_eq!(accepted.conversation.id, "open-group-1");
+    assert_eq!(accepted.text, "retry after sink rejection");
+
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(PUBLIC_LISTENER_GUARD, restarted)
+        .await
+        .expect("stop must join the restarted listener")
+        .expect("listener task must not panic")
+        .expect("explicit stop should be clean");
+    tokio::time::timeout(PUBLIC_LISTENER_GUARD, mock_stream)
+        .await
+        .expect("mock Stream server should observe both connection ends")
+        .expect("mock Stream task must not panic");
 }
