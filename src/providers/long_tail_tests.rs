@@ -355,9 +355,9 @@ async fn legacy_noop_lifecycle_hooks_remain_compatible() {
     // attachment delivery are pinned by the five local-server tests in
     // `providers::mattermost::native_tests`; IRC has equivalent TLS-peer tests
     // in `providers::irc_listen_tests`. Keep this list explicit as the
-    // remaining adapters migrate; the non-empty assertion prevents this
+    // remaining adapter migrates; the non-empty assertion prevents this
     // compatibility check from silently becoming vacuous.
-    const LEGACY_NOOP_PROVIDERS: [&str; 2] = ["dingtalk", "yuanbao"];
+    const LEGACY_NOOP_PROVIDERS: [&str; 1] = ["dingtalk"];
 
     let mut checked = 0;
     for id in LEGACY_NOOP_PROVIDERS {

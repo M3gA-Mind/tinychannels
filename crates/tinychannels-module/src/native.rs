@@ -118,7 +118,7 @@ pub(crate) fn build_native_v2(
         id => {
             let display = long_tail_display(id)?;
             let listener_mode = match id {
-                "irc" | "lark" | "mattermost" | "qq" => LongTailListenerMode::Adapter,
+                "irc" | "lark" | "mattermost" | "qq" | "yuanbao" => LongTailListenerMode::Adapter,
                 _ => LongTailListenerMode::Legacy,
             };
             tinychannels::factory::build_long_tail_channel_with_host(config, host, http, id)

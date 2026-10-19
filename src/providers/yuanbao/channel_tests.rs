@@ -537,7 +537,7 @@ async fn listener_dispatches_push_then_stops_on_kickout_and_second_listen_is_noo
     config.dm_access = "open".into();
     let ch = YuanbaoChannel::new(config).unwrap();
     let (incoming, rx) = mpsc::unbounded_channel();
-    *ch.inbound_rx.lock() = Some(rx);
+    *ch.inbound_rx.lock().await = Some(rx);
     incoming
         .send(InboundEvent::Push(make_push_frame(
             "inbound_message",
@@ -571,7 +571,7 @@ async fn listener_stops_when_inbound_channel_closes() {
     config.ws_domain = "ws://127.0.0.1:0".into();
     let ch = YuanbaoChannel::new(config).unwrap();
     let (incoming, rx) = mpsc::unbounded_channel();
-    *ch.inbound_rx.lock() = Some(rx);
+    *ch.inbound_rx.lock().await = Some(rx);
     drop(incoming);
     let (tx, _rx) = mpsc::channel(1);
     tokio::time::timeout(Duration::from_secs(3), ch.listen(tx))
@@ -592,7 +592,7 @@ async fn listener_stops_when_shutdown_is_signaled() {
         tokio::spawn(async move { ch.listen(tx).await })
     };
     tokio::time::timeout(Duration::from_secs(3), async {
-        while ch.inbound_rx.lock().is_some() {
+        while ch.inbound_rx.lock().await.is_some() {
             tokio::task::yield_now().await;
         }
         ch.shutdown_tx.send(true).unwrap();
