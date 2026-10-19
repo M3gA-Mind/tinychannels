@@ -6,6 +6,8 @@ use std::sync::Arc;
 use tinychannels_bus::ChannelIngress;
 use tinychannels_bus::channel::{ConversationKind, ConversationRef, SendErrorKind};
 
+const PUBLIC_LISTENER_GUARD: std::time::Duration = std::time::Duration::from_secs(8);
+
 #[derive(Clone)]
 struct RecordingInboundSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
 
@@ -1372,11 +1374,8 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
     use crate::providers::http_test_support::HttpsServer;
     use futures_util::{SinkExt, StreamExt};
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::time::Duration;
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
-
-    const GUARD: Duration = Duration::from_secs(8);
 
     fn callback(frame_id: &str, provider_id: &str, staff_id: &str, text: &str) -> Message {
         Message::Text(
@@ -1403,7 +1402,7 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
         websocket: &mut tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>,
         message_id: &str,
     ) {
-        let response = tokio::time::timeout(GUARD, websocket.next())
+        let response = tokio::time::timeout(PUBLIC_LISTENER_GUARD, websocket.next())
             .await
             .expect("DingTalk Stream acknowledgement should arrive")
             .expect("DingTalk Stream connection should remain open")
@@ -1460,18 +1459,19 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
                 "after restart",
             ),
         ] {
-            let (socket, _) = tokio::time::timeout(GUARD, stream_listener.accept())
+            let (socket, _) = tokio::time::timeout(PUBLIC_LISTENER_GUARD, stream_listener.accept())
                 .await
                 .expect("DingTalk adapter should connect to the local Stream gateway")
                 .unwrap();
             #[allow(clippy::result_large_err)]
             let mut websocket = tokio::time::timeout(
-                GUARD,
+                PUBLIC_LISTENER_GUARD,
                 accept_hdr_async(
                     socket,
                     move |request: &tokio_tungstenite::tungstenite::handshake::server::Request,
                           response| {
-                        assert_eq!(request.uri().query(), Some(&format!("ticket={ticket}")));
+                        let expected_query = format!("ticket={ticket}");
+                        assert_eq!(request.uri().query(), Some(expected_query.as_str()));
                         Ok(response)
                     },
                 ),
@@ -1491,7 +1491,7 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
                 ))
                 .await
                 .unwrap();
-            let pong = tokio::time::timeout(GUARD, websocket.next())
+            let pong = tokio::time::timeout(PUBLIC_LISTENER_GUARD, websocket.next())
                 .await
                 .expect("DingTalk Stream SYSTEM ping should be acknowledged")
                 .unwrap()
@@ -1554,7 +1554,7 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
                 read_ack(&mut websocket, "frame-restarted").await;
             }
 
-            let closed = tokio::time::timeout(GUARD, websocket.next())
+            let closed = tokio::time::timeout(PUBLIC_LISTENER_GUARD, websocket.next())
                 .await
                 .expect("DingTalk stop should close its Stream WebSocket");
             assert!(matches!(closed, None | Some(Ok(Message::Close(_)))));
@@ -1578,12 +1578,12 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
     });
     let session = tokio::select! {
         result = &mut listener => panic!("DingTalk adapter start returned before Stream ownership: {result:?}"),
-        session = tokio::time::timeout(GUARD, ready_rx.recv()) => session
+        session = tokio::time::timeout(PUBLIC_LISTENER_GUARD, ready_rx.recv()) => session
             .expect("DingTalk Stream handshake should finish within the guard")
             .expect("mock Stream readiness sender remains connected"),
     };
     assert_eq!(session, 1);
-    let first = tokio::time::timeout(GUARD, rx.recv())
+    let first = tokio::time::timeout(PUBLIC_LISTENER_GUARD, rx.recv())
         .await
         .expect("admitted DingTalk callback should reach the supplied typed sink")
         .expect("test sink remains connected");
@@ -1595,7 +1595,7 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
     assert_eq!(first.conversation.id, "open-group-1");
     assert_eq!(first.text, "first stream message");
 
-    let barrier = tokio::time::timeout(GUARD, rx.recv())
+    let barrier = tokio::time::timeout(PUBLIC_LISTENER_GUARD, rx.recv())
         .await
         .expect("barrier callback should follow the accepted DingTalk callback")
         .expect("test sink remains connected");
@@ -1608,7 +1608,7 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
     assert_eq!(barrier.text, "after duplicate");
 
     adapter.stop().await.unwrap();
-    tokio::time::timeout(GUARD, &mut listener)
+    tokio::time::timeout(PUBLIC_LISTENER_GUARD, &mut listener)
         .await
         .expect("DingTalk stop must join the Stream listener")
         .expect("DingTalk listener must not panic")
@@ -1625,12 +1625,12 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
     });
     let session = tokio::select! {
         result = &mut restarted => panic!("DingTalk restart returned before Stream ownership: {result:?}"),
-        session = tokio::time::timeout(GUARD, ready_rx.recv()) => session
+        session = tokio::time::timeout(PUBLIC_LISTENER_GUARD, ready_rx.recv()) => session
             .expect("restarted DingTalk Stream handshake should finish within the guard")
             .expect("mock Stream readiness sender remains connected"),
     };
     assert_eq!(session, 2);
-    let restarted_ingress = tokio::time::timeout(GUARD, rx.recv())
+    let restarted_ingress = tokio::time::timeout(PUBLIC_LISTENER_GUARD, rx.recv())
         .await
         .expect("restarted DingTalk Stream should publish admitted callbacks")
         .expect("test sink remains connected");
@@ -1643,7 +1643,7 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
     assert_eq!(restarted_ingress.text, "after restart");
 
     adapter.stop().await.unwrap();
-    tokio::time::timeout(GUARD, &mut restarted)
+    tokio::time::timeout(PUBLIC_LISTENER_GUARD, &mut restarted)
         .await
         .expect("DingTalk stop must join the restarted Stream listener")
         .expect("restarted DingTalk listener must not panic")
@@ -1652,7 +1652,7 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
         rx.try_recv(),
         Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     ));
-    tokio::time::timeout(GUARD, mock_stream)
+    tokio::time::timeout(PUBLIC_LISTENER_GUARD, mock_stream)
         .await
         .expect("mock DingTalk Stream gateway should observe both stops")
         .expect("mock Stream gateway task must not panic");
