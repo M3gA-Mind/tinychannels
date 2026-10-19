@@ -308,7 +308,7 @@ async fn lark_voice_store_only_ingests_voice_without_file_repository() {
             token_ok("t-voice-in")
         } else if request.target == "/open-apis/im/v1/messages/om-voice/resources/file-1?type=file"
         {
-            (200, b"voice attachment bytes".to_vec())
+            (200, "voice attachment bytes".into())
         } else {
             panic!("unexpected Lark request: {}", request.target)
         }
@@ -339,12 +339,17 @@ async fn lark_voice_store_only_ingests_voice_without_file_repository() {
 
     assert!(matches!(
         &envelope.parts[0],
-        tinychannels_bus::ContentPart::Voice { media, .. }
-            if media.opaque_id.as_deref() == Some("voice-1")
+        tinychannels_bus::ContentPart::VoiceNote { voice_note }
+            if voice_note.media.opaque_id.as_deref() == Some("voice-1")
     ));
     let stored = voice.stored.lock().unwrap();
     assert_eq!(stored.len(), 1);
-    assert_eq!(stored[0].bytes, b"voice attachment bytes");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&stored[0].audio_base64)
+            .unwrap(),
+        b"voice attachment bytes"
+    );
 }
 
 #[tokio::test]

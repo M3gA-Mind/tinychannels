@@ -368,7 +368,8 @@ pub(crate) async fn send_typed<P: NativeProvider + ?Sized>(
         )));
     }
     provider.validate_target(&target)?;
-    let steps = plan(provider, message, &target).await?;
+    let mut steps = plan(provider, message, &target).await?;
+    provider.prepare_steps(&target, &mut steps).await?;
     let mut parts: Vec<MessageReceiptPart> = Vec::new();
     let mut failure = None;
     if provider.bundles_steps() {

@@ -127,6 +127,16 @@ pub(crate) trait NativeProvider: Send + Sync {
     fn validate_target(&self, _target: &Target) -> Result<(), ChannelSendError> {
         Ok(())
     }
+    /// Validate or normalize every provider-specific step before delivery
+    /// starts. This keeps a known-invalid later attachment from following an
+    /// already-sent text step.
+    async fn prepare_steps(
+        &self,
+        _target: &Target,
+        _steps: &mut [Step],
+    ) -> Result<(), ChannelSendError> {
+        Ok(())
+    }
     /// Extra descriptor metadata (for example `voiceOut=attachment`).
     fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
         Vec::new()
