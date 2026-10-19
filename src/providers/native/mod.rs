@@ -113,6 +113,11 @@ pub(crate) trait NativeProvider: Send + Sync {
     fn media_repository(&self) -> Option<&Arc<dyn MediaRepository>>;
     fn voice_media_store(&self) -> Option<&Arc<dyn VoiceMediaStore>>;
     fn voice_synthesis(&self) -> bool;
+    /// Whether accompanying text is preserved as a voice caption instead of a
+    /// separate ordered text message.
+    fn voice_caption_supported(&self) -> bool {
+        true
+    }
     fn declared_capabilities(&self) -> ChannelCapabilities;
     /// Resolve legacy provider-specific address projections before scoped
     /// media is read, so delivery and media authority share one target.

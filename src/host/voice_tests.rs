@@ -333,6 +333,44 @@ async fn prepare_voice_reply_uses_provider_codec_and_encoded_duration_metadata()
 }
 
 #[tokio::test]
+async fn prepare_voice_reply_can_encode_measured_amr_for_app_bot() {
+    let (synth, codec, store) =
+        voice_pipeline_stubs("audio/wav", "AQIDBA==", Some(1_240), Some("amr-media"));
+    let accepted = vec!["amr_nb".into()];
+    let prepared = prepare_voice_reply(
+        scope(),
+        "hello over App Bot".into(),
+        None,
+        &synth,
+        &codec,
+        &store,
+        VoiceReplyConstraints {
+            accepted_codecs: &accepted,
+            max_size_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: None,
+        },
+    )
+    .await
+    .unwrap();
+
+    let codec_request = codec.requests.lock().unwrap()[0].clone();
+    assert_eq!(codec_request.from, "wav_pcm16");
+    assert_eq!(codec_request.target, "amr_nb");
+    let stored = &store.requests.lock().unwrap()[0];
+    assert_eq!(stored.mime_type, "audio/amr");
+    assert_eq!(stored.codec.as_deref(), Some("amr_nb"));
+    assert_eq!(stored.file_name.as_deref(), Some("voice.amr"));
+    assert_eq!(stored.duration_ms, Some(1_240));
+    assert_eq!(prepared.note.media.opaque_id.as_deref(), Some("amr-media"));
+    assert_eq!(
+        prepared.note.media.content_type.as_deref(),
+        Some("audio/amr")
+    );
+    assert_eq!(prepared.note.media.codec.as_deref(), Some("amr_nb"));
+    assert_eq!(prepared.note.duration_ms, Some(1_240));
+}
+
+#[tokio::test]
 async fn prepare_voice_reply_stops_before_storage_when_host_pipeline_cannot_proceed() {
     let accepted = vec!["ogg_opus".into()];
     let (synth, codec, store) = voice_pipeline_stubs("audio/aac", "AQIDBA==", None, Some("id"));

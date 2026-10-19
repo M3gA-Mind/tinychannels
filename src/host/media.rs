@@ -593,7 +593,7 @@ pub(crate) fn is_allowed_content_type(
         }
         tinychannels_bus::MediaKind::Audio => matches!(
             content_type,
-            "audio/ogg" | "audio/mpeg" | "audio/mp4" | "audio/wav" | "audio/webm"
+            "audio/amr" | "audio/ogg" | "audio/mpeg" | "audio/mp4" | "audio/wav" | "audio/webm"
         ),
         tinychannels_bus::MediaKind::Document => matches!(
             content_type,
@@ -611,6 +611,7 @@ pub(crate) fn is_allowed_content_type(
 
 fn content_matches(content_type: &str, bytes: &[u8]) -> bool {
     match content_type {
+        "audio/amr" => bytes.starts_with(b"#!AMR\n"),
         "image/png" => {
             bytes.starts_with(b"\x89PNG\r\n\x1a\n")
                 && bytes.len() >= 45
