@@ -4804,7 +4804,7 @@ async fn dingtalk_final_voice_pipeline_keeps_transcript_and_measured_codec_metad
         Arc::clone(storage.blobs()),
     );
     let stored = media_store
-        .read(scope, media_id, 2 * 1024 * 1024)
+        .read(scope, &media_id, 2 * 1024 * 1024)
         .await
         .expect("AMR voice is persisted under the scoped host media store");
     assert_eq!(stored.bytes, AMR_BYTES);
