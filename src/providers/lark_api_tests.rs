@@ -215,7 +215,10 @@ async fn rejected_lark_file_upload_stops_before_message_delivery() {
         } else if request.target == "/open-apis/im/v1/files" {
             (413, r#"{"code":99991663,"msg":"too large"}"#.into())
         } else {
-            panic!("rejected file upload must stop before message delivery: {}", request.target)
+            panic!(
+                "rejected file upload must stop before message delivery: {}",
+                request.target
+            )
         }
     })
     .await;
@@ -261,6 +264,75 @@ async fn rejected_lark_file_upload_stops_before_message_delivery() {
     let requests = server.requests.lock().unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests[1].target.starts_with("/open-apis/im/v1/files"));
+}
+
+#[tokio::test]
+async fn lark_image_upload_rejections_stop_before_message_delivery() {
+    use crate::providers::native::fixtures::{StubMedia, stored_media};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tinychannels_bus::{
+        ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
+    };
+
+    let upload_attempts = Arc::new(AtomicUsize::new(0));
+    let server_attempts = upload_attempts.clone();
+    let server = HttpsServer::start(move |request| {
+        if is_token_request(request) {
+            token_ok("t-image-rejected")
+        } else if request.target == "/open-apis/im/v1/images" {
+            match server_attempts.fetch_add(1, Ordering::SeqCst) {
+                0 => (200, r#"{"code":99991663,"msg":"rejected"}"#.into()),
+                _ => (200, r#"{"code":0,"data":{}}"#.into()),
+            }
+        } else {
+            panic!(
+                "rejected image upload must stop before message delivery: {}",
+                request.target
+            )
+        }
+    })
+    .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(MediaKind::Image, "image/png", b"small-png"));
+    let channel = channel_with(&server, true).with_media_repository(media);
+    let message = ChannelOutboundMessage {
+        channel_id: "lark".into(),
+        conversation_id: "oc_chat_1".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-image-rejected".into()),
+        idempotency_key: "image-rejected".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("image-1".into()),
+                    kind: MediaKind::Image,
+                    content_type: Some("image/png".into()),
+                    ..Default::default()
+                },
+                caption: None,
+                alt_text: None,
+            },
+        }],
+    };
+
+    for _ in 0..2 {
+        let error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+            .await
+            .unwrap_err();
+        assert!(!error.sent_before_error);
+    }
+    assert_eq!(upload_attempts.load(Ordering::SeqCst), 2);
+    assert!(
+        server
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .all(|request| !request.target.starts_with("/open-apis/im/v1/messages"))
+    );
 }
 
 #[tokio::test]

@@ -916,6 +916,112 @@ async fn rejected_qq_upload_does_not_send_a_message_or_claim_delivery() {
 }
 
 #[tokio::test]
+async fn qq_accepted_send_without_message_id_is_reported_as_unknown_delivery() {
+    let server = HttpsServer::start(|request| match request.target.as_str() {
+        "/app/getAppAccessToken" => (
+            200,
+            json!({"access_token": "qq-token", "expires_in": "7200"}).to_string(),
+        ),
+        "/v2/users/user-1/messages" => (200, "{}".into()),
+        other => panic!("unexpected QQ request: {other}"),
+    })
+    .await;
+    let config = tinychannels_bus::ChannelsConfig {
+        qq: Some(tinychannels_bus::config::QQConfig {
+            app_id: "app-id".into(),
+            app_secret: "app-secret".into(),
+            allowed_users: vec!["*".into()],
+        }),
+        ..Default::default()
+    };
+    let channel = build_long_tail_channel_with_host(
+        &config,
+        &ChannelHostBuilder::new().build(),
+        &FixtureHttpClients(server.client.clone()),
+        "qq",
+    )
+    .expect("configured QQ adapter");
+
+    let error = tinychannels_runtime::channel::ChannelTypedSend::send_typed(
+        channel.as_ref(),
+        &content_message(
+            "user-1",
+            "missing-message-id",
+            ContentPart::Text {
+                text: "hello".into(),
+                markdown_dialect: None,
+            },
+        ),
+    )
+    .await
+    .expect_err("accepted response without an id has uncertain delivery");
+
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Unknown
+    );
+    assert!(error.sent_before_error);
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn qq_final_server_error_preserves_uncertain_delivery_after_upload() {
+    let server = HttpsServer::start(|request| match request.target.as_str() {
+        "/app/getAppAccessToken" => (
+            200,
+            json!({"access_token": "qq-token", "expires_in": "7200"}).to_string(),
+        ),
+        "/v2/users/user-1/files" => (
+            200,
+            json!({"file_info": "opaque-qq-file-info", "ttl": 300}).to_string(),
+        ),
+        "/v2/users/user-1/messages" => (500, json!({"message": "gateway error"}).to_string()),
+        other => panic!("unexpected QQ request: {other}"),
+    })
+    .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(
+        MediaKind::Image,
+        "image/png",
+        b"exact-scoped-png-bytes",
+    ));
+    let host = ChannelHostBuilder::new().media_repository(media).build();
+    let config = tinychannels_bus::ChannelsConfig {
+        qq: Some(tinychannels_bus::config::QQConfig {
+            app_id: "app-id".into(),
+            app_secret: "app-secret".into(),
+            allowed_users: vec!["*".into()],
+        }),
+        ..Default::default()
+    };
+    let channel = build_long_tail_channel_with_host(
+        &config,
+        &host,
+        &FixtureHttpClients(server.client.clone()),
+        "qq",
+    )
+    .expect("configured QQ adapter");
+
+    let error = tinychannels_runtime::channel::ChannelTypedSend::send_typed(
+        channel.as_ref(),
+        &image_message("user-1", "final-send-error"),
+    )
+    .await
+    .expect_err("a server error after upload leaves message delivery uncertain");
+
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Unknown
+    );
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[1].target, "/v2/users/user-1/files");
+    assert_eq!(requests[2].target, "/v2/users/user-1/messages");
+}
+
+#[tokio::test]
 async fn qq_uses_video_and_generic_file_upload_types() {
     for (kind, mime, name, expected_file_type, content_part) in [
         (
