@@ -84,6 +84,64 @@ async fn direct_send_uses_staff_id_and_provider_receipt() {
 }
 
 #[tokio::test]
+async fn typed_send_rejects_missing_admission_or_robot_context_before_http() {
+    use crate::providers::http_test_support::HttpsServer;
+    use tinychannels_bus::{ChannelOutboundMessage, ContentPart, OutboundContentPart};
+    use tinychannels_runtime::channel::ChannelTypedSend;
+
+    let server = HttpsServer::start(|request| {
+        panic!("missing admitted context must fail before HTTP: {request:?}")
+    })
+    .await;
+    for (kind, id, context) in [
+        (ConversationKind::Group, "missing-context", None),
+        (ConversationKind::Group, "missing-robot", Some(json!({}))),
+    ] {
+        let channel = DingTalkChannel::with_http_client(
+            "app-key".into(),
+            "app-secret".into(),
+            vec!["alice".into()],
+            server.client.clone(),
+        );
+        if let Some(context) = context {
+            channel
+                .robot_contexts
+                .write()
+                .await
+                .insert(conversation_context_key(kind, id), context);
+        }
+        let message = ChannelOutboundMessage {
+            channel_id: "dingtalk".into(),
+            conversation_id: id.into(),
+            channel_ref: None,
+            conversation_ref: Some(ConversationRef {
+                kind,
+                id: id.into(),
+                ..Default::default()
+            }),
+            reply_to_id: None,
+            thread_id: None,
+            turn_id: Some("turn-admission-check".into()),
+            idempotency_key: format!("admission-{id}"),
+            parts: vec![OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "hello".into(),
+                    markdown_dialect: None,
+                },
+            }],
+        };
+        let error = channel
+            .send_typed(&message)
+            .await
+            .err()
+            .expect("unadmitted conversation cannot receive a provider send");
+        assert_eq!(error.kind, SendErrorKind::BadFormat, "{id}");
+        assert!(!error.sent_before_error, "{id}");
+    }
+    assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
     use crate::providers::http_test_support::HttpsServer;
     use crate::providers::native::fixtures::{StubMedia, stored_media};
