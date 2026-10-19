@@ -44,7 +44,10 @@ async fn downloadable_sound_is_stored_and_published_as_typed_voice() {
         |request| {
             assert_eq!(request.method, "GET");
             assert_eq!(request.target, "/voice.ogg");
-            (200, b"ogg-voice-bytes".to_vec())
+            (
+                200,
+                include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+            )
         },
         "audio/ogg",
     )
@@ -96,7 +99,7 @@ async fn downloadable_sound_is_stored_and_published_as_typed_voice() {
         base64::engine::general_purpose::STANDARD
             .decode(&stored[0].audio_base64)
             .unwrap(),
-        b"ogg-voice-bytes"
+        include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg")
     );
     drop(stored);
     let ingress = events.inbound();
@@ -147,7 +150,10 @@ async fn failed_voice_ingress_releases_dedupe_for_provider_redelivery() {
         |request| {
             assert_eq!(request.method, "GET");
             assert_eq!(request.target, "/voice.ogg");
-            (200, b"ogg-voice-bytes".to_vec())
+            (
+                200,
+                include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+            )
         },
         "audio/ogg",
     )

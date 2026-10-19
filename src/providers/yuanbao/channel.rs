@@ -640,11 +640,7 @@ impl YuanbaoChannel {
             ),
             ..Default::default()
         };
-        if publish("yuanbao", Some(events), envelope).await {
-            true
-        } else {
-            false
-        }
+        publish("yuanbao", Some(events), envelope).await
     }
 }
 
