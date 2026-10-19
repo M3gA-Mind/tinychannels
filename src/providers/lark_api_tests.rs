@@ -67,7 +67,7 @@ async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request(
         ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
     };
 
-    let server = HttpsServer::start_with_content_type(|request| {
+    let server = HttpsServer::start(|request| {
         if is_token_request(request) {
             token_ok("t-1")
         } else if request.target == "/open-apis/im/v1/messages?receive_id_type=chat_id" {
@@ -78,7 +78,7 @@ async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request(
         } else {
             panic!("unexpected Lark request: {}", request.target)
         }
-    }, "audio/ogg")
+    })
     .await;
     let media = Arc::new(StubMedia::default());
     *media.read.lock().unwrap() = Some(stored_media(
@@ -376,7 +376,7 @@ async fn native_inbound_downloads_and_stores_a_file_before_building_the_envelope
 
 #[tokio::test]
 async fn lark_voice_store_only_ingests_voice_without_file_repository() {
-    let server = HttpsServer::start(|request| {
+    let server = HttpsServer::start_with_content_type(|request| {
         if is_token_request(request) {
             token_ok("t-voice-in")
         } else if request.target == "/open-apis/im/v1/messages/om-voice/resources/file-1?type=file"
@@ -385,7 +385,7 @@ async fn lark_voice_store_only_ingests_voice_without_file_repository() {
         } else {
             panic!("unexpected Lark request: {}", request.target)
         }
-    })
+    }, "audio/ogg")
     .await;
     let voice = Arc::new(crate::providers::native::fixtures::StubVoice::default());
     let channel = channel_with(&server, true)
