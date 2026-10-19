@@ -812,7 +812,11 @@ async fn the_factory_built_qq_adapter_passes_the_full_conformance_matrix() {
     let results = check_all_features(&fixture).await;
     assert_eq!(results.len(), Feature::ALL.len());
     let failed = failures(&results);
-    assert!(failed.is_empty(), "QQ conformance failures: {failed:#?}");
+    assert!(
+        failed.is_empty(),
+        "QQ conformance failures: {failed:#?}; observations={:#?}",
+        fixture.observations()
+    );
     let observations = fixture.observations();
     for feature in [
         Feature::Text,
