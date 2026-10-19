@@ -961,6 +961,24 @@ pub(crate) struct ModuleEvents(
 );
 
 #[async_trait::async_trait]
+impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        tinychannels::host::EventSink::publish_ingress(self, ingress)
+            .await
+            .map(|_| ())
+            .map_err(|error| tinychannels::channel::ChannelSendError {
+                kind: tinychannels::channel::SendErrorKind::Unknown,
+                message: error.to_string(),
+                retryable: true,
+                ..Default::default()
+            })
+    }
+}
+
+#[async_trait::async_trait]
 impl tinychannels::host::EventSink for ModuleEvents {
     async fn publish(
         &self,
@@ -1131,6 +1149,53 @@ async fn listen_with_supervision(
     }
 }
 
+async fn listen_adapter_with_supervision(
+    adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
+    sink: Arc<ModuleEvents>,
+    host: HostChannels,
+    name: String,
+    policy: Option<ChannelSupervisionPolicy>,
+    mut cancellation: watch::Receiver<bool>,
+) -> anyhow::Result<()> {
+    if *cancellation.borrow() {
+        return Ok(());
+    }
+    let (mut backoff, maximum) = policy
+        .map(|policy| {
+            let initial = policy.initial_backoff_secs.max(1);
+            (Some(initial), policy.max_backoff_secs.max(initial))
+        })
+        .unwrap_or((None, 0));
+    loop {
+        let mut start = Box::pin(adapter.start(sink.as_ref()));
+        let result = tokio::select! { biased;
+            // Poll start first so providers can synchronously claim their
+            // listener before stop is sent if cancellation raced task startup.
+            result = &mut start => result.map_err(|error| anyhow::anyhow!(error.message)),
+            _ = async { let _ = cancellation.wait_for(|value| *value).await; } => {
+                let _ = adapter.stop().await;
+                let _ = (&mut start).await;
+                return Ok(());
+            }
+        };
+        let _ = adapter.stop().await;
+        let Some(delay) = backoff else {
+            return result;
+        };
+        host.report_status(&name, "restarting", Some("provider disconnected".into()))
+            .await;
+        tokio::select! { biased;
+            _ = async { let _ = cancellation.wait_for(|value| *value).await; } => return Ok(()),
+            _ = tokio::time::sleep(Duration::from_secs(delay) + Duration::from_millis(tinychannels::runtime::jitter_millis(delay))) => {}
+        }
+        backoff = Some(delay.saturating_mul(2).min(maximum));
+        host.report_status(&name, "connecting", None).await;
+        if let Err(error) = result {
+            tracing::debug!(channel = %name, %error, "native listener disconnected");
+        }
+    }
+}
+
 /// A resource is retained until its owning task acknowledges cleanup.
 #[derive(Clone)]
 pub(crate) struct NativePorts {
@@ -1143,6 +1208,16 @@ pub(crate) struct NativePorts {
     edits: Arc<dyn tinychannels::channel::ChannelEdit>,
     deletes: Arc<dyn tinychannels::channel::ChannelDelete>,
     drafts: Arc<dyn tinychannels::channel::ChannelStreamingDraft>,
+    listener_mode: LongTailListenerMode,
+}
+
+/// Which listener implementation owns inbound delivery for a long-tail
+/// provider. Migrated providers run their typed adapter directly; the others
+/// keep their existing legacy listener until their own migration.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LongTailListenerMode {
+    Legacy,
+    Adapter,
 }
 
 impl NativePorts {
@@ -1166,12 +1241,17 @@ impl NativePorts {
             edits: channel.clone(),
             deletes: channel.clone(),
             drafts: channel,
+            listener_mode: LongTailListenerMode::Legacy,
         }
     }
 
     /// Ports over one long-tail provider object (Lark, Mattermost, IRC, QQ,
     /// DingTalk, Yuanbao); `provider` is its display name in errors.
-    fn long_tail(channel: Arc<dyn tinychannels::LongTailNative>, provider: &'static str) -> Self {
+    fn long_tail(
+        channel: Arc<dyn tinychannels::LongTailNative>,
+        provider: &'static str,
+        listener_mode: LongTailListenerMode,
+    ) -> Self {
         Self {
             provider,
             adapter: channel.clone(),
@@ -1181,6 +1261,7 @@ impl NativePorts {
             edits: channel.clone(),
             deletes: channel.clone(),
             drafts: channel,
+            listener_mode,
         }
     }
 
@@ -1699,6 +1780,7 @@ impl Running {
         host: HostChannels,
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
+        listener_mode: LongTailListenerMode,
     ) -> Arc<Self> {
         let channel_dyn: Arc<dyn Channel> = channel.clone();
         Self::start_inner(
@@ -1707,7 +1789,7 @@ impl Running {
             host,
             supervision,
             outbound_only,
-            Some(NativePorts::long_tail(channel, provider)),
+            Some(NativePorts::long_tail(channel, provider, listener_mode)),
         )
     }
 
@@ -1757,28 +1839,79 @@ impl Running {
             .clone();
         let worker_cancel = cancel.clone();
         let worker_instance = configured_instance.clone();
+        let worker_scope = media_account_scope.clone();
         let worker_native = native_ports.clone();
+        let native_listener = worker_native
+            .as_ref()
+            .is_some_and(|ports| ports.listener_mode == LongTailListenerMode::Adapter);
         let worker = tokio::spawn(async move {
             let name = listen_channel.name().to_owned();
             host.report_status(&name, "connecting", None).await;
-            let (tx, mut rx) = tokio::sync::mpsc::channel(256);
-            let forward_host = host.clone();
-            let forward_name = name.clone();
-            let mut forwarder = AbortOnDrop(tokio::spawn(async move {
-                while let Some(message) = rx.recv().await {
-                    let envelope = tinychannels::inbound_envelope_from_legacy_message(&message);
-                    forward_host.deliver_inbound(&forward_name, envelope).await;
-                }
-            }));
+            let (tx, rx) = if native_listener {
+                (None, None)
+            } else {
+                let (tx, rx) = tokio::sync::mpsc::channel(256);
+                (Some(tx), Some(rx))
+            };
+            let mut forwarder = if native_listener {
+                None
+            } else {
+                let forward_host = host.clone();
+                let forward_name = name.clone();
+                Some(AbortOnDrop(tokio::spawn(async move {
+                    let mut rx = rx.expect("legacy listener owns its inbound receiver");
+                    while let Some(message) = rx.recv().await {
+                        let envelope = tinychannels::inbound_envelope_from_legacy_message(&message);
+                        forward_host.deliver_inbound(&forward_name, envelope).await;
+                    }
+                })))
+            };
             let listener_host = host.clone();
+            let listener_cancel = worker_cancel.subscribe();
+            let listener_native = worker_native.clone();
+            let listener_instance = worker_instance.clone();
+            let listener_scope = worker_scope.clone();
+            let listener_name = name.clone();
             let mut listener = AbortOnDrop(tokio::spawn(async move {
-                if outbound_only {
+                if native_listener {
+                    let Some(native) = listener_native else {
+                        return Err(anyhow::anyhow!("native listener ports are unavailable"));
+                    };
+                    let sink = Arc::new(ModuleEvents(
+                        listener_host.clone(),
+                        listener_instance,
+                        listener_scope,
+                    ));
+                    let adapter = Arc::clone(&native.adapter);
+                    let mut listener_cancel = listener_cancel;
+                    if outbound_only {
+                        let _ = listener_cancel.wait_for(|value| *value).await;
+                        let _ = adapter.stop().await;
+                        Ok(())
+                    } else {
+                        listen_adapter_with_supervision(
+                            Arc::clone(&adapter),
+                            sink,
+                            listener_host.clone(),
+                            listener_name,
+                            supervision,
+                            listener_cancel,
+                        )
+                        .await
+                    }
+                } else if outbound_only {
                     // Keep the inbound sender alive until cancellation so the forwarder
                     // has the same explicit cleanup path as native listeners.
-                    let _inbound = tx;
+                    let _inbound = tx.expect("legacy listener owns its inbound sender");
                     std::future::pending::<anyhow::Result<()>>().await
                 } else {
-                    listen_with_supervision(listen_channel, tx, listener_host, supervision).await
+                    listen_with_supervision(
+                        listen_channel,
+                        tx.expect("legacy listener owns its inbound sender"),
+                        listener_host,
+                        supervision,
+                    )
+                    .await
                 }
             }));
             let mut send_cancel = send_cancel;
@@ -1928,15 +2061,31 @@ impl Running {
                         .send(Err(Error::failed("provider is stopping")));
                 }
             }));
-            let outcome = tokio::select! {biased;
-                _=async {let _=canceled.wait_for(|value|*value).await;}=>{listener.0.abort(); let _=(&mut listener.0).await;None},
-                outcome=&mut listener.0=>Some(outcome),
+            let outcome = if native_listener {
+                tokio::select! { biased;
+                    _ = async { let _ = canceled.wait_for(|value| *value).await; } => {
+                        let _ = (&mut listener.0).await;
+                        None
+                    }
+                    outcome = &mut listener.0 => Some(outcome),
+                }
+            } else {
+                tokio::select! { biased;
+                    _ = async { let _ = canceled.wait_for(|value| *value).await; } => {
+                        listener.0.abort();
+                        let _ = (&mut listener.0).await;
+                        None
+                    }
+                    outcome = &mut listener.0 => Some(outcome),
+                }
             };
             worker_cancel.send_replace(true);
             // Join listener first: it cannot register another native hook later.
             hooks.drain().await;
             let _ = (&mut sender.0).await;
-            let _ = (&mut forwarder.0).await;
+            if let Some(forwarder) = &mut forwarder {
+                let _ = (&mut forwarder.0).await;
+            }
             host.report_status(
                 &name,
                 if outcome.is_some_and(|outcome| !matches!(outcome, Ok(Ok(())))) {

@@ -4899,6 +4899,206 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     running.stop().await.unwrap();
 }
 
+struct ModuleIrcPeer {
+    reader: tokio::io::BufReader<
+        tokio::io::ReadHalf<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>,
+    >,
+    writer: tokio::io::WriteHalf<tokio_rustls::server::TlsStream<tokio::net::TcpStream>>,
+}
+
+impl ModuleIrcPeer {
+    async fn accept(listener: &tokio::net::TcpListener) -> Self {
+        let (socket, _) =
+            tokio::time::timeout(std::time::Duration::from_secs(10), listener.accept())
+                .await
+                .expect("module IRC listener should connect")
+                .expect("local IRC socket should accept");
+        let tls = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            irc_module_acceptor().accept(socket),
+        )
+        .await
+        .expect("module IRC listener should complete TLS")
+        .expect("local TLS fixture should be accepted");
+        let (reader, writer) = tokio::io::split(tls);
+        Self {
+            reader: tokio::io::BufReader::new(reader),
+            writer,
+        }
+    }
+
+    async fn next_line(&mut self) -> String {
+        use tokio::io::AsyncBufReadExt as _;
+
+        let mut line = String::new();
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            self.reader.read_line(&mut line),
+        )
+        .await
+        .expect("IRC peer read should not hang")
+        .expect("IRC peer read should succeed");
+        line.trim_end_matches(['\r', '\n']).to_owned()
+    }
+
+    async fn expect(&mut self, expected: &str) {
+        assert_eq!(self.next_line().await, expected);
+    }
+
+    async fn say(&mut self, message: &str) {
+        use tokio::io::AsyncWriteExt as _;
+
+        self.writer
+            .write_all(format!("{message}\r\n").as_bytes())
+            .await
+            .unwrap();
+        self.writer.flush().await.unwrap();
+    }
+}
+
+fn irc_module_acceptor() -> tokio_rustls::TlsAcceptor {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let certificate = include_bytes!("../../../tests/fixtures/tls/cert.der");
+    let private_key = include_bytes!("../../../tests/fixtures/tls/key.der");
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![rustls::pki_types::CertificateDer::from(
+                certificate.to_vec(),
+            )],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(private_key.to_vec()).into(),
+        )
+        .unwrap();
+    tokio_rustls::TlsAcceptor::from(Arc::new(config))
+}
+
+#[tokio::test]
+async fn configured_irc_launch_publishes_one_scoped_native_ingress_and_stops() {
+    use tinychannels::factory::DefaultHttpClients;
+    use tinychannels_bus::config::IrcConfig;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let config = tinychannels_bus::ChannelsConfig {
+        irc: Some(IrcConfig {
+            server: "127.0.0.1".into(),
+            port,
+            nickname: "bot".into(),
+            username: Some("botuser".into()),
+            channels: vec!["#ops".into()],
+            allowed_users: vec!["alice".into()],
+            server_password: None,
+            nickserv_password: None,
+            sasl_password: None,
+            verify_tls: Some(false),
+        }),
+        ..Default::default()
+    };
+    let noop: Arc<dyn tinychannels::host::ChannelHost> = tinychannels::host::NoopHost::arc();
+    let launch = crate::native::build_native_v2("irc", &config, &noop, &DefaultHttpClients)
+        .expect("configured IRC should build a native module launch");
+    let hooks = Arc::new(Hooks::default());
+    let (host, callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), "irc:team-a".into(), None);
+    let running = launch.start(hooks, host, None, false);
+    let adapter = running.adapter_handle();
+    assert_eq!(adapter.mode, AdapterMode::LongTailNativeV2);
+    assert_eq!(
+        adapter.descriptor().account_id.as_deref(),
+        Some("irc:team-a")
+    );
+
+    let mut peer = ModuleIrcPeer::accept(&listener).await;
+    peer.expect("NICK bot").await;
+    peer.expect("USER botuser 0 * :OpenHuman").await;
+    peer.say(":srv 001 bot :Welcome").await;
+    peer.expect("JOIN #ops").await;
+    peer.say(":mallory!m@host PRIVMSG #ops :denied").await;
+    peer.say(":alice!a@host PRIVMSG #ops :module IRC message")
+        .await;
+
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if !callbacks.inbound.lock().await.is_empty() {
+                break;
+            }
+            callbacks.ingress_changed.notified().await;
+        }
+    })
+    .await
+    .expect("one admitted IRC message should reach the host callback");
+
+    let inbound = callbacks.inbound.lock().await.clone();
+    assert_eq!(inbound.len(), 1, "denied senders must not publish");
+    assert_eq!(inbound[0].0, "irc:team-a");
+    let message = &inbound[0].1;
+    // `publish_ingress` adds the configured account and channel kind. The
+    // legacy ChannelMessage forwarder does not, so this also pins that the
+    // module is using the typed adapter route exactly once.
+    assert_eq!(message["channel"]["id"], "irc");
+    assert_eq!(message["channel"]["accountId"], "irc:team-a");
+    assert_eq!(message["conversation"]["kind"], "channel");
+    assert_eq!(message["conversation"]["id"], "#ops");
+    assert_eq!(message["sender"]["id"], "alice");
+    assert!(message["messageId"].as_str().unwrap().starts_with("irc_"));
+    assert!(
+        message["text"]
+            .as_str()
+            .unwrap()
+            .contains("module IRC message")
+    );
+
+    running.stop().await.unwrap();
+    let final_line = peer.next_line().await;
+    if final_line.starts_with("QUIT ") {
+        assert!(
+            peer.next_line().await.is_empty(),
+            "QUIT must close IRC socket"
+        );
+    } else {
+        assert!(final_line.is_empty(), "module stop must close IRC socket");
+    }
+}
+
+#[tokio::test]
+async fn configured_irc_listener_does_not_connect_after_cancellation_precedes_start() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = Arc::new(
+        tinychannels::IrcChannel::new(tinychannels::IrcChannelConfig {
+            server: "127.0.0.1".into(),
+            port,
+            nickname: "bot".into(),
+            username: None,
+            channels: vec![],
+            allowed_users: vec![],
+            server_password: None,
+            nickserv_password: None,
+            sasl_password: None,
+            verify_tls: false,
+        }),
+    );
+    let (host, _callbacks, _server, _storage) = ingress_fixture().await;
+    let sink = Arc::new(ModuleEvents(
+        host.clone(),
+        "irc:team-a".into(),
+        MediaScope::default(),
+    ));
+    let (cancel, receiver) = tokio::sync::watch::channel(true);
+    let result =
+        listen_adapter_with_supervision(adapter, sink, host, "irc".into(), None, receiver).await;
+    assert!(result.is_ok());
+    assert!(
+        matches!(
+            listener.accept(),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+        ),
+        "pre-cancelled adapter startup must not open a provider connection"
+    );
+    drop(cancel);
+}
+
 #[tokio::test]
 async fn configured_long_tail_adapter_sends_through_the_ordered_queue_and_refuses_the_rest() {
     use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
@@ -4935,7 +5135,15 @@ async fn configured_long_tail_adapter_sends_through_the_ordered_queue_and_refuse
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), "mattermost:team-a".into(), None);
-    let running = Running::start_long_tail("Mattermost", channel, hooks, host, None, true);
+    let running = Running::start_long_tail(
+        "Mattermost",
+        channel,
+        hooks,
+        host,
+        None,
+        true,
+        crate::provider::LongTailListenerMode::Legacy,
+    );
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::LongTailNativeV2);
     let descriptor = handle.descriptor();

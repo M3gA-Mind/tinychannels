@@ -337,13 +337,27 @@ fn unconfigured_or_unknown_providers_build_nothing() {
 }
 
 #[tokio::test]
-async fn lifecycle_and_status_report_a_configured_enabled_account() {
+async fn configured_accounts_report_enabled_status() {
     let config = config("http://mm.invalid");
     for (id, _) in PROVIDERS {
         let channel = build(&config, id);
         let status = ChannelAdapter::status(channel.as_ref()).await.unwrap();
         assert_eq!(status.channel_id, id);
         assert!(status.states.contains(&ChannelAccountState::Enabled));
+    }
+}
+
+#[tokio::test]
+async fn legacy_noop_lifecycle_hooks_remain_compatible() {
+    let config = config("http://mm.invalid");
+    // IRC owns a real network listener now. Its start/stop lifecycle is pinned
+    // by the mock TLS peer tests in `providers::irc`; this generic compatibility
+    // check covers only providers that still expose no-op lifecycle hooks.
+    for (id, _) in PROVIDERS {
+        if id == "irc" {
+            continue;
+        }
+        let channel = build(&config, id);
         struct Sink;
         #[async_trait::async_trait]
         impl crate::channel::ChannelInboundSink for Sink {

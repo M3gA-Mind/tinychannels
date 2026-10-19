@@ -3,7 +3,7 @@
 //! the same ordered operation queue as Telegram and Slack.
 
 use crate::host::HostChannels;
-use crate::provider::{Hooks, Running};
+use crate::provider::{Hooks, LongTailListenerMode, Running};
 use std::sync::Arc;
 use tinychannels::Channel;
 use tinychannels::factory::HttpClientFactory;
@@ -50,12 +50,24 @@ impl NativeLaunch {
     }
 
     /// A long-tail text provider held as its trait object.
-    fn long_tail(provider: &'static str, channel: Arc<dyn tinychannels::LongTailNative>) -> Self {
+    fn long_tail(
+        provider: &'static str,
+        channel: Arc<dyn tinychannels::LongTailNative>,
+        listener_mode: LongTailListenerMode,
+    ) -> Self {
         let dynamic: Arc<dyn Channel> = channel.clone();
         Self {
             channel: dynamic,
             start: Box::new(move |hooks, host, supervision, outbound_only| {
-                Running::start_long_tail(provider, channel, hooks, host, supervision, outbound_only)
+                Running::start_long_tail(
+                    provider,
+                    channel,
+                    hooks,
+                    host,
+                    supervision,
+                    outbound_only,
+                    listener_mode,
+                )
             }),
         }
     }
@@ -105,8 +117,12 @@ pub(crate) fn build_native_v2(
             .map(|channel| NativeLaunch::new("Email", channel)),
         id => {
             let display = long_tail_display(id)?;
+            let listener_mode = match id {
+                "irc" => LongTailListenerMode::Adapter,
+                _ => LongTailListenerMode::Legacy,
+            };
             tinychannels::factory::build_long_tail_channel_with_host(config, host, http, id)
-                .map(|channel| NativeLaunch::long_tail(display, channel))
+                .map(|channel| NativeLaunch::long_tail(display, channel, listener_mode))
         }
     }
 }
