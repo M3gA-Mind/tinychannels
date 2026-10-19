@@ -5096,7 +5096,15 @@ async fn configured_long_tail_adapter_sends_through_the_ordered_queue_and_refuse
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), "mattermost:team-a".into(), None);
-    let running = Running::start_long_tail("Mattermost", channel, hooks, host, None, true);
+    let running = Running::start_long_tail(
+        "Mattermost",
+        channel,
+        hooks,
+        host,
+        None,
+        true,
+        crate::provider::LongTailListenerMode::Legacy,
+    );
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::LongTailNativeV2);
     let descriptor = handle.descriptor();
