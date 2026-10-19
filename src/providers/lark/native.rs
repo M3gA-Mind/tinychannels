@@ -204,6 +204,23 @@ impl LarkChannel {
         &self,
         event: &serde_json::Value,
     ) -> Option<ChannelInboundEnvelope> {
+        self.inbound_envelope_with_listener(event, false).await
+    }
+
+    pub(crate) async fn inbound_envelope_for_listener(
+        &self,
+        event: &serde_json::Value,
+        typed_sink_available: bool,
+    ) -> Option<ChannelInboundEnvelope> {
+        self.inbound_envelope_with_listener(event, typed_sink_available)
+            .await
+    }
+
+    async fn inbound_envelope_with_listener(
+        &self,
+        event: &serde_json::Value,
+        typed_sink_available: bool,
+    ) -> Option<ChannelInboundEnvelope> {
         use crate::providers::native::inbound::{
             InboundFile, Ingest, Ingested, assemble, media_of,
         };
@@ -318,7 +335,7 @@ impl LarkChannel {
             ),
             _ => (None, "file", false, "application/octet-stream"),
         };
-        if self.native.events.is_some()
+        if (self.native.events.is_some() || typed_sink_available)
             && (self.native.media_repository.is_some() || self.native.voice_media_store.is_some())
             && let Some(key) = key.filter(|key| !key.is_empty())
             && let Some(file) = self
