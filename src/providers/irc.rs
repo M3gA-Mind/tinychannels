@@ -743,6 +743,7 @@ impl Channel for IrcChannel {
 #[path = "irc_tests.rs"]
 mod tests;
 
+#[async_trait]
 impl crate::providers::long_tail::LongTail for IrcChannel {
     const ID: &'static str = "irc";
     const DISPLAY: &'static str = "IRC";
