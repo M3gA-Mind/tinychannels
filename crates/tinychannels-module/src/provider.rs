@@ -966,7 +966,10 @@ impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
         &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
-        self.publish_ingress(ingress).await.map(|_| ()).map_err(|error| {
+        tinychannels::host::EventSink::publish_ingress(self, ingress)
+            .await
+            .map(|_| ())
+            .map_err(|error| {
             tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Unknown,
                 message: error.to_string(),
