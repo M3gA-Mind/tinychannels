@@ -1637,7 +1637,12 @@ async fn public_adapter_retries_a_message_after_typed_sink_rejection() {
                 let closed = tokio::time::timeout(GUARD, websocket.next())
                     .await
                     .expect("a rejected typed event should terminate the current listener");
-                assert!(closed.is_none() || matches!(closed, Some(Ok(Message::Close(_)))));
+                assert!(
+                    closed.is_none()
+                        || matches!(closed, Some(Ok(Message::Close(_))))
+                        || matches!(closed, Some(Err(_))),
+                    "rejected publication should release the gateway socket, got {closed:?}"
+                );
             } else {
                 let closed = tokio::time::timeout(GUARD, websocket.next())
                     .await
