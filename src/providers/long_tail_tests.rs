@@ -350,7 +350,7 @@ async fn configured_accounts_report_enabled_status() {
 #[tokio::test]
 async fn legacy_noop_lifecycle_hooks_remain_compatible() {
     let config = config("http://mm.invalid");
-    // IRC and Mattermost own real listeners now. Mattermost's public start,
+    // IRC, Mattermost, and QQ own real listeners now. Mattermost's public start,
     // abort/restart, equal-timestamp ordering, admission, and configured
     // attachment delivery are pinned by the five local-server tests in
     // `providers::mattermost::native_tests`; IRC has equivalent TLS-peer tests
@@ -358,9 +358,9 @@ async fn legacy_noop_lifecycle_hooks_remain_compatible() {
     // remaining adapters migrate; the non-empty assertion prevents this
     // compatibility check from silently becoming vacuous.
     #[cfg(feature = "lark")]
-    const LEGACY_NOOP_PROVIDERS: [&str; 4] = ["lark", "qq", "dingtalk", "yuanbao"];
+    const LEGACY_NOOP_PROVIDERS: [&str; 3] = ["lark", "dingtalk", "yuanbao"];
     #[cfg(not(feature = "lark"))]
-    const LEGACY_NOOP_PROVIDERS: [&str; 3] = ["qq", "dingtalk", "yuanbao"];
+    const LEGACY_NOOP_PROVIDERS: [&str; 2] = ["dingtalk", "yuanbao"];
 
     let mut checked = 0;
     for id in LEGACY_NOOP_PROVIDERS {

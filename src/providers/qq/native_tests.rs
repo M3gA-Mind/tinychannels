@@ -1,6 +1,6 @@
 use super::super::http_test_support::HttpsServer;
 use super::native::timestamp_unix_ms;
-use crate::channel::ChannelAdapter;
+use crate::channel::{ChannelAdapter, ChannelInboundSink};
 use crate::factory::{HttpClientFactory, build_long_tail_channel_with_host};
 use crate::host::{ChannelHostBuilder, VoiceMediaRequest, VoiceMediaStore};
 use crate::providers::native::fixtures::{StubMedia, stored_media};
@@ -9,10 +9,30 @@ use base64::Engine as _;
 use serde_json::json;
 use std::sync::Arc;
 use tinychannels_bus::{
-    ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind, ConversationRef,
-    HostReadVoiceMediaResult, HostStoreVoiceMediaResult, MediaKind, MediaReference,
-    OutboundContentPart, OutboundVoice,
+    ChannelIngress, ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind,
+    ConversationRef, HostReadVoiceMediaResult, HostStoreVoiceMediaResult, MediaKind,
+    MediaReference, OutboundContentPart, OutboundVoice,
 };
+
+#[derive(Clone)]
+struct RecordingInboundSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
+
+#[async_trait::async_trait]
+impl ChannelInboundSink for RecordingInboundSink {
+    async fn push(
+        &self,
+        ingress: ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.0
+            .send(ingress)
+            .map_err(|_| tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "test sink closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+    }
+}
 
 #[tokio::test]
 async fn qq_inbound_image_downloads_tencent_attachment_and_publishes_typed_ingress() {
@@ -1155,4 +1175,350 @@ fn media_reference(id: &str, kind: MediaKind, content_type: &str, name: &str) ->
         file_name: Some(name.into()),
         ..Default::default()
     }
+}
+
+#[tokio::test]
+async fn public_adapter_start_owns_qq_gateway_until_stop_and_restart() {
+    use crate::providers::http_test_support::HttpsServer;
+    use futures_util::{SinkExt, StreamExt};
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    const GUARD: Duration = Duration::from_secs(8);
+
+    fn dispatch(id: &str, sender: &str, content: &str, sequence: i64) -> Message {
+        Message::Text(
+            serde_json::json!({
+                "op": 0,
+                "s": sequence,
+                "t": "C2C_MESSAGE_CREATE",
+                "d": {
+                    "id": id,
+                    "timestamp": "2024-07-03T09:46:40+00:00",
+                    "content": content,
+                    "author": {"user_openid": sender}
+                }
+            })
+            .to_string()
+            .into(),
+        )
+    }
+
+    let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_address = gateway_listener.local_addr().unwrap();
+    let gateway = HttpsServer::start(move |request| match request.target.as_str() {
+        "/app/getAppAccessToken" => (
+            200,
+            serde_json::json!({"access_token": "qq-test-token", "expires_in": "7200"}).to_string(),
+        ),
+        "/gateway" => {
+            assert!(
+                request
+                    .headers
+                    .to_ascii_lowercase()
+                    .contains("authorization: qqbot qq-test-token")
+            );
+            (
+                200,
+                serde_json::json!({"url": format!("ws://{gateway_address}/")}).to_string(),
+            )
+        }
+        other => panic!("unexpected QQ API request: {other}"),
+    })
+    .await;
+
+    let (ready_tx, mut ready_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mock_gateway = tokio::spawn(async move {
+        for (session, accepted_id, accepted_text) in [
+            (1_u8, "qq-public-accepted", "first connection"),
+            (2_u8, "qq-public-restarted", "after restart"),
+        ] {
+            let (socket, _) = tokio::time::timeout(GUARD, gateway_listener.accept())
+                .await
+                .expect("QQ adapter should connect to the local gateway")
+                .unwrap();
+            let mut websocket = tokio::time::timeout(GUARD, accept_async(socket))
+                .await
+                .expect("QQ WebSocket handshake should complete")
+                .unwrap();
+            websocket
+                .send(Message::Text(
+                    serde_json::json!({"op": 10, "d": {"heartbeat_interval": 60000}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            let identify: serde_json::Value = tokio::time::timeout(GUARD, websocket.next())
+                .await
+                .expect("QQ adapter should identify after HELLO")
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert_eq!(identify["op"], 2);
+            assert_eq!(identify["d"]["token"], "QQBot qq-test-token");
+            assert_eq!(identify["d"]["intents"], (1_u64 << 25) | (1_u64 << 30));
+
+            let heartbeat: serde_json::Value = tokio::time::timeout(GUARD, websocket.next())
+                .await
+                .expect("QQ adapter should send its initial heartbeat")
+                .unwrap()
+                .unwrap()
+                .to_text()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert_eq!(heartbeat, serde_json::json!({"op": 1, "d": null}));
+            ready_tx.send(session).unwrap();
+
+            if session == 1 {
+                websocket
+                    .send(dispatch("qq-denied", "mallory", "must be filtered", 1))
+                    .await
+                    .unwrap();
+                websocket
+                    .send(dispatch(accepted_id, "alice", accepted_text, 2))
+                    .await
+                    .unwrap();
+                websocket
+                    .send(dispatch(accepted_id, "alice", "duplicate delivery", 3))
+                    .await
+                    .unwrap();
+                websocket
+                    .send(dispatch("qq-public-barrier", "alice", "after duplicate", 4))
+                    .await
+                    .unwrap();
+            } else {
+                websocket
+                    .send(dispatch(accepted_id, "alice", accepted_text, 1))
+                    .await
+                    .unwrap();
+            }
+
+            let closed = tokio::time::timeout(GUARD, websocket.next())
+                .await
+                .expect("QQ adapter stop should close its gateway connection");
+            assert!(matches!(closed, None | Some(Ok(Message::Close(_)))));
+        }
+    });
+
+    let channel = Arc::new(super::super::QQChannel::with_http_client(
+        "app-id".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        gateway.client.clone(),
+    ));
+    let adapter: Arc<dyn ChannelAdapter> = channel;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = RecordingInboundSink(tx);
+
+    let mut listener = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink.clone();
+        async move { adapter.start(&sink).await }
+    });
+    let session = tokio::select! {
+        result = &mut listener => panic!("QQ adapter start returned before gateway ownership: {result:?}"),
+        session = tokio::time::timeout(GUARD, ready_rx.recv()) => session
+            .expect("QQ gateway handshake should finish within the guard")
+            .expect("mock gateway readiness sender remains connected"),
+    };
+    assert_eq!(session, 1);
+
+    let first = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("allowed QQ event should reach the supplied typed sink")
+        .expect("test sink remains connected");
+    let ChannelIngress::Inbound(first) = first else {
+        panic!("QQ messages must arrive as typed inbound ingress");
+    };
+    assert_eq!(first.message_id, "qq-public-accepted");
+    assert_eq!(first.sender.id, "alice");
+    assert_eq!(first.conversation.id, "user:alice");
+    assert_eq!(first.text, "first connection");
+
+    let barrier = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("barrier event should follow the allowed QQ event")
+        .expect("test sink remains connected");
+    let ChannelIngress::Inbound(barrier) = barrier else {
+        panic!("QQ messages must arrive as typed inbound ingress");
+    };
+    assert_eq!(barrier.message_id, "qq-public-barrier");
+    assert_eq!(barrier.sender.id, "alice");
+    assert_eq!(barrier.conversation.id, "user:alice");
+    assert_eq!(barrier.text, "after duplicate");
+
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(GUARD, &mut listener)
+        .await
+        .expect("QQ stop must join the gateway listener")
+        .expect("QQ listener must not panic")
+        .expect("QQ listener must stop cleanly");
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+
+    let mut restarted = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink.clone();
+        async move { adapter.start(&sink).await }
+    });
+    let session = tokio::select! {
+        result = &mut restarted => panic!("QQ restart returned before gateway ownership: {result:?}"),
+        session = tokio::time::timeout(GUARD, ready_rx.recv()) => session
+            .expect("restarted QQ gateway handshake should finish within the guard")
+            .expect("mock gateway readiness sender remains connected"),
+    };
+    assert_eq!(session, 2);
+    let restarted_ingress = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("restarted QQ gateway should publish admitted events")
+        .expect("test sink remains connected");
+    let ChannelIngress::Inbound(restarted_ingress) = restarted_ingress else {
+        panic!("QQ messages must arrive as typed inbound ingress");
+    };
+    assert_eq!(restarted_ingress.message_id, "qq-public-restarted");
+    assert_eq!(restarted_ingress.sender.id, "alice");
+    assert_eq!(restarted_ingress.conversation.id, "user:alice");
+    assert_eq!(restarted_ingress.text, "after restart");
+
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(GUARD, &mut restarted)
+        .await
+        .expect("QQ stop must join the restarted gateway listener")
+        .expect("restarted QQ listener must not panic")
+        .expect("restarted QQ listener must stop cleanly");
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+    tokio::time::timeout(GUARD, mock_gateway)
+        .await
+        .expect("mock QQ gateway should observe both adapter stops")
+        .expect("mock QQ gateway task must not panic");
+}
+
+#[tokio::test]
+async fn public_adapter_stop_cancels_a_blocked_typed_sink() {
+    use crate::providers::http_test_support::HttpsServer;
+    use futures_util::{SinkExt, StreamExt};
+    use std::future::pending;
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    const GUARD: Duration = Duration::from_secs(8);
+
+    struct BlockingSink(Arc<tokio::sync::Notify>);
+
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for BlockingSink {
+        async fn push(
+            &self,
+            _ingress: ChannelIngress,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            self.0.notify_one();
+            pending::<()>().await;
+            Ok(())
+        }
+    }
+
+    let gateway_listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let gateway_address = gateway_listener.local_addr().unwrap();
+    let gateway = HttpsServer::start(move |request| match request.target.as_str() {
+        "/app/getAppAccessToken" => (
+            200,
+            serde_json::json!({"access_token": "qq-test-token", "expires_in": "7200"}).to_string(),
+        ),
+        "/gateway" => (
+            200,
+            serde_json::json!({"url": format!("ws://{gateway_address}/")}).to_string(),
+        ),
+        other => panic!("unexpected QQ API request: {other}"),
+    })
+    .await;
+    let mock_gateway = tokio::spawn(async move {
+        let (socket, _) = tokio::time::timeout(GUARD, gateway_listener.accept())
+            .await
+            .expect("QQ adapter should connect to its gateway")
+            .unwrap();
+        let mut websocket = tokio::time::timeout(GUARD, accept_async(socket))
+            .await
+            .expect("QQ WebSocket handshake should complete")
+            .unwrap();
+        websocket
+            .send(Message::Text(
+                serde_json::json!({"op": 10, "d": {"heartbeat_interval": 60000}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+        for expected_op in [2, 1] {
+            let frame = tokio::time::timeout(GUARD, websocket.next())
+                .await
+                .expect("QQ adapter should identify and heartbeat")
+                .unwrap()
+                .unwrap();
+            let value: serde_json::Value = frame.to_text().unwrap().parse().unwrap();
+            assert_eq!(value["op"], expected_op);
+        }
+        websocket
+            .send(Message::Text(
+                serde_json::json!({
+                    "op": 0,
+                    "s": 1,
+                    "t": "C2C_MESSAGE_CREATE",
+                    "d": {
+                        "id": "qq-blocked-sink",
+                        "timestamp": "2024-07-03T09:46:40+00:00",
+                        "content": "block publication",
+                        "author": {"user_openid": "alice"}
+                    }
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let close = tokio::time::timeout(GUARD, websocket.next())
+            .await
+            .expect("stop should close the gateway despite a blocked sink")
+            .expect("gateway connection should close")
+            .expect("close frame should be valid");
+        assert!(matches!(close, Message::Close(_)));
+    });
+
+    let channel = Arc::new(super::super::QQChannel::with_http_client(
+        "app-id".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        gateway.client.clone(),
+    ));
+    let adapter: Arc<dyn ChannelAdapter> = channel;
+    let blocked = Arc::new(tokio::sync::Notify::new());
+    let sink = BlockingSink(blocked.clone());
+    let mut listener = tokio::spawn({
+        let adapter = adapter.clone();
+        async move { adapter.start(&sink).await }
+    });
+    tokio::time::timeout(GUARD, blocked.notified())
+        .await
+        .expect("QQ event should enter the typed sink");
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(GUARD, &mut listener)
+        .await
+        .expect("stop must cancel blocked typed publication and join")
+        .expect("listener task must not panic")
+        .expect("explicit stop should be clean");
+    tokio::time::timeout(GUARD, mock_gateway)
+        .await
+        .expect("mock gateway should observe graceful shutdown")
+        .expect("mock gateway task must not panic");
 }

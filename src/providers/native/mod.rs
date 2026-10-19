@@ -152,6 +152,20 @@ pub(crate) trait NativeProvider: Send + Sync {
     /// Send one resolved step and report the message ids the platform issued.
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError>;
 
+    /// Run a provider-owned typed listener when this native adapter supports
+    /// inbound events. Most adapters are outbound-only and retain the no-op.
+    async fn start_listener(
+        &self,
+        _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        Ok(())
+    }
+
+    /// Signal a provider-owned listener to stop.
+    async fn stop_listener(&self) -> Result<(), ChannelSendError> {
+        Ok(())
+    }
+
     /// Whether one reply travels as a single platform message (email), so the
     /// planned steps are delivered together by [`Self::deliver_bundle`].
     fn bundles_steps(&self) -> bool {
@@ -253,14 +267,13 @@ macro_rules! native_v2_adapter {
 
             async fn start(
                 &self,
-                _sink: &(dyn $crate::channel::ChannelInboundSink + Send + Sync),
+                sink: &(dyn $crate::channel::ChannelInboundSink + Send + Sync),
             ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-                // The configured module's running task owns the single inbound loop.
-                Ok(())
+                $crate::providers::native::NativeProvider::start_listener(self, sink).await
             }
 
             async fn stop(&self) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-                Ok(())
+                $crate::providers::native::NativeProvider::stop_listener(self).await
             }
 
             async fn send(
