@@ -1155,29 +1155,35 @@ async fn listen_adapter_with_supervision(
     host: HostChannels,
     name: String,
     policy: Option<ChannelSupervisionPolicy>,
+    mut cancellation: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
-    let Some(policy) = policy else {
-        return adapter
-            .start(sink.as_ref())
-            .await
-            .map_err(|error| anyhow::anyhow!(error.message));
-    };
-    let mut backoff = policy.initial_backoff_secs.max(1);
-    let maximum = policy.max_backoff_secs.max(backoff);
+    let (mut backoff, maximum) = policy
+        .map(|policy| {
+            let initial = policy.initial_backoff_secs.max(1);
+            (Some(initial), policy.max_backoff_secs.max(initial))
+        })
+        .unwrap_or((None, 0));
     loop {
-        let result = adapter
-            .start(sink.as_ref())
-            .await
-            .map_err(|error| anyhow::anyhow!(error.message));
+        let mut start = Box::pin(adapter.start(sink.as_ref()));
+        let result = tokio::select! { biased;
+            _ = cancellation.wait_for(|value| *value) => {
+                let _ = adapter.stop().await;
+                let _ = (&mut start).await;
+                return Ok(());
+            }
+            result = &mut start => result.map_err(|error| anyhow::anyhow!(error.message)),
+        };
         let _ = adapter.stop().await;
+        let Some(delay) = backoff else {
+            return result;
+        };
         host.report_status(&name, "restarting", Some("provider disconnected".into()))
             .await;
-        tokio::time::sleep(
-            Duration::from_secs(backoff)
-                + Duration::from_millis(tinychannels::runtime::jitter_millis(backoff)),
-        )
-        .await;
-        backoff = backoff.saturating_mul(2).min(maximum);
+        tokio::select! { biased;
+            _ = cancellation.wait_for(|value| *value) => return Ok(()),
+            _ = tokio::time::sleep(Duration::from_secs(delay) + Duration::from_millis(tinychannels::runtime::jitter_millis(delay))) => {}
+        }
+        backoff = Some(delay.saturating_mul(2).min(maximum));
         host.report_status(&name, "connecting", None).await;
         if let Err(error) = result {
             tracing::debug!(channel = %name, %error, "native listener disconnected");
@@ -1835,14 +1841,19 @@ impl Running {
         let worker = tokio::spawn(async move {
             let name = listen_channel.name().to_owned();
             host.report_status(&name, "connecting", None).await;
-            let (tx, rx) = tokio::sync::mpsc::channel(256);
+            let (tx, rx) = if native_listener {
+                (None, None)
+            } else {
+                let (tx, rx) = tokio::sync::mpsc::channel(256);
+                (Some(tx), Some(rx))
+            };
             let mut forwarder = if native_listener {
                 None
             } else {
                 let forward_host = host.clone();
                 let forward_name = name.clone();
                 Some(AbortOnDrop(tokio::spawn(async move {
-                    let mut rx = rx;
+                    let mut rx = rx.expect("legacy listener owns its inbound receiver");
                     while let Some(message) = rx.recv().await {
                         let envelope = tinychannels::inbound_envelope_from_legacy_message(&message);
                         forward_host.deliver_inbound(&forward_name, envelope).await;
@@ -1872,30 +1883,29 @@ impl Running {
                         let _ = adapter.stop().await;
                         Ok(())
                     } else {
-                        tokio::select! { biased;
-                            _ = listener_cancel.wait_for(|value| *value) => {
-                                let _ = adapter.stop().await;
-                                Ok(())
-                            }
-                            result = listen_adapter_with_supervision(
-                                Arc::clone(&adapter),
-                                sink,
-                                listener_host.clone(),
-                                listener_name,
-                                supervision,
-                            ) => {
-                                let _ = adapter.stop().await;
-                                result
-                            }
-                        }
+                        listen_adapter_with_supervision(
+                            Arc::clone(&adapter),
+                            sink,
+                            listener_host.clone(),
+                            listener_name,
+                            supervision,
+                            listener_cancel,
+                        )
+                        .await
                     }
                 } else if outbound_only {
                     // Keep the inbound sender alive until cancellation so the forwarder
                     // has the same explicit cleanup path as native listeners.
-                    let _inbound = tx;
+                    let _inbound = tx.expect("legacy listener owns its inbound sender");
                     std::future::pending::<anyhow::Result<()>>().await
                 } else {
-                    listen_with_supervision(listen_channel, tx, listener_host, supervision).await
+                    listen_with_supervision(
+                        listen_channel,
+                        tx.expect("legacy listener owns its inbound sender"),
+                        listener_host,
+                        supervision,
+                    )
+                    .await
                 }
             }));
             let mut send_cancel = send_cancel;

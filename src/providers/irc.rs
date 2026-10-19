@@ -33,9 +33,19 @@ pub struct IrcChannel {
     verify_tls: bool,
     /// Shared write half of the TLS stream for sending messages.
     writer: Arc<Mutex<Option<WriteHalf>>>,
+    /// Cancellation for the single provider-owned native listener.
+    listener_cancel: std::sync::Mutex<Option<tokio::sync::watch::Sender<bool>>>,
 }
 
 type WriteHalf = tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
+
+struct ListenerRegistration<'a>(&'a IrcChannel);
+
+impl Drop for ListenerRegistration<'_> {
+    fn drop(&mut self) {
+        self.0.end_listener();
+    }
+}
 
 enum IrcIngress<'a> {
     Legacy(mpsc::Sender<ChannelMessage>),
@@ -43,18 +53,17 @@ enum IrcIngress<'a> {
 }
 
 impl IrcIngress<'_> {
-    async fn publish(&self, message: ChannelMessage) -> anyhow::Result<bool> {
+    async fn publish(
+        &self,
+        envelope: tinychannels_bus::channel::ChannelInboundEnvelope,
+    ) -> anyhow::Result<bool> {
         match self {
-            Self::Legacy(tx) => Ok(tx.send(message).await.is_ok()),
+            Self::Legacy(tx) => {
+                let timestamp = envelope.timestamp_unix_ms.unwrap_or_default() / 1000;
+                let message = crate::legacy_message_from_inbound_envelope(&envelope, timestamp)?;
+                Ok(tx.send(message).await.is_ok())
+            }
             Self::Typed(sink) => {
-                let is_channel =
-                    message.reply_target.starts_with('#') || message.reply_target.starts_with('&');
-                let mut envelope = crate::inbound_envelope_from_legacy_message(&message);
-                envelope.conversation.kind = if is_channel {
-                    tinychannels_bus::channel::ConversationKind::Channel
-                } else {
-                    tinychannels_bus::channel::ConversationKind::Dm
-                };
                 sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
                     .await
                     .map_err(|error| anyhow::anyhow!(error.message))?;
@@ -277,6 +286,7 @@ impl IrcChannel {
             sasl_password: cfg.sasl_password,
             verify_tls: cfg.verify_tls,
             writer: Arc::new(Mutex::new(None)),
+            listener_cancel: std::sync::Mutex::new(None),
         }
     }
 
@@ -324,10 +334,42 @@ impl IrcChannel {
         Ok(())
     }
 
-    async fn listen_owned(&self, ingress: IrcIngress<'_>) -> anyhow::Result<()> {
-        let result = self.listen_loop(ingress).await;
+    async fn listen_owned(
+        &self,
+        ingress: IrcIngress<'_>,
+        mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> anyhow::Result<()> {
+        let result = if let Some(cancel) = &mut cancellation {
+            tokio::select! {
+                biased;
+                _ = cancel.wait_for(|value| *value) => Ok(()),
+                result = self.listen_loop(ingress) => result,
+            }
+        } else {
+            self.listen_loop(ingress).await
+        };
         self.clear_writer().await;
         result
+    }
+
+    fn begin_listener(&self) -> anyhow::Result<tokio::sync::watch::Receiver<bool>> {
+        let mut active = self
+            .listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if active.is_some() {
+            anyhow::bail!("IRC listener is already running");
+        }
+        let (cancel, receiver) = tokio::sync::watch::channel(false);
+        *active = Some(cancel);
+        Ok(receiver)
+    }
+
+    fn end_listener(&self) {
+        self.listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take();
     }
 
     async fn clear_writer(&self) {
@@ -537,11 +579,6 @@ impl IrcChannel {
                     // Determine reply target: if sent to a channel, reply to channel;
                     // if DM (target == our nick), reply to sender
                     let is_channel = target.starts_with('#') || target.starts_with('&');
-                    let reply_target = if is_channel {
-                        target.to_string()
-                    } else {
-                        sender_nick.to_string()
-                    };
                     let content = if is_channel {
                         format!("{IRC_STYLE_PREFIX}<{sender_nick}> {text}")
                     } else {
@@ -549,23 +586,40 @@ impl IrcChannel {
                     };
 
                     let seq = MSG_SEQ.fetch_add(1, Ordering::Relaxed);
-                    let channel_msg = ChannelMessage {
-                        id: format!("irc_{}_{seq}", chrono::Utc::now().timestamp_millis()),
-                        sender: sender_nick.to_string(),
-                        reply_target,
-                        content,
-                        channel: "irc".to_string(),
-                        timestamp: std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs(),
-                        topic_id: None,
-                        reply_to_id: None,
-                        thread_ts: None,
-                        sender_name: None,
+                    let timestamp_unix_ms = chrono::Utc::now().timestamp_millis().max(0) as u64;
+                    let envelope = tinychannels_bus::channel::ChannelInboundEnvelope {
+                        channel: tinychannels_bus::ChannelRef {
+                            id: "irc".into(),
+                            account_id: None,
+                        },
+                        message_id: format!("irc_{timestamp_unix_ms}_{seq}"),
+                        timestamp_unix_ms: Some(timestamp_unix_ms),
+                        conversation: tinychannels_bus::ConversationRef {
+                            kind: if is_channel {
+                                tinychannels_bus::ConversationKind::Channel
+                            } else {
+                                tinychannels_bus::ConversationKind::Dm
+                            },
+                            id: if is_channel {
+                                target.to_owned()
+                            } else {
+                                sender_nick.to_owned()
+                            },
+                            ..Default::default()
+                        },
+                        sender: tinychannels_bus::SenderRef {
+                            id: sender_nick.to_owned(),
+                            ..Default::default()
+                        },
+                        text: content.clone(),
+                        parts: vec![tinychannels_bus::channel::ContentPart::Text {
+                            text: content,
+                            markdown_dialect: None,
+                        }],
+                        ..Default::default()
                     };
 
-                    if !ingress.publish(channel_msg).await? {
+                    if !ingress.publish(envelope).await? {
                         return Ok(());
                     }
                 }
@@ -660,7 +714,7 @@ impl Channel for IrcChannel {
     }
 
     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        self.listen_owned(IrcIngress::Legacy(tx)).await
+        self.listen_owned(IrcIngress::Legacy(tx), None).await
     }
 
     async fn health_check(&self) -> bool {
@@ -693,20 +747,38 @@ impl crate::providers::long_tail::LongTail for IrcChannel {
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-        self.listen_owned(IrcIngress::Typed(sink))
-            .await
-            .map_err(|error| {
-                tracing::debug!(%error, "IRC typed listener stopped");
-                tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::Transient,
-                    message: "IRC listener stopped".into(),
-                    retryable: true,
+        let cancellation =
+            self.begin_listener()
+                .map_err(|error| tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
+                    message: error.to_string(),
+                    retryable: false,
                     ..Default::default()
-                }
-            })
+                })?;
+        let _registration = ListenerRegistration(self);
+        let result = self
+            .listen_owned(IrcIngress::Typed(sink), Some(cancellation))
+            .await;
+        result.map_err(|error| {
+            tracing::debug!(%error, "IRC typed listener stopped");
+            tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "IRC listener stopped".into(),
+                retryable: true,
+                ..Default::default()
+            }
+        })
     }
 
     async fn stop_listener(&self) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        if let Some(cancel) = self
+            .listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            cancel.send_replace(true);
+        }
         self.stop_writer().await.map_err(|error| {
             tracing::debug!(%error, "IRC listener shutdown failed");
             tinychannels_bus::channel::ChannelSendError {

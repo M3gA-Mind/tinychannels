@@ -199,6 +199,59 @@ async fn public_adapter_start_owns_typed_listener_until_stop_joins_it() {
 }
 
 #[tokio::test]
+async fn public_adapter_stop_cancels_tls_handshake_and_releases_listener() {
+    let (listener, port) = bind().await;
+    let channel = Arc::new(IrcChannel::new(config(port)));
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let mut start = tokio::spawn({
+        let channel = channel.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+    let (_socket, _) = tokio::time::timeout(GUARD, listener.accept())
+        .await
+        .expect("listener should establish TCP before the TLS handshake")
+        .unwrap();
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, &mut start)
+        .await
+        .expect("stop must cancel an in-progress TLS handshake")
+        .expect("listener task must not panic")
+        .expect("listener cancellation should be clean");
+}
+
+#[tokio::test]
+async fn public_adapter_rejects_a_second_concurrent_listener() {
+    let (listener, port) = bind().await;
+    let acceptor = acceptor(false);
+    let channel = Arc::new(IrcChannel::new(config(port)));
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let mut start = tokio::spawn({
+        let channel = channel.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+    let _peer = Peer::accept(&listener, &acceptor).await;
+    let second = crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await;
+    let error = second.expect_err("the provider must have one listener owner");
+    assert!(
+        !error.retryable,
+        "concurrent listener conflict is not transient"
+    );
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, &mut start)
+        .await
+        .expect("stop must join the first listener")
+        .expect("listener task must not panic")
+        .expect("listener cancellation should be clean");
+}
+
+#[tokio::test]
 async fn listen_registers_authenticates_and_forwards_allowed_privmsgs() {
     let (listener, port) = bind().await;
     let acceptor = acceptor(false);
