@@ -37,7 +37,7 @@ async fn qq_inbound_image_downloads_tencent_attachment_and_publishes_typed_ingre
             "C2C_MESSAGE_CREATE",
             &json!({
                 "id": "qq-inbound-1",
-                "timestamp": "1720000000000",
+                "timestamp": "2024-07-03T09:46:40+00:00",
                 "content": "look",
                 "author": {"user_openid": "alice"},
                 "attachments": [{
@@ -51,6 +51,7 @@ async fn qq_inbound_image_downloads_tencent_attachment_and_publishes_typed_ingre
         .expect("allowed QQ attachment becomes typed ingress");
 
     assert_eq!(envelope.message_id, "qq-inbound-1");
+    assert_eq!(envelope.timestamp_unix_ms, Some(1_720_000_000_000));
     assert_eq!(envelope.conversation.id, "user:alice");
     assert_eq!(envelope.sender.id, "alice");
     assert_eq!(envelope.text, "look");
