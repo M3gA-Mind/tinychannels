@@ -66,23 +66,17 @@ fn media_is_advertised_only_when_scoped_host_storage_is_injected() {
 }
 
 #[test]
-fn inbound_voice_is_advertised_only_with_store_and_ordered_events() {
+fn inbound_voice_is_advertised_with_store_for_the_supplied_typed_sink() {
     let store_only = channel().with_voice_media_store(Arc::new(
         crate::providers::native::fixtures::StubVoice::default(),
     ));
     assert!(
-        !NativeProvider::declared_capabilities(&store_only)
+        NativeProvider::declared_capabilities(&store_only)
             .voice_in
             .supported
     );
 
-    let host_ready = channel()
-        .with_voice_media_store(Arc::new(
-            crate::providers::native::fixtures::StubVoice::default(),
-        ))
-        .with_events(Arc::new(
-            crate::providers::native::fixtures::RecordingEvents::delivering(),
-        ));
+    let host_ready = store_only;
     let capabilities = NativeProvider::declared_capabilities(&host_ready);
     assert!(capabilities.voice_in.supported);
     assert!(

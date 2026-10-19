@@ -5097,6 +5097,40 @@ async fn configured_qq_factory_selects_the_native_listener_owner() {
 }
 
 #[tokio::test]
+async fn configured_yuanbao_factory_selects_the_native_listener_owner() {
+    use tinychannels::factory::DefaultHttpClients;
+    use tinychannels_bus::config::YuanbaoConfig;
+
+    let config = tinychannels_bus::ChannelsConfig {
+        yuanbao: Some(YuanbaoConfig {
+            app_key: "app-key".into(),
+            app_secret: "app-secret".into(),
+            bot_id: "bot-1".into(),
+            ws_domain: "wss://gateway.invalid".into(),
+            token: "token".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let noop: Arc<dyn tinychannels::host::ChannelHost> = tinychannels::host::NoopHost::arc();
+    let launch = crate::native::build_native_v2("yuanbao", &config, &noop, &DefaultHttpClients)
+        .expect("configured Yuanbao credentials define a provider");
+    let (host, _callbacks, _server, _storage) = ingress_fixture().await;
+    let running = launch.start(Arc::new(Hooks::default()), host, None, true);
+
+    assert_eq!(
+        running
+            .native_ports
+            .as_ref()
+            .expect("configured Yuanbao must expose native adapter ports")
+            .listener_mode,
+        LongTailListenerMode::Adapter,
+        "Yuanbao must launch through ChannelAdapter::start, not Channel::listen"
+    );
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn configured_dingtalk_factory_selects_the_native_listener_owner() {
     use tinychannels::factory::DefaultHttpClients;
     use tinychannels_bus::config::DingTalkConfig;
@@ -5112,9 +5146,8 @@ async fn configured_dingtalk_factory_selects_the_native_listener_owner() {
     let noop: Arc<dyn tinychannels::host::ChannelHost> = tinychannels::host::NoopHost::arc();
     let launch = crate::native::build_native_v2("dingtalk", &config, &noop, &DefaultHttpClients)
         .expect("configured DingTalk credentials define a provider");
-    let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server, _storage) = ingress_fixture().await;
-    let running = launch.start(hooks, host, None, true);
+    let running = launch.start(Arc::new(Hooks::default()), host, None, true);
 
     assert_eq!(
         running
@@ -5125,7 +5158,6 @@ async fn configured_dingtalk_factory_selects_the_native_listener_owner() {
         LongTailListenerMode::Adapter,
         "DingTalk module launch must route through ChannelAdapter::start, not Channel::listen"
     );
-
     running.stop().await.unwrap();
 }
 

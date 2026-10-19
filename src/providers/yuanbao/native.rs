@@ -42,6 +42,18 @@ impl NativeProvider for YuanbaoChannel {
         false
     }
 
+    async fn start_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        self.start_typed_listener(sink).await
+    }
+
+    async fn stop_listener(&self) -> Result<(), ChannelSendError> {
+        self.stop_typed_listener();
+        Ok(())
+    }
+
     fn declared_capabilities(&self) -> ChannelCapabilities {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
         let mut caps = text_capabilities(TextSpec {
@@ -63,7 +75,10 @@ impl NativeProvider for YuanbaoChannel {
             caps.content.file.outbound = true;
             caps.content.file.max_size_bytes = Some(max_bytes);
         }
-        if self.native.voice_media_store.is_some() && self.native.events.is_some() {
+        // Native voice ingress is published through the supplied
+        // ChannelInboundSink, so the adapter only needs the scoped voice
+        // store; the legacy EventSink is not part of this path.
+        if self.native.voice_media_store.is_some() {
             caps.voice_in.supported = true;
             caps.voice_in.accepted_codecs = vec!["m4a_aac".into(), "mp3".into(), "ogg_opus".into()];
             caps.voice_in.max_size_bytes = Some(self.limits().file_bytes);
