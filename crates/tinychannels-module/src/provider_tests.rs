@@ -5542,3 +5542,121 @@ async fn configured_mattermost_launch_delivers_scoped_attachment_only_posts() {
         "allowlist admission must precede metadata and download requests"
     );
 }
+
+#[tokio::test]
+async fn configured_lark_webhook_delivers_scoped_provider_identity_through_factory() {
+    use tinychannels_bus::config::{LarkConfig, LarkReceiveMode};
+
+    let port_probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = port_probe.local_addr().unwrap().port();
+    drop(port_probe);
+
+    let instance = "lark:team-a";
+    let config = tinychannels_bus::ChannelsConfig {
+        lark: Some(LarkConfig {
+            app_id: "app-id".into(),
+            app_secret: "app-secret".into(),
+            encrypt_key: None,
+            verification_token: Some("verify-secret".into()),
+            allowed_users: vec!["ou-alice".into()],
+            use_feishu: true,
+            receive_mode: LarkReceiveMode::Webhook,
+            port: Some(port),
+        }),
+        ..Default::default()
+    };
+    let (host, callbacks, _server, _storage) = ingress_fixture().await;
+    let scope = configured_media_account_scope(instance, &config)
+        .expect("configured Lark credentials define an account scope");
+    let hooks = Arc::new(Hooks::default());
+    let provider_host = hooks.host(
+        host.clone(),
+        instance.into(),
+        MediaScope::fixed(Some(scope)),
+    );
+    let launch = crate::native::build_native_v2(
+        "lark",
+        &config,
+        &provider_host,
+        &tinychannels::DefaultHttpClients,
+    )
+    .expect("configured Lark provider builds through the normal factory");
+    let running = launch.start(hooks, host, None, false);
+
+    async fn post_event(
+        client: &reqwest::Client,
+        port: u16,
+        payload: &serde_json::Value,
+    ) -> reqwest::Response {
+        for _ in 0..100 {
+            match client
+                .post(format!("http://127.0.0.1:{port}/lark"))
+                .json(payload)
+                .send()
+                .await
+            {
+                Ok(response) => return response,
+                Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+            }
+        }
+        panic!("configured Lark webhook did not become ready");
+    }
+
+    let client = reqwest::Client::new();
+    let payload = |message_id: &str, open_id: &str, text: &str| {
+        serde_json::json!({
+            "header": {
+                "event_type": "im.message.receive_v1",
+                "event_id": format!("event-{message_id}"),
+                "token": "verify-secret"
+            },
+            "event": {
+                "sender": {
+                    "sender_type": "user",
+                    "sender_id": {"open_id": open_id}
+                },
+                "message": {
+                    "message_id": message_id,
+                    "chat_id": "oc-chat-a",
+                    "chat_type": "p2p",
+                    "message_type": "text",
+                    "content": serde_json::json!({"text": text}).to_string(),
+                    "create_time": "1760900000000"
+                }
+            }
+        })
+    };
+
+    let denied = post_event(&client, port, &payload("om-denied", "ou-mallory", "denied")).await;
+    assert_eq!(denied.status(), reqwest::StatusCode::OK);
+    assert!(callbacks.inbound.lock().await.is_empty());
+
+    let accepted = post_event(
+        &client,
+        port,
+        &payload("om-allowed", "ou-alice", "typed webhook"),
+    )
+    .await;
+    assert_eq!(accepted.status(), reqwest::StatusCode::OK);
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if !callbacks.inbound.lock().await.is_empty() {
+                break;
+            }
+            callbacks.ingress_changed.notified().await;
+        }
+    })
+    .await
+    .expect("configured Lark event must reach the host's typed ingress callback");
+
+    running.stop().await.unwrap();
+    let inbound = callbacks.inbound.lock().await.clone();
+    assert_eq!(inbound.len(), 1, "denied senders do not reach ingress");
+    assert_eq!(inbound[0].0, instance);
+    assert_eq!(inbound[0].1["channel"]["id"], "lark");
+    assert_eq!(inbound[0].1["channel"]["accountId"], instance);
+    assert_eq!(inbound[0].1["messageId"], "om-allowed");
+    assert_eq!(inbound[0].1["sender"]["id"], "ou-alice");
+    assert_eq!(inbound[0].1["conversation"]["id"], "oc-chat-a");
+    assert_eq!(inbound[0].1["text"], "typed webhook");
+}
