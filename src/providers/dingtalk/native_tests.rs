@@ -1377,8 +1377,13 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_hdr_async, tungstenite::Message};
 
-    fn callback(frame_id: &str, provider_id: &str, staff_id: &str, text: &str) -> Message {
-        Message::Text(
+    fn callback(
+        frame_id: &str,
+        provider_id: &str,
+        staff_id: &str,
+        text: &str,
+    ) -> tokio_tungstenite::tungstenite::Message {
+        tokio_tungstenite::tungstenite::Message::Text(
             json!({
                 "type": "CALLBACK",
                 "headers": {"messageId": frame_id},
