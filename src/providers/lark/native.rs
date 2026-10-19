@@ -698,3 +698,7 @@ fn uncertain_send(message: &str) -> ChannelSendError {
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+#[path = "native_tests.rs"]
+mod tests;

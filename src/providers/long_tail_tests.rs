@@ -60,6 +60,30 @@ fn typed_fixture_message(
     message
 }
 
+#[test]
+fn typed_receipt_uses_reported_ids_and_falls_back_to_message_routing() {
+    let mut message = typed_fixture_message(Vec::new());
+    message.channel_ref = None;
+    message.conversation_ref = None;
+    message.thread_id = Some("thread-1".into());
+    message.reply_to_id = Some("reply-1".into());
+
+    let receipt = super::receipt::<TypedTextFixture>(
+        &message,
+        vec!["platform-1".into(), "platform-2".into()],
+    );
+
+    assert_eq!(receipt.idempotency_key.as_deref(), Some("k"));
+    assert_eq!(receipt.channel.as_ref().map(|channel| channel.id.as_str()), Some("fixture"));
+    assert_eq!(receipt.conversation.as_ref().map(|conversation| conversation.id.as_str()), Some("room-1"));
+    assert_eq!(receipt.primary_platform_message_id.as_deref(), Some("platform-1"));
+    assert_eq!(receipt.platform_message_ids, ["platform-1", "platform-2"]);
+    assert_eq!(receipt.parts.len(), 2);
+    assert_eq!(receipt.parts[1].index, 1);
+    assert_eq!(receipt.parts[1].thread_id.as_deref(), Some("thread-1"));
+    assert_eq!(receipt.parts[1].reply_to_id.as_deref(), Some("reply-1"));
+}
+
 #[tokio::test]
 async fn text_only_typed_adapter_sends_a_legacy_text_projection() {
     let provider = TypedTextFixture {

@@ -94,6 +94,23 @@ fn qq_declares_inbound_file_capabilities_only_when_ingress_ports_are_present() {
         crate::providers::native::NativeProvider::declared_capabilities(&outbound_only);
     assert!(!capabilities.content.image.inbound);
     assert!(capabilities.content.image.outbound);
+    assert!(!crate::providers::native::NativeProvider::voice_synthesis(
+        &outbound_only
+    ));
+}
+
+#[test]
+fn qq_timestamps_accept_numeric_values_and_numeric_strings() {
+    assert_eq!(
+        super::timestamp_unix_ms(&json!(1_720_000_000_000_u64)),
+        Some(1_720_000_000_000)
+    );
+    assert_eq!(
+        super::timestamp_unix_ms(&json!("1700000000000")),
+        Some(1_700_000_000_000)
+    );
+    assert_eq!(super::timestamp_unix_ms(&json!("not-a-timestamp")), None);
+    assert_eq!(super::timestamp_unix_ms(&json!(-1)), None);
 }
 
 #[tokio::test]

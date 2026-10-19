@@ -228,6 +228,56 @@ async fn final_post_server_error_preserves_unknown_delivery_state() {
     assert_eq!(requests[1].url.path(), "/api/v4/posts");
 }
 
+#[tokio::test]
+async fn upload_without_a_file_id_does_not_attempt_to_create_a_post() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/files"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"file_infos": [{}]})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(MediaKind::Image, "image/png", b"image"));
+
+    let error = ChannelTypedSend::send_typed(&channel(&server, media), &image_message("chan"))
+        .await
+        .unwrap_err();
+
+    assert_eq!(error.kind, SendErrorKind::Unknown);
+    assert!(!error.sent_before_error);
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn accepted_post_without_an_id_is_reported_as_unknown_delivery() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/posts"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut message = image_message("chan");
+    message.parts = vec![OutboundContentPart::Content {
+        part: ContentPart::Text {
+            text: "hello".into(),
+            markdown_dialect: None,
+        },
+    }];
+
+    let error = ChannelTypedSend::send_typed(
+        &channel(&server, Arc::new(StubMedia::default())),
+        &message,
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.kind, SendErrorKind::Unknown);
+    assert!(error.sent_before_error);
+    assert!(!error.retryable);
+}
+
 #[test]
 fn media_capabilities_require_host_scoped_storage() {
     let bare = MattermostChannel::new(
