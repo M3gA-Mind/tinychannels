@@ -1,5 +1,5 @@
 use super::*;
-use crate::channel::{ChannelAdapter, ChannelTypedSend};
+use crate::channel::ChannelTypedSend;
 use crate::providers::native::NativeProvider;
 use crate::providers::native::fixtures::RecordingEvents;
 use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
@@ -296,20 +296,13 @@ async fn packed_thread_address_cannot_conflict_with_the_canonical_thread() {
 async fn descriptor_advertises_voice_attachment_only_when_host_voice_storage_exists() {
     let server = MockServer::start().await;
     let without_voice = channel(&server, Arc::new(StubMedia::default()));
-    assert!(
-        !ChannelAdapter::descriptor(&without_voice)
-            .metadata
-            .contains_key("voiceOut")
-    );
+    assert!(NativeProvider::descriptor_extra(&without_voice).is_empty());
 
     let with_voice = channel(&server, Arc::new(StubMedia::default()))
         .with_voice_media_store(Arc::new(StubVoice::default()));
     assert_eq!(
-        ChannelAdapter::descriptor(&with_voice)
-            .metadata
-            .get("voiceOut")
-            .map(String::as_str),
-        Some("attachment")
+        NativeProvider::descriptor_extra(&with_voice),
+        vec![("voiceOut", "attachment")]
     );
 }
 
