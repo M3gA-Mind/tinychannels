@@ -175,3 +175,34 @@ async fn lark_preflights_unsupported_image_and_video_formats() {
         assert!(!error.retryable);
     }
 }
+
+#[tokio::test]
+async fn lark_reactions_are_explicitly_unsupported() {
+    let channel = super::super::LarkChannel::new(
+        "app-id".into(),
+        "app-secret".into(),
+        "verify-token".into(),
+        None,
+        vec!["*".into()],
+    );
+    let reaction = tinychannels_bus::channel::ChannelReaction {
+        value: "👍".into(),
+        custom_emoji_id: None,
+    };
+
+    let error = NativeProvider::react(
+        &channel,
+        &ConversationRef {
+            id: "chat-1".into(),
+            ..Default::default()
+        },
+        "message-1",
+        &reaction,
+        false,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(error.unsupported);
+    assert!(!error.sent_before_error);
+}
