@@ -121,6 +121,13 @@ shows native upload followed by a msg_type=7 response. This confirms that the
 existing QQ listener's text-only projection drops supported inbound
 attachments; it is an implementation gap, not a protocol limitation.
 
+The message timestamp is RFC3339 text, not Unix milliseconds. Tencent's
+[official Go SDK message model](https://github.com/tencent-connect/botgo/blob/fe31c0dfe469001e0f783d2f07e7de7bd08b403f/dto/message.go#L15-L20)
+types `timestamp` as its `Timestamp` string, and its
+[Timestamp parser](https://github.com/tencent-connect/botgo/blob/fe31c0dfe469001e0f783d2f07e7de7bd08b403f/dto/timestamp.go)
+uses Go's `time.RFC3339` layout. The typed ingress should parse that source
+format into Unix milliseconds instead of silently dropping the timestamp.
+
 ## DingTalk App Bot
 
 DingTalk's official [bot overview](https://opensource.dingtalk.com/developerpedia/docs/learn/bot/overview/)
