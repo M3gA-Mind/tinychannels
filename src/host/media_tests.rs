@@ -440,7 +440,10 @@ async fn unsupported_stream_mime_is_rejected_before_reading_body() {
 
 #[test]
 fn amr_audio_requires_its_storage_magic_header() {
-    assert!(is_allowed_content_type(MediaKind::Audio, "audio/amr"));
+    assert!(is_allowed_content_type(
+        tinychannels_bus::MediaKind::Audio,
+        "audio/amr"
+    ));
     assert!(content_matches("audio/amr", b"#!AMR\nframe"));
     assert!(!content_matches("audio/amr", b"not an AMR stream"));
 }
