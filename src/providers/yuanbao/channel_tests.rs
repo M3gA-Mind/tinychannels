@@ -714,6 +714,11 @@ async fn public_adapter_start_delivers_admitted_deduplicated_pushes_and_restarts
     assert_eq!(first.channel.id, "yuanbao");
     assert_eq!(first.message_id, "accepted-once");
     assert_eq!(first.sender.id, "alice");
+    assert_eq!(
+        first.conversation.kind,
+        tinychannels_bus::channel::ConversationKind::Dm
+    );
+    assert_eq!(first.conversation.id, "alice");
     assert_eq!(first.text, "first delivery");
     let barrier = next_public_yuanbao_message(&mut received).await;
     assert_eq!(barrier.message_id, "ordered-barrier");
