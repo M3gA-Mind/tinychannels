@@ -2243,8 +2243,14 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
         .await
         .unwrap();
     assert_eq!(prepared.intent.idempotency_key, "original-key");
-    assert_eq!(prepared.legacy_message, legacy);
-    let typed = SendMessage::new("fixture", "recipient").in_thread(Some("topic".into()));
+    assert_eq!(prepared.legacy_message, legacy.clone());
+    assert!(matches!(
+        &prepared.intent.payload,
+        tinychannels_bus::OutboundPayload::NativeChannelData { data } if data == &legacy
+    ));
+    let mut typed = SendMessage::new("fixture", "recipient").in_thread(Some("topic".into()));
+    typed.reply_to_id = Some("parent-message".into());
+    typed.topic_id = Some("topic-id".into());
     let expected = tinychannels::outbound_intent_from_send_message("telegram", &typed);
     let prepared = channels
         .prepare_outbound_intent("telegram".into(), ChannelMessagePreparation::Typed(typed))
@@ -2252,10 +2258,72 @@ async fn preparation_preserves_explicit_keys_and_typed_thread_before_provider_io
         .unwrap();
     assert_eq!(prepared.intent.idempotency_key, expected.idempotency_key);
     assert_eq!(prepared.intent.thread_id.as_deref(), Some("topic"));
+    assert_eq!(prepared.intent.channel_id, "telegram");
+    assert_eq!(prepared.intent.conversation_id, "recipient");
+    assert_eq!(
+        prepared.intent.reply_to_id.as_deref(),
+        Some("parent-message")
+    );
+    assert_eq!(
+        prepared
+            .intent
+            .conversation_ref
+            .as_ref()
+            .and_then(|reference| reference.topic_id.as_deref()),
+        Some("topic-id")
+    );
+    assert!(
+        matches!(
+            &prepared.intent.payload,
+            tinychannels_bus::OutboundPayload::Text { text } if text == "fixture"
+        ),
+        "typed SendMessage input must reach providers as typed text, not native provider data"
+    );
+    assert_eq!(prepared.legacy_message["content"], "fixture");
+    assert_eq!(prepared.legacy_message["recipient"], "recipient");
+    assert_eq!(prepared.legacy_message["thread_ts"], "topic");
+    assert_eq!(prepared.legacy_message["replyToId"], "parent-message");
+    assert_eq!(prepared.legacy_message["topicId"], "topic-id");
     assert_eq!(
         prepared.legacy_message["idempotencyKey"],
         prepared.intent.idempotency_key
     );
+
+    let mut subject_message = SendMessage::new("fixture", "recipient");
+    subject_message.subject = Some("subject".into());
+    let subject_prepared = channels
+        .prepare_outbound_intent(
+            "email".into(),
+            ChannelMessagePreparation::Typed(subject_message),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        &subject_prepared.intent.payload,
+        tinychannels_bus::OutboundPayload::NativeChannelData { .. }
+    ));
+    assert_eq!(subject_prepared.legacy_message["subject"], "subject");
+
+    let native_intent = tinychannels_bus::ChannelOutboundIntent {
+        channel_id: "telegram".into(),
+        idempotency_key: "native-key".into(),
+        payload: tinychannels_bus::OutboundPayload::NativeChannelData {
+            data: serde_json::json!({"provider_payload": "keep native"}),
+        },
+        ..Default::default()
+    };
+    let native_prepared = channels
+        .prepare_outbound_intent(
+            "telegram".into(),
+            ChannelMessagePreparation::Intent(native_intent),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        native_prepared.intent.payload,
+        tinychannels_bus::OutboundPayload::NativeChannelData { .. }
+    ));
+
     assert!(
         channels
             .prepare_outbound_intent(
@@ -2410,7 +2478,7 @@ async fn inbound_preparation_preserves_escaped_persisted_keys_and_provider_threa
     assert_eq!(prepared.envelope.text, "fixture content");
     assert_eq!(
         prepared.session_key,
-        "openhuman:discord:default:unknown:room#b:thread/c"
+        "v22|namespace=p9:openhuman|channel=p7:discord|account=a|kind=p7:unknown|scope=a|conversation=p6:room#b|parent=a|topic=a|thread=p8:thread/c|participant=a"
     );
     service.shutdown().await.unwrap();
 }
@@ -2618,14 +2686,14 @@ async fn prepared_envelope_preserves_media_account_and_group_isolation_policy() 
     assert_eq!(prepared.message.sender_name.as_deref(), Some("Display"));
     assert_eq!(
         prepared.session_key,
-        "tenant:discord:account:group:room:thread"
+        "v22|namespace=p6:tenant|channel=p7:discord|account=p7:account|kind=p5:group|scope=a|conversation=p4:room|parent=a|topic=a|thread=p6:thread|participant=a"
     );
     let mut per_user = request;
     per_user.session_policy.thread_sessions_per_user = true;
     let prepared = service.prepare_channel_inbound(per_user).await.unwrap();
     assert_eq!(
         prepared.session_key,
-        "tenant:discord:account:group:room:thread:user"
+        "v22|namespace=p6:tenant|channel=p7:discord|account=p7:account|kind=p5:group|scope=a|conversation=p4:room|parent=a|topic=a|thread=p6:thread|participant=p4:user"
     );
     service.shutdown().await.unwrap();
 }

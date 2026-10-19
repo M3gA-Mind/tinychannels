@@ -62,6 +62,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "logging", "tls12"] }
 wiremock = "0.6"
 hmac = "0.13"
+reqwest = { version = "0.12", default-features = false, features = ["json"] }
 
 [features]
 default = []

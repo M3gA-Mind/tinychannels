@@ -701,7 +701,8 @@ async fn webhook_ignores_non_message_events_before_media_download() {
     let state = LarkWebhookState {
         verification_token: "verify-token".into(),
         channel: Arc::new(channel_with(&server, true)),
-        tx,
+        tx: Some(tx),
+        typed_tx: None,
     };
     let payload = serde_json::json!({
         "header": {"token": "verify-token", "event_type": "im.message.deleted_v1"},
@@ -1360,7 +1361,8 @@ async fn webhook_handler_acknowledges_events_after_the_receiver_closes() {
             None,
             vec!["*".into()],
         )),
-        tx,
+        tx: Some(tx),
+        typed_tx: None,
     };
     let response = handle_lark_webhook(
         axum::extract::State(state),
