@@ -296,87 +296,30 @@ impl IrcChannel {
         writer.flush().await?;
         Ok(())
     }
-}
 
-/// Certificate verifier that accepts any certificate (for `verify_tls=false`).
-#[derive(Debug)]
-struct NoVerify;
-
-impl rustls::client::danger::ServerCertVerifier for NoVerify {
-    fn verify_server_cert(
-        &self,
-        _end_entity: &rustls::pki_types::CertificateDer<'_>,
-        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
-        _server_name: &rustls::pki_types::ServerName<'_>,
-        _ocsp_response: &[u8],
-        _now: rustls::pki_types::UnixTime,
-    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
-        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    async fn listen_owned(&self, ingress: IrcIngress<'_>) -> anyhow::Result<()> {
+        let result = self.listen_loop(ingress).await;
+        self.clear_writer().await;
+        result
     }
 
-    fn verify_tls12_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    async fn clear_writer(&self) {
+        self.writer.lock().await.take();
     }
 
-    fn verify_tls13_signature(
-        &self,
-        _message: &[u8],
-        _cert: &rustls::pki_types::CertificateDer<'_>,
-        _dss: &rustls::DigitallySignedStruct,
-    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
-        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
-        rustls::crypto::ring::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
-}
-
-#[async_trait]
-#[allow(clippy::too_many_lines)]
-impl Channel for IrcChannel {
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::long_tail::LongTail::declared(self)
-    }
-
-    fn name(&self) -> &str {
-        "irc"
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+    async fn stop_writer(&self) -> anyhow::Result<()> {
         let mut guard = self.writer.lock().await;
-        let writer = guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("IRC not connected"))?;
-
-        // Calculate safe payload size:
-        // 512 - sender prefix (~64 bytes for :nick!user@host) - "PRIVMSG " - target - " :" - "\r\n"
-        let overhead = SENDER_PREFIX_RESERVE + 10 + message.recipient.len() + 2;
-        let max_payload = 512_usize.saturating_sub(overhead);
-        let chunks = split_message(&message.content, max_payload);
-
-        for chunk in chunks {
-            Self::send_raw(writer, &format!("PRIVMSG {} :{chunk}", message.recipient)).await?;
-        }
-
+        let Some(mut writer) = guard.take() else {
+            return Ok(());
+        };
+        let quit = Self::send_raw(&mut writer, "QUIT :OpenHuman stopping").await;
+        let shutdown = writer.shutdown().await;
+        quit?;
+        shutdown?;
         Ok(())
     }
 
-    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+    async fn listen_loop(&self, ingress: IrcIngress<'_>) -> anyhow::Result<()> {
         let mut current_nick = self.nickname.clone();
         tracing::info!(
             "IRC channel connecting to {}:{} as {}...",
@@ -592,7 +535,7 @@ impl Channel for IrcChannel {
                         sender_name: None,
                     };
 
-                    if tx.send(channel_msg).await.is_err() {
+                    if !ingress.publish(channel_msg).await? {
                         return Ok(());
                     }
                 }
@@ -605,6 +548,90 @@ impl Channel for IrcChannel {
                 _ => {}
             }
         }
+    }
+
+}
+
+/// Certificate verifier that accepts any certificate (for `verify_tls=false`).
+#[derive(Debug)]
+struct NoVerify;
+
+impl rustls::client::danger::ServerCertVerifier for NoVerify {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
+        _ocsp_response: &[u8],
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        _message: &[u8],
+        _cert: &rustls::pki_types::CertificateDer<'_>,
+        _dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        rustls::crypto::ring::default_provider()
+            .signature_verification_algorithms
+            .supported_schemes()
+    }
+}
+
+#[async_trait]
+#[allow(clippy::too_many_lines)]
+impl Channel for IrcChannel {
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        crate::providers::long_tail::LongTail::declared(self)
+    }
+
+    fn name(&self) -> &str {
+        "irc"
+    }
+
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+
+    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
+        let mut guard = self.writer.lock().await;
+        let writer = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("IRC not connected"))?;
+
+        // Calculate safe payload size:
+        // 512 - sender prefix (~64 bytes for :nick!user@host) - "PRIVMSG " - target - " :" - "\r\n"
+        let overhead = SENDER_PREFIX_RESERVE + 10 + message.recipient.len() + 2;
+        let max_payload = 512_usize.saturating_sub(overhead);
+        let chunks = split_message(&message.content, max_payload);
+
+        for chunk in chunks {
+            Self::send_raw(writer, &format!("PRIVMSG {} :{chunk}", message.recipient)).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        self.listen_owned(IrcIngress::Legacy(tx)).await
     }
 
     async fn health_check(&self) -> bool {
