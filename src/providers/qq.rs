@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::collections::HashSet;
+use std::future::Future;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio_tungstenite::tungstenite::Message;
@@ -71,6 +72,26 @@ impl Drop for ListenerRegistration<'_> {
 enum QQIngress<'a> {
     Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
     Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
+}
+
+async fn listener_cancelled(cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>) {
+    match cancellation {
+        Some(receiver) => {
+            let _ = receiver.changed().await;
+        }
+        None => std::future::pending::<()>().await,
+    }
+}
+
+async fn until_listener_cancelled<F: Future>(
+    cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>,
+    future: F,
+) -> Option<F::Output> {
+    tokio::select! {
+        biased;
+        () = listener_cancelled(cancellation) => None,
+        output = future => Some(output),
+    }
 }
 
 impl QQChannel {
@@ -306,26 +327,45 @@ impl QQChannel {
 
 impl QQChannel {
     #[allow(clippy::too_many_lines)]
-    async fn listen_owned(&self, ingress: QQIngress<'_>) -> anyhow::Result<()> {
+    async fn listen_owned(
+        &self,
+        ingress: QQIngress<'_>,
+        mut cancellation: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> anyhow::Result<()> {
         let legacy_tx = match &ingress {
             QQIngress::Legacy(tx) => Some(tx),
             QQIngress::Typed(_) => None,
         };
         tracing::info!("QQ: authenticating...");
-        let token = self.get_token().await?;
+        let Some(token) = until_listener_cancelled(&mut cancellation, self.get_token()).await
+        else {
+            return Ok(());
+        };
+        let token = token?;
 
         tracing::info!("QQ: fetching gateway URL...");
-        let gw_url = self.get_gateway_url(&token).await?;
+        let Some(gw_url) =
+            until_listener_cancelled(&mut cancellation, self.get_gateway_url(&token)).await
+        else {
+            return Ok(());
+        };
+        let gw_url = gw_url?;
 
         tracing::info!("QQ: connecting to gateway WebSocket...");
-        let (ws_stream, _) = tokio_tungstenite::connect_async(&gw_url).await?;
+        let Some(connection) =
+            until_listener_cancelled(&mut cancellation, tokio_tungstenite::connect_async(&gw_url))
+                .await
+        else {
+            return Ok(());
+        };
+        let (ws_stream, _) = connection?;
         let (mut write, mut read) = ws_stream.split();
 
         // Read Hello (opcode 10)
-        let hello = read
-            .next()
-            .await
-            .ok_or(anyhow::anyhow!("QQ: no hello frame"))??;
+        let Some(hello) = until_listener_cancelled(&mut cancellation, read.next()).await else {
+            return Ok(());
+        };
+        let hello = hello.ok_or(anyhow::anyhow!("QQ: no hello frame"))??;
         let hello_data: serde_json::Value = serde_json::from_str(&hello.to_string())?;
         let heartbeat_interval = hello_data
             .get("d")
@@ -371,6 +411,11 @@ impl QQChannel {
 
         loop {
             tokio::select! {
+                biased;
+                () = listener_cancelled(&mut cancellation) => {
+                    let _ = write.send(Message::Close(None)).await;
+                    break;
+                }
                 _ = hb_rx.recv() => {
                     let d = if sequence >= 0 { json!(sequence) } else { json!(null) };
                     let hb = json!({"op": 1, "d": d});
@@ -662,7 +707,7 @@ impl Channel for QQChannel {
 
     #[allow(clippy::too_many_lines)]
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        self.listen_owned(QQIngress::Legacy(tx)).await
+        self.listen_owned(QQIngress::Legacy(tx), None).await
     }
 
     async fn health_check(&self) -> bool {

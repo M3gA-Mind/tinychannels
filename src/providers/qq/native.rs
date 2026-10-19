@@ -236,28 +236,24 @@ impl NativeProvider for QQChannel {
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> Result<(), ChannelSendError> {
-        let (id, mut cancellation) = self.begin_listener().map_err(|error| ChannelSendError {
+        let (id, cancellation) = self.begin_listener().map_err(|error| ChannelSendError {
             kind: SendErrorKind::Forbidden,
             message: error.to_string(),
             retryable: false,
             ..Default::default()
         })?;
         let _registration = super::ListenerRegistration { channel: self, id };
-        tokio::select! {
-            biased;
-            _ = cancellation.changed() => Ok(()),
-            result = self.listen_owned(super::QQIngress::Typed(sink)) => {
-                result.map_err(|error| {
-                    tracing::debug!(%error, "QQ typed listener stopped");
-                    ChannelSendError {
-                        kind: SendErrorKind::Transient,
-                        message: "QQ listener stopped".into(),
-                        retryable: true,
-                        ..Default::default()
-                    }
-                })
-            }
-        }
+        self.listen_owned(super::QQIngress::Typed(sink), Some(cancellation))
+            .await
+            .map_err(|error| {
+                tracing::debug!(%error, "QQ typed listener stopped");
+                ChannelSendError {
+                    kind: SendErrorKind::Transient,
+                    message: "QQ listener stopped".into(),
+                    retryable: true,
+                    ..Default::default()
+                }
+            })
     }
 
     async fn stop_listener(&self) -> Result<(), ChannelSendError> {
