@@ -282,7 +282,8 @@ impl QQChannel {
         event_type: &str,
         message: &serde_json::Value,
     ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
-        self.inbound_envelope_with_mode(event_type, message, false).await
+        self.inbound_envelope_with_mode(event_type, message, false)
+            .await
     }
 
     pub(crate) async fn inbound_envelope_for_listener(
@@ -290,7 +291,8 @@ impl QQChannel {
         event_type: &str,
         message: &serde_json::Value,
     ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
-        self.inbound_envelope_with_mode(event_type, message, true).await
+        self.inbound_envelope_with_mode(event_type, message, true)
+            .await
     }
 
     async fn inbound_envelope_with_mode(

@@ -290,7 +290,10 @@ impl QQChannel {
     }
 
     fn begin_listener(&self) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
-        let mut listener = self.listener.lock().unwrap_or_else(|error| error.into_inner());
+        let mut listener = self
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         if listener.is_some() {
             anyhow::bail!("QQ listener is already running");
         }
