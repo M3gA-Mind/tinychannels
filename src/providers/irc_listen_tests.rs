@@ -139,21 +139,17 @@ async fn public_adapter_start_owns_typed_listener_until_stop_joins_it() {
     }));
     let (tx, mut rx) = mpsc::unbounded_channel();
     let sink = InboundSink(tx);
-    let start = tokio::spawn({
+    let mut start = tokio::spawn({
         let channel = channel.clone();
         async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
     });
-
-    // `start` owns the listener for its lifetime. The current adapter macro
-    // returns immediately, so this assertion is an authentic public-surface
-    // regression before any implementation change.
-    tokio::task::yield_now().await;
-    assert!(
-        !start.is_finished(),
-        "start must keep the IRC listener running"
-    );
-
-    let mut peer = Peer::accept(&listener, &acceptor).await;
+    // `start` must establish and own its listener instead of returning as the
+    // current adapter macro does. Racing the real TLS peer against completion
+    // avoids relying on scheduler timing or an arbitrary startup delay.
+    let mut peer = tokio::select! {
+        result = &mut start => panic!("IRC adapter start returned before accepting a peer: {result:?}"),
+        peer = Peer::accept(&listener, &acceptor) => peer,
+    };
     peer.expect("NICK bot").await;
     peer.expect("USER botuser 0 * :OpenHuman").await;
     peer.say(":srv 001 bot :Welcome").await;
@@ -192,7 +188,14 @@ async fn public_adapter_start_owns_typed_listener_until_stop_joins_it() {
         .expect("listener task must not panic")
         .expect("listener must stop cleanly");
     let final_line = peer.next_line().await;
-    assert!(final_line.is_empty() || final_line.starts_with("QUIT "));
+    if final_line.starts_with("QUIT ") {
+        assert!(
+            peer.next_line().await.is_empty(),
+            "QUIT must close the IRC socket"
+        );
+    } else {
+        assert!(final_line.is_empty(), "stop must close the IRC socket");
+    }
 }
 
 #[tokio::test]
