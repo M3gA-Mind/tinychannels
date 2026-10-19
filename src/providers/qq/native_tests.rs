@@ -545,9 +545,7 @@ async fn qq_rejects_text_with_captioned_media_before_sending_any_step() {
         "image/png",
         b"exact-image-bytes",
     ));
-    let host = ChannelHostBuilder::new()
-        .media_repository(media)
-        .build();
+    let host = ChannelHostBuilder::new().media_repository(media).build();
     let config = tinychannels_bus::ChannelsConfig {
         qq: Some(tinychannels_bus::config::QQConfig {
             app_id: "app-id".into(),
@@ -594,11 +592,9 @@ async fn qq_rejects_text_with_captioned_media_before_sending_any_step() {
         ],
     };
 
-    let result = tinychannels_runtime::channel::ChannelTypedSend::send_typed(
-        channel.as_ref(),
-        &message,
-    )
-    .await;
+    let result =
+        tinychannels_runtime::channel::ChannelTypedSend::send_typed(channel.as_ref(), &message)
+            .await;
 
     assert!(result.is_err(), "QQ must reject an unrepresentable caption");
     assert!(server.requests.lock().unwrap().is_empty());
