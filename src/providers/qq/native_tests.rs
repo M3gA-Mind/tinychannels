@@ -159,6 +159,7 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
         ),
         "/gateway" => (200, json!({"url": format!("ws://{address}/")}).to_string()),
         "/attachments/image-2" => (200, "listener-image-bytes".into()),
+        "/attachments/group-image" => (200, "group-image-bytes".into()),
         other => panic!("unexpected QQ request: {other}"),
     })
     .await;
@@ -199,6 +200,26 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
         ))
         .await
         .unwrap();
+        ws.send(Message::Text(
+            json!({
+                "op": 0,
+                "t": "GROUP_AT_MESSAGE_CREATE",
+                "d": {
+                    "id": "qq-listener-group-image",
+                    "author": {"member_openid": "alice"},
+                    "group_openid": "group-1",
+                    "attachments": [{
+                        "content_type": "image/png",
+                        "filename": "group-listener.png",
+                        "url": "https://api.sgroup.qq.com/attachments/group-image"
+                    }]
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
         release_rx.await.unwrap();
         ws.close(None).await.unwrap();
     });
@@ -219,7 +240,7 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
-            if events.inbound().len() == 1 {
+            if events.inbound().len() == 2 {
                 break;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -232,13 +253,25 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
         ContentPart::Image { media, .. }
             if media.file_name.as_deref() == Some("listener.png")
     ));
+    assert_eq!(events.inbound()[1].conversation.id, "group:group-1");
+    assert!(matches!(
+        &events.inbound()[1].parts[0],
+        ContentPart::Image { media, .. }
+            if media.file_name.as_deref() == Some("group-listener.png")
+    ));
     assert!(
         rx.try_recv().is_err(),
         "typed ingress must suppress legacy fallback"
     );
     assert_eq!(
-        media.stored.lock().unwrap()[0].bytes,
-        b"listener-image-bytes"
+        media
+            .stored
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|stored| stored.bytes.as_slice())
+            .collect::<Vec<_>>(),
+        vec![b"listener-image-bytes".as_slice(), b"group-image-bytes".as_slice()]
     );
     release_tx.send(()).unwrap();
     drop(rx);
