@@ -361,8 +361,8 @@ async fn legacy_noop_lifecycle_hooks_remain_compatible() {
     const LEGACY_NOOP_PROVIDERS: [&str; 4] = ["lark", "qq", "dingtalk", "yuanbao"];
     #[cfg(not(feature = "lark"))]
     const LEGACY_NOOP_PROVIDERS: [&str; 3] = ["qq", "dingtalk", "yuanbao"];
-    assert!(!LEGACY_NOOP_PROVIDERS.is_empty());
 
+    let mut checked = 0;
     for id in LEGACY_NOOP_PROVIDERS {
         assert!(
             PROVIDERS.iter().any(|(provider, _)| *provider == id),
@@ -383,7 +383,12 @@ async fn legacy_noop_lifecycle_hooks_remain_compatible() {
             .await
             .unwrap();
         ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+        checked += 1;
     }
+    assert!(
+        checked > 0,
+        "at least one legacy no-op provider must be tested"
+    );
 }
 
 #[tokio::test]
