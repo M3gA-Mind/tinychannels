@@ -3,12 +3,14 @@ use crate::channel::ChannelAdapter;
 use crate::factory::{HttpClientFactory, build_long_tail_channel_with_host};
 use crate::host::{ChannelHostBuilder, VoiceMediaRequest, VoiceMediaStore};
 use crate::providers::native::fixtures::{StubMedia, stored_media};
+use crate::providers::native::{NativeProvider, Target};
 use base64::Engine as _;
 use serde_json::json;
 use std::sync::Arc;
 use tinychannels_bus::{
-    ChannelOutboundMessage, ContentPart, HostReadVoiceMediaResult, HostStoreVoiceMediaResult,
-    MediaKind, MediaReference, OutboundContentPart, OutboundVoice,
+    ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind, ConversationRef,
+    HostReadVoiceMediaResult, HostStoreVoiceMediaResult, MediaKind, MediaReference,
+    OutboundContentPart, OutboundVoice,
 };
 
 #[tokio::test]
@@ -111,6 +113,54 @@ fn qq_timestamps_accept_numeric_values_and_numeric_strings() {
     );
     assert_eq!(super::timestamp_unix_ms(&json!("not-a-timestamp")), None);
     assert_eq!(super::timestamp_unix_ms(&json!(-1)), None);
+}
+
+#[test]
+fn qq_target_validation_rejects_threads_invalid_ids_and_non_chat_targets() {
+    let channel = super::super::QQChannel::new("app-id".into(), "app-secret".into(), vec![]);
+    let target = |id: &str, kind: ConversationKind| Target {
+        channel: ChannelRef {
+            id: "qq".into(),
+            account_id: None,
+        },
+        conversation: ConversationRef {
+            kind,
+            id: id.into(),
+            ..Default::default()
+        },
+        reply_to: None,
+        thread: None,
+    };
+
+    let mut threaded = target("user-1", ConversationKind::Dm);
+    threaded.thread = Some("thread-1".into());
+    assert!(NativeProvider::validate_target(&channel, &threaded)
+        .unwrap_err()
+        .unsupported);
+
+    let invalid_id = target("user/1", ConversationKind::Dm);
+    assert_eq!(
+        NativeProvider::validate_target(&channel, &invalid_id)
+            .unwrap_err()
+            .kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
+
+    let empty_id = target("", ConversationKind::Dm);
+    assert_eq!(
+        NativeProvider::validate_target(&channel, &empty_id)
+            .unwrap_err()
+            .kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
+
+    let non_chat = target("channel-1", ConversationKind::Channel);
+    assert_eq!(
+        NativeProvider::validate_target(&channel, &non_chat)
+            .unwrap_err()
+            .kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
 }
 
 #[tokio::test]
