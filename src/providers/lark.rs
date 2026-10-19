@@ -913,7 +913,7 @@ impl Channel for LarkChannel {
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         use crate::config::LarkReceiveMode;
         match self.receive_mode {
-            LarkReceiveMode::Websocket => self.listen_ws(tx).await,
+            LarkReceiveMode::Websocket => self.listen_ws(LarkIngress::Legacy(tx)).await,
             LarkReceiveMode::Webhook => self.listen_http(tx).await,
         }
     }
@@ -1264,6 +1264,40 @@ impl crate::providers::long_tail::LongTail for LarkChannel {
         tinychannels_bus::channel::ChannelSendError,
     > {
         crate::providers::native::outbound::send_typed(self, message).await
+    }
+
+    async fn start_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        let mut cancellation = self.begin_listener()?;
+        let _registration = LarkListenerRegistration(self);
+        let result = match self.receive_mode {
+            crate::config::LarkReceiveMode::Websocket => {
+                tokio::select! {
+                    biased;
+                    _ = cancellation.changed() => Ok(()),
+                    result = self.listen_ws(LarkIngress::Typed(sink)) => result,
+                }
+            }
+            crate::config::LarkReceiveMode::Webhook => {
+                self.listen_http_typed(sink, &mut cancellation).await
+            }
+        };
+        result.map_err(|error| {
+            tracing::debug!(%error, "Lark typed listener stopped");
+            tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "Lark listener stopped".into(),
+                retryable: true,
+                ..Default::default()
+            }
+        })
+    }
+
+    async fn stop_listener(&self) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.end_listener();
+        Ok(())
     }
 }
 
