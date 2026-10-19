@@ -279,6 +279,102 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
     websocket.await.unwrap();
 }
 
+#[tokio::test]
+async fn qq_gateway_listener_publishes_group_attachment_only_message_without_legacy_fallback() {
+    use crate::providers::native::fixtures::RecordingEvents;
+    use crate::traits::Channel;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let gateway = HttpsServer::start(move |request| match request.target.as_str() {
+        "/app/getAppAccessToken" => (
+            200,
+            json!({"access_token": "qq-token", "expires_in": "7200"}).to_string(),
+        ),
+        "/gateway" => (200, json!({"url": format!("ws://{address}/")}).to_string()),
+        "/attachments/group-image" => (200, "group-image-bytes".into()),
+        other => panic!("unexpected QQ request: {other}"),
+    })
+    .await;
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let websocket = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(socket).await.unwrap();
+        ws.send(Message::Text(
+            json!({"op": 10, "d": {"heartbeat_interval": 60000}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let _: serde_json::Value =
+            serde_json::from_str(&ws.next().await.unwrap().unwrap().to_string()).unwrap();
+        let _: serde_json::Value =
+            serde_json::from_str(&ws.next().await.unwrap().unwrap().to_string()).unwrap();
+        ws.send(Message::Text(
+            json!({
+                "op": 0,
+                "t": "GROUP_AT_MESSAGE_CREATE",
+                "d": {
+                    "id": "qq-listener-group-only-image",
+                    "author": {"member_openid": "alice"},
+                    "group_openid": "group-1",
+                    "attachments": [{
+                        "content_type": "image/png",
+                        "filename": "group-listener.png",
+                        "url": "https://api.sgroup.qq.com/attachments/group-image"
+                    }]
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        release_rx.await.unwrap();
+        ws.close(None).await.unwrap();
+    });
+
+    let media = Arc::new(StubMedia::default());
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = super::super::QQChannel::with_http_client(
+        "app-id".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        gateway.client.clone(),
+    )
+    .with_media_repository(media.clone())
+    .with_events(events.clone())
+    .with_attachment_http_client(gateway.client.clone());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let listening = tokio::spawn(async move { channel.listen(tx).await });
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if events.inbound().len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("QQ group listener should publish attachment-only typed ingress");
+    assert_eq!(events.inbound()[0].conversation.id, "group:group-1");
+    assert!(matches!(
+        &events.inbound()[0].parts[0],
+        ContentPart::Image { media, .. }
+            if media.file_name.as_deref() == Some("group-listener.png")
+    ));
+    assert!(rx.try_recv().is_err(), "typed ingress must suppress legacy fallback");
+    assert_eq!(media.stored.lock().unwrap()[0].bytes, b"group-image-bytes");
+    release_tx.send(()).unwrap();
+    drop(rx);
+    assert!(listening.await.unwrap().is_err());
+    websocket.await.unwrap();
+}
+
 struct QQVoiceStore;
 
 #[async_trait::async_trait]
