@@ -445,11 +445,11 @@ impl DingTalkChannel {
                         sender_name: None,
                     };
 
-                    if let Some(tx) = legacy_tx {
-                        if tx.send(channel_msg).await.is_err() {
-                            tracing::warn!("DingTalk: message channel closed");
-                            break;
-                        }
+                    if let Some(tx) = legacy_tx
+                        && tx.send(channel_msg).await.is_err()
+                    {
+                        tracing::warn!("DingTalk: message channel closed");
+                        break;
                     }
                 }
                 _ => {}
