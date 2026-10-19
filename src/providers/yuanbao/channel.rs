@@ -67,7 +67,7 @@ pub struct YuanbaoChannel {
     native: NativeState,
     voice_http: reqwest::Client,
     /// Single-owner cancellation for the native typed listener.
-    listener: std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>,
+    listener: Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>,
     listener_generation: std::sync::atomic::AtomicU64,
 }
 
@@ -98,7 +98,15 @@ impl YuanbaoChannel {
             }
             *active = Some((id, cancel.clone()));
         }
-        let _registration = YuanbaoListenerRegistration { channel: self, id };
+        let mut registration = YuanbaoListenerRegistration {
+            listener: Arc::clone(&self.listener),
+            id,
+            cancel: cancel.clone(),
+            abandoned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            connection_done: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            connection_started: false,
+            completed: false,
+        };
         self.shutdown_tx.send_replace(false);
 
         let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
@@ -112,8 +120,18 @@ impl YuanbaoChannel {
             .expect("new listener receiver");
         let connection = Arc::clone(&self.connection);
         let connection_cancel = cancellation.clone();
-        let mut connection_task =
-            tokio::spawn(async move { connection.run(connection_cancel).await });
+        let completion = YuanbaoListenerRegistration {
+            listener: Arc::clone(&self.listener),
+            id,
+            cancel: cancel.clone(),
+            abandoned: Arc::clone(&registration.abandoned),
+            connection_done: Arc::clone(&registration.connection_done),
+        };
+        let mut connection_task = tokio::spawn(async move {
+            let _completion = completion;
+            connection.run(connection_cancel).await;
+        });
+        registration.connection_started = true;
 
         loop {
             tokio::select! {
@@ -131,6 +149,7 @@ impl YuanbaoChannel {
                                         connection_task.abort();
                                         let _ = connection_task.await;
                                     }
+                                    registration.completed = true;
                                     return Err(error);
                                 }
                             }
@@ -152,6 +171,7 @@ impl YuanbaoChannel {
             connection_task.abort();
             let _ = connection_task.await;
         }
+        registration.completed = true;
         Ok(())
     }
 
@@ -209,7 +229,7 @@ impl YuanbaoChannel {
             recipient_aliases: TokioMutex::new(HashMap::new()),
             native: NativeState::default(),
             voice_http: no_redirect_client(),
-            listener: std::sync::Mutex::new(None),
+            listener: Arc::new(std::sync::Mutex::new(None)),
             listener_generation: std::sync::atomic::AtomicU64::new(0),
         })
     }
@@ -826,23 +846,53 @@ impl YuanbaoChannel {
     }
 }
 
-struct YuanbaoListenerRegistration<'a> {
-    channel: &'a YuanbaoChannel,
+struct YuanbaoListenerRegistration {
+    listener: Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>,
     id: u64,
+    cancel: watch::Sender<bool>,
+    abandoned: Arc<std::sync::atomic::AtomicBool>,
+    connection_done: Arc<std::sync::atomic::AtomicBool>,
+    connection_started: bool,
+    completed: bool,
 }
 
-impl Drop for YuanbaoListenerRegistration<'_> {
+impl Drop for YuanbaoListenerRegistration {
     fn drop(&mut self) {
-        let mut active = self
-            .channel
-            .listener
-            .lock()
-            .unwrap_or_else(|error| error.into_inner());
-        if active.as_ref().is_some_and(|(id, _)| *id == self.id) {
-            if let Some((_, cancel)) = active.take() {
-                cancel.send_replace(true);
+        self.cancel.send_replace(true);
+        if self.connection_started && !self.completed {
+            self.abandoned.store(true, std::sync::atomic::Ordering::Release);
+            if !self.connection_done.load(std::sync::atomic::Ordering::Acquire) {
+                return;
             }
         }
+        clear_yuanbao_listener(&self.listener, self.id);
+    }
+}
+
+impl Drop for YuanbaoConnectionRegistration {
+    fn drop(&mut self) {
+        self.connection_done
+            .store(true, std::sync::atomic::Ordering::Release);
+        if self.abandoned.load(std::sync::atomic::Ordering::Acquire) {
+            clear_yuanbao_listener(&self.listener, self.id);
+        }
+    }
+}
+
+struct YuanbaoConnectionRegistration {
+    listener: Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>,
+    id: u64,
+    abandoned: Arc<std::sync::atomic::AtomicBool>,
+    connection_done: Arc<std::sync::atomic::AtomicBool>,
+}
+
+fn clear_yuanbao_listener(
+    listener: &std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>,
+    id: u64,
+) {
+    let mut active = listener.lock().unwrap_or_else(|error| error.into_inner());
+    if active.as_ref().is_some_and(|(active_id, _)| *active_id == id) {
+        active.take();
     }
 }
 
@@ -857,12 +907,7 @@ fn no_redirect_client() -> reqwest::Client {
 impl Drop for YuanbaoChannel {
     fn drop(&mut self) {
         let _ = self.shutdown_tx.send(true);
-        if let Some((_, cancel)) = self
-            .listener
-            .get_mut()
-            .unwrap_or_else(|error| error.into_inner())
-            .take()
-        {
+        if let Some((_, cancel)) = self.listener.lock().unwrap_or_else(|error| error.into_inner()).take() {
             cancel.send_replace(true);
         }
     }
