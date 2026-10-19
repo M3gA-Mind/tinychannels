@@ -547,6 +547,16 @@ fn dingtalk_factory_wires_host_voice_store_and_ordered_ingress() {
     .unwrap();
     assert!(voice_ready.capabilities().voice_out.supported);
     assert!(voice_ready.capabilities().voice_out.synthesis);
+
+    let without_store: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
+        .synthesizer(Arc::new(FactorySpeechSynthesizer))
+        .voice_codec(Arc::new(FactoryVoiceCodec))
+        .build();
+    let no_storage =
+        build_long_tail_channel_with_host(&config, &without_store, &DefaultHttpClients, "dingtalk")
+            .unwrap();
+    assert!(!no_storage.capabilities().voice_out.supported);
+    assert!(!no_storage.capabilities().voice_out.synthesis);
 }
 
 struct FactorySpeechSynthesizer;
