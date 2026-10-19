@@ -42,6 +42,8 @@ pub(crate) struct FileStep {
     pub(crate) mime: String,
     pub(crate) name: String,
     pub(crate) caption: Option<String>,
+    /// Measured duration carried by a stored voice note, when present.
+    pub(crate) duration_ms: Option<u64>,
 }
 
 /// One validated unit of work, in message order.
@@ -176,8 +178,9 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
             OutboundContentPart::Content {
                 part: ContentPart::Text { .. },
             } => {
-                // With a voice clip the text is the transcript caption.
-                if voice_count == 0
+                // Providers without voice captions receive transcript text as
+                // its own ordered step before or after the voice upload.
+                if (voice_count == 0 || !provider.voice_caption_supported())
                     && let Some(text) = text_of(part).filter(|text| !text.trim().is_empty())
                 {
                     for chunk in chunk_text(&text, limits.text_chars) {
@@ -247,10 +250,14 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                     name: stored.file_name.unwrap_or_else(|| name.to_owned()),
                     bytes: stored.bytes,
                     caption: caption.map(|caption| strip_tool_call_tags(&caption)),
+                    duration_ms: None,
                 }));
             }
             OutboundContentPart::Voice {
-                voice: OutboundVoice::Media { media, .. },
+                voice:
+                    OutboundVoice::Media {
+                        media, duration_ms, ..
+                    },
             } => {
                 let store = provider.voice_media_store().ok_or_else(|| {
                     unsupported(&format!("{display} voice needs host voice storage"))
@@ -295,13 +302,22 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                     .ok_or_else(|| {
                         pre_dispatch(&format!("{display} voice media failed upload validation"))
                     })?;
+                let default_name = if resolved.mime_type == "audio/amr" {
+                    "voice.amr"
+                } else {
+                    "voice.m4a"
+                };
                 steps.push(Step::Voice(FileStep {
                     #[cfg(feature = "lark")]
                     kind: MediaKind::Audio,
                     mime: resolved.mime_type,
-                    name: resolved.file_name.unwrap_or_else(|| "voice.m4a".into()),
+                    name: resolved.file_name.unwrap_or_else(|| default_name.into()),
                     bytes: audio,
-                    caption: Some(caption).filter(|c| !c.trim().is_empty()),
+                    caption: provider
+                        .voice_caption_supported()
+                        .then_some(caption)
+                        .filter(|c| !c.trim().is_empty()),
+                    duration_ms: *duration_ms,
                 }));
             }
             OutboundContentPart::Voice { .. } => {

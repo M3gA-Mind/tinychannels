@@ -67,6 +67,7 @@ fn mime_helpers_classify_and_name_codecs() {
     assert_eq!(kind_for_mime("application/pdf"), MediaKind::Document);
     assert_eq!(normalize_mime(" Audio/MP4 ; codecs=aac"), "audio/mp4");
     for (mime, codec) in [
+        ("audio/amr", Some("amr_nb")),
         ("audio/mp4", Some("m4a_aac")),
         ("audio/aac", Some("m4a_aac")),
         ("audio/mpeg", Some("mp3")),
@@ -76,6 +77,30 @@ fn mime_helpers_classify_and_name_codecs() {
     ] {
         assert_eq!(codec_for(mime).as_deref(), codec, "{mime}");
     }
+}
+
+#[tokio::test]
+async fn amr_voice_is_stored_with_the_native_codec_tag() {
+    let rig = rig(Default::default(), Default::default(), Default::default());
+    let mut ingest = rig.ingest(false);
+    ingest.voice_bytes = 2 * 1024 * 1024;
+    let mut amr = file("audio/amr", true);
+    amr.bytes = include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr").to_vec();
+    amr.name = Some("voice.amr".into());
+
+    let mut ingested = Ingested::default();
+    ingest
+        .add(&mut ingested, &conversation(), "amr-message", amr)
+        .await;
+
+    let note = ingested.voice.expect("allowed AMR voice should be stored");
+    assert_eq!(note.media.content_type.as_deref(), Some("audio/amr"));
+    assert_eq!(note.codec.as_deref(), Some("amr_nb"));
+    let stored = rig.voice.stored.lock().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].mime_type, "audio/amr");
+    assert_eq!(stored[0].codec.as_deref(), Some("amr_nb"));
+    assert_eq!(stored[0].file_name.as_deref(), Some("voice.amr"));
 }
 
 #[tokio::test]

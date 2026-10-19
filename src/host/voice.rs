@@ -133,12 +133,13 @@ pub async fn prepare_voice_reply(
         .await?;
     let from = match synthesized.mime_type.as_str() {
         "audio/wav" | "audio/wave" => "wav_pcm16",
+        "audio/amr" => "amr_nb",
         "audio/ogg" => "ogg_opus",
         "audio/mp4" => "m4a_aac",
         "audio/mpeg" => "mp3",
         _ => anyhow::bail!("synthesizer returned an unsupported audio format"),
     };
-    let target = ["ogg_opus", "m4a_aac", "mp3", "wav_pcm16"]
+    let target = ["ogg_opus", "m4a_aac", "mp3", "wav_pcm16", "amr_nb"]
         .into_iter()
         .find(|codec| {
             constraints
@@ -178,6 +179,7 @@ pub async fn prepare_voice_reply(
         "m4a_aac" => ("audio/mp4", "voice.m4a"),
         "mp3" => ("audio/mpeg", "voice.mp3"),
         "wav_pcm16" => ("audio/wav", "voice.wav"),
+        "amr_nb" => ("audio/amr", "voice.amr"),
         _ => unreachable!(),
     };
     let stored = store

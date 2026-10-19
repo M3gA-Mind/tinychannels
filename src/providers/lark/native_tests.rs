@@ -119,6 +119,7 @@ async fn lark_preflights_audio_that_needs_a_host_codec_before_delivery() {
         mime: "audio/wav".into(),
         name: "voice.wav".into(),
         caption: None,
+        duration_ms: None,
     })];
 
     let error = NativeProvider::prepare_steps(&channel, &target, &mut steps)
@@ -166,6 +167,7 @@ async fn lark_preflights_unsupported_image_and_video_formats() {
             mime: mime.into(),
             name: "attachment.bin".into(),
             caption: None,
+            duration_ms: None,
         })];
         let error = NativeProvider::prepare_steps(&channel, &target, &mut steps)
             .await

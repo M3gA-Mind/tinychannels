@@ -438,6 +438,16 @@ async fn unsupported_stream_mime_is_rejected_before_reading_body() {
     assert!(result.is_err());
 }
 
+#[test]
+fn amr_audio_requires_its_storage_magic_header() {
+    assert!(is_allowed_content_type(
+        tinychannels_bus::MediaKind::Audio,
+        "audio/amr"
+    ));
+    assert!(content_matches("audio/amr", b"#!AMR\nframe"));
+    assert!(!content_matches("audio/amr", b"not an AMR stream"));
+}
+
 #[tokio::test]
 async fn media_store_rejects_spoofed_mime_and_truncated_image_bodies() {
     let store = store();
