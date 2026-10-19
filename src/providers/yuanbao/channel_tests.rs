@@ -645,6 +645,32 @@ fn yuanbao_push(message_id: &str, sender: &str, text: &str) -> Vec<u8> {
     )
 }
 
+fn yuanbao_sound_push(message_id: &str, sender: &str, url: &str) -> Vec<u8> {
+    crate::providers::yuanbao::connection::test_support::encode_frame(
+        crate::providers::yuanbao::proto_constants::cmd_type::PUSH,
+        "inbound_message",
+        message_id,
+        "yuanbao_openclaw_proxy",
+        true,
+        0,
+        &serde_json::to_vec(&serde_json::json!({
+            "from_account": sender,
+            "msg_id": message_id,
+            "msg_time": 1_700_000_000,
+            "sender_nickname": "Alice",
+            "msg_body": [{
+                "msg_type": "TIMSoundElem",
+                "msg_content": {
+                    "sound": "sound-id",
+                    "url": url,
+                    "file_name": "voice.ogg",
+                },
+            }],
+        }))
+        .unwrap(),
+    )
+}
+
 async fn expect_yuanbao_push_ack(
     session: &mut crate::providers::yuanbao::connection::test_support::GatewaySession,
     message_id: &str,
@@ -763,5 +789,86 @@ async fn public_adapter_start_delivers_admitted_deduplicated_pushes_and_restarts
         .expect("second stop should join the restarted listener")
         .expect("restarted listener task should not panic")
         .expect("restarted listener should stop cleanly");
+    assert!(received.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn public_adapter_stores_url_backed_voice_and_publishes_typed_media() {
+    use crate::channel::ChannelAdapter;
+    use crate::providers::http_test_support::HttpsServer;
+    use crate::providers::native::fixtures::StubVoice;
+    use crate::providers::yuanbao::connection::test_support::{MockGateway, gateway_config};
+    use base64::Engine as _;
+    use tinychannels_bus::ContentPart;
+
+    let voice_fixture = include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg").to_vec();
+    let received_body = voice_fixture.clone();
+    let media_server = HttpsServer::start_with_bytes(
+        move |request| {
+            assert_eq!(request.method, "GET");
+            assert_eq!(request.target, "/voice.ogg");
+            (200, received_body.clone())
+        },
+        "audio/ogg",
+    )
+    .await;
+    let gateway = MockGateway::bind().await;
+    let config = gateway_config(&gateway.url);
+    let voice_store = Arc::new(StubVoice::default());
+    let channel = Arc::new(
+        YuanbaoChannel::new(config)
+            .unwrap()
+            .with_voice_media_store(voice_store.clone())
+            .with_voice_http_client(media_server.client.clone()),
+    );
+    let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(PublicAdapterSink(events));
+    let listener = {
+        let channel = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        tokio::spawn(async move { channel.start(sink.as_ref()).await })
+    };
+    let mut session = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        gateway.accept_authed("voice-connect"),
+    )
+    .await
+    .expect("Yuanbao listener should connect to the local gateway");
+    session
+        .send(tokio_tungstenite::tungstenite::Message::Binary(
+            yuanbao_sound_push(
+                "voice-public-1",
+                "alice",
+                "https://api.dingtalk.com/voice.ogg",
+            )
+            .into(),
+        ))
+        .await;
+    expect_yuanbao_push_ack(&mut session, "voice-public-1").await;
+
+    let envelope = next_public_yuanbao_message(&mut received).await;
+    assert_eq!(envelope.message_id, "voice-public-1");
+    assert_eq!(envelope.channel.account_id.as_deref(), Some("bot-id"));
+    assert!(envelope.text.is_empty(), "signed voice URL must not become model text");
+    assert!(matches!(envelope.parts.as_slice(), [ContentPart::VoiceNote { .. }]));
+    let stored = voice_store.stored.lock().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].scope.turn_id, "voice-public-1");
+    assert_eq!(stored[0].mime_type, "audio/ogg");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&stored[0].audio_base64)
+            .unwrap(),
+        voice_fixture
+    );
+    drop(stored);
+    assert_eq!(media_server.requests.lock().unwrap().len(), 1);
+
+    channel.stop().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), listener)
+        .await
+        .expect("stopping the typed listener should join it")
+        .expect("listener task should not panic")
+        .expect("listener should stop cleanly");
     assert!(received.try_recv().is_err());
 }
