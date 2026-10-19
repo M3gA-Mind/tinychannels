@@ -148,12 +148,15 @@ file and video event examples carry download codes too. This establishes that
 typed inbound media is a supported platform capability, not something to
 infer from the current text-only listener.
 
-The DingTalk API reference mirrors document the robot media templates and
-upload operation: [message templates](https://dingtalk.apifox.cn/doc-3550110)
-lists `sampleFile`, `sampleVideo`, and `sampleAudio`, and
-[media upload](https://dingtalk.apifox.cn/api-9093351) describes
-`POST https://oapi.dingtalk.com/media/upload` returning a reusable `media_id`.
-The newer robot send API is
+The official [robot message type reference](https://open.dingtalk.com/document/orgapp/types-of-messages-sent-by-robots)
+defines `sampleAudio` with a `mediaId` and `duration`; it explicitly supports
+OGG and AMR, and specifies milliseconds for audio duration. The official
+[upload media API](https://open.dingtalk.com/document/orgapp/upload-media-files)
+returns the reusable `media_id`. Its voice-upload contract uses
+`POST https://oapi.dingtalk.com/media/upload` with `type=voice`, accepts AMR,
+MP3, and WAV, and limits uploaded voice to 2 MiB. This upload limit does not
+establish an inbound-download limit; callback downloads retain the adapter's
+existing 10 MiB bound and codec support. The newer robot send API is
 `POST https://api.dingtalk.com/v1.0/robot/groupMessages/send` with
 `robotCode`, `openConversationId`, `msgKey`, and JSON-string `msgParam`; the
 private-chat endpoint is documented separately. These endpoints require an
