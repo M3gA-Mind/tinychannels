@@ -67,7 +67,7 @@ async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request(
         ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
     };
 
-    let server = HttpsServer::start(|request| {
+    let server = HttpsServer::start_with_content_type(|request| {
         if is_token_request(request) {
             token_ok("t-1")
         } else if request.target == "/open-apis/im/v1/messages?receive_id_type=chat_id" {
@@ -78,7 +78,7 @@ async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request(
         } else {
             panic!("unexpected Lark request: {}", request.target)
         }
-    })
+    }, "audio/ogg")
     .await;
     let media = Arc::new(StubMedia::default());
     *media.read.lock().unwrap() = Some(stored_media(
