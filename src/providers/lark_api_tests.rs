@@ -203,6 +203,67 @@ async fn oversized_lark_image_is_a_non_retryable_preflight_error() {
 }
 
 #[tokio::test]
+async fn rejected_lark_file_upload_stops_before_message_delivery() {
+    use crate::providers::native::fixtures::{StubMedia, stored_media};
+    use tinychannels_bus::{
+        ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
+    };
+
+    let server = HttpsServer::start(|request| {
+        if is_token_request(request) {
+            token_ok("t-file-rejected")
+        } else if request.target == "/open-apis/im/v1/files" {
+            (413, r#"{"code":99991663,"msg":"too large"}"#.into())
+        } else {
+            panic!("rejected file upload must stop before message delivery: {}", request.target)
+        }
+    })
+    .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(
+        MediaKind::Document,
+        "application/pdf",
+        b"small-pdf",
+    ));
+    let channel = channel_with(&server, true).with_media_repository(media);
+    let message = ChannelOutboundMessage {
+        channel_id: "lark".into(),
+        conversation_id: "oc_chat_1".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-file-rejected".into()),
+        idempotency_key: "file-rejected".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::File {
+                media: MediaReference {
+                    opaque_id: Some("file-1".into()),
+                    kind: MediaKind::Document,
+                    content_type: Some("application/pdf".into()),
+                    ..Default::default()
+                },
+                file_name: Some("report.pdf".into()),
+                caption: None,
+            },
+        }],
+    };
+
+    let error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
+    assert!(!error.sent_before_error);
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].target.starts_with("/open-apis/im/v1/files"));
+}
+
+#[tokio::test]
 async fn lark_host_voice_store_delivers_voice_without_file_repository() {
     let server = HttpsServer::start(|request| {
         if is_token_request(request) {
