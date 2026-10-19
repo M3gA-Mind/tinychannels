@@ -63,7 +63,6 @@ tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring
 wiremock = "0.6"
 hmac = "0.13"
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
-reqwest = { version = "0.12", default-features = false, features = ["json"] }
 
 [features]
 default = []

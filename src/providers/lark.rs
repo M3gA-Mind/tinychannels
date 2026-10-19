@@ -267,7 +267,9 @@ impl LarkChannel {
         self.http_client.clone()
     }
 
-    fn begin_listener(&self) -> Result<watch::Receiver<bool>, tinychannels_bus::channel::ChannelSendError> {
+    fn begin_listener(
+        &self,
+    ) -> Result<watch::Receiver<bool>, tinychannels_bus::channel::ChannelSendError> {
         let mut active = self
             .listener_cancel
             .lock()
