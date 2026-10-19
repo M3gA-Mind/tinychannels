@@ -137,7 +137,10 @@ async fn lark_host_voice_store_delivers_voice_without_file_repository() {
         } else if request.target == "/open-apis/im/v1/files" {
             (200, r#"{"code":0,"data":{"file_key":"voice_key"}}"#.into())
         } else if request.target.starts_with("/open-apis/im/v1/messages?") {
-            (200, r#"{"code":0,"data":{"message_id":"om-voice-only"}}"#.into())
+            (
+                200,
+                r#"{"code":0,"data":{"message_id":"om-voice-only"}}"#.into(),
+            )
         } else {
             panic!("unexpected Lark request: {}", request.target)
         }
@@ -167,11 +170,11 @@ async fn lark_host_voice_store_delivers_voice_without_file_repository() {
         ..Default::default()
     };
     let clients = FixtureHttpClients(fixture_client(&server));
-    let channel = crate::factory::build_long_tail_channel_with_host(&config, &host, &clients, "lark")
-        .expect("configured Lark adapter");
-    let capabilities = crate::providers::native::NativeProvider::declared_capabilities(
-        channel.as_ref(),
-    );
+    let channel =
+        crate::factory::build_long_tail_channel_with_host(&config, &host, &clients, "lark")
+            .expect("configured Lark adapter");
+    let capabilities =
+        crate::providers::native::NativeProvider::declared_capabilities(channel.as_ref());
     assert!(capabilities.voice_out.supported);
     assert!(capabilities.voice_in.supported);
 
@@ -301,7 +304,8 @@ async fn lark_voice_store_only_ingests_voice_without_file_repository() {
     let server = HttpsServer::start(|request| {
         if is_token_request(request) {
             token_ok("t-voice-in")
-        } else if request.target == "/open-apis/im/v1/messages/om-voice/resources/file-1?type=file" {
+        } else if request.target == "/open-apis/im/v1/messages/om-voice/resources/file-1?type=file"
+        {
             (200, b"voice attachment bytes".to_vec())
         } else {
             panic!("unexpected Lark request: {}", request.target)
