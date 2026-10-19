@@ -46,6 +46,31 @@ pub struct QQChannel {
     attachment_http_client: reqwest::Client,
     /// Host-scoped media and voice stores used by native typed sends.
     native: crate::providers::native::HostPorts,
+    /// Single-owner cancellation for the public typed gateway listener.
+    listener: std::sync::Mutex<Option<(Uuid, tokio::sync::watch::Sender<bool>)>>,
+}
+
+struct ListenerRegistration<'a> {
+    channel: &'a QQChannel,
+    id: Uuid,
+}
+
+impl Drop for ListenerRegistration<'_> {
+    fn drop(&mut self) {
+        let mut listener = self
+            .channel
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if listener.as_ref().is_some_and(|(id, _)| *id == self.id) {
+            *listener = None;
+        }
+    }
+}
+
+enum QQIngress<'a> {
+    Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
+    Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
 }
 
 impl QQChannel {
@@ -59,6 +84,7 @@ impl QQChannel {
             http_client: reqwest::Client::new(),
             attachment_http_client: no_redirect_client(),
             native: crate::providers::native::HostPorts::default(),
+            listener: std::sync::Mutex::new(None),
         }
     }
 
@@ -77,6 +103,7 @@ impl QQChannel {
             http_client,
             attachment_http_client: no_redirect_client(),
             native: crate::providers::native::HostPorts::default(),
+            listener: std::sync::Mutex::new(None),
         }
     }
 
@@ -243,6 +270,35 @@ impl QQChannel {
         dedup.insert(msg_id.to_string());
         false
     }
+
+    async fn has_duplicate(&self, msg_id: &str) -> bool {
+        !msg_id.is_empty() && self.dedup.read().await.contains(msg_id)
+    }
+
+    async fn mark_duplicate(&self, msg_id: &str) {
+        if msg_id.is_empty() {
+            return;
+        }
+        let mut dedup = self.dedup.write().await;
+        if dedup.len() >= DEDUP_CAPACITY {
+            let remove: Vec<String> = dedup.iter().take(DEDUP_CAPACITY / 2).cloned().collect();
+            for key in remove {
+                dedup.remove(&key);
+            }
+        }
+        dedup.insert(msg_id.to_owned());
+    }
+
+    fn begin_listener(&self) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
+        let mut listener = self.listener.lock().unwrap_or_else(|error| error.into_inner());
+        if listener.is_some() {
+            anyhow::bail!("QQ listener is already running");
+        }
+        let id = Uuid::new_v4();
+        let (cancel, receiver) = tokio::sync::watch::channel(false);
+        *listener = Some((id, cancel));
+        Ok((id, receiver))
+    }
 }
 
 #[async_trait]
@@ -310,6 +366,15 @@ impl Channel for QQChannel {
 
     #[allow(clippy::too_many_lines)]
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        self.listen_owned(QQIngress::Legacy(tx)).await
+    }
+
+    #[allow(clippy::too_many_lines)]
+    async fn listen_owned(&self, ingress: QQIngress<'_>) -> anyhow::Result<()> {
+        let legacy_tx = match &ingress {
+            QQIngress::Legacy(tx) => Some(tx),
+            QQIngress::Typed(_) => None,
+        };
         tracing::info!("QQ: authenticating...");
         let token = self.get_token().await?;
 
@@ -441,6 +506,22 @@ impl Channel for QQChannel {
                     match event_type {
                         "C2C_MESSAGE_CREATE" => {
                             let msg_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                            if let QQIngress::Typed(sink) = &ingress {
+                                if self.has_duplicate(msg_id).await {
+                                    continue;
+                                }
+                                let Some(envelope) = self
+                                    .inbound_envelope_for_listener("C2C_MESSAGE_CREATE", d)
+                                    .await
+                                else {
+                                    continue;
+                                };
+                                sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                                    .await
+                                    .map_err(|error| anyhow::anyhow!(error.message))?;
+                                self.mark_duplicate(msg_id).await;
+                                continue;
+                            }
                             if self.is_duplicate(msg_id).await {
                                 continue;
                             }
@@ -490,13 +571,31 @@ impl Channel for QQChannel {
                                 sender_name: None,
                             };
 
-                            if tx.send(channel_msg).await.is_err() {
-                                tracing::warn!("QQ: message channel closed");
-                                break;
+                            if let Some(tx) = legacy_tx {
+                                if tx.send(channel_msg).await.is_err() {
+                                    tracing::warn!("QQ: message channel closed");
+                                    break;
+                                }
                             }
                         }
                         "GROUP_AT_MESSAGE_CREATE" => {
                             let msg_id = d.get("id").and_then(|i| i.as_str()).unwrap_or("");
+                            if let QQIngress::Typed(sink) = &ingress {
+                                if self.has_duplicate(msg_id).await {
+                                    continue;
+                                }
+                                let Some(envelope) = self
+                                    .inbound_envelope_for_listener("GROUP_AT_MESSAGE_CREATE", d)
+                                    .await
+                                else {
+                                    continue;
+                                };
+                                sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                                    .await
+                                    .map_err(|error| anyhow::anyhow!(error.message))?;
+                                self.mark_duplicate(msg_id).await;
+                                continue;
+                            }
                             if self.is_duplicate(msg_id).await {
                                 continue;
                             }
@@ -545,9 +644,11 @@ impl Channel for QQChannel {
                                 sender_name: None,
                             };
 
-                            if tx.send(channel_msg).await.is_err() {
-                                tracing::warn!("QQ: message channel closed");
-                                break;
+                            if let Some(tx) = legacy_tx {
+                                if tx.send(channel_msg).await.is_err() {
+                                    tracing::warn!("QQ: message channel closed");
+                                    break;
+                                }
                             }
                         }
                         _ => {}

@@ -231,6 +231,46 @@ impl NativeProvider for QQChannel {
             }
         }
     }
+
+    async fn start_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        let (id, mut cancellation) = self.begin_listener().map_err(|error| ChannelSendError {
+            kind: SendErrorKind::Forbidden,
+            message: error.to_string(),
+            retryable: false,
+            ..Default::default()
+        })?;
+        let _registration = super::ListenerRegistration { channel: self, id };
+        tokio::select! {
+            biased;
+            _ = cancellation.changed() => Ok(()),
+            result = self.listen_owned(super::QQIngress::Typed(sink)) => {
+                result.map_err(|error| {
+                    tracing::debug!(%error, "QQ typed listener stopped");
+                    ChannelSendError {
+                        kind: SendErrorKind::Transient,
+                        message: "QQ listener stopped".into(),
+                        retryable: true,
+                        ..Default::default()
+                    }
+                })
+            }
+        }
+    }
+
+    async fn stop_listener(&self) -> Result<(), ChannelSendError> {
+        if let Some((_, cancellation)) = self
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            cancellation.send_replace(true);
+        }
+        Ok(())
+    }
 }
 
 impl QQChannel {
@@ -241,6 +281,23 @@ impl QQChannel {
         &self,
         event_type: &str,
         message: &serde_json::Value,
+    ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
+        self.inbound_envelope_with_mode(event_type, message, false).await
+    }
+
+    pub(crate) async fn inbound_envelope_for_listener(
+        &self,
+        event_type: &str,
+        message: &serde_json::Value,
+    ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
+        self.inbound_envelope_with_mode(event_type, message, true).await
+    }
+
+    async fn inbound_envelope_with_mode(
+        &self,
+        event_type: &str,
+        message: &serde_json::Value,
+        listener: bool,
     ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
         use crate::providers::native::inbound::{
             InboundFile, Ingest, Ingested, assemble, media_of,
@@ -292,7 +349,7 @@ impl QQChannel {
         };
         let mut ingested = Ingested::default();
         let mut downloaded_bytes = 0_u64;
-        if self.native.events.is_some()
+        if (listener || self.native.events.is_some())
             && self.native.media_repository.is_some()
             && let Some(attachments) = message
                 .get("attachments")
@@ -355,7 +412,9 @@ impl QQChannel {
         if parts.is_empty() {
             return None;
         }
-        self.native.mark_seen(format!("qq:{message_id}"));
+        if !listener {
+            self.native.mark_seen(format!("qq:{message_id}"));
+        }
         Some(tinychannels_bus::ChannelInboundEnvelope {
             channel: tinychannels_bus::ChannelRef {
                 id: "qq".into(),
