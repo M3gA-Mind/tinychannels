@@ -5536,7 +5536,11 @@ async fn configured_lark_webhook_delivers_scoped_provider_identity_through_facto
     let scope = configured_media_account_scope(instance, &config)
         .expect("configured Lark credentials define an account scope");
     let hooks = Arc::new(Hooks::default());
-    let provider_host = hooks.host(host.clone(), instance.into(), MediaScope::fixed(scope));
+    let provider_host = hooks.host(
+        host.clone(),
+        instance.into(),
+        MediaScope::fixed(Some(scope)),
+    );
     let launch = crate::native::build_native_v2(
         "lark",
         &config,
