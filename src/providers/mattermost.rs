@@ -27,6 +27,15 @@ pub struct MattermostChannel {
     voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
     transcriber: Option<Arc<dyn Transcriber>>,
     events: Option<Arc<dyn EventSink>>,
+    listener_cancel: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
+}
+
+struct AdmittedPost {
+    id: String,
+    user_id: String,
+    create_at: i64,
+    root_id: String,
+    content: String,
 }
 
 impl MattermostChannel {
@@ -73,6 +82,7 @@ impl MattermostChannel {
             voice_media_store: None,
             transcriber: None,
             events: None,
+            listener_cancel: Mutex::new(None),
         }
     }
 
@@ -149,6 +159,17 @@ impl MattermostChannel {
         channel_id: &str,
         message: &ChannelMessage,
     ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
+        self.inbound_envelope_from_text(post, channel_id, &message.content, false)
+            .await
+    }
+
+    async fn inbound_envelope_from_text(
+        &self,
+        post: &serde_json::Value,
+        channel_id: &str,
+        text: &str,
+        native_listener: bool,
+    ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
         let id = post.get("id")?.as_str()?.to_owned();
         let sender_id = post.get("user_id")?.as_str()?.to_owned();
         let timestamp = post.get("create_at")?.as_i64()?;
@@ -185,7 +206,7 @@ impl MattermostChannel {
             .flatten()
             .filter_map(serde_json::Value::as_str);
         for file_id in file_ids {
-            if self.media_repository.is_none() || self.events.is_none() {
+            if self.media_repository.is_none() || (!native_listener && self.events.is_none()) {
                 break;
             }
             let Some((mime, name, size)) = self.file_info(post, file_id).await else {
@@ -220,7 +241,7 @@ impl MattermostChannel {
                 )
                 .await;
         }
-        let parts = crate::providers::native::inbound::assemble(&message.content, None, ingested);
+        let parts = crate::providers::native::inbound::assemble(text, None, ingested);
         if parts.is_empty() {
             return None;
         }
@@ -238,7 +259,7 @@ impl MattermostChannel {
                 id: sender_id,
                 ..Default::default()
             },
-            text: message.content.clone(),
+            text: text.to_owned(),
             media: crate::providers::native::inbound::media_of(&parts),
             parts,
             ..Default::default()
@@ -318,6 +339,108 @@ impl MattermostChannel {
             bytes.extend_from_slice(&chunk);
         }
         (!bytes.is_empty()).then_some(bytes)
+    }
+
+    async fn listen_typed(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        cancellation: &mut tokio::sync::watch::Receiver<bool>,
+    ) -> std::result::Result<(), tinychannels_bus::channel::ChannelSendError> {
+        use tinychannels_bus::channel::{ChannelIngress, ChannelSendError, SendErrorKind};
+
+        let channel_id = self.channel_id.as_deref().ok_or_else(|| ChannelSendError {
+            kind: SendErrorKind::BadFormat,
+            message: "Mattermost channel_id required for listening".into(),
+            ..Default::default()
+        })?;
+        if *cancellation.borrow() {
+            return Ok(());
+        }
+        let (bot_user_id, bot_username) = tokio::select! {
+            _ = cancellation.changed() => return Ok(()),
+            identity = self.get_bot_identity() => identity,
+        };
+        #[allow(clippy::cast_possible_truncation)]
+        let mut last_create_at = (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()) as i64;
+
+        loop {
+            tokio::select! {
+                _ = cancellation.changed() => return Ok(()),
+                _ = tokio::time::sleep(std::time::Duration::from_secs(3)) => {}
+            }
+            let response = tokio::select! {
+                _ = cancellation.changed() => return Ok(()),
+                response = self.http_client()
+                    .get(format!("{}/api/v4/channels/{channel_id}/posts", self.base_url))
+                    .bearer_auth(&self.bot_token)
+                    .query(&[("since", last_create_at.to_string())])
+                    .send() => response,
+            };
+            let response = match response {
+                Ok(response) => response,
+                Err(error) => {
+                    tracing::warn!("Mattermost poll error: {error}");
+                    continue;
+                }
+            };
+            let data = tokio::select! {
+                _ = cancellation.changed() => return Ok(()),
+                data = response.json::<serde_json::Value>() => data,
+            };
+            let data = match data {
+                Ok(data) => data,
+                Err(error) => {
+                    tracing::warn!("Mattermost parse error: {error}");
+                    continue;
+                }
+            };
+            let Some(posts) = data.get("posts").and_then(serde_json::Value::as_object) else {
+                continue;
+            };
+            let mut post_list: Vec<_> = posts.values().collect();
+            post_list.sort_by_key(|post| {
+                post.get("create_at")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(0)
+            });
+            for post in post_list {
+                if *cancellation.borrow() {
+                    return Ok(());
+                }
+                let cursor = last_create_at;
+                let create_at = post
+                    .get("create_at")
+                    .and_then(serde_json::Value::as_i64)
+                    .unwrap_or(last_create_at);
+                let Some(admitted) = self.admitted_post(post, &bot_user_id, &bot_username, cursor)
+                else {
+                    last_create_at = last_create_at.max(create_at);
+                    continue;
+                };
+                last_create_at = last_create_at.max(create_at);
+                let envelope = tokio::select! {
+                    _ = cancellation.changed() => return Ok(()),
+                    envelope = self.inbound_envelope_from_text(
+                        post,
+                        channel_id,
+                        &admitted.content,
+                        true,
+                    ) => envelope,
+                };
+                let Some(envelope) = envelope else {
+                    continue;
+                };
+                tokio::select! {
+                    _ = cancellation.changed() => return Ok(()),
+                    result = sink.push(ChannelIngress::Inbound(envelope)) => {
+                        result?;
+                    }
+                }
+            }
+        }
     }
 
     /// Post one message and return the id Mattermost assigned to it.
@@ -562,12 +685,54 @@ impl MattermostChannel {
         last_create_at: i64,
         channel_id: &str,
     ) -> Option<ChannelMessage> {
-        let id = post.get("id").and_then(|i| i.as_str()).unwrap_or("");
-        let user_id = post.get("user_id").and_then(|u| u.as_str()).unwrap_or("");
-        let text = post.get("message").and_then(|m| m.as_str()).unwrap_or("");
-        let create_at = post.get("create_at").and_then(|c| c.as_i64()).unwrap_or(0);
-        let root_id = post.get("root_id").and_then(|r| r.as_str()).unwrap_or("");
+        let admitted = self.admitted_post(post, bot_user_id, bot_username, last_create_at)?;
 
+        // Reply routing depends on thread_replies config:
+        //   - Existing thread (root_id set): always stay in the thread.
+        //   - Top-level post + thread_replies=true: thread on the original post.
+        //   - Top-level post + thread_replies=false: reply at channel level.
+        let reply_target = if !admitted.root_id.is_empty() {
+            format!("{}:{}", channel_id, admitted.root_id)
+        } else if self.thread_replies {
+            format!("{}:{}", channel_id, admitted.id)
+        } else {
+            channel_id.to_string()
+        };
+
+        Some(ChannelMessage {
+            id: format!("mattermost_{}", admitted.id),
+            sender: admitted.user_id,
+            reply_target,
+            content: admitted.content,
+            channel: "mattermost".to_string(),
+            #[allow(clippy::cast_sign_loss)]
+            timestamp: (admitted.create_at / 1000) as u64,
+            topic_id: None,
+            reply_to_id: None,
+            thread_ts: None,
+            sender_name: None,
+        })
+    }
+
+    fn admitted_post(
+        &self,
+        post: &serde_json::Value,
+        bot_user_id: &str,
+        bot_username: &str,
+        last_create_at: i64,
+    ) -> Option<AdmittedPost> {
+        let id = post.get("id")?.as_str()?.to_owned();
+        let user_id = post.get("user_id")?.as_str()?.to_owned();
+        let text = post
+            .get("message")
+            .and_then(|message| message.as_str())
+            .unwrap_or("");
+        let create_at = post.get("create_at")?.as_i64()?;
+        let root_id = post
+            .get("root_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_owned();
         let has_files = post
             .get("file_ids")
             .and_then(serde_json::Value::as_array)
@@ -576,44 +741,21 @@ impl MattermostChannel {
         {
             return None;
         }
-
-        if !self.is_user_allowed(user_id) {
+        if !self.is_user_allowed(&user_id) {
             tracing::warn!("Mattermost: ignoring message from unauthorized user: {user_id}");
             return None;
         }
-
-        // mention_only filtering: skip messages that don't @-mention the bot.
         let content = if self.mention_only {
-            let normalized = normalize_mattermost_content(text, bot_user_id, bot_username, post);
-            normalized?
+            normalize_mattermost_content(text, bot_user_id, bot_username, post)?
         } else {
-            text.to_string()
+            text.to_owned()
         };
-
-        // Reply routing depends on thread_replies config:
-        //   - Existing thread (root_id set): always stay in the thread.
-        //   - Top-level post + thread_replies=true: thread on the original post.
-        //   - Top-level post + thread_replies=false: reply at channel level.
-        let reply_target = if !root_id.is_empty() {
-            format!("{}:{}", channel_id, root_id)
-        } else if self.thread_replies {
-            format!("{}:{}", channel_id, id)
-        } else {
-            channel_id.to_string()
-        };
-
-        Some(ChannelMessage {
-            id: format!("mattermost_{id}"),
-            sender: user_id.to_string(),
-            reply_target,
+        Some(AdmittedPost {
+            id,
+            user_id,
+            create_at,
+            root_id,
             content,
-            channel: "mattermost".to_string(),
-            #[allow(clippy::cast_sign_loss)]
-            timestamp: (create_at / 1000) as u64,
-            topic_id: None,
-            reply_to_id: None,
-            thread_ts: None,
-            sender_name: None,
         })
     }
 }
@@ -805,6 +947,39 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
 
     fn typing_supported(&self) -> bool {
         true
+    }
+
+    async fn start_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> std::result::Result<(), tinychannels_bus::channel::ChannelSendError> {
+        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
+
+        let (cancel, mut cancellation) = tokio::sync::watch::channel(false);
+        {
+            let mut active = self.listener_cancel.lock();
+            if active.is_some() {
+                return Err(ChannelSendError {
+                    kind: SendErrorKind::Transient,
+                    message: "Mattermost listener is already running".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            *active = Some(cancel);
+        }
+        let result = self.listen_typed(sink, &mut cancellation).await;
+        self.listener_cancel.lock().take();
+        result
+    }
+
+    async fn stop_listener(
+        &self,
+    ) -> std::result::Result<(), tinychannels_bus::channel::ChannelSendError> {
+        if let Some(cancel) = self.listener_cancel.lock().as_ref() {
+            cancel.send_replace(true);
+        }
+        Ok(())
     }
 
     async fn send_reporting_ids(&self, message: &SendMessage) -> Result<Vec<String>> {
