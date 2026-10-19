@@ -64,6 +64,7 @@ impl NativeProvider for LarkChannel {
         steps: &mut [Step],
     ) -> Result<(), ChannelSendError> {
         for step in steps {
+            let is_voice = matches!(step, Step::Voice(_));
             let file = match step {
                 Step::Text(_) => continue,
                 Step::File(file) if file.kind == MediaKind::Image => {
@@ -99,7 +100,7 @@ impl NativeProvider for LarkChannel {
                     "Lark video type",
                 ));
             }
-            if matches!(step, Step::Voice(_)) || file.kind == MediaKind::Audio {
+            if is_voice || file.kind == MediaKind::Audio {
                 let (bytes, name) = self.opus_audio(file).await?;
                 file.bytes = bytes;
                 file.name = name;
