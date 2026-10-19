@@ -30,6 +30,184 @@ fn host_voice_store_is_retained_for_native_inbound_services() {
     );
 }
 
+#[tokio::test]
+async fn downloadable_sound_is_stored_and_published_as_typed_voice() {
+    use crate::providers::http_test_support::HttpsServer;
+    use crate::providers::native::fixtures::{RecordingEvents, StubVoice};
+    use crate::providers::yuanbao::inbound::PipelineCtx;
+    use crate::providers::yuanbao::types::{
+        InboundMessage, MessageKind, MsgBodyElement, MsgContent, Source,
+    };
+    use base64::Engine as _;
+    use tinychannels_bus::{ChannelIngress, ContentPart};
+    let server = HttpsServer::start_with_bytes(
+        |request| {
+            assert_eq!(request.method, "GET");
+            assert_eq!(request.target, "/voice.ogg");
+            (
+                200,
+                include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+            )
+        },
+        "audio/ogg",
+    )
+    .await;
+    let voice = Arc::new(StubVoice::default());
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = YuanbaoChannel::new(good_cfg())
+        .unwrap()
+        .with_voice_media_store(voice.clone())
+        .with_events(events.clone())
+        .with_voice_http_client(server.client.clone());
+    let ctx = PipelineCtx {
+        msg: InboundMessage {
+            msg_id: "voice-message-9".into(),
+            msg_time: 1_700_000_000,
+            from_account: "alice".into(),
+            sender_nickname: "Alice".into(),
+            msg_body: vec![MsgBodyElement {
+                msg_type: "TIMSoundElem".into(),
+                msg_content: MsgContent {
+                    sound: Some("sound-id".into()),
+                    url: Some("https://api.dingtalk.com/voice.ogg".into()),
+                    file_name: Some("note.ogg".into()),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        },
+        source: Source {
+            from_account: "alice".into(),
+            sender_nickname: "Alice".into(),
+            ..Default::default()
+        },
+        text: String::new(),
+        image_urls: Vec::new(),
+        is_at_bot: false,
+        is_owner_command: false,
+        kind: MessageKind::Voice,
+    };
+
+    assert!(channel.publish_voice(&ctx).await);
+    assert_eq!(server.requests.lock().unwrap().len(), 1);
+    let stored = voice.stored.lock().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].mime_type, "audio/ogg");
+    assert_eq!(stored[0].file_name.as_deref(), Some("note.ogg"));
+    assert_eq!(stored[0].scope.turn_id, "voice-message-9");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&stored[0].audio_base64)
+            .unwrap(),
+        include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg")
+    );
+    drop(stored);
+    let ingress = events.inbound();
+    assert_eq!(ingress.len(), 1);
+    assert_eq!(ingress[0].message_id, "voice-message-9");
+    assert!(matches!(
+        ingress[0].parts.as_slice(),
+        [ContentPart::VoiceNote { .. }]
+    ));
+    assert!(matches!(
+        events.ingress.lock().unwrap().as_slice(),
+        [ChannelIngress::Inbound(_)]
+    ));
+}
+
+#[tokio::test]
+async fn failed_voice_ingress_releases_dedupe_for_provider_redelivery() {
+    use crate::host::EventSink;
+    use crate::providers::http_test_support::HttpsServer;
+    use crate::providers::native::fixtures::StubVoice;
+    use serde_json::{Value, json};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tinychannels_bus::ChannelIngress;
+
+    #[derive(Default)]
+    struct RetrySink {
+        calls: AtomicUsize,
+        accepted: std::sync::Mutex<Vec<ChannelIngress>>,
+    }
+
+    #[async_trait::async_trait]
+    impl EventSink for RetrySink {
+        async fn publish(&self, _domain: &str, _kind: &str, _payload: Value) -> anyhow::Result<()> {
+            Ok(())
+        }
+
+        async fn publish_ingress(&self, ingress: ChannelIngress) -> anyhow::Result<bool> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call == 0 {
+                return Ok(false);
+            }
+            self.accepted.lock().unwrap().push(ingress);
+            Ok(true)
+        }
+    }
+
+    let server = HttpsServer::start_with_bytes(
+        |request| {
+            assert_eq!(request.method, "GET");
+            assert_eq!(request.target, "/voice.ogg");
+            (
+                200,
+                include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+            )
+        },
+        "audio/ogg",
+    )
+    .await;
+    let voice = Arc::new(StubVoice::default());
+    let events = Arc::new(RetrySink::default());
+    let mut config = good_cfg();
+    config.dm_access = "open".into();
+    let channel = YuanbaoChannel::new(config)
+        .unwrap()
+        .with_voice_media_store(voice.clone())
+        .with_events(events.clone())
+        .with_voice_http_client(server.client.clone());
+    let body = json!({
+        "from_account":"alice",
+        "to_account":"bot",
+        "msg_id":"voice-retry-12",
+        "msg_time":1700000000,
+        "msg_body":[{"msg_type":"TIMSoundElem","msg_content":{
+            "sound":"voice-id","url":"https://api.dingtalk.com/voice.ogg","file_name":"note.ogg"
+        }}]
+    })
+    .to_string()
+    .into_bytes();
+    let (tx, mut legacy_rx) = tokio::sync::mpsc::channel(1);
+
+    for _ in 0..2 {
+        channel
+            .dispatch_push(
+                crate::providers::yuanbao::types::ConnFrame {
+                    cmd_type: 2,
+                    cmd: "inbound_message".into(),
+                    module: String::new(),
+                    seq_no: 0,
+                    msg_id: String::new(),
+                    need_ack: false,
+                    status: 0,
+                    data: body.clone(),
+                },
+                &tx,
+            )
+            .await;
+    }
+
+    assert_eq!(events.calls.load(Ordering::SeqCst), 2);
+    assert_eq!(events.accepted.lock().unwrap().len(), 1);
+    assert_eq!(server.requests.lock().unwrap().len(), 2);
+    assert_eq!(voice.stored.lock().unwrap().len(), 2);
+    assert!(
+        legacy_rx.try_recv().is_err(),
+        "voice URLs must not fall back to model-visible text"
+    );
+}
+
 #[test]
 fn invalid_config_rejected() {
     let mut c = YuanbaoConfig::default();

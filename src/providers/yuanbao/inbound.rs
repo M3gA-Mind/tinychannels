@@ -147,6 +147,11 @@ impl DedupCache {
             }
         }
     }
+
+    fn remove(&mut self, id: &str) {
+        self.index.remove(id);
+        self.order.retain(|(cached, _)| cached != id);
+    }
 }
 
 // ───── Individual inbound stages ────────────────────────────────────
@@ -308,7 +313,18 @@ impl Middleware for PlaceholderFilterMw {
     async fn process(&self, _s: &PipelineState, c: &mut PipelineCtx) -> MwResult {
         let trimmed = c.text.trim();
         let is_placeholder = trimmed == "[image]" || trimmed == "[file]" || trimmed == "[图片]";
-        if (trimmed.is_empty() || is_placeholder) && c.image_urls.is_empty() {
+        let has_downloadable_sound = c.msg.msg_body.iter().any(|element| {
+            element.msg_type == tim::SOUND
+                && element
+                    .msg_content
+                    .url
+                    .as_deref()
+                    .is_some_and(|url| !url.trim().is_empty())
+        });
+        if (trimmed.is_empty() || is_placeholder)
+            && c.image_urls.is_empty()
+            && !has_downloadable_sound
+        {
             return MwResult::Skip("placeholder_filter");
         }
         MwResult::Continue
@@ -460,6 +476,14 @@ impl InboundPipeline {
             Box::new(MediaResolveMw),
         ];
         Self { state, stages }
+    }
+
+    /// Release an inbound id after native media delivery fails, allowing a
+    /// provider redelivery to retry while preserving dedupe during processing.
+    pub async fn release_message(&self, message_id: &str) {
+        if !message_id.is_empty() {
+            self.state.dedup.write().await.remove(message_id);
+        }
     }
 
     /// Decode a biz push body, run it through every stage, return the outcome.

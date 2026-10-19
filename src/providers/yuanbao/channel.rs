@@ -14,7 +14,7 @@ use tokio::sync::{Mutex as TokioMutex, mpsc, watch};
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 
-use crate::host::{MediaRepository, VoiceMediaStore};
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::native::HostPorts as NativeState;
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 
@@ -69,6 +69,7 @@ pub struct YuanbaoChannel {
     recipient_aliases: TokioMutex<HashMap<String, String>>,
     /// Host-scoped services used by the native typed-send adapter.
     native: NativeState,
+    voice_http: reqwest::Client,
 }
 
 impl YuanbaoChannel {
@@ -114,6 +115,7 @@ impl YuanbaoChannel {
             heartbeat_tasks: TokioMutex::new(HashMap::new()),
             recipient_aliases: TokioMutex::new(HashMap::new()),
             native: NativeState::default(),
+            voice_http: no_redirect_client(),
         })
     }
 
@@ -123,10 +125,28 @@ impl YuanbaoChannel {
         self
     }
 
-    /// Retain the host voice store for future inbound voice support. Yuanbao
-    /// currently has no verified outbound audio element.
+    /// Enable URL-backed inbound TIMSound storage through the host voice port.
+    /// Yuanbao still has no verified outbound audio element.
     pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
         self.native.voice_media_store = Some(store);
+        self
+    }
+
+    /// Publish native inbound events through the host's ordered ingress port.
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.native.events = Some(events);
+        self
+    }
+
+    /// Attach host speech-to-text for voice notes without a transcript.
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.native.transcriber = Some(transcriber);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_voice_http_client(mut self, client: reqwest::Client) -> Self {
+        self.voice_http = client;
         self
     }
 
@@ -411,6 +431,25 @@ impl YuanbaoChannel {
         let outcome = self.pipeline.process(biz_body).await;
         match outcome {
             PipelineOutcome::Dispatch(ctx) => {
+                if self.publish_voice(&ctx).await {
+                    return;
+                }
+                if ctx.kind == super::types::MessageKind::Voice {
+                    self.pipeline.release_message(&ctx.msg.msg_id).await;
+                    warn!(
+                        message_id = %ctx.msg.msg_id,
+                        "[yuanbao] voice event could not be stored and published through the typed host path"
+                    );
+                    return;
+                }
+                if ctx.kind == super::types::MessageKind::Voice {
+                    self.pipeline.release_message(&ctx.msg.msg_id).await;
+                    warn!(
+                        message_id = %ctx.msg.msg_id,
+                        "[yuanbao] voice event could not be stored and published through the typed host path"
+                    );
+                    return;
+                }
                 // Shorten ids at the channel boundary so the composite thread_id
                 // derived downstream (channel:yuanbao_<sender>_<reply_target>)
                 // stays under filesystem NAME_MAX once hex-encoded for the
@@ -463,6 +502,154 @@ impl YuanbaoChannel {
             }
         }
     }
+
+    async fn publish_voice(&self, ctx: &super::inbound::PipelineCtx) -> bool {
+        use crate::providers::native::inbound::{
+            InboundFile, Ingest, Ingested, assemble, media_of, publish,
+        };
+        use tinychannels_bus::{ChannelInboundEnvelope, ChannelRef, ConversationRef, SenderRef};
+
+        let (events, store) = match (&self.native.events, &self.native.voice_media_store) {
+            (Some(events), Some(store)) => (events, store),
+            _ => return false,
+        };
+        let Some(sound) = ctx
+            .msg
+            .msg_body
+            .iter()
+            .find(|element| element.msg_type == super::proto_constants::tim::SOUND)
+        else {
+            return false;
+        };
+        let Some(url) = sound
+            .msg_content
+            .url
+            .as_deref()
+            .filter(|url| !url.trim().is_empty())
+        else {
+            return false;
+        };
+        let Ok(url) = reqwest::Url::parse(url) else {
+            return false;
+        };
+        if url.scheme() != "https"
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.port().is_some_and(|port| port != 443)
+        {
+            tracing::warn!("[yuanbao] rejected unsafe voice media URL");
+            return false;
+        }
+        let max_bytes = u64::from(self.config.max_media_mb).saturating_mul(1024 * 1024);
+        let Ok(mut response) = self.voice_http.get(url).send().await else {
+            return false;
+        };
+        if !response.status().is_success()
+            || response
+                .content_length()
+                .is_some_and(|length| length > max_bytes)
+        {
+            return false;
+        }
+        let mime = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        if !mime.starts_with("audio/") {
+            return false;
+        }
+        let mut bytes = Vec::new();
+        loop {
+            match response.chunk().await {
+                Ok(Some(chunk)) if bytes.len() as u64 + chunk.len() as u64 <= max_bytes => {
+                    bytes.extend_from_slice(&chunk);
+                }
+                Ok(Some(_)) | Err(_) => return false,
+                Ok(None) => break,
+            }
+        }
+        if bytes.is_empty() {
+            return false;
+        }
+        let conversation = ConversationRef {
+            kind: if ctx.source.is_group {
+                tinychannels_bus::channel::ConversationKind::Group
+            } else {
+                tinychannels_bus::channel::ConversationKind::Dm
+            },
+            id: ctx.source.reply_target(),
+            ..Default::default()
+        };
+        let channel = ChannelRef {
+            id: "yuanbao".into(),
+            account_id: Some(self.config.bot_id.clone()),
+        };
+        let mut ingested = Ingested::default();
+        Ingest {
+            provider: "yuanbao",
+            channel: channel.clone(),
+            repository: self.native.media_repository.as_ref(),
+            voice_store: Some(store),
+            transcriber: self.native.transcriber.as_ref(),
+            file_bytes: max_bytes,
+            voice_bytes: max_bytes,
+        }
+        .add(
+            &mut ingested,
+            &conversation,
+            &ctx.msg.msg_id,
+            InboundFile {
+                bytes,
+                mime,
+                name: sound.msg_content.file_name.clone(),
+                duration_ms: None,
+                voice: true,
+                dedupe_key: format!("{}:voice", ctx.msg.msg_id),
+                transcript: None,
+            },
+        )
+        .await;
+        let parts = assemble(&ctx.text, None, ingested);
+        if !parts
+            .iter()
+            .any(|part| matches!(part, tinychannels_bus::ContentPart::VoiceNote { .. }))
+        {
+            return false;
+        }
+        let envelope = ChannelInboundEnvelope {
+            channel,
+            message_id: ctx.msg.msg_id.clone(),
+            timestamp_unix_ms: Some(u64::from(ctx.msg.msg_time) * 1000),
+            conversation,
+            sender: SenderRef {
+                id: ctx.msg.from_account.clone(),
+                name: Some(ctx.msg.sender_nickname.clone()),
+                ..Default::default()
+            },
+            text: ctx.text.clone(),
+            media: media_of(&parts),
+            parts,
+            raw: Some(
+                serde_json::json!({"providerMessageId": ctx.msg.msg_id, "messageType": "TIMSoundElem"}),
+            ),
+            ..Default::default()
+        };
+        publish("yuanbao", Some(events), envelope).await
+    }
+}
+
+fn no_redirect_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(Duration::from_secs(30))
+        .build()
+        .expect("building the Yuanbao voice HTTP client should succeed")
 }
 
 impl Drop for YuanbaoChannel {

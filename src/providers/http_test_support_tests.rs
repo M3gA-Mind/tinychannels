@@ -68,6 +68,7 @@ impl HttpsServer {
         for host in [
             "slack.com",
             "api.dingtalk.com",
+            "oapi.dingtalk.com",
             "bots.qq.com",
             "api.sgroup.qq.com",
         ] {
