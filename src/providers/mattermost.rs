@@ -364,8 +364,8 @@ impl MattermostChannel {
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         cancellation: &mut tokio::sync::watch::Receiver<bool>,
     ) -> std::result::Result<(), tinychannels_bus::channel::ChannelSendError> {
-        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
         use tinychannels_bus::ChannelIngress;
+        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
 
         let channel_id = self.channel_id.as_deref().ok_or_else(|| ChannelSendError {
             kind: SendErrorKind::BadFormat,
