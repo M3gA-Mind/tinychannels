@@ -637,22 +637,31 @@ impl YuanbaoChannel {
     }
 
     async fn publish_voice(&self, ctx: &super::inbound::PipelineCtx) -> bool {
-        use crate::providers::native::inbound::{
-            InboundFile, Ingest, Ingested, assemble, media_of, publish,
+        use crate::providers::native::inbound::publish;
+        let Some(events) = self.native.events.as_ref() else {
+            return false;
         };
+        let Some(envelope) = self.voice_envelope(ctx).await else {
+            return false;
+        };
+        publish("yuanbao", Some(events), envelope).await
+    }
+
+    async fn voice_envelope(
+        &self,
+        ctx: &super::inbound::PipelineCtx,
+    ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
+        use crate::providers::native::inbound::{InboundFile, Ingest, Ingested, assemble, media_of};
         use tinychannels_bus::{ChannelInboundEnvelope, ChannelRef, ConversationRef, SenderRef};
 
-        let (events, store) = match (&self.native.events, &self.native.voice_media_store) {
-            (Some(events), Some(store)) => (events, store),
-            _ => return false,
-        };
+        let store = self.native.voice_media_store.as_ref()?;
         let Some(sound) = ctx
             .msg
             .msg_body
             .iter()
             .find(|element| element.msg_type == super::proto_constants::tim::SOUND)
         else {
-            return false;
+            return None;
         };
         let Some(url) = sound
             .msg_content
@@ -660,10 +669,10 @@ impl YuanbaoChannel {
             .as_deref()
             .filter(|url| !url.trim().is_empty())
         else {
-            return false;
+            return None;
         };
         let Ok(url) = reqwest::Url::parse(url) else {
-            return false;
+            return None;
         };
         if url.scheme() != "https"
             || !url.username().is_empty()
@@ -671,18 +680,18 @@ impl YuanbaoChannel {
             || url.port().is_some_and(|port| port != 443)
         {
             tracing::warn!("[yuanbao] rejected unsafe voice media URL");
-            return false;
+            return None;
         }
         let max_bytes = u64::from(self.config.max_media_mb).saturating_mul(1024 * 1024);
         let Ok(mut response) = self.voice_http.get(url).send().await else {
-            return false;
+            return None;
         };
         if !response.status().is_success()
             || response
                 .content_length()
                 .is_some_and(|length| length > max_bytes)
         {
-            return false;
+            return None;
         }
         let mime = response
             .headers()
@@ -695,7 +704,7 @@ impl YuanbaoChannel {
             .trim()
             .to_ascii_lowercase();
         if !mime.starts_with("audio/") {
-            return false;
+            return None;
         }
         let mut bytes = Vec::new();
         loop {
@@ -703,12 +712,12 @@ impl YuanbaoChannel {
                 Ok(Some(chunk)) if bytes.len() as u64 + chunk.len() as u64 <= max_bytes => {
                     bytes.extend_from_slice(&chunk);
                 }
-                Ok(Some(_)) | Err(_) => return false,
+                Ok(Some(_)) | Err(_) => return None,
                 Ok(None) => break,
             }
         }
         if bytes.is_empty() {
-            return false;
+            return None;
         }
         let conversation = ConversationRef {
             kind: if ctx.source.is_group {
@@ -753,9 +762,9 @@ impl YuanbaoChannel {
             .iter()
             .any(|part| matches!(part, tinychannels_bus::ContentPart::VoiceNote { .. }))
         {
-            return false;
+            return None;
         }
-        let envelope = ChannelInboundEnvelope {
+        Some(ChannelInboundEnvelope {
             channel,
             message_id: ctx.msg.msg_id.clone(),
             timestamp_unix_ms: Some(u64::from(ctx.msg.msg_time) * 1000),
@@ -772,8 +781,7 @@ impl YuanbaoChannel {
                 serde_json::json!({"providerMessageId": ctx.msg.msg_id, "messageType": "TIMSoundElem"}),
             ),
             ..Default::default()
-        };
-        publish("yuanbao", Some(events), envelope).await
+        })
     }
 }
 
