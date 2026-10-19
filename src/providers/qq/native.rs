@@ -362,9 +362,7 @@ impl QQChannel {
                 account_id: None,
             },
             message_id: message_id.clone(),
-            timestamp_unix_ms: message
-                .get("timestamp")
-                .and_then(timestamp_unix_ms),
+            timestamp_unix_ms: message.get("timestamp").and_then(timestamp_unix_ms),
             conversation,
             sender: tinychannels_bus::SenderRef {
                 id: sender_id,

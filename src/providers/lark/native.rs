@@ -96,9 +96,7 @@ impl NativeProvider for LarkChannel {
                 return Err(known_unsent("Lark file exceeds the 30 MiB limit"));
             }
             if file.kind == MediaKind::Video && file.mime != "video/mp4" {
-                return Err(crate::providers::native::unsupported(
-                    "Lark video type",
-                ));
+                return Err(crate::providers::native::unsupported("Lark video type"));
             }
             if is_voice || file.kind == MediaKind::Audio {
                 let (bytes, name) = self.opus_audio(file).await?;
