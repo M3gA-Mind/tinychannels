@@ -109,6 +109,92 @@ async fn recv(rx: &mut mpsc::Receiver<ChannelMessage>) -> ChannelMessage {
         .expect("listener dropped its sender")
 }
 
+struct InboundSink(mpsc::UnboundedSender<tinychannels_bus::ChannelIngress>);
+
+#[async_trait::async_trait]
+impl crate::channel::ChannelInboundSink for InboundSink {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.0
+            .send(ingress)
+            .map_err(|_| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Transient,
+                message: "test sink closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+    }
+}
+
+#[tokio::test]
+async fn public_adapter_start_owns_typed_listener_until_stop_joins_it() {
+    let (listener, port) = bind().await;
+    let acceptor = acceptor(false);
+    let channel = Arc::new(IrcChannel::new(IrcChannelConfig {
+        channels: vec!["#ops".into()],
+        allowed_users: vec!["alice".into()],
+        ..config(port)
+    }));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let start = tokio::spawn({
+        let channel = channel.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+
+    // `start` owns the listener for its lifetime. The current adapter macro
+    // returns immediately, so this assertion is an authentic public-surface
+    // regression before any implementation change.
+    tokio::task::yield_now().await;
+    assert!(
+        !start.is_finished(),
+        "start must keep the IRC listener running"
+    );
+
+    let mut peer = Peer::accept(&listener, &acceptor).await;
+    peer.expect("NICK bot").await;
+    peer.expect("USER botuser 0 * :OpenHuman").await;
+    peer.say(":srv 001 bot :Welcome").await;
+    peer.expect("JOIN #ops").await;
+
+    peer.say(":mallory!m@host PRIVMSG #ops :denied").await;
+    peer.say(":alice!a@host PRIVMSG #ops :hello native listener")
+        .await;
+    let ingress = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("public start should publish admitted IRC messages")
+        .expect("public start should keep the supplied sink connected");
+    let tinychannels_bus::ChannelIngress::Inbound(envelope) = ingress else {
+        panic!("IRC message should use the inbound envelope route");
+    };
+    assert_eq!(envelope.channel.id, "irc");
+    assert_eq!(
+        envelope.conversation.kind,
+        tinychannels_bus::ConversationKind::Channel
+    );
+    assert_eq!(envelope.conversation.id, "#ops");
+    assert_eq!(envelope.sender.id, "alice");
+    assert!(envelope.message_id.starts_with("irc_"));
+    assert!(envelope.text.contains("hello native listener"));
+    assert!(
+        rx.try_recv().is_err(),
+        "denied senders must not reach the sink"
+    );
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, start)
+        .await
+        .expect("stop must join the public listener")
+        .expect("listener task must not panic")
+        .expect("listener must stop cleanly");
+    let final_line = peer.next_line().await;
+    assert!(final_line.is_empty() || final_line.starts_with("QUIT "));
+}
+
 #[tokio::test]
 async fn listen_registers_authenticates_and_forwards_allowed_privmsgs() {
     let (listener, port) = bind().await;
