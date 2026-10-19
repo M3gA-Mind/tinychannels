@@ -130,6 +130,79 @@ async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request(
 }
 
 #[tokio::test]
+async fn oversized_lark_image_is_a_non_retryable_preflight_error() {
+    use crate::providers::native::fixtures::{StubMedia, stored_media};
+    use tinychannels_bus::{
+        ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
+    };
+
+    let server = HttpsServer::start(|request| {
+        if is_token_request(request) {
+            token_ok("t-oversize")
+        } else if request.target.starts_with("/open-apis/im/v1/messages?") {
+            (
+                200,
+                r#"{"code":0,"data":{"message_id":"om-text-before-image"}}"#.into(),
+            )
+        } else {
+            panic!(
+                "oversized image must not make a request: {}",
+                request.target
+            )
+        }
+    })
+    .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(
+        MediaKind::Image,
+        "image/png",
+        &vec![0; 10 * 1024 * 1024 + 1],
+    ));
+    let channel = channel_with(&server, true).with_media_repository(media);
+    let message = ChannelOutboundMessage {
+        channel_id: "lark".into(),
+        conversation_id: "oc_chat_1".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-oversize-image".into()),
+        idempotency_key: "oversize-image".into(),
+        parts: vec![
+            OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "text must wait for attachment validation".into(),
+                    markdown_dialect: None,
+                },
+            },
+            OutboundContentPart::Content {
+                part: ContentPart::Image {
+                    media: MediaReference {
+                        opaque_id: Some("oversize-image".into()),
+                        kind: MediaKind::Image,
+                        content_type: Some("image/png".into()),
+                        ..Default::default()
+                    },
+                    caption: None,
+                    alt_text: None,
+                },
+            },
+        ],
+    };
+
+    let error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::BadFormat
+    );
+    assert!(!error.retryable && !error.sent_before_error);
+    assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn lark_host_voice_store_delivers_voice_without_file_repository() {
     let server = HttpsServer::start(|request| {
         if is_token_request(request) {
