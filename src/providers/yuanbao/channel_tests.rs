@@ -793,6 +793,97 @@ async fn public_adapter_start_delivers_admitted_deduplicated_pushes_and_restarts
 }
 
 #[tokio::test]
+async fn aborted_start_keeps_listener_owned_until_connection_shutdown_joins() {
+    use crate::channel::{ChannelAdapter, SendErrorKind};
+    use crate::providers::yuanbao::connection::test_support::{MockGateway, gateway_config};
+
+    let gateway = MockGateway::bind().await;
+    let channel = Arc::new(YuanbaoChannel::new(gateway_config(&gateway.url)).unwrap());
+    let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(PublicAdapterSink(events));
+
+    let first_start = {
+        let channel = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        tokio::spawn(async move { channel.start(sink.as_ref()).await })
+    };
+    let _first_session = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        gateway.accept_authed("abort-first"),
+    )
+    .await
+    .expect("the first listener should authenticate with the local gateway");
+
+    // Hold the connection's writer lock so its child task cannot finish
+    // shutdown yet. Aborting the future awaiting start must signal cancellation
+    // without releasing the listener slot before that child has actually
+    // stopped.
+    let sender_guard = channel.connection.hold_sender_for_test().await;
+    first_start.abort();
+    let aborted = tokio::time::timeout(std::time::Duration::from_secs(3), first_start)
+        .await
+        .expect("aborting the start future should complete promptly")
+        .expect_err("the first start task should be cancelled");
+    assert!(aborted.is_cancelled());
+
+    let duplicate_start = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        channel.start(sink.as_ref()),
+    )
+    .await
+    .expect("a second start should reject promptly while the old connection owns the slot")
+    .expect_err("the listener must remain single-owner until old shutdown completes");
+    assert_eq!(duplicate_start.kind, SendErrorKind::Transient);
+    assert!(duplicate_start.retryable);
+
+    drop(sender_guard);
+    tokio::time::timeout(std::time::Duration::from_secs(4), async {
+        loop {
+            if channel
+                .listener
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .is_none()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("the cancelled connection should release its owner after shutdown");
+
+    let restarted = {
+        let channel = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        tokio::spawn(async move { channel.start(sink.as_ref()).await })
+    };
+    let mut second_session = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        gateway.accept_authed("abort-restart"),
+    )
+    .await
+    .expect("a fresh start should be admitted once the old owner has joined");
+    second_session
+        .send(tokio_tungstenite::tungstenite::Message::Binary(
+            yuanbao_push("after-abort", "alice", "restarted after abort").into(),
+        ))
+        .await;
+    expect_yuanbao_push_ack(&mut second_session, "after-abort").await;
+    let delivered = next_public_yuanbao_message(&mut received).await;
+    assert_eq!(delivered.message_id, "after-abort");
+    assert_eq!(delivered.text, "restarted after abort");
+
+    channel.stop().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), restarted)
+        .await
+        .expect("the restarted listener should join after stop")
+        .expect("the restarted listener task should not panic")
+        .expect("the restarted listener should stop cleanly");
+    assert!(received.try_recv().is_err());
+}
+
+#[tokio::test]
 async fn public_adapter_stores_url_backed_voice_and_publishes_typed_media() {
     use crate::channel::ChannelAdapter;
     use crate::providers::http_test_support::HttpsServer;
