@@ -1157,6 +1157,9 @@ async fn listen_adapter_with_supervision(
     policy: Option<ChannelSupervisionPolicy>,
     mut cancellation: watch::Receiver<bool>,
 ) -> anyhow::Result<()> {
+    if *cancellation.borrow() {
+        return Ok(());
+    }
     let (mut backoff, maximum) = policy
         .map(|policy| {
             let initial = policy.initial_backoff_secs.max(1);
@@ -1166,12 +1169,14 @@ async fn listen_adapter_with_supervision(
     loop {
         let mut start = Box::pin(adapter.start(sink.as_ref()));
         let result = tokio::select! { biased;
+            // Poll start first so providers can synchronously claim their
+            // listener before stop is sent if cancellation raced task startup.
+            result = &mut start => result.map_err(|error| anyhow::anyhow!(error.message)),
             _ = cancellation.wait_for(|value| *value) => {
                 let _ = adapter.stop().await;
                 let _ = (&mut start).await;
                 return Ok(());
             }
-            result = &mut start => result.map_err(|error| anyhow::anyhow!(error.message)),
         };
         let _ = adapter.stop().await;
         let Some(delay) = backoff else {
