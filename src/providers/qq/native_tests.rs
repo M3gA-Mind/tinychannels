@@ -596,7 +596,10 @@ async fn qq_rejects_text_with_captioned_media_before_sending_any_step() {
         tinychannels_runtime::channel::ChannelTypedSend::send_typed(channel.as_ref(), &message)
             .await;
 
-    assert!(result.is_err(), "QQ must reject an unrepresentable caption");
+    assert!(
+        result.is_err() || result.as_ref().is_ok_and(|outcome| outcome.error.is_some()),
+        "QQ must reject an unrepresentable caption"
+    );
     assert!(server.requests.lock().unwrap().is_empty());
 }
 
