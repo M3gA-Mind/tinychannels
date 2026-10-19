@@ -239,8 +239,7 @@ async fn stale_lark_listener_cleanup_does_not_release_a_new_owner() {
 
     channel.cancel_listener();
     drop(new_registration);
-    let (cancel, id) = channel.begin_listener().unwrap();
-    cancel.send_replace(true);
+    let (_cancel, id) = channel.begin_listener().unwrap();
     channel.end_listener(id);
 }
 
@@ -254,7 +253,7 @@ async fn public_adapter_retries_lark_message_after_typed_sink_rejection() {
         tx,
     });
     let sink_trait: Arc<dyn ChannelInboundSink> = sink;
-    let listener = tokio::spawn({
+    let mut listener = tokio::spawn({
         let adapter = adapter.clone();
         let sink = sink_trait.clone();
         async move { adapter.start(sink.as_ref()).await }
@@ -275,7 +274,7 @@ async fn public_adapter_retries_lark_message_after_typed_sink_rejection() {
         .expect("Lark listener must not panic")
         .expect("Lark listener must stop cleanly after the rejected event");
 
-    let listener = tokio::spawn({
+    let mut listener = tokio::spawn({
         let adapter = adapter.clone();
         let sink = sink_trait.clone();
         async move { adapter.start(sink.as_ref()).await }
@@ -299,7 +298,7 @@ async fn public_adapter_retries_lark_message_after_typed_sink_rejection() {
     assert_eq!(envelope.text, "retry me");
 
     adapter.stop().await.unwrap();
-    tokio::time::timeout(GUARD, listener)
+    tokio::time::timeout(GUARD, &mut listener)
         .await
         .expect("Lark stop must join the retried listener")
         .expect("Lark listener must not panic")
