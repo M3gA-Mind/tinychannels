@@ -1,7 +1,12 @@
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use parking_lot::Mutex;
+use std::sync::Arc;
+
+pub(super) const MAX_FILE_BYTES: u64 = 50 * 1024 * 1024;
+pub(super) const MAX_VOICE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Mattermost channel — polls channel posts via REST API v4.
 /// Mattermost is API-compatible with many Slack patterns but uses a dedicated v4 structure.
@@ -18,6 +23,10 @@ pub struct MattermostChannel {
     /// Handle for the background typing-indicator loop (aborted on stop_typing).
     typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
     http_client: reqwest::Client,
+    media_repository: Option<Arc<dyn MediaRepository>>,
+    voice_media_store: Option<Arc<dyn VoiceMediaStore>>,
+    transcriber: Option<Arc<dyn Transcriber>>,
+    events: Option<Arc<dyn EventSink>>,
 }
 
 impl MattermostChannel {
@@ -60,7 +69,35 @@ impl MattermostChannel {
             mention_only,
             typing_handle: Mutex::new(None),
             http_client,
+            media_repository: None,
+            voice_media_store: None,
+            transcriber: None,
+            events: None,
         }
+    }
+
+    /// Attach the host's scoped media repository for native file uploads.
+    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
+        self.media_repository = Some(repository);
+        self
+    }
+
+    /// Attach the host's scoped voice store for audio file attachments.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
+        self.voice_media_store = Some(store);
+        self
+    }
+
+    /// Attach the host's speech-to-text port for platform-marked voice clips.
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Attach the host's ordered typed-ingress path.
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.events = Some(events);
+        self
     }
 
     fn http_client(&self) -> reqwest::Client {
@@ -106,6 +143,183 @@ impl MattermostChannel {
 }
 
 impl MattermostChannel {
+    async fn inbound_envelope(
+        &self,
+        post: &serde_json::Value,
+        channel_id: &str,
+        message: &ChannelMessage,
+    ) -> Option<tinychannels_bus::ChannelInboundEnvelope> {
+        let id = post.get("id")?.as_str()?.to_owned();
+        let sender_id = post.get("user_id")?.as_str()?.to_owned();
+        let timestamp = post.get("create_at")?.as_i64()?;
+        let mut conversation = tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Channel,
+            id: channel_id.to_owned(),
+            ..Default::default()
+        };
+        let root_id = post
+            .get("root_id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|root| !root.is_empty());
+        conversation.thread_id = root_id
+            .map(str::to_owned)
+            .or_else(|| self.thread_replies.then(|| id.clone()));
+
+        let mut ingested = crate::providers::native::inbound::Ingested::default();
+        let ingest = crate::providers::native::inbound::Ingest {
+            provider: "mattermost",
+            channel: tinychannels_bus::ChannelRef {
+                id: "mattermost".into(),
+                account_id: None,
+            },
+            repository: self.media_repository.as_ref(),
+            voice_store: self.voice_media_store.as_ref(),
+            transcriber: self.transcriber.as_ref(),
+            file_bytes: MAX_FILE_BYTES,
+            voice_bytes: MAX_VOICE_BYTES,
+        };
+        let file_ids = post
+            .get("file_ids")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str);
+        for file_id in file_ids {
+            if self.media_repository.is_none() || self.events.is_none() {
+                break;
+            }
+            let Some((mime, name, size)) = self.file_info(post, file_id).await else {
+                continue;
+            };
+            if size.is_some_and(|size| size > MAX_FILE_BYTES) {
+                continue;
+            }
+            let kind = crate::providers::native::inbound::kind_for_mime(&mime);
+            if !crate::host::is_allowed_content_type(kind, &mime) {
+                continue;
+            }
+            let Some(bytes) = self.download_file(file_id, MAX_FILE_BYTES).await else {
+                continue;
+            };
+            ingest
+                .add(
+                    &mut ingested,
+                    &conversation,
+                    &id,
+                    crate::providers::native::inbound::InboundFile {
+                        bytes,
+                        mime,
+                        name,
+                        duration_ms: None,
+                        // Mattermost file metadata has no voice-note marker;
+                        // generic audio attachments remain ordinary audio.
+                        voice: false,
+                        dedupe_key: format!("mattermost:{id}:{file_id}"),
+                        transcript: None,
+                    },
+                )
+                .await;
+        }
+        let parts = crate::providers::native::inbound::assemble(&message.content, None, ingested);
+        if parts.is_empty() {
+            return None;
+        }
+        Some(tinychannels_bus::ChannelInboundEnvelope {
+            channel: tinychannels_bus::ChannelRef {
+                id: "mattermost".into(),
+                account_id: None,
+            },
+            message_id: id,
+            reply_to_id: root_id.map(str::to_owned),
+            #[allow(clippy::cast_sign_loss)]
+            timestamp_unix_ms: Some(timestamp as u64),
+            conversation,
+            sender: tinychannels_bus::SenderRef {
+                id: sender_id,
+                ..Default::default()
+            },
+            text: message.content.clone(),
+            media: crate::providers::native::inbound::media_of(&parts),
+            parts,
+            ..Default::default()
+        })
+    }
+
+    async fn file_info(
+        &self,
+        post: &serde_json::Value,
+        file_id: &str,
+    ) -> Option<(String, Option<String>, Option<u64>)> {
+        if let Some(file) = post
+            .pointer("/metadata/files")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .find(|file| file.get("id").and_then(serde_json::Value::as_str) == Some(file_id))
+        {
+            return Some((
+                file.get("mime_type")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("application/octet-stream")
+                    .to_owned(),
+                file.get("name")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned),
+                file.get("size").and_then(serde_json::Value::as_u64),
+            ));
+        }
+        if !valid_file_id(file_id) {
+            return None;
+        }
+        let info = self
+            .http_client()
+            .get(format!("{}/api/v4/files/{file_id}/info", self.base_url))
+            .bearer_auth(&self.bot_token)
+            .send()
+            .await
+            .ok()?;
+        if !info.status().is_success() {
+            return None;
+        }
+        let info: serde_json::Value = info.json().await.ok()?;
+        Some((
+            info.get("mime_type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("application/octet-stream")
+                .to_owned(),
+            info.get("name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+            info.get("size").and_then(serde_json::Value::as_u64),
+        ))
+    }
+
+    async fn download_file(&self, file_id: &str, limit: u64) -> Option<Vec<u8>> {
+        if !valid_file_id(file_id) {
+            return None;
+        }
+        let mut response = self
+            .http_client()
+            .get(format!("{}/api/v4/files/{file_id}", self.base_url))
+            .bearer_auth(&self.bot_token)
+            .send()
+            .await
+            .ok()?;
+        if !response.status().is_success()
+            || response.content_length().is_some_and(|size| size > limit)
+        {
+            return None;
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.ok()? {
+            if bytes.len() as u64 + chunk.len() as u64 > limit {
+                return None;
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        (!bytes.is_empty()).then_some(bytes)
+    }
+
     /// Post one message and return the id Mattermost assigned to it.
     async fn post_message(&self, message: &SendMessage) -> Result<Vec<String>> {
         // Mattermost supports threading via 'root_id'.
@@ -152,6 +366,13 @@ impl MattermostChannel {
             .and_then(|post| post.get("id").and_then(|id| id.as_str()).map(str::to_owned));
         Ok(ids.into_iter().collect())
     }
+}
+
+fn valid_file_id(file_id: &str) -> bool {
+    !file_id.is_empty()
+        && file_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 #[async_trait]
@@ -239,7 +460,25 @@ impl Channel for MattermostChannel {
                         .unwrap_or(last_create_at);
                     last_create_at = last_create_at.max(create_at);
 
-                    if let Some(channel_msg) = msg
+                    let typed_delivered = if let Some(message) = msg.as_ref() {
+                        if let Some(envelope) =
+                            self.inbound_envelope(post, &channel_id, message).await
+                        {
+                            crate::providers::native::inbound::publish(
+                                "mattermost",
+                                self.events.as_ref(),
+                                envelope,
+                            )
+                            .await
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if !typed_delivered
+                        && let Some(channel_msg) = msg.filter(|message| !message.content.is_empty())
                         && tx.send(channel_msg).await.is_err()
                     {
                         return Ok(());
@@ -329,7 +568,12 @@ impl MattermostChannel {
         let create_at = post.get("create_at").and_then(|c| c.as_i64()).unwrap_or(0);
         let root_id = post.get("root_id").and_then(|r| r.as_str()).unwrap_or("");
 
-        if user_id == bot_user_id || create_at <= last_create_at || text.is_empty() {
+        let has_files = post
+            .get("file_ids")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|files| !files.is_empty());
+        if user_id == bot_user_id || create_at <= last_create_at || (text.is_empty() && !has_files)
+        {
             return None;
         }
 
@@ -501,11 +745,62 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
 
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
-        text_capabilities(TextSpec {
+        let mut capabilities = text_capabilities(TextSpec {
             typing: true,
             thread: true,
             ..Default::default()
-        })
+        });
+        if self.media_repository.is_some() {
+            capabilities
+                .content
+                .parts
+                .extend(["image", "video", "audio", "file"].map(String::from));
+            let outbound = |types: &[&str]| tinychannels_bus::ContentCapability {
+                outbound: true,
+                accepted_types: types.iter().map(|mime| (*mime).into()).collect(),
+                emitted_types: types.iter().map(|mime| (*mime).into()).collect(),
+                max_size_bytes: Some(MAX_FILE_BYTES),
+                ..Default::default()
+            };
+            capabilities.content.image =
+                outbound(&["image/jpeg", "image/png", "image/gif", "image/webp"]);
+            capabilities.content.video = outbound(&["video/mp4", "video/quicktime", "video/webm"]);
+            capabilities.content.audio = outbound(&[
+                "audio/ogg",
+                "audio/mpeg",
+                "audio/mp4",
+                "audio/wav",
+                "audio/webm",
+            ]);
+            capabilities.content.file = outbound(&[
+                "application/pdf",
+                "text/plain",
+                "text/csv",
+                "application/json",
+                "application/zip",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            ]);
+            let inbound = self.events.is_some();
+            capabilities.content.image.inbound = inbound;
+            capabilities.content.video.inbound = inbound;
+            capabilities.content.audio.inbound = inbound;
+            capabilities.content.file.inbound = inbound;
+        }
+        if self.voice_media_store.is_some() {
+            capabilities.content.parts.push("voice_note".into());
+            capabilities.voice_out = crate::providers::native::capabilities::voice_capabilities(
+                true,
+                false,
+                MAX_VOICE_BYTES,
+                &["m4a_aac", "mp3", "ogg_opus"],
+            );
+        }
+        capabilities
+    }
+
+    fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
+        crate::providers::native::NativeProvider::descriptor_extra(self)
     }
 
     fn typing_supported(&self) -> bool {
@@ -525,7 +820,20 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
             message.recipient = format!("{}:{root}", message.recipient);
         }
     }
+
+    async fn send_typed_message(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        crate::providers::native::outbound::send_typed(self, message).await
+    }
 }
+
+#[path = "mattermost/native.rs"]
+mod native;
 
 crate::providers::long_tail::impl_long_tail_adapter!(MattermostChannel);
 

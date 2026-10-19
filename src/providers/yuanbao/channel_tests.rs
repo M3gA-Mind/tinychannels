@@ -1,4 +1,5 @@
 use crate::traits::Channel;
+use std::sync::Arc;
 
 use super::*;
 
@@ -14,6 +15,19 @@ fn good_cfg() -> YuanbaoConfig {
 fn channel_construction_validates() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     assert_eq!(ch.name(), "yuanbao");
+}
+
+#[test]
+fn host_voice_store_is_retained_for_native_inbound_services() {
+    let store = Arc::new(crate::providers::native::fixtures::StubVoice::default());
+    let channel = YuanbaoChannel::new(good_cfg())
+        .unwrap()
+        .with_voice_media_store(store);
+
+    assert!(
+        crate::providers::native::NativeProvider::voice_media_store(&channel).is_some(),
+        "the channel retains the host's scoped voice store"
+    );
 }
 
 #[test]
@@ -105,6 +119,9 @@ async fn alias_map_clears_when_cap_is_hit() {
 fn supports_draft_updates_is_true() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
     assert!(ch.supports_draft_updates());
+    assert!(Channel::supports_remote_control(&ch));
+    assert!(Channel::supports_chat_approvals(&ch));
+    assert!(crate::providers::long_tail::LongTail::typing_supported(&ch));
     let capabilities = ch.capabilities();
     assert!(capabilities.streaming_reply_pipeline);
     assert!(!capabilities.progressive_edits);

@@ -114,6 +114,29 @@ pub(crate) trait NativeProvider: Send + Sync {
     fn voice_media_store(&self) -> Option<&Arc<dyn VoiceMediaStore>>;
     fn voice_synthesis(&self) -> bool;
     fn declared_capabilities(&self) -> ChannelCapabilities;
+    /// Resolve legacy provider-specific address projections before scoped
+    /// media is read, so delivery and media authority share one target.
+    fn normalized_target(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<Target, ChannelSendError> {
+        outbound::target_of(message, self.id(), self.display())
+    }
+    /// Validate provider-specific address combinations before planning can
+    /// resolve opaque host media or perform any network requests.
+    fn validate_target(&self, _target: &Target) -> Result<(), ChannelSendError> {
+        Ok(())
+    }
+    /// Validate or normalize every provider-specific step before delivery
+    /// starts. This keeps a known-invalid later attachment from following an
+    /// already-sent text step.
+    async fn prepare_steps(
+        &self,
+        _target: &Target,
+        _steps: &mut [Step],
+    ) -> Result<(), ChannelSendError> {
+        Ok(())
+    }
     /// Extra descriptor metadata (for example `voiceOut=attachment`).
     fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
         Vec::new()
@@ -164,6 +187,11 @@ pub(crate) trait NativeProvider: Send + Sync {
 
     /// Whether `edit_text` works; checked before a draft sends its first message.
     fn can_edit(&self) -> bool {
+        false
+    }
+
+    /// Whether provider message deletion is implemented.
+    fn can_delete(&self) -> bool {
         false
     }
 

@@ -64,6 +64,24 @@ fn mattermost_parse_post_basic() {
 }
 
 #[test]
+fn mattermost_accepts_file_only_posts_for_typed_ingress() {
+    let channel = make_channel(vec!["*".into()], true);
+    let post = json!({
+        "id": "post-media-only",
+        "user_id": "user456",
+        "message": "",
+        "create_at": 1_600_000_000_000_i64,
+        "root_id": "",
+        "file_ids": ["file-1"]
+    });
+    let message = channel
+        .parse_mattermost_post(&post, "bot123", "botname", 1_500_000_000_000_i64, "chan789")
+        .unwrap();
+    assert!(message.content.is_empty());
+    assert_eq!(message.reply_target, "chan789:post-media-only");
+}
+
+#[test]
 fn mattermost_parse_post_thread_replies_enabled() {
     let ch = make_channel(vec!["*".into()], true);
     let post = json!({

@@ -20,6 +20,13 @@ fn ensure_https(url: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+fn no_redirect_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("building the default QQ attachment HTTP client should succeed")
+}
+
 /// Deduplication set capacity — evict half of entries when full.
 const DEDUP_CAPACITY: usize = 10_000;
 
@@ -34,6 +41,11 @@ pub struct QQChannel {
     /// Message deduplication set.
     dedup: Arc<RwLock<HashSet<String>>>,
     http_client: reqwest::Client,
+    /// Attachment downloads never follow redirects; QQ attachment URLs are
+    /// signed platform URLs and must not be usable as arbitrary fetch proxies.
+    attachment_http_client: reqwest::Client,
+    /// Host-scoped media and voice stores used by native typed sends.
+    native: crate::providers::native::HostPorts,
 }
 
 impl QQChannel {
@@ -45,6 +57,8 @@ impl QQChannel {
             token_cache: Arc::new(RwLock::new(None)),
             dedup: Arc::new(RwLock::new(HashSet::new())),
             http_client: reqwest::Client::new(),
+            attachment_http_client: no_redirect_client(),
+            native: crate::providers::native::HostPorts::default(),
         }
     }
 
@@ -61,11 +75,52 @@ impl QQChannel {
             token_cache: Arc::new(RwLock::new(None)),
             dedup: Arc::new(RwLock::new(HashSet::new())),
             http_client,
+            attachment_http_client: no_redirect_client(),
+            native: crate::providers::native::HostPorts::default(),
         }
+    }
+
+    /// Enable scoped media uploads through the host repository.
+    pub fn with_media_repository(
+        mut self,
+        repository: Arc<dyn crate::host::MediaRepository>,
+    ) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    /// Enable native QQ voice messages through the host voice store.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
+    }
+
+    /// Attach the host's transcriber for platform-marked inbound voice clips.
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn crate::host::Transcriber>) -> Self {
+        self.native.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Attach the host's ordered typed-ingress path.
+    pub fn with_events(mut self, events: Arc<dyn crate::host::EventSink>) -> Self {
+        self.native.events = Some(events);
+        self
+    }
+
+    /// Replace the no-redirect attachment client, primarily for host-managed
+    /// trust roots and deterministic local tests.
+    #[cfg(test)]
+    pub(crate) fn with_attachment_http_client(mut self, client: reqwest::Client) -> Self {
+        self.attachment_http_client = client;
+        self
     }
 
     fn http_client(&self) -> reqwest::Client {
         self.http_client.clone()
+    }
+
+    fn attachment_http_client(&self) -> reqwest::Client {
+        self.attachment_http_client.clone()
     }
 
     fn is_user_allowed(&self, user_id: &str) -> bool {
@@ -391,9 +446,6 @@ impl Channel for QQChannel {
                             }
 
                             let content = d.get("content").and_then(|c| c.as_str()).unwrap_or("").trim();
-                            if content.is_empty() {
-                                continue;
-                            }
 
                             let author_id = d.get("author").and_then(|a| a.get("id")).and_then(|i| i.as_str()).unwrap_or("unknown");
                             // For QQ, user_openid is the identifier
@@ -405,6 +457,22 @@ impl Channel for QQChannel {
                             }
 
                             let chat_id = format!("user:{user_openid}");
+
+                            if let Some(envelope) = self
+                                .inbound_envelope("C2C_MESSAGE_CREATE", d)
+                                .await
+                                && crate::providers::native::inbound::publish(
+                                    "qq",
+                                    self.native.events.as_ref(),
+                                    envelope,
+                                )
+                                .await
+                            {
+                                continue;
+                            }
+                            if content.is_empty() {
+                                continue;
+                            }
 
                             let channel_msg = ChannelMessage {
                                 id: Uuid::new_v4().to_string(),
@@ -434,9 +502,6 @@ impl Channel for QQChannel {
                             }
 
                             let content = d.get("content").and_then(|c| c.as_str()).unwrap_or("").trim();
-                            if content.is_empty() {
-                                continue;
-                            }
 
                             let author_id = d.get("author").and_then(|a| a.get("member_openid")).and_then(|m| m.as_str()).unwrap_or("unknown");
 
@@ -447,6 +512,22 @@ impl Channel for QQChannel {
 
                             let group_openid = d.get("group_openid").and_then(|g| g.as_str()).unwrap_or("unknown");
                             let chat_id = format!("group:{group_openid}");
+
+                            if let Some(envelope) = self
+                                .inbound_envelope("GROUP_AT_MESSAGE_CREATE", d)
+                                .await
+                                && crate::providers::native::inbound::publish(
+                                    "qq",
+                                    self.native.events.as_ref(),
+                                    envelope,
+                                )
+                                .await
+                            {
+                                continue;
+                            }
+                            if content.is_empty() {
+                                continue;
+                            }
 
                             let channel_msg = ChannelMessage {
                                 id: Uuid::new_v4().to_string(),
@@ -488,13 +569,19 @@ impl crate::providers::long_tail::LongTail for QQChannel {
     const DISPLAY: &'static str = "QQ";
 
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
-        use crate::providers::long_tail::{TextSpec, text_capabilities};
-        text_capabilities(TextSpec::default())
+        crate::providers::native::NativeProvider::declared_capabilities(self)
     }
 }
 
-crate::providers::long_tail::impl_long_tail_adapter!(QQChannel);
+#[path = "qq/native.rs"]
+mod native;
+
+crate::providers::native::native_v2_adapter!(QQChannel);
 
 #[cfg(test)]
 #[path = "qq_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "qq/native_tests.rs"]
+mod native_tests;

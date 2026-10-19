@@ -4968,3 +4968,167 @@ async fn configured_long_tail_adapter_sends_through_the_ordered_queue_and_refuse
     assert!(handle.deletes().unwrap().delete(&receipt).await.is_err());
     running.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn configured_long_tail_factory_uses_account_scoped_host_media() {
+    use base64::Engine as _;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let account_a_server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/files"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "file_infos": [{"id": "uploaded-a"}]
+        })))
+        .expect(1)
+        .mount(&account_a_server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/posts"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "id": "post-a"
+        })))
+        .expect(1)
+        .mount(&account_a_server)
+        .await;
+    let account_b_server = MockServer::start().await;
+
+    let config_a = tinychannels_bus::ChannelsConfig {
+        mattermost: Some(tinychannels_bus::config::MattermostConfig {
+            url: account_a_server.uri(),
+            bot_token: "token-a".into(),
+            channel_id: None,
+            allowed_users: vec![],
+            thread_replies: None,
+            mention_only: None,
+        }),
+        ..Default::default()
+    };
+    let config_b = tinychannels_bus::ChannelsConfig {
+        mattermost: Some(tinychannels_bus::config::MattermostConfig {
+            url: account_b_server.uri(),
+            bot_token: "token-b".into(),
+            channel_id: None,
+            allowed_users: vec![],
+            thread_replies: None,
+            mention_only: None,
+        }),
+        ..Default::default()
+    };
+    let (host, _callbacks, _bus, _storage) = ingress_fixture().await;
+    let account_a = "mattermost:team-a".to_owned();
+    let hooks_a = Arc::new(Hooks::default());
+    let owner_host_a: Arc<dyn tinychannels::host::ChannelHost> = hooks_a.host(
+        host.clone(),
+        account_a.clone(),
+        MediaScope::fixed(configured_media_account_scope(&account_a, &config_a)),
+    );
+    let repository_a = owner_host_a.media_repository().unwrap();
+    let conversation = ConversationRef {
+        kind: ConversationKind::Channel,
+        id: "shared-channel-id".into(),
+        ..Default::default()
+    };
+    let scope_a = tinychannels_bus::HostVoiceScope {
+        configured_instance: account_a.clone(),
+        channel: tinychannels_bus::ChannelRef {
+            id: "mattermost".into(),
+            account_id: Some(account_a.clone()),
+        },
+        conversation: conversation.clone(),
+        turn_id: "shared-turn-id".into(),
+    };
+    let media = repository_a
+        .store_media(tinychannels::host::MediaStoreRequest {
+            metadata: tinychannels::host::MediaMetadata {
+                scope: scope_a,
+                kind: tinychannels_bus::MediaKind::Image,
+                content_type: "image/png".into(),
+                file_name: Some("account-a.png".into()),
+                duration_ms: None,
+                codec: None,
+                voice_direction: None,
+                dedupe_key: None,
+                max_bytes: 1024,
+            },
+            bytes: base64::engine::general_purpose::STANDARD
+                .decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")
+                .unwrap(),
+        })
+        .await
+        .unwrap();
+
+    let intent_for = |account: &str, key: &str| tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: key.into(),
+        channel_id: "mattermost".into(),
+        conversation_id: conversation.id.clone(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "mattermost".into(),
+            account_id: Some(account.into()),
+        }),
+        conversation_ref: Some(conversation.clone()),
+        turn_id: Some("shared-turn-id".into()),
+        payload: tinychannels_bus::OutboundPayload::Parts {
+            parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Image {
+                    media: media.clone(),
+                    caption: Some("scoped upload".into()),
+                    alt_text: None,
+                },
+            }],
+        },
+        ..Default::default()
+    };
+
+    let launch_a = crate::native::build_native_v2(
+        &account_a,
+        &config_a,
+        &owner_host_a,
+        &tinychannels::DefaultHttpClients,
+    )
+    .expect("configured Mattermost account A builds");
+    let running_a = launch_a.start(hooks_a.clone(), host.clone(), None, true);
+    let result_a = running_a
+        .adapter_handle()
+        .send(intent_for(&account_a, "send-a"))
+        .await
+        .unwrap();
+    assert!(result_a.error.is_none(), "account A can read its own media");
+    assert_eq!(result_a.receipt.platform_message_ids, ["post-a"]);
+    running_a.stop().await.unwrap();
+
+    let account_b = "mattermost:team-b".to_owned();
+    let hooks_b = Arc::new(Hooks::default());
+    let owner_host_b: Arc<dyn tinychannels::host::ChannelHost> = hooks_b.host(
+        host.clone(),
+        account_b.clone(),
+        MediaScope::fixed(configured_media_account_scope(&account_b, &config_b)),
+    );
+    let launch_b = crate::native::build_native_v2(
+        &account_b,
+        &config_b,
+        &owner_host_b,
+        &tinychannels::DefaultHttpClients,
+    )
+    .expect("configured Mattermost account B builds");
+    let running_b = launch_b.start(hooks_b.clone(), host, None, true);
+    let result_b = running_b
+        .adapter_handle()
+        .send(intent_for(&account_b, "send-b"))
+        .await
+        .unwrap();
+    assert!(
+        result_b.error.is_some(),
+        "account B cannot read account A media"
+    );
+    assert!(
+        account_b_server
+            .received_requests()
+            .await
+            .unwrap()
+            .is_empty(),
+        "a media-scope failure happens before upload or post I/O"
+    );
+    running_b.stop().await.unwrap();
+}

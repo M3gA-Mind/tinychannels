@@ -104,6 +104,12 @@ pub(crate) trait LongTail: Channel {
     /// The facts this configured account declares.
     fn declared(&self) -> ChannelCapabilities;
 
+    /// Provider-specific descriptor metadata for capabilities that depend on
+    /// host services installed on this configured account.
+    fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
+        Vec::new()
+    }
+
     /// Whether the typing indicator is implemented.
     fn typing_supported(&self) -> bool {
         false
@@ -118,6 +124,16 @@ pub(crate) trait LongTail: Channel {
     /// guessing.
     async fn send_reporting_ids(&self, message: &SendMessage) -> anyhow::Result<Vec<String>> {
         self.send(message).await.map(|()| Vec::new())
+    }
+
+    /// Declared providers with canonical media support implement typed sends
+    /// through the shared scoped-media planner. Text-only providers retain the
+    /// conservative legacy projection.
+    async fn send_typed_message(
+        &self,
+        message: &ChannelOutboundMessage,
+    ) -> Result<ChannelSendOutcome, ChannelSendError> {
+        send_text_typed::<Self>(self, message).await
     }
 }
 
@@ -145,11 +161,15 @@ fn check_channel<T: LongTail + ?Sized>(
     Ok(())
 }
 
-pub(crate) fn descriptor<T: LongTail + ?Sized>() -> ChannelDescriptor {
+pub(crate) fn descriptor<T: LongTail + ?Sized>(provider: &T) -> ChannelDescriptor {
+    let mut metadata = BTreeMap::from([("adapterMode".into(), "native-v2".into())]);
+    for (key, value) in provider.descriptor_extra() {
+        metadata.insert(key.into(), value.into());
+    }
     ChannelDescriptor {
         id: T::ID.into(),
         display_name: T::DISPLAY.into(),
-        metadata: BTreeMap::from([("adapterMode".into(), "native-v2".into())]),
+        metadata,
         ..Default::default()
     }
 }
@@ -159,6 +179,13 @@ pub(crate) async fn send_typed<T: LongTail + ?Sized>(
     message: &ChannelOutboundMessage,
 ) -> Result<ChannelSendOutcome, ChannelSendError> {
     check_channel::<T>(&message.channel_id, message.channel_ref.as_ref())?;
+    provider.send_typed_message(message).await
+}
+
+async fn send_text_typed<T: LongTail + ?Sized>(
+    provider: &T,
+    message: &ChannelOutboundMessage,
+) -> Result<ChannelSendOutcome, ChannelSendError> {
     if message.conversation_id.trim().is_empty() {
         return Err(ChannelSendError {
             kind: SendErrorKind::BadFormat,
@@ -291,7 +318,7 @@ macro_rules! impl_long_tail_adapter {
         #[async_trait::async_trait]
         impl $crate::channel::ChannelAdapter for $ty {
             fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
-                $crate::providers::long_tail::descriptor::<$ty>()
+                $crate::providers::long_tail::descriptor(self)
             }
             fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
                 $crate::providers::long_tail::LongTail::declared(self)

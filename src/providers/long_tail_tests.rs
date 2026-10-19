@@ -5,6 +5,7 @@ use crate::channel::{
 };
 use crate::factory::{DefaultHttpClients, build_long_tail_channel};
 use std::sync::Arc;
+use std::sync::Mutex;
 use tinychannels_bus::channel::{ChannelRef, ConversationRef, MessageReceipt};
 use tinychannels_bus::config::*;
 use tinychannels_bus::{
@@ -12,6 +13,164 @@ use tinychannels_bus::{
 };
 use wiremock::matchers::{body_partial_json, header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+struct TypedTextFixture {
+    send_error: bool,
+    sent: Mutex<Vec<String>>,
+}
+
+#[async_trait::async_trait]
+impl crate::traits::Channel for TypedTextFixture {
+    fn name(&self) -> &str {
+        "fixture"
+    }
+
+    async fn send(&self, message: &crate::traits::SendMessage) -> anyhow::Result<()> {
+        self.sent.lock().unwrap().push(message.content.clone());
+        if self.send_error {
+            anyhow::bail!("private provider detail")
+        }
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _tx: tokio::sync::mpsc::Sender<crate::traits::ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl super::LongTail for TypedTextFixture {
+    const ID: &'static str = "fixture";
+    const DISPLAY: &'static str = "Fixture";
+
+    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
+        super::text_capabilities(super::TextSpec::default())
+    }
+}
+
+fn typed_fixture_message(
+    parts: Vec<OutboundContentPart>,
+) -> tinychannels_bus::ChannelOutboundMessage {
+    let intent = text_intent("fixture", "room-1", None);
+    let mut message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+    message.parts = parts;
+    message
+}
+
+#[test]
+fn typed_receipt_uses_reported_ids_and_falls_back_to_message_routing() {
+    let mut message = typed_fixture_message(Vec::new());
+    message.channel_ref = None;
+    message.conversation_ref = None;
+    message.thread_id = Some("thread-1".into());
+    message.reply_to_id = Some("reply-1".into());
+
+    let receipt = super::receipt::<TypedTextFixture>(
+        &message,
+        vec!["platform-1".into(), "platform-2".into()],
+    );
+
+    assert_eq!(receipt.idempotency_key.as_deref(), Some("k"));
+    assert_eq!(
+        receipt.channel.as_ref().map(|channel| channel.id.as_str()),
+        Some("fixture")
+    );
+    assert_eq!(
+        receipt
+            .conversation
+            .as_ref()
+            .map(|conversation| conversation.id.as_str()),
+        Some("room-1")
+    );
+    assert_eq!(
+        receipt.primary_platform_message_id.as_deref(),
+        Some("platform-1")
+    );
+    assert_eq!(receipt.platform_message_ids, ["platform-1", "platform-2"]);
+    assert_eq!(receipt.parts.len(), 2);
+    assert_eq!(receipt.parts[1].index, 1);
+    assert_eq!(receipt.parts[1].thread_id.as_deref(), Some("thread-1"));
+    assert_eq!(receipt.parts[1].reply_to_id.as_deref(), Some("reply-1"));
+}
+
+#[tokio::test]
+async fn text_only_typed_adapter_sends_a_legacy_text_projection() {
+    let provider = TypedTextFixture {
+        send_error: false,
+        sent: Mutex::new(Vec::new()),
+    };
+    let message = typed_fixture_message(vec![OutboundContentPart::Content {
+        part: ContentPart::Text {
+            text: "plain typed text".into(),
+            markdown_dialect: None,
+        },
+    }]);
+
+    let outcome = super::send_typed(&provider, &message).await.unwrap();
+    assert!(outcome.error.is_none());
+    assert!(
+        outcome.receipt.parts.is_empty(),
+        "no unknown provider id is fabricated"
+    );
+    assert_eq!(
+        provider.sent.lock().unwrap().as_slice(),
+        ["plain typed text"]
+    );
+}
+
+#[tokio::test]
+async fn text_only_typed_adapter_rejects_wrong_channels_and_rich_content_before_send() {
+    let provider = TypedTextFixture {
+        send_error: false,
+        sent: Mutex::new(Vec::new()),
+    };
+    let mut wrong_channel = typed_fixture_message(Vec::new());
+    wrong_channel.channel_id = "another".into();
+    let error = super::send_typed(&provider, &wrong_channel)
+        .await
+        .unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Forbidden);
+
+    let rich_content = typed_fixture_message(vec![OutboundContentPart::Content {
+        part: ContentPart::Image {
+            media: MediaReference {
+                opaque_id: Some("opaque-image".into()),
+                kind: MediaKind::Image,
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    }]);
+    let error = super::send_typed(&provider, &rich_content)
+        .await
+        .unwrap_err();
+    assert!(error.unsupported);
+    assert!(provider.sent.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn text_only_typed_adapter_classifies_legacy_send_errors_as_uncertain() {
+    let provider = TypedTextFixture {
+        send_error: true,
+        sent: Mutex::new(Vec::new()),
+    };
+    let message = typed_fixture_message(vec![OutboundContentPart::Content {
+        part: ContentPart::Text {
+            text: "may have reached the provider".into(),
+            markdown_dialect: None,
+        },
+    }]);
+
+    let error = super::send_typed(&provider, &message).await.unwrap_err();
+    assert_eq!(error.kind, SendErrorKind::Unknown);
+    assert!(error.sent_before_error);
+    assert!(!error.message.contains("private provider detail"));
+    assert_eq!(provider.sent.lock().unwrap().len(), 1);
+}
 
 /// Lark is an optional feature; every other provider is always built in.
 #[cfg(feature = "lark")]
@@ -146,8 +305,9 @@ fn threading_and_typing_are_declared_only_where_implemented() {
         let typing = caps.actions.supported.iter().any(|a| a == "typing");
         let thread = caps.actions.supported.iter().any(|a| a == "thread-reply");
         assert_eq!(typing, matches!(id, "mattermost" | "yuanbao"), "{id}");
-        assert_eq!(thread, matches!(id, "mattermost" | "yuanbao"), "{id}");
+        assert_eq!(thread, id == "mattermost", "{id}");
         assert_eq!(caps.addressing.thread_id, thread, "{id}");
+        assert_eq!(caps.addressing.reply_to_id, id == "yuanbao", "{id}");
     }
 }
 

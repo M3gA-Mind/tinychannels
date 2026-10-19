@@ -456,10 +456,30 @@ pub fn build_long_tail_channel(
     http: &dyn HttpClientFactory,
     provider: &str,
 ) -> Option<Arc<dyn LongTailNative>> {
+    build_long_tail_channel_inner(config, None, http, provider)
+}
+
+/// Build a configured long-tail channel with the scoped host ports available
+/// to its native typed adapter.
+pub fn build_long_tail_channel_with_host(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    http: &dyn HttpClientFactory,
+    provider: &str,
+) -> Option<Arc<dyn LongTailNative>> {
+    build_long_tail_channel_inner(config, Some(host), http, provider)
+}
+
+fn build_long_tail_channel_inner(
+    config: &ChannelsConfig,
+    host: Option<&Arc<dyn ChannelHost>>,
+    http: &dyn HttpClientFactory,
+    provider: &str,
+) -> Option<Arc<dyn LongTailNative>> {
     match provider {
         "mattermost" => {
             let mm = config.mattermost.as_ref()?;
-            Some(Arc::new(MattermostChannel::with_http_client(
+            let mut channel = MattermostChannel::with_http_client(
                 mm.url.clone(),
                 mm.bot_token.clone(),
                 mm.channel_id.clone(),
@@ -467,7 +487,20 @@ pub fn build_long_tail_channel(
                 mm.thread_replies.unwrap_or(true),
                 mm.mention_only.unwrap_or(false),
                 http.client_for("channel.mattermost"),
-            )))
+            );
+            if let Some(repository) = host.and_then(|host| host.media_repository()) {
+                channel = channel.with_media_repository(repository);
+            }
+            if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+                channel = channel.with_voice_media_store(store);
+            }
+            if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+                channel = channel.with_transcriber(transcriber);
+            }
+            if let Some(events) = host.and_then(|host| host.events()) {
+                channel = channel.with_events(events);
+            }
+            Some(Arc::new(channel))
         }
         "irc" => {
             let irc_cfg = config.irc.as_ref()?;
@@ -487,7 +520,26 @@ pub fn build_long_tail_channel(
         #[cfg(feature = "lark")]
         "lark" => {
             let lk = config.lark.as_ref()?;
-            Some(Arc::new(crate::providers::LarkChannel::from_config(lk)))
+            let mut channel = crate::providers::LarkChannel::from_config_with_http_client(
+                lk,
+                http.client_for("channel.lark"),
+            );
+            if let Some(repository) = host.and_then(|host| host.media_repository()) {
+                channel = channel.with_media_repository(repository);
+            }
+            if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+                channel = channel.with_voice_media_store(store);
+            }
+            if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+                channel = channel.with_transcriber(transcriber);
+            }
+            if let Some(codec) = host.and_then(|host| host.voice_codec()) {
+                channel = channel.with_voice_codec(codec);
+            }
+            if let Some(events) = host.and_then(|host| host.events()) {
+                channel = channel.with_events(events);
+            }
+            Some(Arc::new(channel))
         }
         "dingtalk" => {
             let dt = config.dingtalk.as_ref()?;
@@ -500,17 +552,38 @@ pub fn build_long_tail_channel(
         }
         "qq" => {
             let qq = config.qq.as_ref()?;
-            Some(Arc::new(QQChannel::with_http_client(
+            let mut channel = QQChannel::with_http_client(
                 qq.app_id.clone(),
                 qq.app_secret.clone(),
                 qq.allowed_users.clone(),
                 http.client_for("channel.qq"),
-            )))
+            );
+            if let Some(repository) = host.and_then(|host| host.media_repository()) {
+                channel = channel.with_media_repository(repository);
+            }
+            if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+                channel = channel.with_voice_media_store(store);
+            }
+            if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+                channel = channel.with_transcriber(transcriber);
+            }
+            if let Some(events) = host.and_then(|host| host.events()) {
+                channel = channel.with_events(events);
+            }
+            Some(Arc::new(channel))
         }
         "yuanbao" => {
             let yb = config.yuanbao.as_ref()?;
             match YuanbaoChannel::new(yb.clone()) {
-                Ok(channel) => Some(Arc::new(channel)),
+                Ok(mut channel) => {
+                    if let Some(repository) = host.and_then(|host| host.media_repository()) {
+                        channel = channel.with_media_repository(repository);
+                    }
+                    if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+                        channel = channel.with_voice_media_store(store);
+                    }
+                    Some(Arc::new(channel))
+                }
                 Err(error) => {
                     tracing::warn!("[channels] yuanbao config invalid: {error}");
                     None
@@ -677,7 +750,7 @@ pub fn build_channels(
         channels.push(slack);
     }
 
-    if let Some(mattermost) = build_long_tail_channel(config, http, "mattermost") {
+    if let Some(mattermost) = build_long_tail_channel_with_host(config, host, http, "mattermost") {
         channels.push(mattermost);
     }
 
@@ -717,23 +790,23 @@ pub fn build_channels(
         channels.push(email);
     }
 
-    if let Some(irc) = build_long_tail_channel(config, http, "irc") {
+    if let Some(irc) = build_long_tail_channel_with_host(config, host, http, "irc") {
         channels.push(irc);
     }
 
-    if let Some(lark) = build_long_tail_channel(config, http, "lark") {
+    if let Some(lark) = build_long_tail_channel_with_host(config, host, http, "lark") {
         channels.push(lark);
     }
 
-    if let Some(dingtalk) = build_long_tail_channel(config, http, "dingtalk") {
+    if let Some(dingtalk) = build_long_tail_channel_with_host(config, host, http, "dingtalk") {
         channels.push(dingtalk);
     }
 
-    if let Some(qq) = build_long_tail_channel(config, http, "qq") {
+    if let Some(qq) = build_long_tail_channel_with_host(config, host, http, "qq") {
         channels.push(qq);
     }
 
-    if let Some(yuanbao) = build_long_tail_channel(config, http, "yuanbao") {
+    if let Some(yuanbao) = build_long_tail_channel_with_host(config, host, http, "yuanbao") {
         channels.push(yuanbao);
     }
 
