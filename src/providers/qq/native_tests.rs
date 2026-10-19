@@ -271,7 +271,10 @@ async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fa
             .iter()
             .map(|stored| stored.bytes.as_slice())
             .collect::<Vec<_>>(),
-        vec![b"listener-image-bytes".as_slice(), b"group-image-bytes".as_slice()]
+        vec![
+            b"listener-image-bytes".as_slice(),
+            b"group-image-bytes".as_slice()
+        ]
     );
     release_tx.send(()).unwrap();
     drop(rx);
@@ -367,7 +370,10 @@ async fn qq_gateway_listener_publishes_group_attachment_only_message_without_leg
         ContentPart::Image { media, .. }
             if media.file_name.as_deref() == Some("group-listener.png")
     ));
-    assert!(rx.try_recv().is_err(), "typed ingress must suppress legacy fallback");
+    assert!(
+        rx.try_recv().is_err(),
+        "typed ingress must suppress legacy fallback"
+    );
     assert_eq!(media.stored.lock().unwrap()[0].bytes, b"group-image-bytes");
     release_tx.send(()).unwrap();
     drop(rx);

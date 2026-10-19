@@ -1,13 +1,13 @@
 //! Native typed attachment delivery for Mattermost's v4 files and posts API.
 
 use super::super::long_tail::LongTail;
-use super::{MattermostChannel, MAX_FILE_BYTES, MAX_VOICE_BYTES};
+use super::{MAX_FILE_BYTES, MAX_VOICE_BYTES, MattermostChannel};
 use crate::host::{MediaRepository, VoiceMediaStore};
 use crate::providers::native::{Limits, NativeProvider, Sent, Step, Target};
 use async_trait::async_trait;
 use std::sync::Arc;
-use tinychannels_bus::channel::{ChannelSendError, MessageReceiptPartKind, SendErrorKind};
 use tinychannels_bus::ChannelCapabilities;
+use tinychannels_bus::channel::{ChannelSendError, MessageReceiptPartKind, SendErrorKind};
 
 #[async_trait]
 impl NativeProvider for MattermostChannel {
