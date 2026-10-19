@@ -130,6 +130,87 @@ async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request(
 }
 
 #[tokio::test]
+async fn lark_host_voice_store_delivers_voice_without_file_repository() {
+    let server = HttpsServer::start(|request| {
+        if is_token_request(request) {
+            token_ok("t-voice-only")
+        } else if request.target == "/open-apis/im/v1/files" {
+            (200, r#"{"code":0,"data":{"file_key":"voice_key"}}"#.into())
+        } else if request.target.starts_with("/open-apis/im/v1/messages?") {
+            (200, r#"{"code":0,"data":{"message_id":"om-voice-only"}}"#.into())
+        } else {
+            panic!("unexpected Lark request: {}", request.target)
+        }
+    })
+    .await;
+    let voice = Arc::new(crate::providers::native::fixtures::StubVoice::default());
+    *voice.audio_base64.lock().unwrap() =
+        Some(base64::engine::general_purpose::STANDARD.encode(b"mock source audio"));
+    let host = crate::host::ChannelHostBuilder::new()
+        .voice_media_store(voice)
+        .voice_codec(Arc::new(FixtureVoiceCodec))
+        .events(Arc::new(
+            crate::providers::native::fixtures::RecordingEvents::delivering(),
+        ))
+        .build();
+    let config = tinychannels_bus::ChannelsConfig {
+        lark: Some(tinychannels_bus::config::LarkConfig {
+            app_id: "app-id".into(),
+            app_secret: "app-secret".into(),
+            encrypt_key: None,
+            verification_token: None,
+            allowed_users: vec!["*".into()],
+            use_feishu: true,
+            receive_mode: Default::default(),
+            port: None,
+        }),
+        ..Default::default()
+    };
+    let clients = FixtureHttpClients(fixture_client(&server));
+    let channel = crate::factory::build_long_tail_channel_with_host(&config, &host, &clients, "lark")
+        .expect("configured Lark adapter");
+    let capabilities = crate::providers::native::NativeProvider::declared_capabilities(
+        channel.as_ref(),
+    );
+    assert!(capabilities.voice_out.supported);
+    assert!(capabilities.voice_in.supported);
+
+    let result = crate::channel::ChannelTypedSend::send_typed(
+        channel.as_ref(),
+        &tinychannels_bus::ChannelOutboundMessage {
+            channel_id: "lark".into(),
+            conversation_id: "oc_chat_1".into(),
+            turn_id: Some("turn-voice-only".into()),
+            idempotency_key: "voice-only".into(),
+            parts: vec![tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("voice-ref-1".into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        content_type: Some("audio/mp4".into()),
+                        ..Default::default()
+                    },
+                    audio_base64: None,
+                    codec: Some("m4a_aac".into()),
+                    duration_ms: Some(500),
+                    waveform: None,
+                },
+            }],
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert!(result.error.is_none());
+    assert_eq!(
+        result.receipt.primary_platform_message_id.as_deref(),
+        Some("om-voice-only")
+    );
+    assert_eq!(server.requests.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
 async fn native_inbound_applies_allowlist_bot_and_group_mention_filters_before_download() {
     let server = HttpsServer::start(|_| (500, "unexpected request".into())).await;
     let mut channel = channel_with(&server, true);
@@ -213,6 +294,51 @@ async fn native_inbound_downloads_and_stores_a_file_before_building_the_envelope
     assert_eq!(stored[0].bytes, file_bytes.as_bytes());
     assert_eq!(stored[0].metadata.scope.turn_id, "om-1");
     assert_eq!(stored[0].metadata.max_bytes, 30 * 1024 * 1024);
+}
+
+#[tokio::test]
+async fn lark_voice_store_only_ingests_voice_without_file_repository() {
+    let server = HttpsServer::start(|request| {
+        if is_token_request(request) {
+            token_ok("t-voice-in")
+        } else if request.target == "/open-apis/im/v1/messages/om-voice/resources/file-1?type=file" {
+            (200, b"voice attachment bytes".to_vec())
+        } else {
+            panic!("unexpected Lark request: {}", request.target)
+        }
+    })
+    .await;
+    let voice = Arc::new(crate::providers::native::fixtures::StubVoice::default());
+    let channel = channel_with(&server, true)
+        .with_voice_media_store(voice.clone())
+        .with_events(Arc::new(
+            crate::providers::native::fixtures::RecordingEvents::delivering(),
+        ));
+    let event = serde_json::json!({
+        "sender": {"sender_type": "user", "sender_id": {"open_id": "ou_alice"}},
+        "message": {
+            "message_id": "om-voice",
+            "chat_id": "oc-chat",
+            "chat_type": "p2p",
+            "message_type": "audio",
+            "create_time": "1700000000000",
+            "content": "{\"file_key\":\"file-1\",\"duration\":1200}"
+        }
+    });
+
+    let envelope = channel
+        .inbound_envelope(&event)
+        .await
+        .expect("voice store alone supports Lark voice ingress");
+
+    assert!(matches!(
+        &envelope.parts[0],
+        tinychannels_bus::ContentPart::Voice { media, .. }
+            if media.opaque_id.as_deref() == Some("voice-1")
+    ));
+    let stored = voice.stored.lock().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].bytes, b"voice attachment bytes");
 }
 
 #[tokio::test]
