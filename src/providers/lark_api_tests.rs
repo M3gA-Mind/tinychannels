@@ -35,6 +35,28 @@ fn native_audio_requires_an_ogg_opus_identification_packet() {
     assert!(!super::native::is_ogg_opus(b"not an ogg stream"));
 }
 
+#[test]
+fn lark_voice_capabilities_do_not_require_unrelated_file_storage() {
+    let voice = Arc::new(crate::providers::native::fixtures::StubVoice::default());
+    let voice_only = channel_with(
+        &HttpsServer::start(|_| panic!("capability inspection must not make HTTP")),
+        true,
+    )
+    .with_voice_media_store(voice.clone());
+    let capabilities = crate::providers::native::NativeProvider::declared_capabilities(&voice_only);
+
+    assert!(capabilities.voice_out.supported);
+    assert!(!capabilities.voice_in.supported);
+
+    let voice_with_events = voice_only.with_events(Arc::new(
+        crate::providers::native::fixtures::RecordingEvents::delivering(),
+    ));
+    let capabilities =
+        crate::providers::native::NativeProvider::declared_capabilities(&voice_with_events);
+    assert!(capabilities.voice_out.supported);
+    assert!(capabilities.voice_in.supported);
+}
+
 #[tokio::test]
 async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request() {
     use crate::providers::native::fixtures::{StubMedia, stored_media};
