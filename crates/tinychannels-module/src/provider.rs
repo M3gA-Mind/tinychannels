@@ -961,6 +961,23 @@ pub(crate) struct ModuleEvents(
 );
 
 #[async_trait::async_trait]
+impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.publish_ingress(ingress).await.map(|_| ()).map_err(|error| {
+            tinychannels::channel::ChannelSendError {
+                kind: tinychannels::channel::SendErrorKind::Unknown,
+                message: error.to_string(),
+                retryable: true,
+                ..Default::default()
+            }
+        })
+    }
+}
+
+#[async_trait::async_trait]
 impl tinychannels::host::EventSink for ModuleEvents {
     async fn publish(
         &self,
