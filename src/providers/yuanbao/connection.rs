@@ -80,7 +80,7 @@ pub struct YuanbaoConnection {
     is_connected: AtomicBool,
     msg_id_seq: AtomicU64,
     sender: Mutex<Option<WsSender>>,
-    inbound_tx: mpsc::UnboundedSender<InboundEvent>,
+    inbound_tx: ParkingMutex<mpsc::UnboundedSender<InboundEvent>>,
     account: ParkingMutex<Account>,
     sign_manager: Option<Arc<SignManager>>,
     pending: ParkingMutex<PendingMap>,
@@ -113,7 +113,7 @@ impl YuanbaoConnection {
             is_connected: AtomicBool::new(false),
             msg_id_seq: AtomicU64::new(1),
             sender: Mutex::new(None),
-            inbound_tx,
+            inbound_tx: ParkingMutex::new(inbound_tx),
             account: ParkingMutex::new(initial_account),
             sign_manager,
             pending: ParkingMutex::new(HashMap::new()),
@@ -123,6 +123,16 @@ impl YuanbaoConnection {
 
     pub fn is_connected(&self) -> bool {
         self.is_connected.load(Ordering::Relaxed)
+    }
+
+    /// Replace the receiver side used by a newly-owned listener attempt.
+    pub(crate) fn set_inbound_sender(&self, sender: mpsc::UnboundedSender<InboundEvent>) {
+        *self.inbound_tx.lock() = sender;
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn hold_sender_for_test(&self) -> impl Drop + '_ {
+        self.sender.lock().await
     }
 
     pub fn state(&self) -> ConnectionState {
@@ -203,10 +213,17 @@ impl YuanbaoConnection {
 
     /// Trigger a graceful shutdown.
     pub async fn shutdown(&self) {
-        let mut guard = self.sender.lock().await;
-        if let Some(mut s) = guard.take() {
-            let _ = s.send(Message::Close(None)).await;
-            let _ = s.close().await;
+        // A listener can be cancelled while another task is sending a frame.
+        // Bound both lock acquisition and websocket close so an abandoned
+        // listener registration cannot retain its owner forever.
+        if let Ok(mut guard) = time::timeout(Duration::from_secs(1), self.sender.lock()).await
+            && let Some(mut sender) = guard.take()
+        {
+            let _ = time::timeout(Duration::from_secs(1), async {
+                let _ = sender.send(Message::Close(None)).await;
+                let _ = sender.close().await;
+            })
+            .await;
         }
         // Drop all pending waiters so callers stop hanging.
         let mut pending = self.pending.lock();
@@ -240,7 +257,15 @@ impl YuanbaoConnection {
                 ConnectionState::Reconnecting
             });
 
-            let outcome = self.connect_once(&mut shutdown).await;
+            let mut cancellation = shutdown.clone();
+            let outcome = tokio::select! {
+                biased;
+                _ = cancellation.changed() => {
+                    self.shutdown().await;
+                    return;
+                }
+                outcome = self.connect_once(&mut shutdown) => outcome,
+            };
             match outcome {
                 Ok(Some(code)) if NO_RECONNECT_CLOSE_CODES.contains(&code) => {
                     error!("[yuanbao] no-reconnect close code {} — stopping", code);
@@ -542,7 +567,7 @@ impl YuanbaoConnection {
         if frame.cmd == cmd::KICKOUT {
             let reason = String::from_utf8_lossy(&frame.data).into_owned();
             warn!("[yuanbao] kickout received: {}", reason);
-            let _ = self.inbound_tx.send(InboundEvent::Kickout(reason));
+            let _ = self.inbound_tx.lock().send(InboundEvent::Kickout(reason));
             return;
         }
         if frame.cmd == cmd::UPDATE_META {
@@ -561,7 +586,12 @@ impl YuanbaoConnection {
             "[yuanbao] push forwarded to listener cmd={} module={} seq={}",
             frame.cmd, frame.module, frame.seq_no
         );
-        if self.inbound_tx.send(InboundEvent::Push(frame)).is_err() {
+        if self
+            .inbound_tx
+            .lock()
+            .send(InboundEvent::Push(frame))
+            .is_err()
+        {
             error!("[yuanbao] inbound channel closed — listener gone");
         }
     }
