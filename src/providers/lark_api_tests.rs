@@ -49,8 +49,7 @@ async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request(
         } else if request.target == "/open-apis/im/v1/messages" {
             (
                 200,
-                serde_json::json!({"code": 0, "data": {"message_id": "om-text-1"}})
-                    .to_string(),
+                serde_json::json!({"code": 0, "data": {"message_id": "om-text-1"}}).to_string(),
             )
         } else {
             panic!("unexpected Lark request: {}", request.target)
@@ -100,7 +99,10 @@ async fn typed_text_with_unsupported_file_caption_fails_before_any_lark_request(
         server.requests.lock().unwrap().is_empty(),
         "invalid provider-specific attachment must be rejected before text delivery"
     );
-    assert!(result.is_err(), "unsupported file caption should fail the whole send");
+    assert!(
+        result.is_err(),
+        "unsupported file caption should fail the whole send"
+    );
 }
 
 #[tokio::test]
