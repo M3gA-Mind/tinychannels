@@ -1292,6 +1292,25 @@ async fn public_adapter_start_owns_qq_gateway_until_stop_and_restart() {
                     .send(dispatch("qq-public-barrier", "alice", "after duplicate", 4))
                     .await
                     .unwrap();
+                websocket
+                    .send(Message::Text(
+                        serde_json::json!({
+                            "op": 0,
+                            "s": 5,
+                            "t": "GROUP_AT_MESSAGE_CREATE",
+                            "d": {
+                                "id": "qq-public-group",
+                                "timestamp": "2024-07-03T09:46:40+00:00",
+                                "content": "group message",
+                                "author": {"member_openid": "alice"},
+                                "group_openid": "group-1"
+                            }
+                        })
+                        .to_string()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
             } else {
                 websocket
                     .send(dispatch(accepted_id, "alice", accepted_text, 1))
@@ -1361,6 +1380,18 @@ async fn public_adapter_start_owns_qq_gateway_until_stop_and_restart() {
     assert_eq!(barrier.sender.id, "alice");
     assert_eq!(barrier.conversation.id, "user:alice");
     assert_eq!(barrier.text, "after duplicate");
+
+    let group = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("allowed QQ group event should reach the supplied typed sink")
+        .expect("test sink remains connected");
+    let ChannelIngress::Inbound(group) = group else {
+        panic!("QQ group messages must arrive as typed inbound ingress");
+    };
+    assert_eq!(group.message_id, "qq-public-group");
+    assert_eq!(group.sender.id, "alice");
+    assert_eq!(group.conversation.id, "group:group-1");
+    assert_eq!(group.text, "group message");
 
     adapter.stop().await.unwrap();
     tokio::time::timeout(GUARD, &mut listener)
