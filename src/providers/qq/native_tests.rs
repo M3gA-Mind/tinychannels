@@ -32,6 +32,23 @@ async fn qq_inbound_image_downloads_tencent_attachment_and_publishes_typed_ingre
     .with_events(events.clone())
     .with_attachment_http_client(server.client.clone());
 
+    let capabilities =
+        crate::providers::native::NativeProvider::declared_capabilities(&channel);
+    assert!(capabilities.content.image.inbound);
+    assert!(capabilities.content.file.inbound);
+
+    let no_events = super::super::QQChannel::with_http_client(
+        "app-id".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    )
+    .with_media_repository(Arc::new(StubMedia::default()));
+    let capabilities =
+        crate::providers::native::NativeProvider::declared_capabilities(&no_events);
+    assert!(!capabilities.content.image.inbound);
+    assert!(capabilities.content.image.outbound);
+
     let envelope = channel
         .inbound_envelope(
             "C2C_MESSAGE_CREATE",

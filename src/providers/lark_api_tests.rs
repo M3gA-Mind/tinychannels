@@ -38,9 +38,12 @@ fn native_audio_requires_an_ogg_opus_identification_packet() {
 #[test]
 fn lark_voice_capabilities_do_not_require_unrelated_file_storage() {
     let voice = Arc::new(crate::providers::native::fixtures::StubVoice::default());
-    let voice_only = channel_with(
-        &HttpsServer::start(|_| panic!("capability inspection must not make HTTP")),
-        true,
+    let voice_only = LarkChannel::new(
+        "app-id".into(),
+        "app-secret".into(),
+        "verify-token".into(),
+        None,
+        vec!["*".into()],
     )
     .with_voice_media_store(voice.clone());
     let capabilities = crate::providers::native::NativeProvider::declared_capabilities(&voice_only);
