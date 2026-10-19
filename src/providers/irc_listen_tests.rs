@@ -129,6 +129,23 @@ impl crate::channel::ChannelInboundSink for InboundSink {
     }
 }
 
+struct RejectingSink;
+
+#[async_trait::async_trait]
+impl crate::channel::ChannelInboundSink for RejectingSink {
+    async fn push(
+        &self,
+        _: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        Err(crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::Transient,
+            message: "private sink failure detail".into(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
+}
+
 #[tokio::test]
 async fn public_adapter_start_owns_typed_listener_until_stop_joins_it() {
     let (listener, port) = bind().await;
@@ -198,6 +215,73 @@ async fn public_adapter_start_owns_typed_listener_until_stop_joins_it() {
     } else {
         assert!(final_line.is_empty(), "stop must close the IRC socket");
     }
+}
+
+#[tokio::test]
+async fn public_adapter_cleans_up_after_sink_failure_and_can_restart() {
+    let (listener, port) = bind().await;
+    let acceptor = acceptor(false);
+    let channel = Arc::new(IrcChannel::new(IrcChannelConfig {
+        channels: vec!["#ops".into()],
+        allowed_users: vec!["alice".into()],
+        ..config(port)
+    }));
+    let mut start = tokio::spawn({
+        let channel = channel.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &RejectingSink).await }
+    });
+    let mut peer = tokio::select! {
+        result = &mut start => panic!("IRC start returned before accepting a peer: {result:?}"),
+        peer = Peer::accept(&listener, &acceptor) => peer,
+    };
+    peer.expect("NICK bot").await;
+    peer.expect("USER botuser 0 * :OpenHuman").await;
+    peer.say(":srv 001 bot :Welcome").await;
+    peer.expect("JOIN #ops").await;
+    peer.say(":alice!a@host PRIVMSG #ops :reject this event")
+        .await;
+
+    let error = tokio::time::timeout(GUARD, &mut start)
+        .await
+        .expect("a failing event sink should stop the listener")
+        .expect("listener task must not panic")
+        .expect_err("the typed sink rejected the admitted event");
+    assert_eq!(error.kind, crate::channel::SendErrorKind::Transient);
+    assert!(error.retryable);
+    assert_eq!(error.message, "IRC listener stopped");
+    assert!(!error.message.contains("private sink failure detail"));
+    assert!(
+        tokio::time::timeout(GUARD, peer.next_line())
+            .await
+            .expect("the failed listener must close its socket")
+            .is_empty()
+    );
+
+    // A second start on the same adapter proves the failed run released its
+    // single-listener registration and dropped the old writer.
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let mut restarted = tokio::spawn({
+        let channel = channel.clone();
+        let sink = sink.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+    let mut peer = tokio::select! {
+        result = &mut restarted => panic!("restarted listener returned before accepting a peer: {result:?}"),
+        peer = Peer::accept(&listener, &acceptor) => peer,
+    };
+    peer.expect("NICK bot").await;
+    peer.expect("USER botuser 0 * :OpenHuman").await;
+    peer.say(":srv 001 bot :Welcome").await;
+    peer.expect("JOIN #ops").await;
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, restarted)
+        .await
+        .expect("stop must join the restarted listener")
+        .expect("listener task must not panic")
+        .expect("restarted listener must stop cleanly");
 }
 
 #[tokio::test]
