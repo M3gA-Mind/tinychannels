@@ -1678,6 +1678,40 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
 }
 
 #[tokio::test]
+async fn cancelled_listener_does_not_open_gateway_after_registration() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    let server = HttpsServer::start(|request| {
+        panic!("a cancelled DingTalk listener must not register: {request:?}")
+    })
+    .await;
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    );
+    let adapter: Arc<dyn ChannelAdapter> = Arc::new(channel.clone());
+    let (id, cancellation) = channel.begin_listener().unwrap();
+    let _registration = ListenerRegistration {
+        channel: &channel,
+        id,
+    };
+    adapter.stop().await.unwrap();
+
+    let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = RecordingInboundSink(tx);
+    tokio::time::timeout(
+        PUBLIC_LISTENER_GUARD,
+        channel.listen_owned(DingTalkIngress::Typed(&sink), Some(cancellation)),
+    )
+    .await
+    .expect("a pre-cancelled DingTalk listener must return promptly")
+    .expect("cancellation before registration is a clean stop");
+    assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn public_adapter_does_not_ack_or_deduplicate_rejected_typed_callbacks() {
     use crate::providers::http_test_support::HttpsServer;
     use futures_util::{SinkExt, StreamExt};
