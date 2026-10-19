@@ -414,24 +414,24 @@ async fn aborting_public_listener_releases_ownership_for_restart() {
     )
     .unwrap()
         + 10 * 60 * 1000;
-    let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let response_polls = Arc::clone(&polls);
+    let restarted = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let response_restarted = Arc::clone(&restarted);
     Mock::given(method("GET"))
         .and(path("/api/v4/channels/channel-1/posts"))
         .respond_with(move |_request: &wiremock::Request| {
-            let index = response_polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let (id, text) = if index == 0 {
-                ("post-before-abort", "before abort")
-            } else {
-                ("post-after-abort", "after abort")
-            };
+            let (id, text, timestamp) =
+                if response_restarted.load(std::sync::atomic::Ordering::SeqCst) {
+                    ("post-after-abort", "after abort", create_at + 1)
+                } else {
+                    ("post-before-abort", "before abort", create_at)
+                };
             ResponseTemplate::new(200).set_body_json(json!({
                 "posts": {
                     (id): {
                         "id": id,
                         "user_id": "alice",
                         "message": text,
-                        "create_at": create_at + i64::try_from(index).unwrap(),
+                        "create_at": timestamp,
                         "root_id": "thread-1"
                     }
                 }
@@ -467,14 +467,15 @@ async fn aborting_public_listener_releases_ownership_for_restart() {
     assert_eq!(first_envelope.message_id, "post-before-abort");
     first.abort();
     assert!(first.await.unwrap_err().is_cancelled());
+    restarted.store(true, std::sync::atomic::Ordering::SeqCst);
 
-    let mut restarted = tokio::spawn({
+    let mut listener = tokio::spawn({
         let adapter = adapter.clone();
         let sink = sink.clone();
         async move { adapter.start(&sink).await }
     });
     let second_ingress = tokio::select! {
-        result = &mut restarted => panic!("restart returned before typed delivery: {result:?}"),
+        result = &mut listener => panic!("restart returned before typed delivery: {result:?}"),
         received = tokio::time::timeout(GUARD, rx.recv()) => received
             .expect("aborted listener must release ownership so restart can poll")
             .expect("test sink remains connected"),
@@ -485,7 +486,7 @@ async fn aborting_public_listener_releases_ownership_for_restart() {
     assert_eq!(second_envelope.message_id, "post-after-abort");
     assert_eq!(second_envelope.text, "after abort");
     adapter.stop().await.unwrap();
-    tokio::time::timeout(GUARD, &mut restarted)
+    tokio::time::timeout(GUARD, &mut listener)
         .await
         .expect("stop must join restarted listener")
         .expect("restarted listener must not panic")
