@@ -143,6 +143,109 @@ async fn qq_inbound_attachment_checks_sender_allowlist_before_network_io() {
     assert!(server.requests.lock().unwrap().is_empty());
 }
 
+#[tokio::test]
+async fn qq_gateway_listener_publishes_attachment_only_message_without_legacy_fallback() {
+    use crate::providers::native::fixtures::RecordingEvents;
+    use crate::traits::Channel;
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let gateway = HttpsServer::start(move |request| match request.target.as_str() {
+        "/app/getAppAccessToken" => (
+            200,
+            json!({"access_token": "qq-token", "expires_in": "7200"}).to_string(),
+        ),
+        "/gateway" => (200, json!({"url": format!("ws://{address}/")}).to_string()),
+        "/attachments/image-2" => (200, "listener-image-bytes".into()),
+        other => panic!("unexpected QQ request: {other}"),
+    })
+    .await;
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let websocket = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        let mut ws = accept_async(socket).await.unwrap();
+        ws.send(Message::Text(
+            json!({"op": 10, "d": {"heartbeat_interval": 60000}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let identify: serde_json::Value =
+            serde_json::from_str(&ws.next().await.unwrap().unwrap().to_string()).unwrap();
+        assert_eq!(identify["op"], 2);
+        // The gateway's heartbeat interval fires immediately.
+        let heartbeat: serde_json::Value =
+            serde_json::from_str(&ws.next().await.unwrap().unwrap().to_string()).unwrap();
+        assert_eq!(heartbeat["op"], 1);
+        ws.send(Message::Text(
+            json!({
+                "op": 0,
+                "t": "C2C_MESSAGE_CREATE",
+                "d": {
+                    "id": "qq-listener-image",
+                    "author": {"user_openid": "alice"},
+                    "attachments": [{
+                        "content_type": "image/png",
+                        "filename": "listener.png",
+                        "url": "https://api.sgroup.qq.com/attachments/image-2"
+                    }]
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        release_rx.await.unwrap();
+        ws.close(None).await.unwrap();
+    });
+
+    let media = Arc::new(StubMedia::default());
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = super::super::QQChannel::with_http_client(
+        "app-id".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        gateway.client.clone(),
+    )
+    .with_media_repository(media.clone())
+    .with_events(events.clone())
+    .with_attachment_http_client(gateway.client.clone());
+    let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+    let listening = tokio::spawn(async move { channel.listen(tx).await });
+
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if events.inbound().len() == 1 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("QQ listener should publish typed attachment ingress");
+    assert!(matches!(
+        &events.inbound()[0].parts[0],
+        ContentPart::Image { media, .. }
+            if media.file_name.as_deref() == Some("listener.png")
+    ));
+    assert!(
+        rx.try_recv().is_err(),
+        "typed ingress must suppress legacy fallback"
+    );
+    assert_eq!(
+        media.stored.lock().unwrap()[0].bytes,
+        b"listener-image-bytes"
+    );
+    release_tx.send(()).unwrap();
+    drop(rx);
+    assert!(listening.await.unwrap().is_err());
+    websocket.await.unwrap();
+}
+
 struct QQVoiceStore;
 
 #[async_trait::async_trait]
