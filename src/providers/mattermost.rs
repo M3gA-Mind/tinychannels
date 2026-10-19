@@ -799,6 +799,10 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         capabilities
     }
 
+    fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
+        crate::providers::native::NativeProvider::descriptor_extra(self)
+    }
+
     fn typing_supported(&self) -> bool {
         true
     }

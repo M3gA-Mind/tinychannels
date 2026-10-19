@@ -104,6 +104,12 @@ pub(crate) trait LongTail: Channel {
     /// The facts this configured account declares.
     fn declared(&self) -> ChannelCapabilities;
 
+    /// Provider-specific descriptor metadata for capabilities that depend on
+    /// host services installed on this configured account.
+    fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
+        Vec::new()
+    }
+
     /// Whether the typing indicator is implemented.
     fn typing_supported(&self) -> bool {
         false
@@ -155,11 +161,15 @@ fn check_channel<T: LongTail + ?Sized>(
     Ok(())
 }
 
-pub(crate) fn descriptor<T: LongTail + ?Sized>() -> ChannelDescriptor {
+pub(crate) fn descriptor<T: LongTail + ?Sized>(provider: &T) -> ChannelDescriptor {
+    let mut metadata = BTreeMap::from([("adapterMode".into(), "native-v2".into())]);
+    for (key, value) in provider.descriptor_extra() {
+        metadata.insert(key.into(), value.into());
+    }
     ChannelDescriptor {
         id: T::ID.into(),
         display_name: T::DISPLAY.into(),
-        metadata: BTreeMap::from([("adapterMode".into(), "native-v2".into())]),
+        metadata,
         ..Default::default()
     }
 }
@@ -308,7 +318,7 @@ macro_rules! impl_long_tail_adapter {
         #[async_trait::async_trait]
         impl $crate::channel::ChannelAdapter for $ty {
             fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
-                $crate::providers::long_tail::descriptor::<$ty>()
+                $crate::providers::long_tail::descriptor(self)
             }
             fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
                 $crate::providers::long_tail::LongTail::declared(self)
