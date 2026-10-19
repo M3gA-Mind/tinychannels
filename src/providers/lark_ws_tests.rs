@@ -180,7 +180,7 @@ async fn public_adapter_start_owns_lark_websocket_until_stop_and_restart() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let sink = RecordingInboundSink(tx);
 
-    for (message_id, text) in [("om-first", "first connection"), ("om-second", "after restart")] {
+    for (message_id, message_text) in [("om-first", "first connection"), ("om-second", "after restart")] {
         let mut listener = tokio::spawn({
             let adapter = adapter.clone();
             let sink = sink.clone();
@@ -196,7 +196,7 @@ async fn public_adapter_start_owns_lark_websocket_until_stop_and_restart() {
         send_event(
             &mut ws,
             initial_ping.seq_id + 1,
-            event(message_id, "ou_alice", text(text)),
+            event(message_id, "ou_alice", text(message_text)),
         )
         .await;
         let ingress = tokio::select! {
@@ -211,7 +211,7 @@ async fn public_adapter_start_owns_lark_websocket_until_stop_and_restart() {
         assert_eq!(envelope.message_id, message_id);
         assert_eq!(envelope.sender.id, "ou_alice");
         assert_eq!(envelope.conversation.id, "oc_chat");
-        assert_eq!(envelope.text, text);
+        assert_eq!(envelope.text, message_text);
 
         adapter.stop().await.unwrap();
         tokio::time::timeout(GUARD, &mut listener)
