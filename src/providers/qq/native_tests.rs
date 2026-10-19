@@ -32,23 +32,6 @@ async fn qq_inbound_image_downloads_tencent_attachment_and_publishes_typed_ingre
     .with_events(events.clone())
     .with_attachment_http_client(server.client.clone());
 
-    let capabilities =
-        crate::providers::native::NativeProvider::declared_capabilities(&channel);
-    assert!(capabilities.content.image.inbound);
-    assert!(capabilities.content.file.inbound);
-
-    let no_events = super::super::QQChannel::with_http_client(
-        "app-id".into(),
-        "app-secret".into(),
-        vec!["alice".into()],
-        server.client.clone(),
-    )
-    .with_media_repository(Arc::new(StubMedia::default()));
-    let capabilities =
-        crate::providers::native::NativeProvider::declared_capabilities(&no_events);
-    assert!(!capabilities.content.image.inbound);
-    assert!(capabilities.content.image.outbound);
-
     let envelope = channel
         .inbound_envelope(
             "C2C_MESSAGE_CREATE",
@@ -91,6 +74,26 @@ async fn qq_inbound_image_downloads_tencent_attachment_and_publishes_typed_ingre
     assert_eq!(stored[0].metadata.scope.turn_id, "qq-inbound-1");
     assert_eq!(events.inbound().len(), 1);
     assert_eq!(server.requests.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn qq_declares_inbound_file_capabilities_only_when_ingress_ports_are_present() {
+    let with_ingress = super::super::QQChannel::new("app-id".into(), "app-secret".into(), vec![])
+        .with_media_repository(Arc::new(StubMedia::default()))
+        .with_events(Arc::new(
+            crate::providers::native::fixtures::RecordingEvents::delivering(),
+        ));
+    let capabilities =
+        crate::providers::native::NativeProvider::declared_capabilities(&with_ingress);
+    assert!(capabilities.content.image.inbound);
+    assert!(capabilities.content.file.inbound);
+
+    let outbound_only = super::super::QQChannel::new("app-id".into(), "app-secret".into(), vec![])
+        .with_media_repository(Arc::new(StubMedia::default()));
+    let capabilities =
+        crate::providers::native::NativeProvider::declared_capabilities(&outbound_only);
+    assert!(!capabilities.content.image.inbound);
+    assert!(capabilities.content.image.outbound);
 }
 
 #[tokio::test]
