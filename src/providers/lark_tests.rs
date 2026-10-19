@@ -77,7 +77,8 @@ async fn lark_webhook_requires_the_configured_token_for_challenges() {
     let state = LarkWebhookState {
         verification_token: "test_verification_token".into(),
         channel: Arc::new(make_channel()),
-        tx,
+        tx: Some(tx),
+        typed_tx: None,
     };
     for payload in [
         serde_json::json!({"challenge": "abc123"}),
