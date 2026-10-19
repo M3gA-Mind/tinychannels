@@ -262,9 +262,15 @@ pub async fn check_feature(
     if requires_receipt
         && !fixture.receipt_required(feature)
         && receipt.is_some_and(|receipt| {
-            !receipt.platform_message_ids.is_empty()
+            let has_receipt_data = receipt.channel.is_some()
+                || receipt.conversation.is_some()
+                || receipt.primary_platform_message_id.is_some()
+                || !receipt.platform_message_ids.is_empty()
+                || !receipt.parts.is_empty();
+            has_receipt_data
                 && (receipt.channel.as_ref() != Some(&expected.channel)
                     || receipt.conversation.as_ref() != Some(&expected.conversation)
+                    || receipt.platform_message_ids.is_empty()
                     || receipt.parts.is_empty())
         })
     {

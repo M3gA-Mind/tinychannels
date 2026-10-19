@@ -161,6 +161,35 @@ async fn receiptless_platform_send_requires_real_wire_evidence_without_fabricate
     );
 }
 
+#[tokio::test]
+async fn receiptless_platform_rejects_mis_scoped_optional_receipts() {
+    let mut fixture = fixture(ConformanceFeature::Text);
+    fixture.requires_receipt = false;
+    fixture.result = Ok(Some(ChannelSendOutcome {
+        receipt: MessageReceipt {
+            channel: Some(ChannelRef {
+                id: "another-channel".into(),
+                account_id: Some("telegram:account-a".into()),
+            }),
+            conversation: Some(fixture.scope.conversation.clone()),
+            platform_message_ids: vec!["321".into()],
+            parts: vec![MessageReceiptPart {
+                platform_message_id: "321".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        error: None,
+    }));
+
+    assert!(
+        check_feature(&fixture, ConformanceFeature::Text)
+            .await
+            .unwrap_err()
+            .contains("mis-scoped or incomplete optional receipt")
+    );
+}
+
 fn declare_feature(fixture: &mut Fixture, feature: ConformanceFeature) {
     let capabilities = &mut fixture.adapter.0;
     match feature {
