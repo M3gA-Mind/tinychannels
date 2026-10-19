@@ -362,6 +362,15 @@ async fn token_and_upload_server_errors_are_retryable_before_message_delivery() 
                 .iter()
                 .all(|request| { !request.target.starts_with("/v1.0/robot/groupMessages/send") })
         );
+        let requests = server.requests.lock().unwrap();
+        if failing_path == "token" {
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].target, "/v1.0/oauth2/accessToken");
+        } else {
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0].target, "/v1.0/oauth2/accessToken");
+            assert!(requests[1].target.starts_with("/media/upload?"));
+        }
     }
 }
 
