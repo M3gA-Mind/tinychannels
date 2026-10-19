@@ -353,6 +353,42 @@ impl NativeProvider for DingTalkChannel {
             .ok_or_else(|| unknown_after_send("DingTalk accepted the send without a receipt ID"))?;
         Ok(vec![Sent::new(message_id, part_kind)])
     }
+
+    async fn start_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        let (id, cancellation) = self.begin_listener().map_err(|error| ChannelSendError {
+            kind: SendErrorKind::Forbidden,
+            message: error.to_string(),
+            retryable: false,
+            ..Default::default()
+        })?;
+        let _registration = super::ListenerRegistration { channel: self, id };
+        self.listen_owned(super::DingTalkIngress::Typed(sink), Some(cancellation))
+            .await
+            .map_err(|error| {
+                tracing::debug!(%error, "DingTalk typed listener stopped");
+                ChannelSendError {
+                    kind: SendErrorKind::Transient,
+                    message: "DingTalk listener stopped".into(),
+                    retryable: true,
+                    ..Default::default()
+                }
+            })
+    }
+
+    async fn stop_listener(&self) -> Result<(), ChannelSendError> {
+        if let Some((_, cancellation)) = self
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            cancellation.send_replace(true);
+        }
+        Ok(())
+    }
 }
 
 fn response_lists_user(response: &serde_json::Value, field: &str, user_id: &str) -> bool {
@@ -469,6 +505,21 @@ impl DingTalkChannel {
         &self,
         data: &serde_json::Value,
     ) -> Option<ChannelInboundEnvelope> {
+        self.inbound_envelope_with_mode(data, false).await
+    }
+
+    pub(super) async fn inbound_envelope_for_listener(
+        &self,
+        data: &serde_json::Value,
+    ) -> Option<ChannelInboundEnvelope> {
+        self.inbound_envelope_with_mode(data, true).await
+    }
+
+    async fn inbound_envelope_with_mode(
+        &self,
+        data: &serde_json::Value,
+        listener: bool,
+    ) -> Option<ChannelInboundEnvelope> {
         use crate::providers::native::inbound::{assemble, media_of};
 
         let message_id = data.get("msgId")?.as_str()?.to_owned();
@@ -524,11 +575,12 @@ impl DingTalkChannel {
             .to_owned();
         let mut ingested = Ingested::default();
         let voice = message_type == "audio";
-        let can_ingest_file = self.native.events.is_some()
+        let can_ingest_file = (listener || self.native.events.is_some())
             && self.native.media_repository.is_some()
             && matches!(message_type, "picture" | "file");
-        let can_ingest_voice =
-            self.native.events.is_some() && self.native.voice_media_store.is_some() && voice;
+        let can_ingest_voice = (listener || self.native.events.is_some())
+            && self.native.voice_media_store.is_some()
+            && voice;
         if can_ingest_file || can_ingest_voice {
             let download_code = if message_type == "picture" {
                 content

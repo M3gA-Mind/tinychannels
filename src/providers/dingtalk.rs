@@ -295,14 +295,13 @@ impl DingTalkChannel {
                         "data": "",
                     });
 
-                    if let Err(e) = tokio::time::timeout(
+                    let pong_result = tokio::time::timeout(
                         std::time::Duration::from_secs(1),
                         write.send(Message::Text(pong.to_string().into())),
                     )
-                    .await
-                    .unwrap_or_else(|_| Err(anyhow::anyhow!("DingTalk pong timed out")))
-                    {
-                        tracing::warn!("DingTalk: failed to send pong: {e}");
+                    .await;
+                    if !matches!(pong_result, Ok(Ok(()))) {
+                        tracing::warn!("DingTalk: failed to send pong or timed out");
                         break;
                     }
                 }
@@ -343,21 +342,9 @@ impl DingTalkChannel {
                     if provider_message_id
                         .is_some_and(|id| self.native.has_seen(&format!("dingtalk:{id}")))
                     {
-                        let message_id = frame
-                            .get("headers")
-                            .and_then(|headers| headers.get("messageId"))
-                            .and_then(serde_json::Value::as_str)
-                            .unwrap_or("");
-                        let ack = serde_json::json!({
-                            "code": 200,
-                            "headers": {
-                                "contentType": "application/json",
-                                "messageId": message_id,
-                            },
-                            "message": "OK",
-                            "data": "",
-                        });
-                        let _ = write.send(Message::Text(ack.to_string().into())).await;
+                        if !send_callback_ack(&mut write, &frame).await {
+                            break 'stream;
+                        }
                         continue;
                     }
 
@@ -373,6 +360,46 @@ impl DingTalkChannel {
                         webhooks.insert(sender_id.to_string(), webhook);
                     }
 
+                    if let DingTalkIngress::Typed(sink) = &ingress {
+                        let envelope = tokio::select! {
+                            biased;
+                            () = listener_cancelled(&mut cancellation) => {
+                                let _ = tokio::time::timeout(
+                                    std::time::Duration::from_secs(1),
+                                    write.send(Message::Close(None)),
+                                ).await;
+                                stopped = true;
+                                break 'stream;
+                            }
+                            envelope = self.inbound_envelope_for_listener(&data) => envelope,
+                        };
+                        let Some(envelope) = envelope else {
+                            continue;
+                        };
+                        let provider_message_id = envelope.message_id.clone();
+                        let published = tokio::select! {
+                            biased;
+                            () = listener_cancelled(&mut cancellation) => {
+                                let _ = tokio::time::timeout(
+                                    std::time::Duration::from_secs(1),
+                                    write.send(Message::Close(None)),
+                                ).await;
+                                stopped = true;
+                                break 'stream;
+                            }
+                            result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => result,
+                        };
+                        published.map_err(|error| {
+                            anyhow::anyhow!("DingTalk typed ingress rejected: {}", error.message)
+                        })?;
+                        self.native
+                            .mark_seen(format!("dingtalk:{provider_message_id}"));
+                        if !send_callback_ack(&mut write, &frame).await {
+                            break 'stream;
+                        }
+                        continue;
+                    }
+
                     if let Some(envelope) = self.inbound_envelope(&data).await {
                         let provider_message_id = envelope.message_id.clone();
                         if crate::providers::native::inbound::publish(
@@ -384,21 +411,9 @@ impl DingTalkChannel {
                         {
                             self.native
                                 .mark_seen(format!("dingtalk:{provider_message_id}"));
-                            let message_id = frame
-                                .get("headers")
-                                .and_then(|h| h.get("messageId"))
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("");
-                            let ack = serde_json::json!({
-                                "code": 200,
-                                "headers": {
-                                    "contentType": "application/json",
-                                    "messageId": message_id,
-                                },
-                                "message": "OK",
-                                "data": "",
-                            });
-                            let _ = write.send(Message::Text(ack.to_string().into())).await;
+                            if !send_callback_ack(&mut write, &frame).await {
+                                break 'stream;
+                            }
                             continue;
                         }
                     }
@@ -408,22 +423,9 @@ impl DingTalkChannel {
                     }
 
                     // Acknowledge the event
-                    let message_id = frame
-                        .get("headers")
-                        .and_then(|h| h.get("messageId"))
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("");
-
-                    let ack = serde_json::json!({
-                        "code": 200,
-                        "headers": {
-                            "contentType": "application/json",
-                            "messageId": message_id,
-                        },
-                        "message": "OK",
-                        "data": "",
-                    });
-                    let _ = write.send(Message::Text(ack.to_string().into())).await;
+                    if !send_callback_ack(&mut write, &frame).await {
+                        break 'stream;
+                    }
 
                     let channel_msg = ChannelMessage {
                         id: Uuid::new_v4().to_string(),
@@ -441,9 +443,11 @@ impl DingTalkChannel {
                         sender_name: None,
                     };
 
-                    if tx.send(channel_msg).await.is_err() {
-                        tracing::warn!("DingTalk: message channel closed");
-                        break;
+                    if let Some(tx) = legacy_tx {
+                        if tx.send(channel_msg).await.is_err() {
+                            tracing::warn!("DingTalk: message channel closed");
+                            break;
+                        }
                     }
                 }
                 _ => {}
@@ -457,6 +461,37 @@ impl DingTalkChannel {
         }
     
     }
+}
+
+async fn send_callback_ack<S>(
+    write: &mut S,
+    frame: &serde_json::Value,
+) -> bool
+where
+    S: futures_util::Sink<Message> + Unpin,
+{
+    let message_id = frame
+        .get("headers")
+        .and_then(|headers| headers.get("messageId"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let ack = serde_json::json!({
+        "code": 200,
+        "headers": {
+            "contentType": "application/json",
+            "messageId": message_id,
+        },
+        "message": "OK",
+        "data": "",
+    });
+    matches!(
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            write.send(Message::Text(ack.to_string().into())),
+        )
+        .await,
+        Ok(Ok(()))
+    )
 }
 
 async fn listener_cancelled(
