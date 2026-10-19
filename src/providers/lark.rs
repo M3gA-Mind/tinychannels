@@ -129,6 +129,8 @@ struct LarkListenerRegistration<'a> {
     id: Uuid,
 }
 
+type LarkListenerCancel = Arc<StdMutex<Option<(Uuid, watch::Sender<bool>)>>>;
+
 impl Drop for LarkListenerRegistration<'_> {
     fn drop(&mut self) {
         self.channel.end_listener(self.id);
@@ -189,7 +191,7 @@ pub struct LarkChannel {
     /// Dedup set: WS message_ids seen in last ~30 min to prevent double-dispatch
     ws_seen_ids: Arc<RwLock<HashMap<String, Instant>>>,
     /// The typed adapter owns one listener at a time across all provider clones.
-    listener_cancel: Arc<StdMutex<Option<(Uuid, watch::Sender<bool>)>>>,
+    listener_cancel: LarkListenerCancel,
 }
 
 impl LarkChannel {
@@ -579,15 +581,13 @@ impl LarkChannel {
                         if let Some(envelope) = self
                             .inbound_envelope_for_listener(&event_payload, true)
                             .await
-                        {
-                            if sink
+                            && sink
                                 .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
                                 .await
                                 .is_err()
-                            {
-                                tracing::warn!("Lark WS: typed ingress sink rejected an event");
-                                break;
-                            }
+                        {
+                            tracing::warn!("Lark WS: typed ingress sink rejected an event");
+                            break;
                         }
                         self.mark_ws_message_seen(&lark_msg.message_id).await;
                         continue;
@@ -1130,9 +1130,10 @@ impl LarkChannel {
                                 .and_then(serde_json::Value::as_str)
                                 .unwrap_or_default()
                                 .to_owned();
-                            if !self.is_event_admitted(&request.event) || message_id.is_empty() {
-                                TypedWebhookResult::Acknowledged
-                            } else if self.ws_message_was_seen(&message_id).await {
+                            if !self.is_event_admitted(&request.event)
+                                || message_id.is_empty()
+                                || self.ws_message_was_seen(&message_id).await
+                            {
                                 TypedWebhookResult::Acknowledged
                             } else if let Some(envelope) = self
                                 .inbound_envelope_for_listener(&request.event, true)
