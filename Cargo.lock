@@ -2772,6 +2772,7 @@ dependencies = [
  "tinychannels-bus",
  "tinychannels-conformance",
  "tinychannels-runtime",
+ "tinyvoice-bus",
  "tinystoragedrivers-core",
  "tokio",
  "tokio-rustls",
