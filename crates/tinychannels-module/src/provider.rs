@@ -1172,7 +1172,7 @@ async fn listen_adapter_with_supervision(
             // Poll start first so providers can synchronously claim their
             // listener before stop is sent if cancellation raced task startup.
             result = &mut start => result.map_err(|error| anyhow::anyhow!(error.message)),
-            _ = cancellation.wait_for(|value| *value) => {
+            _ = async { let _ = cancellation.wait_for(|value| *value).await; } => {
                 let _ = adapter.stop().await;
                 let _ = (&mut start).await;
                 return Ok(());
@@ -1185,7 +1185,7 @@ async fn listen_adapter_with_supervision(
         host.report_status(&name, "restarting", Some("provider disconnected".into()))
             .await;
         tokio::select! { biased;
-            _ = cancellation.wait_for(|value| *value) => return Ok(()),
+            _ = async { let _ = cancellation.wait_for(|value| *value).await; } => return Ok(()),
             _ = tokio::time::sleep(Duration::from_secs(delay) + Duration::from_millis(tinychannels::runtime::jitter_millis(delay))) => {}
         }
         backoff = Some(delay.saturating_mul(2).min(maximum));
