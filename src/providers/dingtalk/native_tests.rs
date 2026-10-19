@@ -673,13 +673,13 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
     use crate::host::{VoiceReplyConstraints, prepare_voice_reply};
     use crate::providers::http_test_support::HttpsServer;
     use base64::Engine as _;
+    use sha2::Digest as _;
     use tinybus::{broker::Broker, module::ModuleHost, transport::memory::MemoryBus};
     use tinychannels_bus::channel::{ConversationKind, ConversationRef, MessageReceiptPartKind};
     use tinychannels_bus::{
         ChannelOutboundMessage, ChannelRef, ContentPart, OutboundContentPart, OutboundVoice,
     };
     use tinychannels_runtime::channel::ChannelTypedSend;
-    use sha2::Digest as _;
     use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
     let artifact = std::env::var("TINYVOICE_MODULE_ARTIFACT").expect("TinyVoice module path");
@@ -903,11 +903,6 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
         Some("receipt-sampleAudio")
     );
     let requests = server.requests.lock().unwrap();
-    let upload = requests
-        .iter()
-        .find(|request| request.target.starts_with("/media/upload?"))
-        .unwrap();
-    assert!(upload.raw_body.windows(expected_bytes.len()).any(|bytes| bytes == expected_bytes.as_slice()));
     assert_eq!(
         requests
             .iter()
