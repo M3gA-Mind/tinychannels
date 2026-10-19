@@ -3,6 +3,9 @@
 
 use super::*;
 use std::time::Duration;
+use tinychannels_conformance::{
+    AdapterFixture, ConformanceFeature, ExpectedScope, WireObservation, check_all_features,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
@@ -140,6 +143,322 @@ impl crate::channel::ChannelInboundSink for InboundSink {
                 ..Default::default()
             })
     }
+}
+
+struct IrcConformanceFixture {
+    channel: Arc<dyn crate::LongTailNative>,
+    peer: tokio::sync::Mutex<Peer>,
+    observations: std::sync::Mutex<Vec<WireObservation>>,
+}
+
+#[async_trait::async_trait]
+impl AdapterFixture for IrcConformanceFixture {
+    fn adapter(&self) -> &dyn crate::channel::ChannelAdapter {
+        self.channel.as_ref()
+    }
+
+    fn expected_scope(&self, _: ConformanceFeature) -> ExpectedScope {
+        ExpectedScope {
+            channel: tinychannels_bus::ChannelRef {
+                id: "irc".into(),
+                account_id: None,
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Channel,
+                id: "#ops".into(),
+                ..Default::default()
+            },
+            reply_to_id: None,
+            thread_id: None,
+        }
+    }
+
+    fn receipt_required(&self, _: ConformanceFeature) -> bool {
+        false
+    }
+
+    fn clear_observations(&self) {
+        self.observations.lock().unwrap().clear();
+    }
+
+    fn observations(&self) -> Vec<WireObservation> {
+        self.observations.lock().unwrap().clone()
+    }
+
+    async fn exercise(
+        &self,
+        feature: ConformanceFeature,
+    ) -> Result<
+        Option<tinychannels_bus::channel::ChannelSendOutcome>,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        let expected = self.expected_scope(feature);
+        let intent = |payload| {
+            let mut intent = tinychannels_bus::ChannelOutboundIntent {
+                idempotency_key: "irc-conformance".into(),
+                channel_id: "irc".into(),
+                conversation_id: "#ops".into(),
+                channel_ref: Some(expected.channel.clone()),
+                conversation_ref: Some(expected.conversation.clone()),
+                payload,
+                ..Default::default()
+            };
+            if feature == ConformanceFeature::ReplyAddressing {
+                intent.reply_to_id = Some("parent-message".into());
+            }
+            if feature == ConformanceFeature::ThreadAddressing {
+                intent.thread_id = Some("thread-channel".into());
+            }
+            intent
+        };
+        use tinychannels_bus::{ContentPart, MediaKind, MediaReference, OutboundContentPart};
+        let rich = |part| tinychannels_bus::OutboundPayload::Parts {
+            parts: vec![OutboundContentPart::Content { part }],
+        };
+        let media = |kind| MediaReference {
+            opaque_id: Some(format!("irc-{kind:?}")),
+            kind,
+            ..Default::default()
+        };
+        let text = || tinychannels_bus::OutboundPayload::Text {
+            text: "conformance".into(),
+        };
+
+        if feature == ConformanceFeature::Text {
+            let outcome =
+                crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent(text())).await?;
+            let line = self.peer.lock().await.next_line().await;
+            assert_eq!(line, "PRIVMSG #ops :conformance");
+            self.observations.lock().unwrap().push(WireObservation {
+                feature,
+                operation: "send".into(),
+                channel: expected.channel,
+                conversation: expected.conversation,
+                reply_to_id: None,
+                thread_id: None,
+                payload_kinds: vec!["text".into()],
+                platform_message_ids: Vec::new(),
+                request: serde_json::json!({"line": line}),
+            });
+            return Ok(Some(outcome));
+        }
+
+        match feature {
+            ConformanceFeature::Typing => {
+                crate::channel::ChannelTyping::start_typing(self.channel.as_ref(), "#ops").await?;
+            }
+            ConformanceFeature::Reactions => {
+                crate::channel::ChannelReaction::send_reaction(
+                    self.channel.as_ref(),
+                    &expected.channel,
+                    &expected.conversation,
+                    "message-1",
+                    &tinychannels_bus::channel::ChannelReaction::default(),
+                    false,
+                )
+                .await?;
+            }
+            ConformanceFeature::Edit => {
+                crate::channel::ChannelEdit::edit(
+                    self.channel.as_ref(),
+                    &tinychannels_bus::channel::MessageReceipt::default(),
+                    intent(text()),
+                )
+                .await?;
+            }
+            ConformanceFeature::Delete => {
+                crate::channel::ChannelDelete::delete(
+                    self.channel.as_ref(),
+                    &tinychannels_bus::channel::MessageReceipt::default(),
+                )
+                .await?;
+            }
+            ConformanceFeature::StreamingDraft => {
+                crate::channel::ChannelStreamingDraft::upsert_draft(
+                    self.channel.as_ref(),
+                    None,
+                    intent(text()),
+                )
+                .await?;
+            }
+            ConformanceFeature::VoiceIn
+            | ConformanceFeature::InboundReactions
+            | ConformanceFeature::ReadReceipts => {
+                return Err(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
+                    message: "IRC has no inbound operation for this feature".into(),
+                    unsupported: true,
+                    ..Default::default()
+                });
+            }
+            feature => {
+                let payload = match feature {
+                    ConformanceFeature::Text
+                    | ConformanceFeature::ReplyAddressing
+                    | ConformanceFeature::ThreadAddressing => text(),
+                    ConformanceFeature::Image => rich(ContentPart::Image {
+                        media: media(MediaKind::Image),
+                        caption: None,
+                        alt_text: None,
+                    }),
+                    ConformanceFeature::Video => rich(ContentPart::Video {
+                        media: media(MediaKind::Video),
+                        caption: None,
+                        duration_ms: None,
+                        thumbnail: None,
+                    }),
+                    ConformanceFeature::Audio => rich(ContentPart::Audio {
+                        media: media(MediaKind::Audio),
+                        codec: None,
+                        duration_ms: None,
+                        title: None,
+                        transcript: None,
+                    }),
+                    ConformanceFeature::File => rich(ContentPart::File {
+                        media: media(MediaKind::Document),
+                        file_name: None,
+                        caption: None,
+                    }),
+                    ConformanceFeature::Sticker => rich(ContentPart::Sticker {
+                        media: media(MediaKind::Image),
+                        pack_id: None,
+                        sticker_id: None,
+                        emoji: None,
+                        alt_text: None,
+                    }),
+                    ConformanceFeature::Location => rich(ContentPart::Location {
+                        latitude: 1.0,
+                        longitude: 2.0,
+                        label: None,
+                        address: None,
+                        accuracy_meters: None,
+                        live_until_unix_ms: None,
+                    }),
+                    ConformanceFeature::Contact => rich(ContentPart::Contact {
+                        display_name: "Conformance".into(),
+                        phone_numbers: Vec::new(),
+                        emails: Vec::new(),
+                        organization: None,
+                    }),
+                    ConformanceFeature::Buttons => rich(ContentPart::Buttons {
+                        rows: vec![vec![tinychannels_bus::ButtonAction {
+                            id: "action".into(),
+                            label: "Go".into(),
+                            style: None,
+                            disabled: false,
+                        }]],
+                    }),
+                    ConformanceFeature::Poll => rich(ContentPart::Poll {
+                        question: "Question".into(),
+                        options: vec!["Yes".into()],
+                        multiple_choice: false,
+                        closes_at_unix_ms: None,
+                        provider_poll_id: None,
+                    }),
+                    ConformanceFeature::Presentation => rich(ContentPart::Presentation {
+                        blocks: serde_json::json!({"kind": "approval"}),
+                    }),
+                    ConformanceFeature::NativeData => {
+                        tinychannels_bus::OutboundPayload::NativeChannelData {
+                            data: serde_json::json!({"action": "create_thread"}),
+                        }
+                    }
+                    ConformanceFeature::VoiceOut => tinychannels_bus::OutboundPayload::Voice {
+                        voice: tinychannels_bus::OutboundVoice::Media {
+                            media: media(MediaKind::Audio),
+                            audio_base64: None,
+                            codec: Some("ogg_opus".into()),
+                            duration_ms: Some(1000),
+                            waveform: None,
+                        },
+                    },
+                    ConformanceFeature::VoiceSynthesis => {
+                        tinychannels_bus::OutboundPayload::Voice {
+                            voice: tinychannels_bus::OutboundVoice::Synthesize {
+                                text: "speak".into(),
+                                voice: None,
+                            },
+                        }
+                    }
+                    _ => unreachable!("handled as an optional operation above"),
+                };
+                let outcome =
+                    crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent(payload))
+                        .await?;
+                return Ok(Some(outcome));
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[tokio::test]
+async fn shared_conformance_checks_irc_text_against_a_real_peer_without_fabricated_receipts() {
+    let (listener, port) = bind().await;
+    let acceptor = acceptor(false);
+    let config = tinychannels_bus::ChannelsConfig {
+        irc: Some(tinychannels_bus::config::IrcConfig {
+            server: "127.0.0.1".into(),
+            port,
+            nickname: "bot".into(),
+            username: Some("botuser".into()),
+            channels: vec![],
+            allowed_users: vec!["*".into()],
+            server_password: None,
+            nickserv_password: None,
+            sasl_password: None,
+            verify_tls: Some(false),
+        }),
+        ..Default::default()
+    };
+    let channel = crate::factory::build_long_tail_channel(
+        &config,
+        &crate::factory::DefaultHttpClients,
+        "irc",
+    )
+    .expect("configured IRC adapter from the production factory");
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let mut start = tokio::spawn({
+        let channel = channel.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+    let mut peer = tokio::select! {
+        result = &mut start => panic!("IRC adapter start returned before accepting a peer: {result:?}"),
+        peer = Peer::accept(&listener, &acceptor) => peer,
+    };
+    peer.expect("NICK bot").await;
+    peer.expect("USER botuser 0 * :OpenHuman").await;
+    peer.say(":srv 001 bot :Welcome").await;
+
+    let fixture = IrcConformanceFixture {
+        channel: channel.clone(),
+        peer: tokio::sync::Mutex::new(peer),
+        observations: std::sync::Mutex::new(Vec::new()),
+    };
+    let results = check_all_features(&fixture).await;
+    assert_eq!(results.len(), ConformanceFeature::ALL.len());
+    let failures = results
+        .iter()
+        .filter_map(|(feature, result)| {
+            result
+                .as_ref()
+                .err()
+                .map(|error| format!("{feature:?}: {error}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        failures.is_empty(),
+        "IRC conformance failures: {failures:#?}"
+    );
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, start)
+        .await
+        .expect("stop must join the public listener")
+        .expect("listener task must not panic")
+        .expect("listener must stop cleanly");
 }
 
 struct RejectingSink;

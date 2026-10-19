@@ -148,6 +148,12 @@ pub struct ExpectedScope {
 pub trait AdapterFixture: Send + Sync {
     fn adapter(&self) -> &dyn ChannelAdapter;
     fn expected_scope(&self, feature: ConformanceFeature) -> ExpectedScope;
+    /// Whether the platform returns a message identifier for this operation.
+    /// A receiptless platform must still provide a wire observation proving
+    /// the operation reached the mock platform.
+    fn receipt_required(&self, _feature: ConformanceFeature) -> bool {
+        true
+    }
     fn clear_observations(&self);
     fn observations(&self) -> Vec<WireObservation>;
     async fn exercise(
@@ -239,7 +245,7 @@ pub async fn check_feature(
             | ConformanceFeature::StreamingDraft
     );
     let receipt = outcome.as_ref().map(|outcome| &outcome.receipt);
-    if requires_receipt {
+    if requires_receipt && fixture.receipt_required(feature) {
         let Some(receipt) = receipt else {
             return Err(format!("declared {feature:?} returned no receipt"));
         };
@@ -252,6 +258,19 @@ pub async fn check_feature(
                 "declared {feature:?} returned an incomplete or mis-scoped receipt"
             ));
         }
+    }
+    if requires_receipt
+        && !fixture.receipt_required(feature)
+        && receipt.is_some_and(|receipt| {
+            !receipt.platform_message_ids.is_empty()
+                && (receipt.channel.as_ref() != Some(&expected.channel)
+                    || receipt.conversation.as_ref() != Some(&expected.conversation)
+                    || receipt.parts.is_empty())
+        })
+    {
+        return Err(format!(
+            "declared {feature:?} returned a mis-scoped or incomplete optional receipt"
+        ));
     }
     for required in feature.required_operations() {
         if !observations.iter().any(|observation| {
