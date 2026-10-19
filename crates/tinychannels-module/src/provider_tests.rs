@@ -5340,3 +5340,169 @@ async fn configured_long_tail_factory_uses_account_scoped_host_media() {
     );
     running_b.stop().await.unwrap();
 }
+
+#[tokio::test]
+async fn configured_mattermost_launch_delivers_scoped_attachment_only_posts() {
+    use tinychannels::host::{ChannelHost, ChannelHostBuilder, MediaRepository};
+    use tinychannels_bus::config::MattermostConfig;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    let create_at = i64::try_from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap()
+        + 10 * 60 * 1000;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/users/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "bot-1",
+            "username": "mattermost-bot"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/channels/channel-1/posts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "posts": {
+                "post-1": {
+                    "id": "post-1",
+                    "user_id": "alice",
+                    "message": "",
+                    "create_at": create_at,
+                    "root_id": "thread-1",
+                    "file_ids": ["file-1"]
+                },
+                "post-denied": {
+                    "id": "post-denied",
+                    "user_id": "mallory",
+                    "message": "",
+                    "create_at": create_at + 1,
+                    "root_id": "",
+                    "file_ids": ["file-denied"]
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/files/file-1/info"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "file-1",
+            "mime_type": "text/plain",
+            "name": "notes.txt",
+            "size": 21
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/files/file-1"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(b"attachment-only bytes".to_vec()))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let instance = "mattermost:team-a";
+    let config = tinychannels_bus::ChannelsConfig {
+        mattermost: Some(MattermostConfig {
+            url: server.uri(),
+            bot_token: "account-token".into(),
+            channel_id: Some("channel-1".into()),
+            allowed_users: vec!["alice".into()],
+            thread_replies: Some(true),
+            mention_only: Some(false),
+        }),
+        ..Default::default()
+    };
+    let (host, callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let scope = configured_media_account_scope(instance, &config);
+    let media = Arc::new(ModuleMediaRepository(
+        host.clone(),
+        instance.into(),
+        MediaScope::fixed(scope.clone()),
+    ));
+    let provider_host: Arc<dyn ChannelHost> = ChannelHostBuilder::new()
+        .media_repository(media.clone())
+        .build();
+    let hooks = Arc::new(Hooks::default());
+    let _module_host = hooks.host(host.clone(), instance.into(), scope.clone());
+    let launch = crate::native::build_native_v2(
+        instance,
+        &config,
+        &provider_host,
+        &tinychannels::factory::DefaultHttpClients,
+    )
+    .expect("configured Mattermost account builds through the normal factory");
+    let running = launch.start(hooks, host, None, false);
+    let adapter = running.adapter_handle();
+    assert_eq!(adapter.mode, AdapterMode::LongTailNativeV2);
+    assert_eq!(adapter.descriptor().account_id.as_deref(), Some(instance));
+
+    let received = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        loop {
+            if !callbacks.inbound.lock().await.is_empty() {
+                break;
+            }
+            callbacks.ingress_changed.notified().await;
+        }
+    })
+    .await;
+    running.stop().await.unwrap();
+    received.expect(
+        "configured Mattermost must deliver an attachment-only post through the module's typed ingress route",
+    );
+
+    let inbound = callbacks.inbound.lock().await.clone();
+    assert_eq!(inbound.len(), 1, "denied attachment posts must not publish");
+    assert_eq!(inbound[0].0, instance);
+    assert_eq!(inbound[0].1["channel"]["id"], "mattermost");
+    assert_eq!(inbound[0].1["channel"]["accountId"], instance);
+    assert_eq!(inbound[0].1["messageId"], "post-1");
+    assert_eq!(inbound[0].1["conversation"]["id"], "channel-1");
+    assert_eq!(inbound[0].1["conversation"]["threadId"], "thread-1");
+    assert_eq!(inbound[0].1["text"], "");
+    let parts = inbound[0].1["parts"].as_array().unwrap();
+    assert_eq!(parts.len(), 1);
+    assert_eq!(parts[0]["kind"], "file");
+    assert_eq!(parts[0]["media"]["fileName"], "notes.txt");
+    let media_id = parts[0]["media"]["opaqueId"]
+        .as_str()
+        .expect("typed attachment carries its stored opaque reference");
+    let stored = media
+        .read_media(
+            tinychannels_bus::HostVoiceScope {
+                configured_instance: instance.into(),
+                channel: tinychannels_bus::ChannelRef {
+                    id: "mattermost".into(),
+                    account_id: scope.clone(),
+                },
+                conversation: tinychannels_bus::ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Channel,
+                    id: "channel-1".into(),
+                    thread_id: Some("thread-1".into()),
+                    ..Default::default()
+                },
+                turn_id: "post-1".into(),
+            },
+            media_id.into(),
+            1024,
+        )
+        .await
+        .unwrap();
+    assert_eq!(stored.bytes, b"attachment-only bytes");
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.url.path().contains("file-denied"))
+            .count(),
+        0,
+        "allowlist admission must precede metadata and download requests"
+    );
+}
