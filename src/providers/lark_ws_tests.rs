@@ -5,7 +5,8 @@
 use super::*;
 use crate::channel::{ChannelAdapter, ChannelInboundSink};
 use crate::providers::http_test_support::HttpsServer;
-use tinychannels_bus::channel::{ChannelIngress, ChannelSendError, SendErrorKind};
+use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
+use tinychannels_bus::ChannelIngress;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::WebSocketStream;
 
@@ -227,6 +228,184 @@ async fn public_adapter_start_owns_lark_websocket_until_stop_and_restart() {
             Err(tokio::sync::mpsc::error::TryRecvError::Empty)
         ));
     }
+}
+
+#[tokio::test]
+async fn public_adapter_webhook_authenticates_admits_deduplicates_and_restarts() {
+    use crate::config::{LarkConfig, LarkReceiveMode};
+
+    async fn post_until_ready(
+        client: &reqwest::Client,
+        port: u16,
+        payload: &serde_json::Value,
+    ) -> reqwest::Response {
+        for _ in 0..100 {
+            match client
+                .post(format!("http://127.0.0.1:{port}/lark"))
+                .json(payload)
+                .send()
+                .await
+            {
+                Ok(response) => return response,
+                Err(_) => tokio::time::sleep(Duration::from_millis(20)).await,
+            }
+        }
+        panic!("public Lark webhook did not become ready");
+    }
+
+    fn challenge(token: &str, value: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "url_verification",
+            "challenge": value,
+            "token": token
+        })
+    }
+
+    fn message(message_id: &str, open_id: &str, token: &str, body: &str) -> serde_json::Value {
+        serde_json::json!({
+            "header": {
+                "event_type": "im.message.receive_v1",
+                "event_id": format!("event-{message_id}"),
+                "token": token
+            },
+            "event": {
+                "sender": {
+                    "sender_type": "user",
+                    "sender_id": {"open_id": open_id}
+                },
+                "message": {
+                    "message_id": message_id,
+                    "chat_id": "oc-webhook-chat",
+                    "chat_type": "p2p",
+                    "message_type": "text",
+                    "content": serde_json::json!({"text": body}).to_string(),
+                    "create_time": "1760900000000"
+                }
+            }
+        })
+    }
+
+    let port_probe = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = port_probe.local_addr().unwrap().port();
+    drop(port_probe);
+    let channel = Arc::new(LarkChannel::from_config(&LarkConfig {
+        app_id: "app-id".into(),
+        app_secret: "app-secret".into(),
+        encrypt_key: None,
+        verification_token: Some("verify-token".into()),
+        allowed_users: vec!["ou-alice".into()],
+        use_feishu: true,
+        receive_mode: LarkReceiveMode::Webhook,
+        port: Some(port),
+    }));
+    let adapter: Arc<dyn ChannelAdapter> = channel;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = RecordingInboundSink(tx);
+    let client = reqwest::Client::new();
+
+    let mut listener = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink.clone();
+        async move { adapter.start(&sink).await }
+    });
+    let challenge_response = tokio::select! {
+        result = &mut listener => panic!("Lark adapter start returned before webhook ownership: {result:?}"),
+        response = post_until_ready(&client, port, &challenge("verify-token", "challenge-1")) => response,
+    };
+    assert_eq!(challenge_response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        challenge_response.json::<serde_json::Value>().await.unwrap(),
+        serde_json::json!({"challenge": "challenge-1"})
+    );
+
+    let rejected = client
+        .post(format!("http://127.0.0.1:{port}/lark"))
+        .json(&message("om-invalid-token", "ou-alice", "wrong", "reject"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(rejected.status(), reqwest::StatusCode::FORBIDDEN);
+
+    let denied = post_until_ready(
+        &client,
+        port,
+        &message("om-denied", "ou-mallory", "verify-token", "deny"),
+    )
+    .await;
+    assert_eq!(denied.status(), reqwest::StatusCode::OK);
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+
+    for _ in 0..2 {
+        let accepted = post_until_ready(
+            &client,
+            port,
+            &message("om-accepted", "ou-alice", "verify-token", "admitted"),
+        )
+        .await;
+        assert_eq!(accepted.status(), reqwest::StatusCode::OK);
+    }
+    let ingress = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("admitted webhook message should reach the supplied sink")
+        .expect("test sink remains connected");
+    let ChannelIngress::Inbound(envelope) = ingress else {
+        panic!("Lark webhook messages must use typed inbound ingress");
+    };
+    assert_eq!(envelope.message_id, "om-accepted");
+    assert_eq!(envelope.sender.id, "ou-alice");
+    assert_eq!(envelope.text, "admitted");
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(GUARD, &mut listener)
+        .await
+        .expect("Lark webhook stop must join its listener")
+        .expect("Lark webhook listener must not panic")
+        .expect("Lark webhook listener must stop cleanly");
+    assert!(client
+        .post(format!("http://127.0.0.1:{port}/lark"))
+        .json(&challenge("verify-token", "stopped"))
+        .send()
+        .await
+        .is_err());
+
+    let mut restarted = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink.clone();
+        async move { adapter.start(&sink).await }
+    });
+    let challenge_response = tokio::select! {
+        result = &mut restarted => panic!("Lark restart returned before webhook ownership: {result:?}"),
+        response = post_until_ready(&client, port, &challenge("verify-token", "challenge-2")) => response,
+    };
+    assert_eq!(challenge_response.status(), reqwest::StatusCode::OK);
+    let accepted = post_until_ready(
+        &client,
+        port,
+        &message("om-after-restart", "ou-alice", "verify-token", "restarted"),
+    )
+    .await;
+    assert_eq!(accepted.status(), reqwest::StatusCode::OK);
+    let ingress = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("restarted webhook should publish new admitted messages")
+        .expect("test sink remains connected");
+    let ChannelIngress::Inbound(envelope) = ingress else {
+        panic!("Lark webhook messages must use typed inbound ingress");
+    };
+    assert_eq!(envelope.message_id, "om-after-restart");
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(GUARD, &mut restarted)
+        .await
+        .expect("stop must join restarted Lark webhook listener")
+        .expect("restarted Lark listener must not panic")
+        .expect("restarted Lark listener must stop cleanly");
 }
 
 #[tokio::test]
