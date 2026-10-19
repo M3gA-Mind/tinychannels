@@ -37,6 +37,33 @@ pub struct IrcChannel {
 
 type WriteHalf = tokio::io::WriteHalf<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>;
 
+enum IrcIngress<'a> {
+    Legacy(mpsc::Sender<ChannelMessage>),
+    Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
+}
+
+impl IrcIngress<'_> {
+    async fn publish(&self, message: ChannelMessage) -> anyhow::Result<bool> {
+        match self {
+            Self::Legacy(tx) => Ok(tx.send(message).await.is_ok()),
+            Self::Typed(sink) => {
+                let is_channel =
+                    message.reply_target.starts_with('#') || message.reply_target.starts_with('&');
+                let mut envelope = crate::inbound_envelope_from_legacy_message(&message);
+                envelope.conversation.kind = if is_channel {
+                    tinychannels_bus::channel::ConversationKind::Channel
+                } else {
+                    tinychannels_bus::channel::ConversationKind::Dm
+                };
+                sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                    .await
+                    .map_err(|error| anyhow::anyhow!(error.message))?;
+                Ok(true)
+            }
+        }
+    }
+}
+
 /// Style instruction prepended to every IRC message before it reaches the LLM.
 /// IRC clients render plain text only — no markdown, no HTML, no XML.
 const IRC_STYLE_PREFIX: &str = "\
@@ -368,6 +395,9 @@ impl IrcChannel {
                     anyhow::anyhow!("IRC read timed out (no data for {READ_TIMEOUT:?})")
                 })??;
             if n == 0 {
+                if self.writer.lock().await.is_none() {
+                    return Ok(());
+                }
                 anyhow::bail!("IRC connection closed by server");
             }
 
@@ -549,7 +579,6 @@ impl IrcChannel {
             }
         }
     }
-
 }
 
 /// Certificate verifier that accepts any certificate (for `verify_tls=false`).
@@ -658,6 +687,35 @@ impl crate::providers::long_tail::LongTail for IrcChannel {
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
         text_capabilities(TextSpec::default())
+    }
+
+    async fn start_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.listen_owned(IrcIngress::Typed(sink))
+            .await
+            .map_err(|error| {
+                tracing::debug!(%error, "IRC typed listener stopped");
+                tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                    message: "IRC listener stopped".into(),
+                    retryable: true,
+                    ..Default::default()
+                }
+            })
+    }
+
+    async fn stop_listener(&self) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.stop_writer().await.map_err(|error| {
+            tracing::debug!(%error, "IRC listener shutdown failed");
+            tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "IRC listener shutdown failed".into(),
+                retryable: true,
+                ..Default::default()
+            }
+        })
     }
 }
 

@@ -969,14 +969,12 @@ impl tinychannels::channel::ChannelInboundSink for ModuleEvents {
         tinychannels::host::EventSink::publish_ingress(self, ingress)
             .await
             .map(|_| ())
-            .map_err(|error| {
-            tinychannels::channel::ChannelSendError {
+            .map_err(|error| tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::Unknown,
                 message: error.to_string(),
                 retryable: true,
                 ..Default::default()
-            }
-        })
+            })
     }
 }
 
@@ -1831,9 +1829,9 @@ impl Running {
         let worker_cancel = cancel.clone();
         let worker_instance = configured_instance.clone();
         let worker_native = native_ports.clone();
-        let native_listener = worker_native.as_ref().is_some_and(|ports| {
-            ports.listener_mode == LongTailListenerMode::Adapter
-        });
+        let native_listener = worker_native
+            .as_ref()
+            .is_some_and(|ports| ports.listener_mode == LongTailListenerMode::Adapter);
         let worker = tokio::spawn(async move {
             let name = listen_channel.name().to_owned();
             host.report_status(&name, "connecting", None).await;
