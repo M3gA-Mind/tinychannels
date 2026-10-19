@@ -1,8 +1,8 @@
 use super::*;
 use crate::channel::ChannelTypedSend;
+use crate::providers::native::NativeProvider;
 use crate::providers::native::fixtures::RecordingEvents;
 use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
-use crate::providers::native::NativeProvider;
 use serde_json::json;
 use tinychannels_bus::channel::{ConversationRef, SendErrorKind};
 use tinychannels_bus::{

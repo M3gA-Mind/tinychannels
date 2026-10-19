@@ -134,9 +134,11 @@ fn qq_target_validation_rejects_threads_invalid_ids_and_non_chat_targets() {
 
     let mut threaded = target("user-1", ConversationKind::Dm);
     threaded.thread = Some("thread-1".into());
-    assert!(NativeProvider::validate_target(&channel, &threaded)
-        .unwrap_err()
-        .unsupported);
+    assert!(
+        NativeProvider::validate_target(&channel, &threaded)
+            .unwrap_err()
+            .unsupported
+    );
 
     let invalid_id = target("user/1", ConversationKind::Dm);
     assert_eq!(
