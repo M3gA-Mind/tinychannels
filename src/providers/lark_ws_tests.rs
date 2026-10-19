@@ -180,7 +180,10 @@ async fn public_adapter_start_owns_lark_websocket_until_stop_and_restart() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let sink = RecordingInboundSink(tx);
 
-    for (message_id, message_text) in [("om-first", "first connection"), ("om-second", "after restart")] {
+    for (message_id, message_text) in [
+        ("om-first", "first connection"),
+        ("om-second", "after restart"),
+    ] {
         let mut listener = tokio::spawn({
             let adapter = adapter.clone();
             let sink = sink.clone();
