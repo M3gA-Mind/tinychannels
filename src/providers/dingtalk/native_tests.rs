@@ -542,6 +542,324 @@ async fn typed_voice_send_preserves_transcript_as_an_ordered_text_message() {
     );
 }
 
+struct LoadedVoiceReplySynthesizer(Vec<u8>);
+
+#[async_trait::async_trait]
+impl crate::host::SpeechSynthesizer for LoadedVoiceReplySynthesizer {
+    async fn synthesize(
+        &self,
+        _request: crate::host::SpeechRequest,
+    ) -> anyhow::Result<crate::host::SpeechResult> {
+        use base64::Engine as _;
+
+        Ok(crate::host::SpeechResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(&self.0),
+            mime_type: "audio/wav".into(),
+            duration_ms: Some(8_000),
+            ..Default::default()
+        })
+    }
+}
+
+struct LoadedTinyVoiceCodec(tinybus::Connection);
+
+#[async_trait::async_trait]
+impl crate::host::VoiceCodec for LoadedTinyVoiceCodec {
+    async fn transcode(
+        &self,
+        request: crate::host::VoiceCodecRequest,
+    ) -> anyhow::Result<crate::host::VoiceCodecResult> {
+        let proxy = self
+            .0
+            .proxy(
+                tinyvoice_bus::BUS_NAME,
+                tinyvoice_bus::OBJECT_PATH,
+                tinyvoice_bus::BUS_NAME,
+            )
+            .unwrap();
+        let output: tinyvoice_bus::codec::CodecOutput = proxy
+            .call(
+                tinyvoice_bus::names::methods::CODEC_TRANSCODE,
+                (tinyvoice_bus::codec::CodecTranscodeRequest {
+                    audio_base64: request.audio_base64,
+                    from: match request.from.as_str() {
+                        "wav_pcm16" => tinyvoice_bus::codec::AudioCodec::WavPcm16,
+                        _ => anyhow::bail!("unexpected source codec"),
+                    },
+                    target: match request.target.as_str() {
+                        "amr_nb" => tinyvoice_bus::codec::AudioCodec::AmrNb,
+                        _ => anyhow::bail!("unexpected target codec"),
+                    },
+                },),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        let info: tinyvoice_bus::codec::CodecInfo = proxy
+            .call(
+                tinyvoice_bus::names::methods::CODEC_PROBE,
+                (tinyvoice_bus::codec::CodecInput {
+                    audio_base64: output.audio_base64.clone(),
+                },),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        anyhow::ensure!(info.codec == tinyvoice_bus::codec::AudioCodec::AmrNb);
+        Ok(crate::host::VoiceCodecResult {
+            audio_base64: output.audio_base64,
+            duration_ms: Some(info.duration_ms),
+            waveform: None,
+        })
+    }
+}
+
+struct ScopedVoiceFixture(Arc<crate::host::ScopedMediaStore>);
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for ScopedVoiceFixture {
+    async fn store_voice(
+        &self,
+        request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        use base64::Engine as _;
+        use tinychannels_bus::{MediaKind, HostVoiceMediaDirection};
+
+        anyhow::ensure!(request.direction == HostVoiceMediaDirection::Outbound);
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(request.audio_base64.as_bytes())?;
+        let media = self
+            .0
+            .store(crate::host::MediaStoreRequest {
+                metadata: crate::host::MediaMetadata {
+                    scope: request.scope,
+                    kind: MediaKind::Audio,
+                    content_type: request.mime_type,
+                    file_name: request.file_name,
+                    duration_ms: request.duration_ms,
+                    codec: request.codec,
+                    voice_direction: Some(request.direction),
+                    dedupe_key: None,
+                    max_bytes: 2 * 1024 * 1024,
+                },
+                bytes,
+            })
+            .await?;
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media,
+            accessible_url: None,
+        })
+    }
+
+    async fn read_voice(
+        &self,
+        scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        use base64::Engine as _;
+
+        let stored = self.0.read(scope, &opaque_id, 2 * 1024 * 1024).await?;
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(stored.bytes),
+            mime_type: stored.content_type,
+            file_name: stored.file_name,
+        })
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires a built TinyVoice module; set TINYVOICE_MODULE_ARTIFACT and TINYVOICE_MODULE_SHA256"]
+async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt() {
+    use crate::host::{prepare_voice_reply, VoiceReplyConstraints};
+    use crate::providers::http_test_support::HttpsServer;
+    use base64::Engine as _;
+    use tinybus::{broker::Broker, module::ModuleHost, transport::memory::MemoryBus};
+    use tinychannels_bus::channel::{ConversationKind, ConversationRef, MessageReceiptPartKind};
+    use tinychannels_bus::{ChannelOutboundMessage, ChannelRef, ContentPart, MediaKind, OutboundContentPart, OutboundVoice};
+    use tinychannels_runtime::channel::ChannelTypedSend;
+    use tinystoragedrivers_core::{MemoryStorage, Scope};
+
+    let artifact = std::env::var("TINYVOICE_MODULE_ARTIFACT").expect("TinyVoice module path");
+    let artifact_bytes = std::fs::read(&artifact).expect("read TinyVoice module artifact");
+    let expected_sha = std::env::var("TINYVOICE_MODULE_SHA256").expect("TinyVoice artifact SHA");
+    assert_eq!(hex::encode(sha2::Sha256::digest(&artifact_bytes)), expected_sha);
+
+    let bus = MemoryBus::new();
+    let broker = Broker::new();
+    let _broker_task = broker.spawn(bus.clone());
+    let module_host = ModuleHost::new(broker);
+    assert_eq!(module_host.load_file(&artifact).unwrap().name, "tinyvoice-module");
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap()).await.unwrap();
+
+    let backend = MemoryStorage::new()
+        .for_scope(&Scope::new("module:dingtalk-voice-integration").unwrap())
+        .unwrap();
+    let scoped_media = Arc::new(crate::host::ScopedMediaStore::new(
+        Arc::clone(backend.documents()),
+        Arc::clone(backend.blobs()),
+    ));
+    let voice_store = Arc::new(ScopedVoiceFixture(scoped_media.clone()));
+    let scope = tinychannels_bus::HostVoiceScope {
+        configured_instance: "dingtalk:robot-1".into(),
+        channel: ChannelRef {
+            id: "dingtalk".into(),
+            account_id: Some("dingtalk:robot-1".into()),
+        },
+        conversation: ConversationRef {
+            kind: ConversationKind::Group,
+            id: "open-group-loaded-amr".into(),
+            ..Default::default()
+        },
+        turn_id: "loaded-amr-turn".into(),
+    };
+    let accepted_codecs = vec!["amr_nb".to_owned()];
+    let prepared = prepare_voice_reply(
+        scope.clone(),
+        "A measured response".into(),
+        None,
+        &LoadedVoiceReplySynthesizer(dingtalk_synthesis_wav()),
+        &LoadedTinyVoiceCodec(connection.clone()),
+        voice_store.as_ref(),
+        VoiceReplyConstraints {
+            accepted_codecs: &accepted_codecs,
+            max_size_bytes: Some(2 * 1024 * 1024),
+            max_duration_ms: Some(10_000),
+        },
+    )
+    .await
+    .expect("shared voice preparation should encode and persist through TinyVoice");
+    assert_eq!(prepared.note.codec.as_deref(), Some("amr_nb"));
+    assert_eq!(prepared.note.media.content_type.as_deref(), Some("audio/amr"));
+    assert_eq!(prepared.note.media.file_name.as_deref(), Some("voice.amr"));
+    let media_id = prepared.note.media.opaque_id.clone().expect("scoped opaque voice id");
+    let stored = scoped_media
+        .read(scope.clone(), &media_id, 2 * 1024 * 1024)
+        .await
+        .expect("the scoped store resolves the exact outgoing voice");
+    assert!(stored.bytes.starts_with(b"#!AMR\n"));
+    assert_eq!(stored.file_name.as_deref(), Some("voice.amr"));
+    let codec_proxy = connection
+        .proxy(tinyvoice_bus::BUS_NAME, tinyvoice_bus::OBJECT_PATH, tinyvoice_bus::BUS_NAME)
+        .unwrap();
+    let measured: tinyvoice_bus::codec::CodecInfo = codec_proxy
+        .call(
+            tinyvoice_bus::names::methods::CODEC_PROBE,
+            (tinyvoice_bus::codec::CodecInput {
+                audio_base64: base64::engine::general_purpose::STANDARD.encode(&stored.bytes),
+            },),
+        )
+        .await
+        .unwrap();
+    assert_eq!(measured.codec, tinyvoice_bus::codec::AudioCodec::AmrNb);
+    assert_eq!(prepared.note.duration_ms, Some(measured.duration_ms));
+    let expected_bytes = Arc::new(stored.bytes);
+    let expected_duration = measured.duration_ms.to_string();
+    let sent_parts = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let sent_parts_capture = sent_parts.clone();
+    let bytes_capture = expected_bytes.clone();
+    let duration_capture = expected_duration.clone();
+    let server = HttpsServer::start_with_bytes(
+        move |request| match (request.method.as_str(), request.target.as_str()) {
+            ("POST", "/v1.0/oauth2/accessToken") => {
+                (200, json!({"accessToken":"token"}).to_string().into_bytes())
+            }
+            ("POST", target) if target.starts_with("/media/upload?") => {
+                assert!(target.contains("type=voice"));
+                assert!(request.raw_body.windows(bytes_capture.len()).any(|bytes| bytes == bytes_capture.as_slice()));
+                assert!(String::from_utf8_lossy(&request.raw_body).contains("voice.amr"));
+                (200, json!({"media_id":"loaded-amr-media"}).to_string().into_bytes())
+            }
+            ("POST", "/v1.0/robot/groupMessages/send") => {
+                let key = request.body["msgKey"].as_str().unwrap().to_owned();
+                let params: serde_json::Value = serde_json::from_str(request.body["msgParam"].as_str().unwrap()).unwrap();
+                if key == "sampleAudio" {
+                    assert_eq!(params["mediaId"], "loaded-amr-media");
+                    assert_eq!(params["duration"], duration_capture.as_str());
+                } else {
+                    assert_eq!(key, "sampleText");
+                    assert_eq!(params["content"], "A measured response");
+                }
+                sent_parts_capture.lock().unwrap().push(key.clone());
+                (200, json!({"processQueryKey":format!("receipt-{key}")}).to_string().into_bytes())
+            }
+            _ => panic!("unexpected DingTalk request: {request:?}"),
+        },
+        "application/json",
+    )
+    .await;
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec![],
+        server.client.clone(),
+    )
+    .with_voice_media_store(voice_store);
+    channel.robot_contexts.write().await.insert(
+        conversation_context_key(ConversationKind::Group, &scope.conversation.id),
+        json!({"robotCode":"group-robot"}),
+    );
+    let message = ChannelOutboundMessage {
+        channel_id: "dingtalk".into(),
+        conversation_id: scope.conversation.id.clone(),
+        channel_ref: Some(scope.channel.clone()),
+        conversation_ref: Some(scope.conversation.clone()),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some(scope.turn_id.clone()),
+        idempotency_key: "loaded-amr-send".into(),
+        parts: vec![
+            OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "A measured response".into(),
+                    markdown_dialect: None,
+                },
+            },
+            OutboundContentPart::Voice {
+                voice: OutboundVoice::Media {
+                    media: prepared.note.media,
+                    audio_base64: None,
+                    codec: prepared.note.codec,
+                    duration_ms: prepared.note.duration_ms,
+                    waveform: None,
+                },
+            },
+        ],
+    };
+    let sent = channel.send_typed(&message).await.expect("DingTalk native voice upload/send");
+    assert_eq!(*sent_parts.lock().unwrap(), ["sampleText", "sampleAudio"]);
+    assert_eq!(sent.receipt.parts.len(), 2);
+    assert_eq!(sent.receipt.parts[0].kind, MessageReceiptPartKind::Text);
+    assert_eq!(sent.receipt.parts[1].kind, MessageReceiptPartKind::Voice);
+    assert_eq!(sent.receipt.parts[1].platform_message_id.as_deref(), Some("receipt-sampleAudio"));
+    let requests = server.requests.lock().unwrap();
+    let upload = requests.iter().find(|request| request.target.starts_with("/media/upload?")).unwrap();
+    assert!(upload.raw_body.windows(expected_bytes.len()).any(|bytes| bytes == expected_bytes.as_slice()));
+    assert_eq!(expected_duration, measured.duration_ms.to_string());
+    assert!(requests.len() >= 5);
+}
+
+fn dingtalk_synthesis_wav() -> Vec<u8> {
+    let sample_rate = 16_000u32;
+    let count = sample_rate as usize * 8;
+    let data_len = count * 2;
+    let mut wav = Vec::with_capacity(44 + data_len);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36u32 + data_len as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVEfmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&1u16.to_le_bytes());
+    wav.extend_from_slice(&sample_rate.to_le_bytes());
+    wav.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+    wav.extend_from_slice(&2u16.to_le_bytes());
+    wav.extend_from_slice(&16u16.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data_len as u32).to_le_bytes());
+    for sample in 0..count {
+        let value = ((sample as f32 * 440.0 * std::f32::consts::TAU / sample_rate as f32).sin() * 12_000.0) as i16;
+        wav.extend_from_slice(&value.to_le_bytes());
+    }
+    wav
+}
+
 #[tokio::test]
 async fn typed_voice_over_two_mib_is_rejected_before_platform_requests() {
     use crate::providers::http_test_support::HttpsServer;
