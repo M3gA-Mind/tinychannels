@@ -118,6 +118,22 @@ pub(crate) trait LongTail: Channel {
     /// Final provider-specific addressing applied to the text projection.
     fn address(&self, _message: &mut SendMessage) {}
 
+    /// Run a provider-owned typed listener when this long-tail provider has
+    /// migrated away from the module's legacy `Channel::listen` bridge.
+    async fn start_listener(
+        &self,
+        _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        // Until a provider opts into the typed listener path, the configured
+        // module keeps owning its existing legacy listener.
+        Ok(())
+    }
+
+    /// Stop a provider-owned typed listener and release its connection.
+    async fn stop_listener(&self) -> Result<(), ChannelSendError> {
+        Ok(())
+    }
+
     /// Send one text message and return the platform message ids the provider
     /// actually reported. Providers whose API answers with an id override
     /// this; the default reports none, so the receipt stays empty rather than
@@ -328,14 +344,12 @@ macro_rules! impl_long_tail_adapter {
             }
             async fn start(
                 &self,
-                _sink: &(dyn $crate::channel::ChannelInboundSink + Send + Sync),
+                sink: &(dyn $crate::channel::ChannelInboundSink + Send + Sync),
             ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-                // The configured module's running task owns the single
-                // inbound loop.
-                Ok(())
+                $crate::providers::long_tail::LongTail::start_listener(self, sink).await
             }
             async fn stop(&self) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-                Ok(())
+                $crate::providers::long_tail::LongTail::stop_listener(self).await
             }
             async fn send(
                 &self,
