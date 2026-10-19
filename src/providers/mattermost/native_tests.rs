@@ -393,6 +393,204 @@ async fn public_adapter_start_owns_mattermost_polling_until_stop_and_restart() {
 }
 
 #[tokio::test]
+async fn aborting_public_listener_releases_ownership_for_restart() {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    const GUARD: Duration = Duration::from_secs(12);
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/users/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "bot-1",
+            "username": "mattermost-bot"
+        })))
+        .mount(&server)
+        .await;
+    let create_at = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap()
+        + 10 * 60 * 1000;
+    let polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let response_polls = Arc::clone(&polls);
+    Mock::given(method("GET"))
+        .and(path("/api/v4/channels/channel-1/posts"))
+        .respond_with(move |_request: &wiremock::Request| {
+            let index = response_polls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let (id, text) = if index == 0 {
+                ("post-before-abort", "before abort")
+            } else {
+                ("post-after-abort", "after abort")
+            };
+            ResponseTemplate::new(200).set_body_json(json!({
+                "posts": {
+                    (id): {
+                        "id": id,
+                        "user_id": "alice",
+                        "message": text,
+                        "create_at": create_at + i64::try_from(index).unwrap(),
+                        "root_id": "thread-1"
+                    }
+                }
+            }))
+        })
+        .mount(&server)
+        .await;
+
+    let channel = Arc::new(MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        Some("channel-1".into()),
+        vec!["alice".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    ));
+    let adapter: Arc<dyn ChannelAdapter> = channel;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = RecordingInboundSink(tx);
+    let first = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink.clone();
+        async move { adapter.start(&sink).await }
+    });
+    let first_ingress = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("first listener should publish before cancellation")
+        .expect("test sink remains connected");
+    let tinychannels_bus::ChannelIngress::Inbound(first_envelope) = first_ingress else {
+        panic!("Mattermost posts use typed inbound envelopes");
+    };
+    assert_eq!(first_envelope.message_id, "post-before-abort");
+    first.abort();
+    assert!(first.await.unwrap_err().is_cancelled());
+
+    let mut restarted = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink.clone();
+        async move { adapter.start(&sink).await }
+    });
+    let second_ingress = tokio::select! {
+        result = &mut restarted => panic!("restart returned before typed delivery: {result:?}"),
+        received = tokio::time::timeout(GUARD, rx.recv()) => received
+            .expect("aborted listener must release ownership so restart can poll")
+            .expect("test sink remains connected"),
+    };
+    let tinychannels_bus::ChannelIngress::Inbound(second_envelope) = second_ingress else {
+        panic!("Mattermost posts use typed inbound envelopes");
+    };
+    assert_eq!(second_envelope.message_id, "post-after-abort");
+    assert_eq!(second_envelope.text, "after abort");
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(GUARD, &mut restarted)
+        .await
+        .expect("stop must join restarted listener")
+        .expect("restarted listener must not panic")
+        .expect("restarted listener must stop cleanly");
+}
+
+#[tokio::test]
+async fn typed_listener_delivers_distinct_posts_with_equal_timestamps() {
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    const GUARD: Duration = Duration::from_secs(12);
+    let server = MockServer::start().await;
+    let create_at = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap()
+        + 10 * 60 * 1000;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/users/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "bot-1",
+            "username": "mattermost-bot"
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/channels/channel-1/posts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "posts": {
+                "post-0-denied": {
+                    "id": "post-0-denied",
+                    "user_id": "mallory",
+                    "message": "denied first",
+                    "create_at": create_at,
+                    "root_id": "thread-1"
+                },
+                "post-1-allowed": {
+                    "id": "post-1-allowed",
+                    "user_id": "alice",
+                    "message": "first allowed",
+                    "create_at": create_at,
+                    "root_id": "thread-1"
+                },
+                "post-2-allowed": {
+                    "id": "post-2-allowed",
+                    "user_id": "alice",
+                    "message": "second allowed",
+                    "create_at": create_at,
+                    "root_id": "thread-1"
+                }
+            }
+        })))
+        .mount(&server)
+        .await;
+
+    let channel = Arc::new(MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        Some("channel-1".into()),
+        vec!["alice".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    ));
+    let adapter: Arc<dyn ChannelAdapter> = channel;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = RecordingInboundSink(tx);
+    let mut listener = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink.clone();
+        async move { adapter.start(&sink).await }
+    });
+
+    for (expected_id, expected_text) in [
+        ("post-1-allowed", "first allowed"),
+        ("post-2-allowed", "second allowed"),
+    ] {
+        let ingress = tokio::select! {
+            result = &mut listener => panic!("listener returned before {expected_id}: {result:?}"),
+            received = tokio::time::timeout(GUARD, rx.recv()) => received
+                .expect("same-timestamp posts in one response batch must both be delivered")
+                .expect("test sink remains connected"),
+        };
+        let tinychannels_bus::ChannelIngress::Inbound(envelope) = ingress else {
+            panic!("Mattermost posts use typed inbound envelopes");
+        };
+        assert_eq!(envelope.message_id, expected_id);
+        assert_eq!(envelope.text, expected_text);
+    }
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(GUARD, &mut listener)
+        .await
+        .expect("stop must join Mattermost listener")
+        .expect("listener must not panic")
+        .expect("listener must stop cleanly");
+}
+
+#[tokio::test]
 async fn public_mattermost_listener_admits_before_fetching_attachments() {
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
