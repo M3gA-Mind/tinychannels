@@ -357,10 +357,11 @@ async fn lark_image_and_message_receipt_failures_keep_delivery_certainty() {
                 (200, r#"{"code":0,"data":{"image_key":"image-key"}}"#.into())
             }
         } else if request.target.starts_with("/open-apis/im/v1/messages?") {
-            if server_message_attempts.fetch_add(1, Ordering::SeqCst) == 0 {
-                (200, r#"{"code":0,"data":{}}"#.into())
-            } else {
-                (400, r#"{"code":99991663,"msg":"rejected"}"#.into())
+            match server_message_attempts.fetch_add(1, Ordering::SeqCst) {
+                0 => (200, r#"{"code":0,"data":{}}"#.into()),
+                1 => (400, r#"{"code":99991663,"msg":"rejected"}"#.into()),
+                2 => (500, r#"{"code":99991663,"msg":"server error"}"#.into()),
+                _ => (200, "not-json".into()),
             }
         } else {
             panic!("unexpected Lark request: {}", request.target)
@@ -405,8 +406,25 @@ async fn lark_image_and_message_receipt_failures_keep_delivery_certainty() {
         .await
         .unwrap_err();
     assert!(!rejected_error.sent_before_error);
-    assert_eq!(image_attempts.load(Ordering::SeqCst), 3);
-    assert_eq!(message_attempts.load(Ordering::SeqCst), 2);
+    let server_error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        server_error.kind,
+        tinychannels_bus::channel::SendErrorKind::Unknown
+    );
+    assert!(server_error.sent_before_error);
+    assert!(!server_error.retryable);
+    let unreadable_error = crate::channel::ChannelTypedSend::send_typed(&channel, &message)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        unreadable_error.kind,
+        tinychannels_bus::channel::SendErrorKind::Unknown
+    );
+    assert!(unreadable_error.sent_before_error);
+    assert_eq!(image_attempts.load(Ordering::SeqCst), 5);
+    assert_eq!(message_attempts.load(Ordering::SeqCst), 4);
 }
 
 #[tokio::test]
