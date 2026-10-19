@@ -307,6 +307,13 @@ impl LarkChannel {
         true
     }
 
+    async fn ws_message_was_seen(&self, message_id: &str) -> bool {
+        let now = Instant::now();
+        let mut seen = self.ws_seen_ids.write().await;
+        seen.retain(|_, received| now.duration_since(*received) < Duration::from_secs(30 * 60));
+        seen.contains_key(message_id)
+    }
+
     fn api_base(&self) -> &'static str {
         if self.use_feishu {
             FEISHU_BASE_URL
@@ -524,12 +531,19 @@ impl LarkChannel {
                         Err(e) => { tracing::error!("Lark: payload parse: {e}"); continue; }
                     };
 
-                    if recv.sender.sender_type == "app" || recv.sender.sender_type == "bot" { continue; }
-
-                    let sender_open_id = recv.sender.sender_id.open_id.as_deref().unwrap_or("");
-                    if !self.is_user_allowed(sender_open_id) {
-                        tracing::warn!("Lark WS: ignoring {sender_open_id} (not in allowed_users)");
-                        continue;
+                    if matches!(&ingress, LarkIngress::Typed(_)) {
+                        if !self.is_event_admitted(&event_payload) {
+                            continue;
+                        }
+                    } else {
+                        if recv.sender.sender_type == "app" || recv.sender.sender_type == "bot" {
+                            continue;
+                        }
+                        let sender_open_id = recv.sender.sender_id.open_id.as_deref().unwrap_or("");
+                        if !self.is_user_allowed(sender_open_id) {
+                            tracing::warn!("Lark WS: ignoring {sender_open_id} (not in allowed_users)");
+                            continue;
+                        }
                     }
 
                     let lark_msg = &recv.message;
@@ -626,6 +640,32 @@ impl LarkChannel {
     /// Check if a user open_id is allowed
     fn is_user_allowed(&self, open_id: &str) -> bool {
         self.allowed_users.iter().any(|u| u == "*" || u == open_id)
+    }
+
+    fn is_event_admitted(&self, event: &serde_json::Value) -> bool {
+        let sender_id = event
+            .pointer("/sender/sender_id/open_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let sender_type = event
+            .pointer("/sender/sender_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        let chat_type = event
+            .pointer("/message/chat_type")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default();
+        !sender_id.is_empty()
+            && self.is_user_allowed(sender_id)
+            && !matches!(sender_type, "app" | "bot")
+            && (chat_type != "group"
+                || super::should_respond_in_group(
+                    event
+                        .pointer("/message/mentions")
+                        .and_then(serde_json::Value::as_array)
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                ))
     }
 
     /// Get or refresh tenant access token
@@ -993,7 +1033,8 @@ impl LarkChannel {
         let state = LarkWebhookState {
             verification_token: self.verification_token.clone(),
             channel: Arc::new(self.clone()),
-            tx,
+            tx: Some(tx),
+            typed_tx: None,
         };
 
         let app = Router::new()
@@ -1007,6 +1048,81 @@ impl LarkChannel {
         axum::serve(listener, app).await?;
 
         Ok(())
+    }
+
+    async fn listen_http_typed(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        cancellation: &mut watch::Receiver<bool>,
+    ) -> anyhow::Result<()> {
+        use axum::{Router, routing::post};
+
+        let port = self.port.ok_or_else(|| {
+            anyhow::anyhow!("Lark webhook mode requires `port` to be set in [channels_config.lark]")
+        })?;
+        if self.verification_token.is_empty() {
+            anyhow::bail!("Lark webhook mode requires `verification_token`");
+        }
+
+        let (typed_tx, mut events) = tokio::sync::mpsc::channel(128);
+        let state = LarkWebhookState {
+            verification_token: self.verification_token.clone(),
+            channel: Arc::new(self.clone()),
+            tx: None,
+            typed_tx: Some(typed_tx),
+        };
+        let app = Router::new()
+            .route("/lark", post(handle_lark_webhook))
+            .with_state(state);
+        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        let listener = tokio::net::TcpListener::bind(addr).await?;
+        let server = axum::serve(listener, app);
+        tokio::pin!(server);
+
+        loop {
+            tokio::select! {
+                biased;
+                changed = cancellation.changed() => {
+                    if changed.is_err() || *cancellation.borrow() {
+                        return Ok(());
+                    }
+                }
+                result = &mut server => return result.map_err(Into::into),
+                Some(request) = events.recv() => {
+                    let message_id = request
+                        .event
+                        .pointer("/message/message_id")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned();
+                    let result = if !self.is_event_admitted(&request.event) || message_id.is_empty() {
+                        TypedWebhookResult::Acknowledged
+                    } else if self.ws_message_was_seen(&message_id).await {
+                        TypedWebhookResult::Acknowledged
+                    } else if let Some(envelope) = self
+                        .inbound_envelope_for_listener(&request.event, true)
+                        .await
+                    {
+                        match sink
+                            .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                            .await
+                        {
+                            Ok(()) => {
+                                self.mark_ws_message_seen(&message_id).await;
+                                TypedWebhookResult::Acknowledged
+                            }
+                            Err(error) => {
+                                tracing::debug!(%error, "Lark typed webhook sink rejected an event");
+                                TypedWebhookResult::Retry
+                            }
+                        }
+                    } else {
+                        TypedWebhookResult::Acknowledged
+                    };
+                    let _ = request.reply.send(result);
+                }
+            }
+        }
     }
 }
 
