@@ -397,6 +397,10 @@ async fn public_adapter_webhook_authenticates_admits_deduplicates_and_restarts()
         .expect("Lark webhook stop must join its listener")
         .expect("Lark webhook listener must not panic")
         .expect("Lark webhook listener must stop cleanly");
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
     assert!(
         client
             .post(format!("http://127.0.0.1:{port}/lark"))
@@ -438,6 +442,10 @@ async fn public_adapter_webhook_authenticates_admits_deduplicates_and_restarts()
         .expect("stop must join restarted Lark webhook listener")
         .expect("restarted Lark listener must not panic")
         .expect("restarted Lark listener must stop cleanly");
+    assert!(matches!(
+        rx.try_recv(),
+        Err(tokio::sync::mpsc::error::TryRecvError::Empty)
+    ));
 }
 
 #[tokio::test]
