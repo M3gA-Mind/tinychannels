@@ -793,7 +793,7 @@ async fn public_adapter_start_delivers_admitted_deduplicated_pushes_and_restarts
 }
 
 #[tokio::test]
-async fn aborted_start_keeps_listener_owned_until_connection_shutdown_joins() {
+async fn aborted_auth_start_keeps_listener_owned_until_connection_shutdown_joins() {
     use crate::channel::{ChannelAdapter, SendErrorKind};
     use crate::providers::yuanbao::connection::test_support::{MockGateway, gateway_config};
 
@@ -807,12 +807,15 @@ async fn aborted_start_keeps_listener_owned_until_connection_shutdown_joins() {
         let sink = Arc::clone(&sink);
         tokio::spawn(async move { channel.start(sink.as_ref()).await })
     };
-    let _first_session = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        gateway.accept_authed("abort-first"),
-    )
-    .await
-    .expect("the first listener should authenticate with the local gateway");
+    let mut first_session =
+        tokio::time::timeout(std::time::Duration::from_secs(3), gateway.accept())
+            .await
+            .expect("the first listener should open the local gateway connection");
+    let auth_bind = first_session.recv_frame().await;
+    assert_eq!(
+        auth_bind.cmd,
+        crate::providers::yuanbao::proto_constants::cmd::AUTH_BIND
+    );
 
     // Hold the connection's writer lock so its child task cannot finish
     // shutdown yet. Aborting the future awaiting start must signal cancellation

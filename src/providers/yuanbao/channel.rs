@@ -114,7 +114,7 @@ impl YuanbaoChannel {
                 abandoned: false,
             });
         }
-        let mut registration = YuanbaoListenerRegistration {
+        let _registration = YuanbaoListenerRegistration {
             listener: Arc::clone(&self.listener),
             id,
             cancel: cancel.clone(),
