@@ -555,7 +555,9 @@ impl crate::host::SpeechSynthesizer for LoadedVoiceReplySynthesizer {
         Ok(crate::host::SpeechResult {
             audio_base64: base64::engine::general_purpose::STANDARD.encode(&self.0),
             mime_type: "audio/wav".into(),
-            duration_ms: Some(8_000),
+            // Deliberately disagree with the encoded audio. The native send
+            // must use TinyVoice's measured duration, not this TTS hint.
+            duration_ms: Some(7_777),
             ..Default::default()
         })
     }
@@ -674,11 +676,11 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
     use tinybus::{broker::Broker, module::ModuleHost, transport::memory::MemoryBus};
     use tinychannels_bus::channel::{ConversationKind, ConversationRef, MessageReceiptPartKind};
     use tinychannels_bus::{
-        ChannelOutboundMessage, ChannelRef, ContentPart, MediaKind, OutboundContentPart,
-        OutboundVoice,
+        ChannelOutboundMessage, ChannelRef, ContentPart, OutboundContentPart, OutboundVoice,
     };
     use tinychannels_runtime::channel::ChannelTypedSend;
-    use tinystoragedrivers_core::{MemoryStorage, Scope};
+    use sha2::Digest as _;
+    use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
 
     let artifact = std::env::var("TINYVOICE_MODULE_ARTIFACT").expect("TinyVoice module path");
     let artifact_bytes = std::fs::read(&artifact).expect("read TinyVoice module artifact");
@@ -786,11 +788,33 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
             }
             ("POST", target) if target.starts_with("/media/upload?") => {
                 assert!(target.contains("type=voice"));
-                assert!(
-                    request
-                        .raw_body
-                        .windows(bytes_capture.len())
-                        .any(|bytes| bytes == bytes_capture.as_slice())
+                let content_type = request
+                    .headers
+                    .lines()
+                    .find(|line| line.to_ascii_lowercase().starts_with("content-type:"))
+                    .expect("multipart content type");
+                let boundary = content_type
+                    .split_once("boundary=")
+                    .expect("multipart boundary")
+                    .1
+                    .trim()
+                    .trim_matches('"');
+                let payload_start = request
+                    .raw_body
+                    .windows(4)
+                    .position(|window| window == b"\r\n\r\n")
+                    .expect("multipart media headers")
+                    + 4;
+                let end_marker = format!("\r\n--{boundary}");
+                let payload_end = request.raw_body[payload_start..]
+                    .windows(end_marker.len())
+                    .position(|window| window == end_marker.as_bytes())
+                    .map(|offset| payload_start + offset)
+                    .expect("multipart closing boundary");
+                assert_eq!(
+                    &request.raw_body[payload_start..payload_end],
+                    bytes_capture.as_slice(),
+                    "uploaded AMR must exactly match the bytes read from scoped storage"
                 );
                 assert!(String::from_utf8_lossy(&request.raw_body).contains("voice.amr"));
                 (
@@ -869,6 +893,10 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
     assert_eq!(*sent_parts.lock().unwrap(), ["sampleText", "sampleAudio"]);
     assert_eq!(sent.receipt.parts.len(), 2);
     assert_eq!(sent.receipt.parts[0].kind, MessageReceiptPartKind::Text);
+    assert_eq!(
+        sent.receipt.parts[0].platform_message_id.as_deref(),
+        Some("receipt-sampleText")
+    );
     assert_eq!(sent.receipt.parts[1].kind, MessageReceiptPartKind::Voice);
     assert_eq!(
         sent.receipt.parts[1].platform_message_id.as_deref(),
@@ -879,14 +907,22 @@ async fn loaded_tinyvoice_scoped_reply_reaches_dingtalk_voice_upload_and_receipt
         .iter()
         .find(|request| request.target.starts_with("/media/upload?"))
         .unwrap();
-    assert!(
-        upload
-            .raw_body
-            .windows(expected_bytes.len())
-            .any(|bytes| bytes == expected_bytes.as_slice())
+    assert!(upload.raw_body.windows(expected_bytes.len()).any(|bytes| bytes == expected_bytes.as_slice()));
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.target.starts_with("/media/upload?"))
+            .count(),
+        1
     );
-    assert_eq!(expected_duration, measured.duration_ms.to_string());
-    assert!(requests.len() >= 5);
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.target == "/v1.0/robot/groupMessages/send")
+            .map(|request| request.body["msgKey"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["sampleText", "sampleAudio"]
+    );
 }
 
 fn dingtalk_synthesis_wav() -> Vec<u8> {
