@@ -294,9 +294,11 @@ fn packed_thread_address_cannot_conflict_with_the_canonical_thread() {
 fn descriptor_advertises_voice_attachment_only_when_host_voice_storage_exists() {
     let server = MockServer::new();
     let without_voice = channel(&server, Arc::new(StubMedia::default()));
-    assert!(!ChannelAdapter::descriptor(&without_voice)
-        .metadata
-        .contains_key("voiceOut"));
+    assert!(
+        !ChannelAdapter::descriptor(&without_voice)
+            .metadata
+            .contains_key("voiceOut")
+    );
 
     let with_voice = channel(&server, Arc::new(StubMedia::default()))
         .with_voice_media_store(Arc::new(StubVoice::default()));
