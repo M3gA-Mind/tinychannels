@@ -1839,6 +1839,7 @@ impl Running {
             .clone();
         let worker_cancel = cancel.clone();
         let worker_instance = configured_instance.clone();
+        let worker_scope = media_account_scope.clone();
         let worker_native = native_ports.clone();
         let native_listener = worker_native
             .as_ref()
@@ -1869,7 +1870,7 @@ impl Running {
             let listener_cancel = worker_cancel.subscribe();
             let listener_native = worker_native.clone();
             let listener_instance = worker_instance.clone();
-            let listener_scope = media_account_scope.clone();
+            let listener_scope = worker_scope.clone();
             let listener_name = name.clone();
             let mut listener = AbortOnDrop(tokio::spawn(async move {
                 if native_listener {
