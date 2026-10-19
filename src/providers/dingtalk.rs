@@ -197,10 +197,11 @@ impl DingTalkChannel {
         Ok(gw)
     }
 
-    fn begin_listener(
-        &self,
-    ) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
-        let mut listener = self.listener.lock().unwrap_or_else(|error| error.into_inner());
+    fn begin_listener(&self) -> anyhow::Result<(Uuid, tokio::sync::watch::Receiver<bool>)> {
+        let mut listener = self
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
         if listener.is_some() {
             anyhow::bail!("DingTalk listener is already running");
         }
@@ -223,7 +224,8 @@ impl DingTalkChannel {
         };
         tracing::info!("DingTalk: registering gateway connection...");
 
-        let Some(gw) = until_listener_cancelled(&mut cancellation, self.register_connection()).await
+        let Some(gw) =
+            until_listener_cancelled(&mut cancellation, self.register_connection()).await
         else {
             return Ok(());
         };
@@ -459,14 +461,10 @@ impl DingTalkChannel {
         } else {
             anyhow::bail!("DingTalk WebSocket stream ended")
         }
-    
     }
 }
 
-async fn send_callback_ack<S>(
-    write: &mut S,
-    frame: &serde_json::Value,
-) -> bool
+async fn send_callback_ack<S>(write: &mut S, frame: &serde_json::Value) -> bool
 where
     S: futures_util::Sink<Message> + Unpin,
 {
@@ -494,9 +492,7 @@ where
     )
 }
 
-async fn listener_cancelled(
-    cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>,
-) {
+async fn listener_cancelled(cancellation: &mut Option<tokio::sync::watch::Receiver<bool>>) {
     match cancellation {
         Some(receiver) => {
             let _ = receiver.changed().await;
@@ -580,7 +576,8 @@ impl Channel for DingTalkChannel {
     async fn listen(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         let (id, cancellation) = self.begin_listener()?;
         let _registration = ListenerRegistration { channel: self, id };
-        self.listen_owned(DingTalkIngress::Legacy(tx), Some(cancellation)).await
+        self.listen_owned(DingTalkIngress::Legacy(tx), Some(cancellation))
+            .await
     }
 
     async fn health_check(&self) -> bool {
