@@ -4663,8 +4663,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
 
 #[tokio::test]
 async fn dingtalk_final_voice_pipeline_keeps_transcript_and_measured_codec_metadata() {
-    const AMR_BYTES: &[u8] =
-        include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr");
+    const AMR_BYTES: &[u8] = include_bytes!("../../../tests/fixtures/dingtalk/amrnb_mode0.amr");
 
     let bus = MemoryBus::new();
     let broker = Broker::new();
@@ -4762,28 +4761,36 @@ async fn dingtalk_final_voice_pipeline_keeps_transcript_and_measured_codec_metad
             _ => None,
         })
         .expect("final voice dispatch uses the typed transport");
-    assert!(matches!(
-        sent_parts.as_slice(),
-        [
-            tinychannels_bus::OutboundContentPart::Content {
-                part: tinychannels_bus::ContentPart::Text { text, .. }
-            },
-            tinychannels_bus::OutboundContentPart::Voice {
-                voice: tinychannels_bus::OutboundVoice::Media {
-                    codec: Some(codec),
-                    duration_ms: Some(500),
-                    media,
-                    ..
+    assert!(
+        matches!(
+            sent_parts.as_slice(),
+            [
+                tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text { text, .. }
+                },
+                tinychannels_bus::OutboundContentPart::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media {
+                        codec: Some(codec),
+                        duration_ms: Some(500),
+                        media,
+                        ..
+                    }
                 }
-            }
-        ] if text == "spoken response"
-            && codec == "amr_nb"
-            && media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
-    ), "unexpected DingTalk final voice parts: {sent_parts:?}");
+            ] if text == "spoken response"
+                && codec == "amr_nb"
+                && media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_"))
+        ),
+        "unexpected DingTalk final voice parts: {sent_parts:?}"
+    );
+    let media_id = match &sent_parts[1] {
+        tinychannels_bus::OutboundContentPart::Voice {
+            voice: tinychannels_bus::OutboundVoice::Media { media, .. },
+        } => media.opaque_id.clone().expect("stored opaque media id"),
+        _ => unreachable!("asserted voice part"),
+    };
     assert_eq!(codec_ops.load(Ordering::SeqCst), 1);
     drop(requests);
 
-    let media = sent_parts[1].as_voice_media().expect("voice part");
     let mut scope = tinychannels_bus::HostVoiceScope {
         configured_instance: "dingtalk:robot-1".into(),
         channel: context.channel.clone(),
@@ -4797,11 +4804,7 @@ async fn dingtalk_final_voice_pipeline_keeps_transcript_and_measured_codec_metad
         Arc::clone(storage.blobs()),
     );
     let stored = media_store
-        .read(
-            scope,
-            media.opaque_id.as_deref().expect("stored opaque media id"),
-            2 * 1024 * 1024,
-        )
+        .read(scope, media_id, 2 * 1024 * 1024)
         .await
         .expect("AMR voice is persisted under the scoped host media store");
     assert_eq!(stored.bytes, AMR_BYTES);
