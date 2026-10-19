@@ -327,9 +327,17 @@ impl LongTailFixture {
         feature: Feature,
         payload: OutboundPayload,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+        self.send_intent_and_record(feature, self.intent(feature, payload))
+            .await
+    }
+
+    async fn send_intent_and_record(
+        &self,
+        feature: Feature,
+        intent: ChannelOutboundIntent,
+    ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         let before = self.request_count().await;
-        let outcome =
-            ChannelAdapter::send(self.channel.as_ref(), self.intent(feature, payload)).await?;
+        let outcome = ChannelAdapter::send(self.channel.as_ref(), intent).await?;
         self.record(feature, before).await;
         Ok(Some(outcome))
     }
@@ -381,7 +389,14 @@ impl AdapterFixture for LongTailFixture {
         match feature {
             // A platform without thread addressing has nothing to send to.
             Feature::ThreadAddressing if !channel.declared_capabilities().addressing.thread_id => {
-                unsupported_result()
+                let mut intent = self.intent(
+                    feature,
+                    OutboundPayload::Text {
+                        text: "thread conformance".into(),
+                    },
+                );
+                intent.thread_id = Some(ROOT.into());
+                self.refused(ChannelAdapter::send(channel, intent)).await
             }
             Feature::Text | Feature::ThreadAddressing => {
                 self.send_and_record(
@@ -391,6 +406,20 @@ impl AdapterFixture for LongTailFixture {
                     },
                 )
                 .await
+            }
+            Feature::ReplyAddressing => {
+                let mut intent = self.intent(
+                    feature,
+                    OutboundPayload::Text {
+                        text: "reply conformance".into(),
+                    },
+                );
+                intent.reply_to_id = Some(ROOT.into());
+                if channel.declared_capabilities().addressing.reply_to_id {
+                    self.send_intent_and_record(feature, intent).await
+                } else {
+                    self.refused(ChannelAdapter::send(channel, intent)).await
+                }
             }
             Feature::Typing => {
                 let before = self.request_count().await;
@@ -617,12 +646,11 @@ impl AdapterFixture for LongTailFixture {
                 ))
                 .await
             }
-            // Reply addressing, inbound voice, inbound reactions and read
-            // receipts have no outbound operation on these platforms.
-            Feature::ReplyAddressing
-            | Feature::VoiceIn
-            | Feature::InboundReactions
-            | Feature::ReadReceipts => unsupported_result(),
+            // Inbound voice, reactions and read receipts have no outbound
+            // operation on these platforms.
+            Feature::VoiceIn | Feature::InboundReactions | Feature::ReadReceipts => {
+                unsupported_result()
+            }
         }
     }
 }
