@@ -63,3 +63,31 @@ fn lark_send_errors_preserve_delivery_certainty() {
     assert!(uncertain.sent_before_error);
     assert!(!uncertain.retryable);
 }
+
+#[test]
+fn lark_rejects_threaded_outbound_targets_before_delivery() {
+    let channel = super::super::LarkChannel::new(
+        "app-id".into(),
+        "app-secret".into(),
+        "verify-token".into(),
+        None,
+        vec!["*".into()],
+    );
+    let target = Target {
+        channel: ChannelRef {
+            id: "lark".into(),
+            account_id: None,
+        },
+        conversation: ConversationRef {
+            id: "chat-1".into(),
+            ..Default::default()
+        },
+        reply_to: None,
+        thread: Some("thread-1".into()),
+    };
+
+    let error = NativeProvider::validate_target(&channel, &target).unwrap_err();
+
+    assert!(error.unsupported);
+    assert!(!error.sent_before_error);
+}
