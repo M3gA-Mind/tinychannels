@@ -84,6 +84,190 @@ async fn direct_send_uses_staff_id_and_provider_receipt() {
 }
 
 #[tokio::test]
+async fn typed_send_rejects_missing_admission_or_robot_context_before_http() {
+    use crate::providers::http_test_support::HttpsServer;
+    use tinychannels_bus::{ChannelOutboundMessage, ContentPart, OutboundContentPart};
+    use tinychannels_runtime::channel::ChannelTypedSend;
+
+    let server = HttpsServer::start(|request| {
+        panic!("missing admitted context must fail before HTTP: {request:?}")
+    })
+    .await;
+    for (kind, id, context) in [
+        (ConversationKind::Group, "missing-context", None),
+        (ConversationKind::Group, "missing-robot", Some(json!({}))),
+    ] {
+        let channel = DingTalkChannel::with_http_client(
+            "app-key".into(),
+            "app-secret".into(),
+            vec!["alice".into()],
+            server.client.clone(),
+        );
+        if let Some(context) = context {
+            channel
+                .robot_contexts
+                .write()
+                .await
+                .insert(conversation_context_key(kind, id), context);
+        }
+        let message = ChannelOutboundMessage {
+            channel_id: "dingtalk".into(),
+            conversation_id: id.into(),
+            channel_ref: None,
+            conversation_ref: Some(ConversationRef {
+                kind,
+                id: id.into(),
+                ..Default::default()
+            }),
+            reply_to_id: None,
+            thread_id: None,
+            turn_id: Some("turn-admission-check".into()),
+            idempotency_key: format!("admission-{id}"),
+            parts: vec![OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "hello".into(),
+                    markdown_dialect: None,
+                },
+            }],
+        };
+        let error = channel
+            .send_typed(&message)
+            .await
+            .expect_err("unadmitted conversation cannot receive a provider send");
+        assert_eq!(error.kind, SendErrorKind::BadFormat, "{id}");
+        assert!(!error.sent_before_error, "{id}");
+    }
+    assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
+    use crate::providers::http_test_support::HttpsServer;
+    use crate::providers::native::fixtures::{StubMedia, stored_media};
+    use tinychannels_bus::{
+        ChannelOutboundMessage, ContentPart, MediaKind, MediaReference, OutboundContentPart,
+    };
+    use tinychannels_runtime::channel::ChannelTypedSend;
+
+    const FILE_BYTES: &[u8] = b"%PDF-1.7\nactual fixture bytes\n";
+
+    let server = HttpsServer::start_with_bytes(
+        |request| match (request.method.as_str(), request.target.as_str()) {
+            ("POST", "/v1.0/oauth2/accessToken") => {
+                (200, json!({"accessToken":"token"}).to_string().into_bytes())
+            }
+            ("POST", target) if target.starts_with("/media/upload?") => (
+                200,
+                json!({"media_id":"uploaded-file-12"})
+                    .to_string()
+                    .into_bytes(),
+            ),
+            ("POST", "/v1.0/robot/groupMessages/send") => {
+                assert_eq!(request.body["robotCode"], "group-robot");
+                assert_eq!(request.body["openConversationId"], "open-group-12");
+                assert_eq!(request.body["msgKey"], "sampleFile");
+                let params: serde_json::Value = serde_json::from_str(
+                    request.body["msgParam"]
+                        .as_str()
+                        .expect("msgParam is JSON text"),
+                )
+                .unwrap();
+                assert_eq!(params["mediaId"], "uploaded-file-12");
+                assert_eq!(params["fileName"], "report.pdf");
+                assert_eq!(params["fileType"], "pdf");
+                (
+                    200,
+                    json!({"processQueryKey":"group-receipt-12"})
+                        .to_string()
+                        .into_bytes(),
+                )
+            }
+            _ => panic!("unexpected DingTalk request: {request:?}"),
+        },
+        "application/json",
+    )
+    .await;
+    let media = Arc::new(StubMedia::default());
+    *media.read.lock().unwrap() = Some(stored_media(
+        MediaKind::Document,
+        "application/pdf",
+        FILE_BYTES,
+    ));
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    )
+    .with_media_repository(media.clone());
+    channel.robot_contexts.write().await.insert(
+        conversation_context_key(ConversationKind::Group, "open-group-12"),
+        json!({"robotCode":"group-robot"}),
+    );
+
+    let message = ChannelOutboundMessage {
+        channel_id: "dingtalk".into(),
+        conversation_id: "open-group-12".into(),
+        channel_ref: None,
+        conversation_ref: Some(ConversationRef {
+            kind: ConversationKind::Group,
+            id: "open-group-12".into(),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-file-upload".into()),
+        idempotency_key: "file-upload".into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::File {
+                media: MediaReference {
+                    opaque_id: Some("stored-file-12".into()),
+                    kind: MediaKind::Document,
+                    content_type: Some("application/pdf".into()),
+                    ..Default::default()
+                },
+                file_name: Some("report.pdf".into()),
+                caption: None,
+            },
+        }],
+    };
+
+    let sent = channel.send_typed(&message).await;
+    assert!(
+        sent.is_ok(),
+        "typed send failed: {:?}; observed requests: {:#?}",
+        sent.as_ref().err(),
+        server.requests.lock().unwrap()
+    );
+    let sent = sent.unwrap();
+    assert_eq!(
+        sent.receipt.primary_platform_message_id.as_deref(),
+        Some("group-receipt-12")
+    );
+    assert_eq!(sent.receipt.parts[0].kind, MessageReceiptPartKind::Media);
+    assert_eq!(media.scopes.lock().unwrap()[0].turn_id, "turn-file-upload");
+    let requests = server.requests.lock().unwrap();
+    let upload = requests
+        .iter()
+        .find(|request| request.target.starts_with("/media/upload?"))
+        .expect("file upload request must be observed");
+    assert!(
+        upload
+            .headers
+            .to_ascii_lowercase()
+            .contains("multipart/form-data")
+    );
+    assert!(
+        upload
+            .raw_body
+            .windows(FILE_BYTES.len())
+            .any(|window| window == FILE_BYTES)
+    );
+    assert!(String::from_utf8_lossy(&upload.raw_body).contains("report.pdf"));
+    assert_eq!(requests.len(), 3);
+}
+
+#[tokio::test]
 async fn direct_send_rejection_lists_override_a_success_shaped_receipt() {
     use crate::providers::http_test_support::HttpsServer;
 
@@ -235,6 +419,71 @@ async fn token_and_upload_server_errors_are_retryable_before_message_delivery() 
                 .iter()
                 .all(|request| { !request.target.starts_with("/v1.0/robot/groupMessages/send") })
         );
+        let requests = server.requests.lock().unwrap();
+        if failing_path == "token" {
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].target, "/v1.0/oauth2/accessToken");
+        } else {
+            assert_eq!(requests.len(), 2);
+            assert_eq!(requests[0].target, "/v1.0/oauth2/accessToken");
+            assert!(requests[1].target.starts_with("/media/upload?"));
+        }
+    }
+}
+
+#[tokio::test]
+async fn invalid_upload_receipts_never_dispatch_a_group_message() {
+    use crate::providers::http_test_support::HttpsServer;
+
+    for upload_body in [b"not-json".as_slice(), br#"{"media_id":""}"#] {
+        let upload_body = upload_body.to_vec();
+        let server = HttpsServer::start_with_bytes(
+            move |request| match (request.method.as_str(), request.target.as_str()) {
+                ("POST", "/v1.0/oauth2/accessToken") => {
+                    (200, json!({"accessToken":"token"}).to_string().into_bytes())
+                }
+                ("POST", target) if target.starts_with("/media/upload?") => {
+                    (200, upload_body.clone())
+                }
+                _ => panic!("invalid upload receipt must stop before message send: {request:?}"),
+            },
+            "application/json",
+        )
+        .await;
+        let channel = DingTalkChannel::with_http_client(
+            "app-key".into(),
+            "app-secret".into(),
+            vec!["alice".into()],
+            server.client.clone(),
+        );
+        channel.robot_contexts.write().await.insert(
+            conversation_context_key(ConversationKind::Group, "conversation-1"),
+            json!({"robotCode":"robot-from-callback"}),
+        );
+        let error = channel
+            .deliver(
+                &target(ConversationKind::Group, "conversation-1"),
+                &Step::File(FileStep {
+                    bytes: b"%PDF fixture".to_vec(),
+                    mime: "application/pdf".into(),
+                    name: "report.pdf".into(),
+                    caption: None,
+                    #[cfg(feature = "lark")]
+                    kind: tinychannels_bus::MediaKind::Document,
+                }),
+            )
+            .await
+            .err()
+            .expect("an upload without a provider media ID cannot be sent");
+        assert_eq!(
+            error.kind,
+            SendErrorKind::BadFormat,
+            "{}; observed requests: {:#?}",
+            error.message,
+            server.requests.lock().unwrap()
+        );
+        assert!(!error.sent_before_error);
+        assert_eq!(server.requests.lock().unwrap().len(), 2);
     }
 }
 
