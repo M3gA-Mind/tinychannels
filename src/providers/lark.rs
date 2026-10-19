@@ -661,7 +661,7 @@ impl LarkChannel {
             && self.is_user_allowed(sender_id)
             && !matches!(sender_type, "app" | "bot")
             && (chat_type != "group"
-                || super::should_respond_in_group(
+                || should_respond_in_group(
                     event
                         .pointer("/message/mentions")
                         .and_then(serde_json::Value::as_array)
