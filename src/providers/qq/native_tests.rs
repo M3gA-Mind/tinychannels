@@ -1696,7 +1696,10 @@ async fn public_adapter_retries_a_message_after_typed_sink_rejection() {
         accepted,
     });
 
-    let rejected = adapter.start(sink.as_ref()).await.unwrap_err();
+    let rejected = tokio::time::timeout(GUARD, adapter.start(sink.as_ref()))
+        .await
+        .expect("a rejected typed publication should release the listener")
+        .unwrap_err();
     assert_eq!(
         rejected.kind,
         tinychannels_bus::channel::SendErrorKind::Transient
