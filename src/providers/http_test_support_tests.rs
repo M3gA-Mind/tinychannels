@@ -171,8 +171,8 @@ impl HttpsServer {
                             body: serde_json::from_slice(&raw_body).unwrap_or(serde_json::Value::Null),
                             raw_body,
                         };
+                        captured.lock().unwrap().push(request.clone());
                         let (status, body) = respond(&request);
-                        captured.lock().unwrap().push(request);
                         let headers = format!(
                             "HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             body.len()

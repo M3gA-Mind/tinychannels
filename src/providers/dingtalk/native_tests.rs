@@ -99,16 +99,12 @@ async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
             ("POST", "/v1.0/oauth2/accessToken") => {
                 (200, json!({"accessToken":"token"}).to_string().into_bytes())
             }
-            ("POST", target)
-                if target.starts_with("/media/upload?access_token=token&type=file") =>
-            {
-                (
-                    200,
-                    json!({"media_id":"uploaded-file-12"})
-                        .to_string()
-                        .into_bytes(),
-                )
-            }
+            ("POST", target) if target.starts_with("/media/upload?") => (
+                200,
+                json!({"media_id":"uploaded-file-12"})
+                    .to_string()
+                    .into_bytes(),
+            ),
             ("POST", "/v1.0/robot/groupMessages/send") => {
                 assert_eq!(request.body["robotCode"], "group-robot");
                 assert_eq!(request.body["openConversationId"], "open-group-12");
