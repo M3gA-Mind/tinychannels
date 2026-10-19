@@ -33,6 +33,20 @@ impl HttpsServer {
         respond: impl Fn(&Request) -> (u16, String) + Send + Sync + 'static,
         content_type: &'static str,
     ) -> Self {
+        Self::start_with_bytes(
+            move |request| {
+                let (status, body) = respond(request);
+                (status, body.into_bytes())
+            },
+            content_type,
+        )
+        .await
+    }
+
+    pub async fn start_with_bytes(
+        respond: impl Fn(&Request) -> (u16, Vec<u8>) + Send + Sync + 'static,
+        content_type: &'static str,
+    ) -> Self {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let cert = include_bytes!("../../tests/fixtures/tls/cert.der");
         let key = include_bytes!("../../tests/fixtures/tls/key.der");
@@ -105,11 +119,12 @@ impl HttpsServer {
                         };
                         let (status, body) = respond(&request);
                         captured.lock().unwrap().push(request);
-                        let response = format!(
-                            "HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        let headers = format!(
+                            "HTTP/1.1 {status} Fixture\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                             body.len()
                         );
-                        stream.write_all(response.as_bytes()).await.unwrap();
+                        stream.write_all(headers.as_bytes()).await.unwrap();
+                        stream.write_all(&body).await.unwrap();
                     }).await.unwrap();
                 });
                 while let Some(result) = connections.try_join_next() {

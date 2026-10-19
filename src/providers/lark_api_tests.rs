@@ -376,14 +376,18 @@ async fn native_inbound_downloads_and_stores_a_file_before_building_the_envelope
 
 #[tokio::test]
 async fn lark_voice_store_only_ingests_voice_without_file_repository() {
-    let server = HttpsServer::start_with_content_type(
+    let server = HttpsServer::start_with_bytes(
         |request| {
             if is_token_request(request) {
-                token_ok("t-voice-in")
+                let (status, body) = token_ok("t-voice-in");
+                (status, body.into_bytes())
             } else if request.target
                 == "/open-apis/im/v1/messages/om-voice/resources/file-1?type=file"
             {
-                (200, "voice attachment bytes".into())
+                (
+                    200,
+                    include_bytes!("telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+                )
             } else {
                 panic!("unexpected Lark request: {}", request.target)
             }
@@ -425,7 +429,7 @@ async fn lark_voice_store_only_ingests_voice_without_file_repository() {
         base64::engine::general_purpose::STANDARD
             .decode(&stored[0].audio_base64)
             .unwrap(),
-        b"voice attachment bytes"
+        include_bytes!("telegram/fixtures/sine-ogg-opus.ogg")
     );
 }
 
