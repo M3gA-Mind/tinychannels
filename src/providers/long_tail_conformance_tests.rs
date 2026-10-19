@@ -816,7 +816,14 @@ async fn the_factory_built_qq_adapter_passes_the_full_conformance_matrix() {
         failed.is_empty(),
         "QQ conformance failures: {failed:#?}; observations={:#?}; requests={:#?}",
         fixture.observations(),
-        fixture.fixed_server.as_ref().unwrap().requests.lock().unwrap().clone()
+        fixture
+            .fixed_server
+            .as_ref()
+            .unwrap()
+            .requests
+            .lock()
+            .unwrap()
+            .clone()
     );
     let observations = fixture.observations();
     for feature in [
