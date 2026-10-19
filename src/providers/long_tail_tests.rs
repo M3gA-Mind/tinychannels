@@ -344,6 +344,16 @@ async fn lifecycle_and_status_report_a_configured_enabled_account() {
         let status = ChannelAdapter::status(channel.as_ref()).await.unwrap();
         assert_eq!(status.channel_id, id);
         assert!(status.states.contains(&ChannelAccountState::Enabled));
+    }
+
+    // IRC owns a real network listener now. Its start/stop lifecycle is pinned
+    // by the mock TLS peer tests in `providers::irc`; this generic compatibility
+    // check covers only providers that still expose no-op lifecycle hooks.
+    for (id, _) in PROVIDERS {
+        if id == "irc" {
+            continue;
+        }
+        let channel = build(&config, id);
         struct Sink;
         #[async_trait::async_trait]
         impl crate::channel::ChannelInboundSink for Sink {
