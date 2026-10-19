@@ -316,9 +316,10 @@ async fn public_adapter_webhook_authenticates_admits_deduplicates_and_restarts()
         let sink = sink.clone();
         async move { adapter.start(&sink).await }
     });
+    let initial_challenge = challenge("verify-token", "challenge-1");
     let challenge_response = tokio::select! {
         result = &mut listener => panic!("Lark adapter start returned before webhook ownership: {result:?}"),
-        response = post_until_ready(&client, port, &challenge("verify-token", "challenge-1")) => response,
+        response = post_until_ready(&client, port, &initial_challenge) => response,
     };
     assert_eq!(challenge_response.status(), reqwest::StatusCode::OK);
     assert_eq!(
@@ -415,9 +416,10 @@ async fn public_adapter_webhook_authenticates_admits_deduplicates_and_restarts()
         let sink = sink.clone();
         async move { adapter.start(&sink).await }
     });
+    let restart_challenge = challenge("verify-token", "challenge-2");
     let challenge_response = tokio::select! {
         result = &mut restarted => panic!("Lark restart returned before webhook ownership: {result:?}"),
-        response = post_until_ready(&client, port, &challenge("verify-token", "challenge-2")) => response,
+        response = post_until_ready(&client, port, &restart_challenge) => response,
     };
     assert_eq!(challenge_response.status(), reqwest::StatusCode::OK);
     let accepted = post_until_ready(
