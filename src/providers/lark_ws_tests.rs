@@ -239,7 +239,9 @@ async fn stale_lark_listener_cleanup_does_not_release_a_new_owner() {
 
     channel.cancel_listener();
     drop(new_registration);
-    assert!(channel.begin_listener().is_ok());
+    let (cancel, id) = channel.begin_listener().unwrap();
+    cancel.send_replace(true);
+    channel.end_listener(id);
 }
 
 #[tokio::test]
@@ -266,6 +268,18 @@ async fn public_adapter_retries_lark_message_after_typed_sink_rejection() {
         event("om-retry", "ou_alice", text("retry me")),
     )
     .await;
+    drop(first_connection);
+    tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("sink rejection should release the failed WebSocket attempt")
+        .expect("Lark listener must not panic")
+        .expect("Lark listener must stop cleanly after the rejected event");
+
+    let listener = tokio::spawn({
+        let adapter = adapter.clone();
+        let sink = sink_trait.clone();
+        async move { adapter.start(sink.as_ref()).await }
+    });
     let mut retry_connection = accept(&gateway.listener).await;
     let retry_ping = next_frame(&mut retry_connection).await;
     send_event(
@@ -294,6 +308,13 @@ async fn public_adapter_retries_lark_message_after_typed_sink_rejection() {
         rx.try_recv(),
         Err(tokio::sync::mpsc::error::TryRecvError::Empty)
     ));
+
+    adapter.stop().await.unwrap();
+    tokio::time::timeout(GUARD, listener)
+        .await
+        .expect("Lark stop must join the restarted listener")
+        .expect("Lark listener must not panic")
+        .expect("Lark listener must stop cleanly");
 }
 
 #[tokio::test]
