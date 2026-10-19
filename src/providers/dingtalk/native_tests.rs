@@ -437,6 +437,10 @@ async fn typed_voice_over_two_mib_is_rejected_before_platform_requests() {
         .await
         .expect_err("DingTalk voice upload is limited to 2 MiB");
     assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(
+        !error.unsupported,
+        "AMR is supported; rejection must come from the provider size bound: {error:?}"
+    );
     assert!(!error.sent_before_error);
     assert!(server.requests.lock().unwrap().is_empty());
 }
