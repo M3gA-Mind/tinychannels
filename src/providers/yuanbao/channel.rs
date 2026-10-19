@@ -46,12 +46,8 @@ pub struct YuanbaoChannel {
     outbound: Arc<OutboundSender>,
     pipeline: Arc<InboundPipeline>,
     shutdown_tx: watch::Sender<bool>,
-    /// Holds the inbound receiver between `new()` and the first `listen()` call.
-    ///
-    /// `Channel::listen` takes `&self`, so we can't move the receiver out of
-    /// a field. Use a `Mutex<Option<…>>` so the first listener takes ownership
-    /// and subsequent calls fail cleanly.
-    inbound_rx: parking_lot::Mutex<Option<mpsc::UnboundedReceiver<InboundEvent>>>,
+    /// Serializes ownership of the current connection's inbound receiver.
+    inbound_rx: TokioMutex<Option<mpsc::UnboundedReceiver<InboundEvent>>>,
     /// Per-recipient Reply Heartbeat keepalive tasks (started on `start_typing`).
     heartbeat_tasks: TokioMutex<HashMap<String, JoinHandle<()>>>,
     /// Reverse lookup table from shortened recipient ids (the ones we
@@ -70,9 +66,86 @@ pub struct YuanbaoChannel {
     /// Host-scoped services used by the native typed-send adapter.
     native: NativeState,
     voice_http: reqwest::Client,
+    /// Single-owner cancellation for the native typed listener.
+    listener: std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>,
+    listener_generation: std::sync::atomic::AtomicU64,
 }
 
 impl YuanbaoChannel {
+    async fn start_typed_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
+
+        let id = self.listener_generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        let (cancel, mut cancellation) = watch::channel(false);
+        {
+            let mut active = self.listener.lock().unwrap_or_else(|error| error.into_inner());
+            if active.is_some() {
+                return Err(ChannelSendError {
+                    kind: SendErrorKind::Transient,
+                    message: "Yuanbao listener is already running".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            *active = Some((id, cancel.clone()));
+        }
+        let _registration = YuanbaoListenerRegistration { channel: self, id };
+        self.shutdown_tx.send_replace(false);
+
+        let (inbound_tx, inbound_rx) = mpsc::unbounded_channel();
+        self.connection.set_inbound_sender(inbound_tx);
+        *self.inbound_rx.lock().await = Some(inbound_rx);
+        let mut inbound_rx = self.inbound_rx.lock().await.take().expect("new listener receiver");
+        let connection = Arc::clone(&self.connection);
+        let connection_cancel = cancellation.clone();
+        let mut connection_task = tokio::spawn(async move { connection.run(connection_cancel).await });
+
+        loop {
+            tokio::select! {
+                biased;
+                _ = cancellation.changed() => break,
+                event = inbound_rx.recv() => match event {
+                    Some(InboundEvent::Push(frame)) => {
+                        tokio::select! {
+                            biased;
+                            _ = cancellation.changed() => break,
+                            result = self.dispatch_push_typed(frame, sink) => {
+                                if let Err(error) = result {
+                                    cancel.send_replace(true);
+                                    if tokio::time::timeout(Duration::from_secs(2), &mut connection_task).await.is_err() {
+                                        connection_task.abort();
+                                        let _ = connection_task.await;
+                                    }
+                                    return Err(error);
+                                }
+                            }
+                        }
+                    }
+                    Some(InboundEvent::Kickout(reason)) => {
+                        warn!("[yuanbao] kickout: {} — stopping typed listener", reason);
+                        break;
+                    }
+                    None => break,
+                }
+            }
+        }
+        cancel.send_replace(true);
+        if tokio::time::timeout(Duration::from_secs(2), &mut connection_task).await.is_err() {
+            connection_task.abort();
+            let _ = connection_task.await;
+        }
+        Ok(())
+    }
+
+    fn stop_typed_listener(&self) {
+        if let Some((_, cancel)) = self.listener.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            cancel.send_replace(true);
+        }
+    }
+
     /// Build a channel from a validated config. Returns an error if the
     /// config is missing required fields (so misconfiguration surfaces
     /// at startup, not on the first inbound message).
@@ -111,11 +184,13 @@ impl YuanbaoChannel {
             outbound,
             pipeline,
             shutdown_tx,
-            inbound_rx: parking_lot::Mutex::new(Some(inbound_rx)),
+            inbound_rx: TokioMutex::new(Some(inbound_rx)),
             heartbeat_tasks: TokioMutex::new(HashMap::new()),
             recipient_aliases: TokioMutex::new(HashMap::new()),
             native: NativeState::default(),
             voice_http: no_redirect_client(),
+            listener: std::sync::Mutex::new(None),
+            listener_generation: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -311,7 +386,7 @@ impl Channel for YuanbaoChannel {
 
     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         // Take the inbound receiver. A second listener would just exit early.
-        let mut inbound_rx = match self.inbound_rx.lock().take() {
+        let mut inbound_rx = match self.inbound_rx.lock().await.take() {
             Some(rx) => rx,
             None => {
                 warn!("[yuanbao] listen() called twice — second call exits");
@@ -442,14 +517,6 @@ impl YuanbaoChannel {
                     );
                     return;
                 }
-                if ctx.kind == super::types::MessageKind::Voice {
-                    self.pipeline.release_message(&ctx.msg.msg_id).await;
-                    warn!(
-                        message_id = %ctx.msg.msg_id,
-                        "[yuanbao] voice event could not be stored and published through the typed host path"
-                    );
-                    return;
-                }
                 // Shorten ids at the channel boundary so the composite thread_id
                 // derived downstream (channel:yuanbao_<sender>_<reply_target>)
                 // stays under filesystem NAME_MAX once hex-encoded for the
@@ -501,6 +568,72 @@ impl YuanbaoChannel {
                 );
             }
         }
+    }
+
+    async fn dispatch_push_typed(
+        &self,
+        frame: types::ConnFrame,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        use tinychannels_bus::channel::{ChannelSendError, ConversationKind, SendErrorKind};
+        use tinychannels_bus::{ChannelInboundEnvelope, ChannelIngress, ChannelRef, ConversationRef, SenderRef};
+
+        if frame.data.is_empty() {
+            return Ok(());
+        }
+        let unwrapped = match decode_push_msg(&frame.data) {
+            Ok(push) if (!push.cmd.is_empty() || !push.module.is_empty()) && !push.data.is_empty() => Some(push.data),
+            _ => None,
+        };
+        let body = unwrapped.as_deref().unwrap_or(&frame.data);
+        let PipelineOutcome::Dispatch(ctx) = self.pipeline.process_uncommitted(body).await else {
+            return Ok(());
+        };
+        if self.pipeline.has_seen_message(&ctx.msg.msg_id).await {
+            return Ok(());
+        }
+
+        let envelope = if ctx.kind == super::types::MessageKind::Voice {
+            match self.voice_envelope(&ctx).await {
+                Some(envelope) => envelope,
+                None => {
+                    warn!(message_id = %ctx.msg.msg_id, "[yuanbao] typed voice ingress could not be fetched or stored");
+                    return Ok(());
+                }
+            }
+        } else {
+            let sender_id = ctx.msg.from_account.clone();
+            let reply_target = ctx.source.reply_target();
+            let short_sender = shorten_account_id(&sender_id);
+            let short_reply_target = shorten_reply_target(&reply_target);
+            self.register_recipient_alias(&short_sender, &sender_id).await;
+            self.register_recipient_alias(&short_reply_target, &reply_target).await;
+            ChannelInboundEnvelope {
+                channel: ChannelRef { id: "yuanbao".into(), account_id: Some(self.config.bot_id.clone()) },
+                message_id: ctx.msg.msg_id.clone(),
+                timestamp_unix_ms: Some(u64::from(ctx.msg.msg_time) * 1000),
+                conversation: ConversationRef {
+                    kind: if ctx.source.is_group { ConversationKind::Group } else { ConversationKind::Dm },
+                    id: short_reply_target,
+                    ..Default::default()
+                },
+                sender: SenderRef { id: sender_id, name: Some(ctx.msg.sender_nickname.clone()), ..Default::default() },
+                text: ctx.text.clone(),
+                raw: Some(serde_json::json!({"providerMessageId": ctx.msg.msg_id})),
+                ..Default::default()
+            }
+        };
+
+        if let Err(error) = sink.push(ChannelIngress::Inbound(envelope)).await {
+            return Err(ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "Yuanbao typed ingress sink rejected a message".into(),
+                retryable: true,
+                ..error
+            });
+        }
+        self.pipeline.mark_message_seen(&ctx.msg.msg_id).await;
+        Ok(())
     }
 
     async fn publish_voice(&self, ctx: &super::inbound::PipelineCtx) -> bool {
