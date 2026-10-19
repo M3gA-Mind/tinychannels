@@ -4977,8 +4977,7 @@ async fn configured_irc_launch_publishes_one_scoped_native_ingress_and_stops() {
     use tinychannels::factory::DefaultHttpClients;
     use tinychannels_bus::config::IrcConfig;
 
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let config = tinychannels_bus::ChannelsConfig {
         irc: Some(IrcConfig {
@@ -5063,7 +5062,8 @@ async fn configured_irc_launch_publishes_one_scoped_native_ingress_and_stops() {
 
 #[tokio::test]
 async fn configured_irc_listener_does_not_connect_after_cancellation_precedes_start() {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
     let port = listener.local_addr().unwrap().port();
     let adapter: Arc<dyn tinychannels::channel::ChannelAdapter> = Arc::new(
         tinychannels::IrcChannel::new(tinychannels::IrcChannelConfig {
