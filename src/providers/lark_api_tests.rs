@@ -179,6 +179,11 @@ async fn native_inbound_downloads_and_stores_a_file_before_building_the_envelope
         envelope.media[0].kind,
         tinychannels_bus::MediaKind::Document
     );
+    assert!(matches!(
+        &envelope.parts[0],
+        tinychannels_bus::ContentPart::File { file_name, .. }
+            if file_name.as_deref() == Some("note.json")
+    ));
     let stored = media.stored.lock().unwrap();
     assert_eq!(stored.len(), 1);
     assert_eq!(stored[0].bytes, file_bytes.as_bytes());
