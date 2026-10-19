@@ -51,7 +51,9 @@ impl super::LongTail for TypedTextFixture {
     }
 }
 
-fn typed_fixture_message(parts: Vec<OutboundContentPart>) -> tinychannels_bus::ChannelOutboundMessage {
+fn typed_fixture_message(
+    parts: Vec<OutboundContentPart>,
+) -> tinychannels_bus::ChannelOutboundMessage {
     tinychannels_bus::ChannelOutboundMessage {
         channel_id: "fixture".into(),
         conversation_id: "room-1".into(),
@@ -75,8 +77,14 @@ async fn text_only_typed_adapter_sends_a_legacy_text_projection() {
 
     let outcome = super::send_typed(&provider, &message).await.unwrap();
     assert!(outcome.error.is_none());
-    assert!(outcome.receipt.parts.is_empty(), "no unknown provider id is fabricated");
-    assert_eq!(provider.sent.lock().unwrap().as_slice(), ["plain typed text"]);
+    assert!(
+        outcome.receipt.parts.is_empty(),
+        "no unknown provider id is fabricated"
+    );
+    assert_eq!(
+        provider.sent.lock().unwrap().as_slice(),
+        ["plain typed text"]
+    );
 }
 
 #[tokio::test]
