@@ -602,3 +602,161 @@ async fn listener_stops_when_shutdown_is_signaled() {
     .unwrap();
     assert!(!ch.connection.is_connected());
 }
+
+#[derive(Clone)]
+struct PublicAdapterSink(tokio::sync::mpsc::UnboundedSender<tinychannels_bus::ChannelIngress>);
+
+#[async_trait::async_trait]
+impl crate::channel::ChannelInboundSink for PublicAdapterSink {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.0
+            .send(ingress)
+            .map_err(|_| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Transient,
+                message: "test ingress receiver closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+    }
+}
+
+fn yuanbao_push(message_id: &str, sender: &str, text: &str) -> Vec<u8> {
+    crate::providers::yuanbao::connection::test_support::encode_frame(
+        crate::providers::yuanbao::proto_constants::cmd_type::PUSH,
+        "inbound_message",
+        message_id,
+        "yuanbao_openclaw_proxy",
+        true,
+        0,
+        &serde_json::to_vec(&serde_json::json!({
+            "from_account": sender,
+            "msg_id": message_id,
+            "msg_time": 1_700_000_000,
+            "sender_nickname": "Alice",
+            "msg_body": [{
+                "msg_type": "TIMTextElem",
+                "msg_content": { "text": text },
+            }],
+        }))
+        .unwrap(),
+    )
+}
+
+async fn expect_yuanbao_push_ack(
+    session: &mut crate::providers::yuanbao::connection::test_support::GatewaySession,
+    message_id: &str,
+) {
+    let ack = tokio::time::timeout(std::time::Duration::from_secs(3), session.recv_frame())
+        .await
+        .expect("gateway push should be acknowledged");
+    assert_eq!(
+        ack.cmd_type,
+        crate::providers::yuanbao::proto_constants::cmd_type::PUSH_ACK
+    );
+    assert_eq!(ack.msg_id, message_id);
+}
+
+async fn next_public_yuanbao_message(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<tinychannels_bus::ChannelIngress>,
+) -> tinychannels_bus::channel::ChannelInboundEnvelope {
+    match tokio::time::timeout(std::time::Duration::from_secs(3), rx.recv())
+        .await
+        .expect("native Yuanbao listener should publish an ingress")
+        .expect("native Yuanbao listener dropped its supplied sink")
+    {
+        tinychannels_bus::ChannelIngress::Inbound(envelope) => envelope,
+        other => panic!("expected inbound message, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn public_adapter_start_delivers_admitted_deduplicated_pushes_and_restarts() {
+    use crate::channel::ChannelAdapter;
+    use crate::providers::yuanbao::connection::test_support::{MockGateway, gateway_config};
+    let gateway = MockGateway::bind().await;
+    let mut config = gateway_config(&gateway.url);
+    config.dm_access = "allowlist".into();
+    config.allowed_users = vec!["alice".into()];
+    let channel = Arc::new(YuanbaoChannel::new(config).unwrap());
+    let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(PublicAdapterSink(events));
+
+    let start = {
+        let channel = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        tokio::spawn(async move { channel.start(sink.as_ref()).await })
+    };
+    let mut first_session = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        gateway.accept_authed("connect-first"),
+    )
+    .await
+    .expect("ChannelAdapter::start must open the configured local gateway");
+
+    for (message_id, sender, text) in [
+        ("denied-before-allowed", "mallory", "must be filtered"),
+        ("accepted-once", "alice", "first delivery"),
+        ("accepted-once", "alice", "duplicate delivery"),
+        ("ordered-barrier", "alice", "barrier"),
+    ] {
+        first_session
+            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                yuanbao_push(message_id, sender, text).into(),
+            ))
+            .await;
+        expect_yuanbao_push_ack(&mut first_session, message_id).await;
+    }
+
+    let first = next_public_yuanbao_message(&mut received).await;
+    assert_eq!(first.channel.id, "yuanbao");
+    assert_eq!(first.message_id, "accepted-once");
+    assert_eq!(first.sender.id, "alice");
+    assert_eq!(first.text, "first delivery");
+    let barrier = next_public_yuanbao_message(&mut received).await;
+    assert_eq!(barrier.message_id, "ordered-barrier");
+    assert_eq!(barrier.sender.id, "alice");
+    assert_eq!(barrier.text, "barrier");
+
+    channel.stop().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), start)
+        .await
+        .expect("stopping Yuanbao should join its listener")
+        .expect("listener task should not panic")
+        .expect("listener should stop cleanly");
+    assert!(
+        received.try_recv().is_err(),
+        "denied and duplicate pushes stay filtered"
+    );
+
+    let restarted = {
+        let channel = Arc::clone(&channel);
+        let sink = Arc::clone(&sink);
+        tokio::spawn(async move { channel.start(sink.as_ref()).await })
+    };
+    let mut second_session = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        gateway.accept_authed("connect-second"),
+    )
+    .await
+    .expect("the stopped adapter should reconnect on restart");
+    second_session
+        .send(tokio_tungstenite::tungstenite::Message::Binary(
+            yuanbao_push("after-restart", "alice", "restarted").into(),
+        ))
+        .await;
+    expect_yuanbao_push_ack(&mut second_session, "after-restart").await;
+    let after_restart = next_public_yuanbao_message(&mut received).await;
+    assert_eq!(after_restart.message_id, "after-restart");
+    assert_eq!(after_restart.text, "restarted");
+
+    channel.stop().await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(3), restarted)
+        .await
+        .expect("second stop should join the restarted listener")
+        .expect("restarted listener task should not panic")
+        .expect("restarted listener should stop cleanly");
+    assert!(received.try_recv().is_err());
+}
