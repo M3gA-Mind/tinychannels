@@ -92,22 +92,41 @@ async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
             ("POST", "/v1.0/oauth2/accessToken") => {
                 (200, json!({"accessToken":"token"}).to_string().into_bytes())
             }
-            ("POST", target) if target.starts_with("/media/upload?access_token=token&type=file") => {
-                assert!(request.headers.to_ascii_lowercase().contains("multipart/form-data"));
-                (200, json!({"media_id":"uploaded-file-12"}).to_string().into_bytes())
+            ("POST", target)
+                if target.starts_with("/media/upload?access_token=token&type=file") =>
+            {
+                assert!(
+                    request
+                        .headers
+                        .to_ascii_lowercase()
+                        .contains("multipart/form-data")
+                );
+                (
+                    200,
+                    json!({"media_id":"uploaded-file-12"})
+                        .to_string()
+                        .into_bytes(),
+                )
             }
             ("POST", "/v1.0/robot/groupMessages/send") => {
                 assert_eq!(request.body["robotCode"], "group-robot");
                 assert_eq!(request.body["openConversationId"], "open-group-12");
                 assert_eq!(request.body["msgKey"], "sampleFile");
                 let params: serde_json::Value = serde_json::from_str(
-                    request.body["msgParam"].as_str().expect("msgParam is JSON text"),
+                    request.body["msgParam"]
+                        .as_str()
+                        .expect("msgParam is JSON text"),
                 )
                 .unwrap();
                 assert_eq!(params["mediaId"], "uploaded-file-12");
                 assert_eq!(params["fileName"], "report.pdf");
                 assert_eq!(params["fileType"], "pdf");
-                (200, json!({"processQueryKey":"group-receipt-12"}).to_string().into_bytes())
+                (
+                    200,
+                    json!({"processQueryKey":"group-receipt-12"})
+                        .to_string()
+                        .into_bytes(),
+                )
             }
             _ => panic!("unexpected DingTalk request: {request:?}"),
         },
