@@ -130,6 +130,11 @@ impl YuanbaoConnection {
         *self.inbound_tx.lock() = sender;
     }
 
+    #[cfg(test)]
+    pub(crate) async fn hold_sender_for_test(&self) -> impl Drop + '_ {
+        self.sender.lock().await
+    }
+
     pub fn state(&self) -> ConnectionState {
         *self.state.lock()
     }

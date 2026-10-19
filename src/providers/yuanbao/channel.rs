@@ -120,10 +120,9 @@ impl YuanbaoChannel {
             .expect("new listener receiver");
         let connection = Arc::clone(&self.connection);
         let connection_cancel = cancellation.clone();
-        let completion = YuanbaoListenerRegistration {
+        let completion = YuanbaoConnectionRegistration {
             listener: Arc::clone(&self.listener),
             id,
-            cancel: cancel.clone(),
             abandoned: Arc::clone(&registration.abandoned),
             connection_done: Arc::clone(&registration.connection_done),
         };
@@ -860,8 +859,12 @@ impl Drop for YuanbaoListenerRegistration {
     fn drop(&mut self) {
         self.cancel.send_replace(true);
         if self.connection_started && !self.completed {
-            self.abandoned.store(true, std::sync::atomic::Ordering::Release);
-            if !self.connection_done.load(std::sync::atomic::Ordering::Acquire) {
+            self.abandoned
+                .store(true, std::sync::atomic::Ordering::Release);
+            if !self
+                .connection_done
+                .load(std::sync::atomic::Ordering::Acquire)
+            {
                 return;
             }
         }
@@ -891,7 +894,10 @@ fn clear_yuanbao_listener(
     id: u64,
 ) {
     let mut active = listener.lock().unwrap_or_else(|error| error.into_inner());
-    if active.as_ref().is_some_and(|(active_id, _)| *active_id == id) {
+    if active
+        .as_ref()
+        .is_some_and(|(active_id, _)| *active_id == id)
+    {
         active.take();
     }
 }
@@ -907,7 +913,12 @@ fn no_redirect_client() -> reqwest::Client {
 impl Drop for YuanbaoChannel {
     fn drop(&mut self) {
         let _ = self.shutdown_tx.send(true);
-        if let Some((_, cancel)) = self.listener.lock().unwrap_or_else(|error| error.into_inner()).take() {
+        if let Some((_, cancel)) = self
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
             cancel.send_replace(true);
         }
     }
