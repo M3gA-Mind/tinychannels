@@ -38,6 +38,28 @@ fn default_group_policy_keeps_topic_distinct_from_same_sender_id() {
 }
 
 #[test]
+fn canonical_v22_key_uses_tagged_fields_and_utf8_byte_lengths() {
+    let mut envelope = envelope();
+    envelope.channel.account_id = Some("telegram:bot-a".into());
+    envelope.conversation.topic_id = Some("42".into());
+
+    assert_eq!(
+        key("租户", &envelope, SessionKeyPolicy::default()),
+        "v22|namespace=p6:租户|channel=p8:telegram|account=p14:telegram:bot-a|kind=p5:group|scope=a|conversation=p4:-100|parent=a|topic=p2:42|thread=a|participant=a"
+    );
+
+    let mut absent_account = envelope.clone();
+    absent_account.channel.account_id = None;
+    let mut empty_account = envelope;
+    empty_account.channel.account_id = Some(String::new());
+    assert_ne!(
+        key("main", &absent_account, SessionKeyPolicy::default()),
+        key("main", &empty_account, SessionKeyPolicy::default()),
+        "an absent account must differ from a present empty account"
+    );
+}
+
+#[test]
 fn identity_preserves_parent_topic_thread_scope_and_presence() {
     let policy = SessionKeyPolicy {
         group_sessions_per_user: false,
