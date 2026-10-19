@@ -4,9 +4,9 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use prost::Message as ProstMessage;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
+use tokio::sync::{RwLock, watch};
 use tokio_tungstenite::tungstenite::Message as WsMsg;
 use uuid::Uuid;
 
@@ -124,6 +124,30 @@ struct LarkMessage {
     mentions: Vec<serde_json::Value>,
 }
 
+struct LarkListenerRegistration<'a>(&'a LarkChannel);
+
+impl Drop for LarkListenerRegistration<'_> {
+    fn drop(&mut self) {
+        self.0.end_listener();
+    }
+}
+
+enum LarkIngress<'a> {
+    Legacy(tokio::sync::mpsc::Sender<ChannelMessage>),
+    Typed(&'a (dyn crate::channel::ChannelInboundSink + Send + Sync)),
+}
+
+struct TypedWebhookEvent {
+    event: serde_json::Value,
+    reply: tokio::sync::oneshot::Sender<TypedWebhookResult>,
+}
+
+#[derive(Clone, Copy)]
+enum TypedWebhookResult {
+    Acknowledged,
+    Retry,
+}
+
 /// Heartbeat timeout for WS connection — must be larger than ping_interval (default 120 s).
 /// If no binary frame (pong or event) is received within this window, reconnect.
 const WS_HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(300);
@@ -161,6 +185,8 @@ pub struct LarkChannel {
     tenant_token: Arc<RwLock<Option<String>>>,
     /// Dedup set: WS message_ids seen in last ~30 min to prevent double-dispatch
     ws_seen_ids: Arc<RwLock<HashMap<String, Instant>>>,
+    /// The typed adapter owns one listener at a time across all provider clones.
+    listener_cancel: Arc<StdMutex<Option<watch::Sender<bool>>>>,
 }
 
 impl LarkChannel {
@@ -184,6 +210,7 @@ impl LarkChannel {
             voice_codec: None,
             tenant_token: Arc::new(RwLock::new(None)),
             ws_seen_ids: Arc::new(RwLock::new(HashMap::new())),
+            listener_cancel: Arc::new(StdMutex::new(None)),
         }
     }
 
@@ -240,6 +267,46 @@ impl LarkChannel {
         self.http_client.clone()
     }
 
+    fn begin_listener(&self) -> Result<watch::Receiver<bool>, tinychannels_bus::channel::ChannelSendError> {
+        let mut active = self
+            .listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        if active.is_some() {
+            return Err(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
+                message: "Lark listener is already running".into(),
+                retryable: false,
+                ..Default::default()
+            });
+        }
+        let (cancel, receiver) = watch::channel(false);
+        *active = Some(cancel);
+        Ok(receiver)
+    }
+
+    fn end_listener(&self) {
+        if let Some(cancel) = self
+            .listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+        {
+            cancel.send_replace(true);
+        }
+    }
+
+    async fn mark_ws_message_seen(&self, message_id: &str) -> bool {
+        let now = Instant::now();
+        let mut seen = self.ws_seen_ids.write().await;
+        seen.retain(|_, received| now.duration_since(*received) < Duration::from_secs(30 * 60));
+        if seen.contains_key(message_id) {
+            return false;
+        }
+        seen.insert(message_id.to_owned(), now);
+        true
+    }
+
     fn api_base(&self) -> &'static str {
         if self.use_feishu {
             FEISHU_BASE_URL
@@ -294,7 +361,7 @@ impl LarkChannel {
     /// WS long-connection event loop.  Returns Ok(()) when the connection closes
     /// (the caller reconnects).
     #[allow(clippy::too_many_lines)]
-    async fn listen_ws(&self, tx: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+    async fn listen_ws(&self, ingress: LarkIngress<'_>) -> anyhow::Result<()> {
         let (wss_url, client_config) = self.get_ws_endpoint().await?;
         let service_id = wss_url
             .split('?')
@@ -467,17 +534,26 @@ impl LarkChannel {
 
                     let lark_msg = &recv.message;
 
-                    // Dedup
-                    {
-                        let now = Instant::now();
-                        let mut seen = self.ws_seen_ids.write().await;
-                        // GC
-                        seen.retain(|_, t| now.duration_since(*t) < Duration::from_secs(30 * 60));
-                        if seen.contains_key(&lark_msg.message_id) {
-                            tracing::debug!("Lark WS: dup {}", lark_msg.message_id);
-                            continue;
+                    // Dedup before decoding or downloading content, including when
+                    // the same provider message is delivered through both modes.
+                    if !self.mark_ws_message_seen(&lark_msg.message_id).await {
+                        tracing::debug!("Lark WS: dup {}", lark_msg.message_id);
+                        continue;
+                    }
+
+                    if let LarkIngress::Typed(sink) = &ingress {
+                        if let Some(envelope) = self
+                            .inbound_envelope_for_listener(&event_payload, true)
+                            .await
+                            && sink
+                                .push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+                                .await
+                                .is_err()
+                        {
+                            tracing::warn!("Lark WS: typed ingress sink rejected an event");
+                            break;
                         }
-                        seen.insert(lark_msg.message_id.clone(), now);
+                        continue;
                     }
 
                     if let Some(envelope) = self.inbound_envelope(&event_payload).await
@@ -537,6 +613,9 @@ impl LarkChannel {
                     };
 
                     tracing::debug!("Lark WS: message in {}", lark_msg.chat_id);
+                    let LarkIngress::Legacy(tx) = &ingress else {
+                        unreachable!("typed Lark ingress returned above")
+                    };
                     if tx.send(channel_msg).await.is_err() { break; }
                 }
             }
@@ -808,7 +887,8 @@ impl Channel for LarkChannel {
 struct LarkWebhookState {
     verification_token: String,
     channel: Arc<LarkChannel>,
-    tx: tokio::sync::mpsc::Sender<ChannelMessage>,
+    tx: Option<tokio::sync::mpsc::Sender<ChannelMessage>>,
+    typed_tx: Option<tokio::sync::mpsc::Sender<TypedWebhookEvent>>,
 }
 
 async fn handle_lark_webhook(
@@ -835,6 +915,36 @@ async fn handle_lark_webhook(
         return (StatusCode::OK, axum::Json(resp)).into_response();
     }
 
+    if let Some(typed_tx) = &state.typed_tx {
+        if payload
+            .pointer("/header/event_type")
+            .and_then(serde_json::Value::as_str)
+            != Some("im.message.receive_v1")
+        {
+            return (StatusCode::OK, "ok").into_response();
+        }
+        let Some(event) = payload.get("event") else {
+            return (StatusCode::OK, "ok").into_response();
+        };
+        let (reply, response) = tokio::sync::oneshot::channel();
+        if typed_tx
+            .send(TypedWebhookEvent {
+                event: event.clone(),
+                reply,
+            })
+            .await
+            .is_err()
+        {
+            return (StatusCode::SERVICE_UNAVAILABLE, "listener stopped").into_response();
+        }
+        return match response.await {
+            Ok(TypedWebhookResult::Acknowledged) => (StatusCode::OK, "ok").into_response(),
+            Ok(TypedWebhookResult::Retry) | Err(_) => {
+                (StatusCode::SERVICE_UNAVAILABLE, "listener unavailable").into_response()
+            }
+        };
+    }
+
     let messages = state.channel.parse_event_payload(&payload);
     if payload
         .pointer("/header/event_type")
@@ -852,7 +962,10 @@ async fn handle_lark_webhook(
         return (StatusCode::OK, "ok").into_response();
     }
     for msg in messages {
-        if state.tx.send(msg).await.is_err() {
+        let Some(tx) = &state.tx else {
+            break;
+        };
+        if tx.send(msg).await.is_err() {
             tracing::warn!("Lark: message channel closed");
             break;
         }
