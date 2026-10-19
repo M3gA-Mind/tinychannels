@@ -1,6 +1,6 @@
 use super::super::http_test_support::HttpsServer;
 use super::native::timestamp_unix_ms;
-use crate::channel::ChannelAdapter;
+use crate::channel::{ChannelAdapter, ChannelInboundSink};
 use crate::factory::{HttpClientFactory, build_long_tail_channel_with_host};
 use crate::host::{ChannelHostBuilder, VoiceMediaRequest, VoiceMediaStore};
 use crate::providers::native::fixtures::{StubMedia, stored_media};
@@ -9,10 +9,30 @@ use base64::Engine as _;
 use serde_json::json;
 use std::sync::Arc;
 use tinychannels_bus::{
-    ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind, ConversationRef,
-    HostReadVoiceMediaResult, HostStoreVoiceMediaResult, MediaKind, MediaReference,
-    OutboundContentPart, OutboundVoice,
+    ChannelIngress, ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind,
+    ConversationRef, HostReadVoiceMediaResult, HostStoreVoiceMediaResult, MediaKind,
+    MediaReference, OutboundContentPart, OutboundVoice,
 };
+
+#[derive(Clone)]
+struct RecordingInboundSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
+
+#[async_trait::async_trait]
+impl ChannelInboundSink for RecordingInboundSink {
+    async fn push(
+        &self,
+        ingress: ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.0.send(ingress).map_err(|_| {
+            tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "test sink closed".into(),
+                retryable: true,
+                ..Default::default()
+            }
+        })
+    }
+}
 
 #[tokio::test]
 async fn qq_inbound_image_downloads_tencent_attachment_and_publishes_typed_ingress() {
