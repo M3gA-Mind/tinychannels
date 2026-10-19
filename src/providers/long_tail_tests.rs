@@ -54,12 +54,10 @@ impl super::LongTail for TypedTextFixture {
 fn typed_fixture_message(
     parts: Vec<OutboundContentPart>,
 ) -> tinychannels_bus::ChannelOutboundMessage {
-    tinychannels_bus::ChannelOutboundMessage {
-        channel_id: "fixture".into(),
-        conversation_id: "room-1".into(),
-        parts,
-        ..Default::default()
-    }
+    let intent = text_intent("fixture", "room-1", None);
+    let mut message = tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+    message.parts = parts;
+    message
 }
 
 #[tokio::test]
