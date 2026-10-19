@@ -109,6 +109,7 @@ async fn recv(rx: &mut mpsc::Receiver<ChannelMessage>) -> ChannelMessage {
         .expect("listener dropped its sender")
 }
 
+#[derive(Clone)]
 struct InboundSink(mpsc::UnboundedSender<tinychannels_bus::ChannelIngress>);
 
 #[async_trait::async_trait]
@@ -141,6 +142,7 @@ async fn public_adapter_start_owns_typed_listener_until_stop_joins_it() {
     let sink = InboundSink(tx);
     let mut start = tokio::spawn({
         let channel = channel.clone();
+        let sink = sink.clone();
         async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
     });
     // `start` must establish and own its listener instead of returning as the
@@ -206,6 +208,7 @@ async fn public_adapter_stop_cancels_tls_handshake_and_releases_listener() {
     let sink = InboundSink(tx);
     let mut start = tokio::spawn({
         let channel = channel.clone();
+        let sink = sink.clone();
         async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
     });
     let (_socket, _) = tokio::time::timeout(GUARD, listener.accept())
@@ -220,6 +223,11 @@ async fn public_adapter_stop_cancels_tls_handshake_and_releases_listener() {
         .expect("stop must cancel an in-progress TLS handshake")
         .expect("listener task must not panic")
         .expect("listener cancellation should be clean");
+    let registration = channel
+        .begin_listener()
+        .expect("cancellation must release single-listener ownership");
+    drop(registration);
+    channel.end_listener();
 }
 
 #[tokio::test]
@@ -231,6 +239,7 @@ async fn public_adapter_rejects_a_second_concurrent_listener() {
     let sink = InboundSink(tx);
     let mut start = tokio::spawn({
         let channel = channel.clone();
+        let sink = sink.clone();
         async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
     });
     let _peer = Peer::accept(&listener, &acceptor).await;
