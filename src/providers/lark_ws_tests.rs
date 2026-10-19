@@ -5,8 +5,8 @@
 use super::*;
 use crate::channel::{ChannelAdapter, ChannelInboundSink};
 use crate::providers::http_test_support::HttpsServer;
-use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
 use tinychannels_bus::ChannelIngress;
+use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::WebSocketStream;
 
@@ -314,7 +314,10 @@ async fn public_adapter_webhook_authenticates_admits_deduplicates_and_restarts()
     };
     assert_eq!(challenge_response.status(), reqwest::StatusCode::OK);
     assert_eq!(
-        challenge_response.json::<serde_json::Value>().await.unwrap(),
+        challenge_response
+            .json::<serde_json::Value>()
+            .await
+            .unwrap(),
         serde_json::json!({"challenge": "challenge-1"})
     );
 
@@ -368,12 +371,14 @@ async fn public_adapter_webhook_authenticates_admits_deduplicates_and_restarts()
         .expect("Lark webhook stop must join its listener")
         .expect("Lark webhook listener must not panic")
         .expect("Lark webhook listener must stop cleanly");
-    assert!(client
-        .post(format!("http://127.0.0.1:{port}/lark"))
-        .json(&challenge("verify-token", "stopped"))
-        .send()
-        .await
-        .is_err());
+    assert!(
+        client
+            .post(format!("http://127.0.0.1:{port}/lark"))
+            .json(&challenge("verify-token", "stopped"))
+            .send()
+            .await
+            .is_err()
+    );
 
     let mut restarted = tokio::spawn({
         let adapter = adapter.clone();
