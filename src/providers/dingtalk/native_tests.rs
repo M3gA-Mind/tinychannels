@@ -1596,6 +1596,12 @@ async fn public_adapter_start_owns_dingtalk_stream_until_stop_and_restart() {
             .expect("mock Stream readiness sender remains connected"),
     };
     assert_eq!(session, 1);
+    let duplicate_start = tokio::time::timeout(PUBLIC_LISTENER_GUARD, adapter.start(&sink))
+        .await
+        .expect("duplicate DingTalk start should reject promptly")
+        .expect_err("a second listener must not replace the active Stream owner");
+    assert_eq!(duplicate_start.kind, SendErrorKind::Forbidden);
+
     let first = tokio::time::timeout(PUBLIC_LISTENER_GUARD, rx.recv())
         .await
         .expect("admitted DingTalk callback should reach the supplied typed sink")
