@@ -213,10 +213,17 @@ impl YuanbaoConnection {
 
     /// Trigger a graceful shutdown.
     pub async fn shutdown(&self) {
-        let mut guard = self.sender.lock().await;
-        if let Some(mut s) = guard.take() {
-            let _ = s.send(Message::Close(None)).await;
-            let _ = s.close().await;
+        // A listener can be cancelled while another task is sending a frame.
+        // Bound both lock acquisition and websocket close so an abandoned
+        // listener registration cannot retain its owner forever.
+        if let Ok(mut guard) = time::timeout(Duration::from_secs(1), self.sender.lock()).await {
+            if let Some(mut sender) = guard.take() {
+                let _ = time::timeout(Duration::from_secs(1), async {
+                    let _ = sender.send(Message::Close(None)).await;
+                    let _ = sender.close().await;
+                })
+                .await;
+            }
         }
         // Drop all pending waiters so callers stop hanging.
         let mut pending = self.pending.lock();
