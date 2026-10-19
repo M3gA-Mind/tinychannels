@@ -1693,7 +1693,7 @@ async fn cancelled_listener_does_not_open_gateway_after_registration() {
     ));
     let adapter: Arc<dyn ChannelAdapter> = channel.clone();
     let (id, cancellation) = channel.begin_listener().unwrap();
-    let _registration = ListenerRegistration {
+    let _registration = super::super::ListenerRegistration {
         channel: &channel,
         id,
     };
@@ -1703,7 +1703,10 @@ async fn cancelled_listener_does_not_open_gateway_after_registration() {
     let sink = RecordingInboundSink(tx);
     tokio::time::timeout(
         PUBLIC_LISTENER_GUARD,
-        channel.listen_owned(DingTalkIngress::Typed(&sink), Some(cancellation)),
+        channel.listen_owned(
+            super::super::DingTalkIngress::Typed(&sink),
+            Some(cancellation),
+        ),
     )
     .await
     .expect("a pre-cancelled DingTalk listener must return promptly")
