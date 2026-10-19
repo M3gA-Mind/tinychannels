@@ -1078,7 +1078,7 @@ impl LarkChannel {
             .with_state(state);
         let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
         let listener = tokio::net::TcpListener::bind(addr).await?;
-        let server = axum::serve(listener, app);
+        let server = axum::serve(listener, app).into_future();
         tokio::pin!(server);
 
         loop {
@@ -1114,7 +1114,7 @@ impl LarkChannel {
                                 TypedWebhookResult::Acknowledged
                             }
                             Err(error) => {
-                                tracing::debug!(%error, "Lark typed webhook sink rejected an event");
+                                tracing::debug!(error = %error.message, "Lark typed webhook sink rejected an event");
                                 TypedWebhookResult::Retry
                             }
                         }
