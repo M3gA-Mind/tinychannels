@@ -173,8 +173,7 @@ async fn lark_host_voice_store_delivers_voice_without_file_repository() {
     let channel =
         crate::factory::build_long_tail_channel_with_host(&config, &host, &clients, "lark")
             .expect("configured Lark adapter");
-    let capabilities =
-        crate::providers::native::NativeProvider::declared_capabilities(channel.as_ref());
+    let capabilities = crate::channel::ChannelAdapter::declared_capabilities(channel.as_ref());
     assert!(capabilities.voice_out.supported);
     assert!(capabilities.voice_in.supported);
 
@@ -183,6 +182,10 @@ async fn lark_host_voice_store_delivers_voice_without_file_repository() {
         &tinychannels_bus::ChannelOutboundMessage {
             channel_id: "lark".into(),
             conversation_id: "oc_chat_1".into(),
+            channel_ref: None,
+            conversation_ref: None,
+            reply_to_id: None,
+            thread_id: None,
             turn_id: Some("turn-voice-only".into()),
             idempotency_key: "voice-only".into(),
             parts: vec![tinychannels_bus::OutboundContentPart::Voice {
@@ -199,7 +202,6 @@ async fn lark_host_voice_store_delivers_voice_without_file_repository() {
                     waveform: None,
                 },
             }],
-            ..Default::default()
         },
     )
     .await
