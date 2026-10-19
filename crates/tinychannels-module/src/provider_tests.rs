@@ -5097,6 +5097,39 @@ async fn configured_qq_factory_selects_the_native_listener_owner() {
 }
 
 #[tokio::test]
+async fn configured_dingtalk_factory_selects_the_native_listener_owner() {
+    use tinychannels::factory::DefaultHttpClients;
+    use tinychannels_bus::config::DingTalkConfig;
+
+    let config = tinychannels_bus::ChannelsConfig {
+        dingtalk: Some(DingTalkConfig {
+            client_id: "app-key".into(),
+            client_secret: "app-secret".into(),
+            allowed_users: vec!["alice".into()],
+        }),
+        ..Default::default()
+    };
+    let noop: Arc<dyn tinychannels::host::ChannelHost> = tinychannels::host::NoopHost::arc();
+    let launch = crate::native::build_native_v2("dingtalk", &config, &noop, &DefaultHttpClients)
+        .expect("configured DingTalk credentials define a provider");
+    let hooks = Arc::new(Hooks::default());
+    let (host, _callbacks, _server, _storage) = ingress_fixture().await;
+    let running = launch.start(hooks, host, None, true);
+
+    assert_eq!(
+        running
+            .native_ports
+            .as_ref()
+            .expect("configured DingTalk uses native adapter ports")
+            .listener_mode,
+        LongTailListenerMode::Adapter,
+        "DingTalk module launch must route through ChannelAdapter::start, not Channel::listen"
+    );
+
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn configured_irc_listener_does_not_connect_after_cancellation_precedes_start() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
