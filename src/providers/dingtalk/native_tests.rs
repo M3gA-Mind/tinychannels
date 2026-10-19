@@ -1685,13 +1685,13 @@ async fn cancelled_listener_does_not_open_gateway_after_registration() {
         panic!("a cancelled DingTalk listener must not register: {request:?}")
     })
     .await;
-    let channel = DingTalkChannel::with_http_client(
+    let channel = Arc::new(DingTalkChannel::with_http_client(
         "app-key".into(),
         "app-secret".into(),
         vec!["alice".into()],
         server.client.clone(),
-    );
-    let adapter: Arc<dyn ChannelAdapter> = Arc::new(channel.clone());
+    ));
+    let adapter: Arc<dyn ChannelAdapter> = channel.clone();
     let (id, cancellation) = channel.begin_listener().unwrap();
     let _registration = ListenerRegistration {
         channel: &channel,
