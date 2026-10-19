@@ -163,3 +163,7 @@ fn nonempty(value: &str) -> Option<&str> {
     let value = value.trim();
     (!value.is_empty()).then_some(value)
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;
