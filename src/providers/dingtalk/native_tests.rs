@@ -267,6 +267,173 @@ async fn group_file_upload_sends_the_uploaded_media_id_and_real_receipt() {
     assert_eq!(requests.len(), 3);
 }
 
+struct ReadableAmrVoice(Vec<u8>);
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for ReadableAmrVoice {
+    async fn store_voice(
+        &self,
+        _request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        anyhow::bail!("this fixture only serves outbound voice")
+    }
+
+    async fn read_voice(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        _opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        use base64::Engine as _;
+
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(&self.0),
+            mime_type: "audio/amr".into(),
+            file_name: Some("reply.amr".into()),
+        })
+    }
+}
+
+fn voice_message(conversation_id: &str) -> tinychannels_bus::ChannelOutboundMessage {
+    use tinychannels_bus::{
+        ChannelOutboundMessage, MediaKind, MediaReference, OutboundContentPart, OutboundVoice,
+    };
+
+    ChannelOutboundMessage {
+        channel_id: "dingtalk".into(),
+        conversation_id: conversation_id.into(),
+        channel_ref: None,
+        conversation_ref: Some(ConversationRef {
+            kind: ConversationKind::Group,
+            id: conversation_id.into(),
+            ..Default::default()
+        }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: Some("turn-amr-voice".into()),
+        idempotency_key: "amr-voice-send".into(),
+        parts: vec![OutboundContentPart::Voice {
+            voice: OutboundVoice::Media {
+                media: MediaReference {
+                    opaque_id: Some("opaque-amr-voice".into()),
+                    kind: MediaKind::Audio,
+                    content_type: Some("audio/amr".into()),
+                    ..Default::default()
+                },
+                audio_base64: None,
+                codec: Some("amr_nb".into()),
+                duration_ms: Some(1_240),
+                waveform: None,
+            },
+        }],
+    }
+}
+
+#[tokio::test]
+async fn typed_voice_upload_uses_amr_sample_audio_with_uploaded_media_id_and_duration() {
+    use crate::providers::http_test_support::HttpsServer;
+    use tinychannels_bus::channel::MessageReceiptPartKind;
+    use tinychannels_runtime::channel::ChannelTypedSend;
+
+    const AMR_BYTES: &[u8] = b"#!AMR\nprovider AMR voice bytes";
+
+    let server = HttpsServer::start_with_bytes(
+        |request| match (request.method.as_str(), request.target.as_str()) {
+            ("POST", "/v1.0/oauth2/accessToken") => {
+                (200, json!({"accessToken":"token"}).to_string().into_bytes())
+            }
+            ("POST", target) if target.starts_with("/media/upload?") => {
+                assert!(target.contains("type=voice"), "voice must use the voice upload type");
+                assert!(request.headers.to_ascii_lowercase().contains("multipart/form-data"));
+                assert!(request.raw_body.windows(AMR_BYTES.len()).any(|w| w == AMR_BYTES));
+                assert!(String::from_utf8_lossy(&request.raw_body).contains("reply.amr"));
+                (200, json!({"media_id":"uploaded-amr-voice"}).to_string().into_bytes())
+            }
+            ("POST", "/v1.0/robot/groupMessages/send") => {
+                assert_eq!(request.body["msgKey"], "sampleAudio");
+                let params: serde_json::Value = serde_json::from_str(
+                    request.body["msgParam"].as_str().expect("msgParam is JSON text"),
+                )
+                .unwrap();
+                assert_eq!(params["mediaId"], "uploaded-amr-voice");
+                assert_eq!(params["duration"], "1240");
+                (
+                    200,
+                    json!({"processQueryKey":"amr-voice-receipt"})
+                        .to_string()
+                        .into_bytes(),
+                )
+            }
+            _ => panic!("unexpected DingTalk request: {request:?}"),
+        },
+        "application/json",
+    )
+    .await;
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    )
+    .with_voice_media_store(Arc::new(ReadableAmrVoice(AMR_BYTES.to_vec())));
+    channel.robot_contexts.write().await.insert(
+        conversation_context_key(ConversationKind::Group, "open-group-amr"),
+        json!({"robotCode":"group-robot"}),
+    );
+
+    let sent = channel
+        .send_typed(&voice_message("open-group-amr"))
+        .await
+        .expect("AMR voice should be uploaded and sent as sampleAudio");
+
+    assert_eq!(
+        sent.receipt.primary_platform_message_id.as_deref(),
+        Some("amr-voice-receipt")
+    );
+    assert_eq!(sent.receipt.parts[0].kind, MessageReceiptPartKind::Voice);
+    assert_eq!(server.requests.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
+async fn typed_voice_over_two_mib_is_rejected_before_platform_requests() {
+    use crate::providers::http_test_support::HttpsServer;
+    use tinychannels_runtime::channel::ChannelTypedSend;
+
+    let server = HttpsServer::start(|request| {
+        panic!("oversized DingTalk voice must be rejected before HTTP: {request:?}")
+    })
+    .await;
+    let channel = DingTalkChannel::with_http_client(
+        "app-key".into(),
+        "app-secret".into(),
+        vec!["alice".into()],
+        server.client.clone(),
+    )
+    .with_voice_media_store(Arc::new(ReadableAmrVoice(vec![0; 2 * 1024 * 1024 + 1])));
+
+    let error = channel
+        .send_typed(&voice_message("open-group-amr"))
+        .await
+        .expect_err("DingTalk voice upload is limited to 2 MiB");
+    assert_eq!(error.kind, SendErrorKind::BadFormat);
+    assert!(!error.sent_before_error);
+    assert!(server.requests.lock().unwrap().is_empty());
+}
+
+#[test]
+fn dingtalk_voice_capabilities_advertise_amr_when_host_ports_are_available() {
+    use crate::providers::native::fixtures::RecordingEvents;
+
+    let channel = DingTalkChannel::new("app-key".into(), "app-secret".into(), vec![])
+        .with_voice_media_store(Arc::new(ReadableAmrVoice(Vec::new())))
+        .with_events(Arc::new(RecordingEvents::delivering()));
+    let caps = NativeProvider::declared_capabilities(&channel);
+
+    assert!(caps.voice_in.supported);
+    assert!(caps.voice_in.accepted_codecs.iter().any(|codec| codec == "amr_nb"));
+    assert!(caps.content.audio.accepted_types.iter().any(|mime| mime == "audio/amr"));
+    assert!(caps.voice_out.supported);
+}
+
 #[tokio::test]
 async fn direct_send_rejection_lists_override_a_success_shaped_receipt() {
     use crate::providers::http_test_support::HttpsServer;
