@@ -58,6 +58,57 @@ impl NativeProvider for LarkChannel {
         Ok(())
     }
 
+    async fn prepare_steps(
+        &self,
+        _target: &Target,
+        steps: &mut [Step],
+    ) -> Result<(), ChannelSendError> {
+        for step in steps {
+            let file = match step {
+                Step::Text(_) => continue,
+                Step::File(file) if file.kind == MediaKind::Image => {
+                    if file.bytes.len() as u64 > IMAGE_LIMIT {
+                        return Err(known_unsent("Lark image exceeds the 10 MiB limit"));
+                    }
+                    if !matches!(
+                        file.mime.as_str(),
+                        "image/jpeg" | "image/png" | "image/gif" | "image/webp"
+                    ) {
+                        return Err(crate::providers::native::pre_dispatch(
+                            "Lark image type is not supported",
+                        ));
+                    }
+                    continue;
+                }
+                Step::File(file) | Step::Voice(file) => file,
+            };
+            if file
+                .caption
+                .as_deref()
+                .is_some_and(|caption| !caption.trim().is_empty())
+            {
+                return Err(crate::providers::native::unsupported(
+                    "Lark file/audio captions",
+                ));
+            }
+            if file.bytes.len() as u64 > FILE_LIMIT {
+                return Err(known_unsent("Lark file exceeds the 30 MiB limit"));
+            }
+            if file.kind == MediaKind::Video && file.mime != "video/mp4" {
+                return Err(crate::providers::native::unsupported(
+                    "Lark video type",
+                ));
+            }
+            if matches!(step, Step::Voice(_)) || file.kind == MediaKind::Audio {
+                let (bytes, name) = self.opus_audio(file).await?;
+                file.bytes = bytes;
+                file.name = name;
+                file.mime = "audio/ogg".into();
+            }
+        }
+        Ok(())
+    }
+
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
         match step {
             Step::Text(text) => {
@@ -304,7 +355,11 @@ impl LarkChannel {
                 InboundFile {
                     bytes: file.0,
                     mime: file.1,
-                    name: file.2,
+                    name: content
+                        .get("file_name")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_owned)
+                        .or(file.2),
                     duration_ms: content.get("duration").and_then(serde_json::Value::as_u64),
                     voice,
                     dedupe_key: format!("{message_id}:{key}"),

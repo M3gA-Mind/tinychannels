@@ -19,6 +19,18 @@ const MAX_INBOUND_ATTACHMENTS: usize = 10;
 const DIRECT_UPLOAD_LIMIT: u64 = 5 * 1024 * 1024;
 const TEXT_LIMIT: usize = 2000;
 
+fn timestamp_unix_ms(value: &serde_json::Value) -> Option<u64> {
+    if let Some(timestamp) = value.as_u64() {
+        return Some(timestamp);
+    }
+    let timestamp = value.as_str()?;
+    if let Ok(timestamp) = timestamp.parse::<u64>() {
+        return Some(timestamp);
+    }
+    let timestamp = chrono::DateTime::parse_from_rfc3339(timestamp).ok()?;
+    u64::try_from(timestamp.timestamp_millis()).ok()
+}
+
 #[async_trait]
 impl NativeProvider for QQChannel {
     fn id(&self) -> &'static str {
@@ -55,6 +67,7 @@ impl NativeProvider for QQChannel {
         );
         if self.native.media_repository.is_some() {
             let media = |types: &[&str]| ContentCapability {
+                inbound: self.native.events.is_some(),
                 outbound: true,
                 accepted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
                 emitted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
@@ -130,6 +143,37 @@ impl NativeProvider for QQChannel {
             return Err(pre_dispatch(
                 "QQ send target must identify a direct message or group",
             ));
+        }
+        Ok(())
+    }
+
+    async fn prepare_steps(
+        &self,
+        _target: &Target,
+        steps: &mut [Step],
+    ) -> Result<(), ChannelSendError> {
+        for step in steps {
+            let file = match step {
+                Step::Text(_) => continue,
+                Step::File(file) => {
+                    file_type(file, false)?;
+                    file
+                }
+                Step::Voice(file) => {
+                    file_type(file, true)?;
+                    file
+                }
+            };
+            if file.bytes.len() as u64 > DIRECT_UPLOAD_LIMIT {
+                return Err(pre_dispatch("QQ direct media upload exceeds 5 MiB"));
+            }
+            if file
+                .caption
+                .as_deref()
+                .is_some_and(|caption| !caption.trim().is_empty())
+            {
+                return Err(unsupported("QQ rich media captions"));
+            }
         }
         Ok(())
     }
@@ -320,8 +364,7 @@ impl QQChannel {
             message_id: message_id.clone(),
             timestamp_unix_ms: message
                 .get("timestamp")
-                .and_then(serde_json::Value::as_str)
-                .and_then(|value| value.parse().ok()),
+                .and_then(timestamp_unix_ms),
             conversation,
             sender: tinychannels_bus::SenderRef {
                 id: sender_id,
