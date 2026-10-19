@@ -1043,63 +1043,62 @@ impl LarkChannel {
         &self,
         mut capabilities: tinychannels_bus::ChannelCapabilities,
     ) -> tinychannels_bus::ChannelCapabilities {
-        if self.native.media_repository.is_none() {
-            return capabilities;
-        }
         use tinychannels_bus::ContentCapability;
         const IMAGE_LIMIT: u64 = 10 * 1024 * 1024;
         const FILE_LIMIT: u64 = 30 * 1024 * 1024;
-        capabilities
-            .content
-            .parts
-            .extend(["image", "video", "audio", "file"].map(str::to_owned));
-        let media = |types: &[&str], max_size_bytes| ContentCapability {
-            inbound: self.native.events.is_some(),
-            outbound: true,
-            accepted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
-            emitted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
-            max_size_bytes: Some(max_size_bytes),
-            ..Default::default()
-        };
-        capabilities.content.image = media(
-            &["image/jpeg", "image/png", "image/gif", "image/webp"],
-            IMAGE_LIMIT,
-        );
-        capabilities.content.video = media(&["video/mp4"], FILE_LIMIT);
-        let accepted_audio = if self.voice_codec.is_some() {
-            vec![
-                "audio/ogg",
-                "audio/opus",
-                "audio/mp4",
-                "audio/mpeg",
-                "audio/wav",
-            ]
-        } else {
-            vec!["audio/ogg", "audio/opus"]
-        };
-        capabilities.content.audio = ContentCapability {
-            inbound: self.native.events.is_some(),
-            outbound: true,
-            accepted_types: accepted_audio
-                .iter()
-                .map(|mime| (*mime).to_owned())
-                .collect(),
-            emitted_types: vec!["audio/opus".into()],
-            max_size_bytes: Some(FILE_LIMIT),
-            ..Default::default()
-        };
-        capabilities.content.file = media(
-            &[
-                "application/pdf",
-                "text/plain",
-                "text/csv",
-                "application/json",
-                "application/zip",
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            ],
-            FILE_LIMIT,
-        );
+        if self.native.media_repository.is_some() {
+            capabilities
+                .content
+                .parts
+                .extend(["image", "video", "audio", "file"].map(str::to_owned));
+            let media = |types: &[&str], max_size_bytes| ContentCapability {
+                inbound: self.native.events.is_some(),
+                outbound: true,
+                accepted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
+                emitted_types: types.iter().map(|mime| (*mime).to_owned()).collect(),
+                max_size_bytes: Some(max_size_bytes),
+                ..Default::default()
+            };
+            capabilities.content.image = media(
+                &["image/jpeg", "image/png", "image/gif", "image/webp"],
+                IMAGE_LIMIT,
+            );
+            capabilities.content.video = media(&["video/mp4"], FILE_LIMIT);
+            let accepted_audio = if self.voice_codec.is_some() {
+                vec![
+                    "audio/ogg",
+                    "audio/opus",
+                    "audio/mp4",
+                    "audio/mpeg",
+                    "audio/wav",
+                ]
+            } else {
+                vec!["audio/ogg", "audio/opus"]
+            };
+            capabilities.content.audio = ContentCapability {
+                inbound: self.native.events.is_some(),
+                outbound: true,
+                accepted_types: accepted_audio
+                    .iter()
+                    .map(|mime| (*mime).to_owned())
+                    .collect(),
+                emitted_types: vec!["audio/opus".into()],
+                max_size_bytes: Some(FILE_LIMIT),
+                ..Default::default()
+            };
+            capabilities.content.file = media(
+                &[
+                    "application/pdf",
+                    "text/plain",
+                    "text/csv",
+                    "application/json",
+                    "application/zip",
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                ],
+                FILE_LIMIT,
+            );
+        }
         if self.native.voice_media_store.is_some() {
             capabilities.content.parts.push("voice_note".into());
             let accepted_codecs = if self.voice_codec.is_some() {
