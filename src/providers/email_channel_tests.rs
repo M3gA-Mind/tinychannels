@@ -1047,7 +1047,7 @@ async fn health_check_fails_when_the_probe_stalls() {
 
 /// A successful login remains healthy if LOGOUT stalls, but that best-effort
 /// cleanup must still finish within the same total health-probe deadline.
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn health_check_bounds_a_stalled_logout_after_successful_login() {
     let logout_seen = Arc::new(Notify::new());
     let allow_logout = Arc::new(Notify::new());
@@ -1063,7 +1063,10 @@ async fn health_check_bounds_a_stalled_logout_after_successful_login() {
             .await
     });
 
-    logout_seen.notified().await;
+    tokio::time::timeout(HANG_GUARD, logout_seen.notified())
+        .await
+        .expect("the fake server observed the logout request");
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(2)).await;
     tokio::task::yield_now().await;
     let completed_before_logout_release = probe.is_finished();
