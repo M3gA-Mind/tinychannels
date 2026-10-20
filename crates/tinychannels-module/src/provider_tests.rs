@@ -5149,8 +5149,9 @@ async fn configured_linq_webhook_uses_typed_port_and_stamps_module_account() {
     let launch =
         crate::native::build_native_v2("linq", &config, &provider_host, &DefaultHttpClients)
             .expect("configured Linq factory");
-    let running = launch.start(hooks, host, None, true);
+    let running = launch.start(hooks, host, None, false);
     let ports = running.native_ports.as_ref().expect("native ports");
+    assert!(running.channel.is_none());
     assert!(ports.adapter.supports_webhook_delivery());
 
     let body = serde_json::json!({
