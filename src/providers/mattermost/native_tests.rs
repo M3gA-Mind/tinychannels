@@ -146,7 +146,7 @@ async fn typed_edit_and_delete_use_the_provider_returned_post_id() {
     Mock::given(method("POST"))
         .and(path("/api/v4/posts"))
         .and(header("authorization", "Bearer test-token"))
-        .respond_with(move |_| {
+        .respond_with(move |_request: &wiremock::Request| {
             let id = if ids.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
                 "post-edit-1"
             } else {
