@@ -648,15 +648,30 @@ impl Channels {
         if self.terminal.load(Ordering::Acquire) {
             return Err(BusError::failed("channel module is shutting down"));
         }
-        let name = match &request {
-            tinychannels_bus::module_remote::RemoteOperation::Execute { message, .. } => {
-                message.channel.as_str()
-            }
+        let (name, configured_account) = match &request {
+            tinychannels_bus::module_remote::RemoteOperation::Execute {
+                message,
+                session_scope,
+                ..
+            } => (
+                message.channel.as_str(),
+                session_scope
+                    .as_ref()
+                    .and_then(|scope| scope.channel.account_id.as_deref()),
+            ),
             tinychannels_bus::module_remote::RemoteOperation::MarkTurn { channel, .. } => {
-                channel.as_str()
+                (channel.as_str(), None)
             }
         };
         let capabilities = configured_capabilities(&self.running, name).await;
+        let running_names = self.running.lock().await.keys().cloned().collect::<Vec<_>>();
+        tracing::debug!(
+            channel = name,
+            ?configured_account,
+            ?running_names,
+            remote_control = capabilities.remote_control,
+            "resolved remote-control capability for module operation"
+        );
         crate::remote::execute(&self.host, request, capabilities).await
     }
 
