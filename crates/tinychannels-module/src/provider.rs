@@ -1829,8 +1829,9 @@ impl Running {
             Some(NativePorts::telegram(channel)),
         )
     }
-    /// Start a provider whose concrete object is both the listener and the
-    /// native v2 executor (the WhatsApp Cloud and Web adapters).
+    /// Start a configured provider with typed operations and its provider-owned
+    /// legacy listener. Signal opts into its typed SSE listener explicitly;
+    /// providers with webhook, polling or session lifecycles retain theirs.
     pub(crate) fn start_native<T>(
         provider: &'static str,
         channel: Arc<T>,
@@ -1845,7 +1846,7 @@ impl Running {
         let provider_name = channel.descriptor().id;
         let legacy: Arc<dyn Channel> = channel.clone();
         let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
-        let listener_mode = if provider == "Signal" {
+        let listener_mode = if provider_name == "signal" {
             LongTailListenerMode::Adapter
         } else {
             LongTailListenerMode::Legacy
