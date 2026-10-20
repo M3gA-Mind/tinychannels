@@ -232,8 +232,8 @@ pub(crate) trait NativeProvider: Send + Sync {
         anyhow::bail!("provider has no typed webhook ingress")
     }
 
-    /// Provider health projection for typed account status. Providers that do
-    /// not own a health probe remain explicitly unknown.
+    /// Provider-owned health state for the typed adapter descriptor. Providers
+    /// without a probe remain explicitly unknown.
     async fn health_state(&self) -> &'static str {
         "unknown"
     }
