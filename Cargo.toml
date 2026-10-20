@@ -86,6 +86,7 @@ whatsapp-web = [
     "dep:wacore",
     "dep:bytes",
 ]
+imessage = ["dep:rusqlite"]
 
 [dependencies]
 # The transport-free vocabulary shared with every TinyChannels host. The
@@ -98,7 +99,8 @@ tinychannels-bus = { path = "crates/tinychannels-bus", features = ["storage"] }
 tinychannels-runtime = { path = "crates/tinychannels-runtime" }
 # Storage ports only: no driver crate and no database client. The host (or the
 # bus client in the module crate) supplies the backend.
-tinystoragedrivers-core = { git = "https://github.com/tinyhumansai/tinystoragedrivers", tag = "v1.0.0" }
+tinystoragedrivers-api = { git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
+tinystoragedrivers-types = { git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.23"
@@ -112,7 +114,7 @@ parking_lot = "0.12"
 prost = { version = "0.14", optional = true }
 rand = "0.10"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "stream"] }
-rusqlite = { version = "0.40", features = ["bundled"] }
+rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "logging", "tls12"] }
 rustls-pki-types = "1.14.0"
 schemars = { version = "1", features = ["derive"] }
@@ -155,3 +157,4 @@ tempfile = "3"
 toml = "1"
 wiremock = "0.6"
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
+tinystoragedrivers-testkit = { git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
