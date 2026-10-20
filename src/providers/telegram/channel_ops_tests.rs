@@ -33,6 +33,34 @@ struct TelegramWireFixture {
     observations: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
     request_cursor: std::sync::Mutex<usize>,
     scope: tinychannels_conformance::ExpectedScope,
+    events: Arc<TelegramConformanceEvents>,
+}
+
+#[derive(Default)]
+struct TelegramConformanceEvents {
+    events: std::sync::Mutex<Vec<tinychannels_bus::ChannelEvent>>,
+    notified: tokio::sync::Notify,
+}
+
+#[async_trait::async_trait]
+impl crate::host::EventSink for TelegramConformanceEvents {
+    async fn publish(
+        &self,
+        _domain: &str,
+        _kind: &str,
+        _payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn publish_channel_event(
+        &self,
+        event: tinychannels_bus::ChannelEvent,
+    ) -> anyhow::Result<()> {
+        self.events.lock().unwrap().push(event);
+        self.notified.notify_one();
+        Ok(())
+    }
 }
 
 fn rich_part(part: tinychannels_bus::ContentPart) -> tinychannels_bus::OutboundPayload {
@@ -117,6 +145,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
         }
         if feature == tinychannels_conformance::ConformanceFeature::ThreadAddressing {
             scope.thread_id = Some("77".into());
+            scope.conversation.thread_id = Some("77".into());
         }
         scope
     }
@@ -211,7 +240,64 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             return Ok(None);
         }
         if feature == Feature::InboundReactions {
-            return Err(unsupported_fixture_operation());
+            let update = serde_json::json!({
+                "update_id": 901,
+                "message_reaction": {
+                    "chat": {"id": 100, "type": "private"},
+                    "message_id": 321,
+                    "user": {"id": 9, "username": "conformance"},
+                    "date": 1_700_000_000,
+                    "old_reaction": [],
+                    "new_reaction": [{"type": "emoji", "emoji": "👍"}]
+                }
+            });
+            let (tx, _rx) = tokio::sync::mpsc::channel(4);
+            let channel = self.channel.clone();
+            let listener = tokio::spawn(async move {
+                #[allow(deprecated)]
+                tinychannels_runtime::traits::Channel::listen(channel.as_ref(), tx).await
+            });
+            let event = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                self.events.notified.notified(),
+            )
+            .await
+            .map_err(|_| unsupported_fixture_operation())?;
+            drop(event);
+            listener.abort();
+            let requests = self.server.received_requests().await.unwrap_or_default();
+            let request = requests
+                .iter()
+                .find(|request| request.url.path().ends_with("/getUpdates"))
+                .ok_or_else(unsupported_fixture_operation)?;
+            let captured = self.events.events.lock().unwrap().last().cloned();
+            let Some(captured) = captured else {
+                return Err(unsupported_fixture_operation());
+            };
+            let conversation = captured.conversation.clone().unwrap_or_default();
+            let (operation, payload) = match captured.event {
+                tinychannels_bus::ChannelEventKind::ReactionAdded { reaction, .. } => {
+                    ("reaction_receive", reaction.value)
+                }
+                tinychannels_bus::ChannelEventKind::ReactionRemoved { reaction, .. } => {
+                    ("reaction_receive", reaction.value)
+                }
+                _ => return Err(unsupported_fixture_operation()),
+            };
+            self.observations.lock().unwrap().push(
+                tinychannels_conformance::WireObservation {
+                    feature,
+                    operation: operation.into(),
+                    channel: captured.channel,
+                    conversation,
+                    reply_to_id: None,
+                    thread_id: None,
+                    payload_kinds: vec![payload],
+                    platform_message_ids: vec![],
+                    request: serde_json::json!({"update": update, "path": request.url.path()}),
+                },
+            );
+            return Ok(None);
         }
 
         let payload = match feature {
@@ -2593,6 +2679,22 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         ok_with(serde_json::json!({ "message_id": 321 })),
     )
     .await;
+    mount_post(
+        &server,
+        "getUpdates",
+        ok_with(serde_json::json!([{
+            "update_id": 901,
+            "message_reaction": {
+                "chat": {"id": 100, "type": "private"},
+                "message_id": 321,
+                "user": {"id": 9, "username": "conformance"},
+                "date": 1_700_000_000,
+                "old_reaction": [],
+                "new_reaction": [{"type": "emoji", "emoji": "👍"}]
+            }
+        }])),
+    )
+    .await;
     let config = tinychannels_bus::ChannelsConfig {
         telegram: Some(tinychannels_bus::config::TelegramConfig {
             bot_token: TOKEN.into(),
@@ -2605,7 +2707,10 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         }),
         ..Default::default()
     };
-    let host: Arc<dyn crate::host::ChannelHost> = crate::NoopHost::arc();
+    let events = Arc::new(TelegramConformanceEvents::default());
+    let host: Arc<dyn crate::host::ChannelHost> = crate::host::ChannelHostBuilder::new()
+        .events(events.clone())
+        .build();
     let mut channel = crate::build_telegram_channel(&config, &host, &crate::DefaultHttpClients)
         .expect("configured factory builds Telegram");
     Arc::get_mut(&mut channel)
@@ -2641,6 +2746,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         observations: std::sync::Mutex::new(Vec::new()),
         request_cursor: std::sync::Mutex::new(0),
         scope,
+        events,
     };
     let results = check_all_features(&fixture).await;
     assert_eq!(results.len(), ConformanceFeature::ALL.len());
