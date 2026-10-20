@@ -66,6 +66,7 @@ const MAX_TYPING_REFRESH_INTERVAL_SECS: u64 = 60;
 async fn dispatch_interaction(
     channel: Option<Arc<dyn Channel>>,
     native: Option<NativePorts>,
+    configured_instance: &str,
     interaction: tinychannels_bus::ChannelInteraction,
     typing: &mut TypingRefreshes,
 ) -> Result<tinychannels_bus::ChannelInteractionResult> {
@@ -88,6 +89,7 @@ async fn dispatch_interaction(
         if let Some(result) = crate::interaction::dispatch_native_draft(
             native.adapter.as_ref(),
             native.drafts.as_ref(),
+            configured_instance,
             interaction.clone(),
         )
         .await
@@ -2183,6 +2185,7 @@ impl Running {
                             dispatch_interaction(
                                 send_channel.clone(),
                                 worker_native.clone(),
+                                &worker_instance,
                                 interaction,
                                 &mut typing,
                             )

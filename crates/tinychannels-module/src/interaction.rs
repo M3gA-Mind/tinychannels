@@ -33,13 +33,17 @@ pub(crate) fn describe_adapter(
 #[allow(deprecated)]
 fn draft_intent(
     adapter: &dyn tinychannels::channel::ChannelAdapter,
+    configured_instance: &str,
     message: &tinychannels::SendMessage,
 ) -> tinychannels_bus::ChannelOutboundIntent {
     let descriptor = adapter.descriptor();
     let mut intent = tinychannels::outbound_intent_from_send_message(&descriptor.id, message);
     intent.channel_ref = Some(tinychannels_bus::ChannelRef {
         id: descriptor.id,
-        account_id: descriptor.account_id,
+        // Account scope belongs to the configured module instance. Some raw
+        // provider adapters (including SlackChannel) intentionally have no
+        // account identity in their descriptor.
+        account_id: Some(configured_instance.to_owned()),
     });
     if let Some(conversation) = intent.conversation_ref.as_mut() {
         conversation.scope_id = intent
@@ -62,6 +66,7 @@ fn draft_intent(
 pub(crate) async fn dispatch_native_draft(
     adapter: &dyn tinychannels::channel::ChannelAdapter,
     drafts: &dyn tinychannels::channel::ChannelStreamingDraft,
+    configured_instance: &str,
     interaction: ChannelInteraction,
 ) -> Option<tinybus::Result<ChannelInteractionResult>> {
     use ChannelInteraction as Op;
@@ -71,7 +76,7 @@ pub(crate) async fn dispatch_native_draft(
             if !capabilities.streaming_reply_pipeline {
                 return Some(Ok(ChannelInteractionResult::Draft(None)));
             }
-            let intent = draft_intent(adapter, &message);
+            let intent = draft_intent(adapter, configured_instance, &message);
             match drafts.start_draft(intent).await {
                 Ok(id) => Some(Ok(ChannelInteractionResult::Draft(id))),
                 Err(error) if error.unsupported => None,
@@ -89,7 +94,7 @@ pub(crate) async fn dispatch_native_draft(
                 return None;
             }
             let message = tinychannels::SendMessage::new(text, recipient);
-            let intent = draft_intent(adapter, &message);
+            let intent = draft_intent(adapter, configured_instance, &message);
             match drafts.update_draft(&message_id, intent).await {
                 Ok(()) => Some(Ok(ChannelInteractionResult::Completed)),
                 Err(error) if error.unsupported => None,
@@ -107,7 +112,7 @@ pub(crate) async fn dispatch_native_draft(
             }
             let mut message = tinychannels::SendMessage::new(text, recipient);
             message.thread_ts = thread_ts;
-            let intent = draft_intent(adapter, &message);
+            let intent = draft_intent(adapter, configured_instance, &message);
             match drafts.finalize_draft(&message_id, intent).await {
                 Ok(()) => Some(Ok(ChannelInteractionResult::Completed)),
                 Err(error) if error.unsupported => None,
