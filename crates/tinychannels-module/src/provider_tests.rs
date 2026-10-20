@@ -5127,8 +5127,15 @@ async fn a_built_linq_launch_starts_as_the_native_linq_adapter() {
 async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     use tinychannels::factory::DefaultHttpClients;
     let (smtp_port, smtp_server) = email_module_smtp_server();
+    let imap_probe_port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
     let config = tinychannels_bus::ChannelsConfig {
         email: Some(tinychannels_bus::config::EmailConfig {
+            imap_host: "127.0.0.1".into(),
+            imap_port: imap_probe_port,
             from_address: "bot@example.com".into(),
             smtp_host: "127.0.0.1".into(),
             smtp_port,
@@ -5150,6 +5157,20 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     assert_eq!(handle.mode, AdapterMode::EmailNativeV2);
     assert_eq!(handle.descriptor().id, "email");
     assert_eq!(handle.configured_instance, "email:work");
+    assert_eq!(
+        running
+            .native_ports
+            .as_ref()
+            .unwrap()
+            .adapter
+            .status()
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
+        Some("unhealthy"),
+        "the configured Email adapter must expose its failed IMAP probe"
+    );
     assert!(
         running.channel.is_none(),
         "typed Email launch must not retain a legacy Channel transport"
