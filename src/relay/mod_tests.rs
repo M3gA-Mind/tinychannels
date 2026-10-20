@@ -1182,10 +1182,8 @@ mod websocket_loopback {
                 vec![tokio_rustls::rustls::pki_types::CertificateDer::from(
                     certificate.to_vec(),
                 )],
-                tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(
-                    private_key.to_vec(),
-                )
-                .into(),
+                tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(private_key.to_vec())
+                    .into(),
             )
             .expect("test certificate and key");
         let acceptor = TlsAcceptor::from(Arc::new(server_config));
