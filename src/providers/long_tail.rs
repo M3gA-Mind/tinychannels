@@ -94,7 +94,7 @@ impl<T> LongTailNative for T where
 /// Sending is implemented on the typed outbound port; this contract does not
 /// inherit or call the legacy `Channel` transport trait.
 #[async_trait::async_trait]
-pub(crate) trait LongTail {
+pub(crate) trait LongTail: Send + Sync {
     /// Stable provider id (`mattermost`).
     const ID: &'static str;
     /// Human-readable name (`Mattermost`).
@@ -226,7 +226,7 @@ pub(crate) async fn typing<T: LongTail + ?Sized>(
     }
     let result = provider.set_typing(conversation_id, start).await;
     result.map_err(|error| {
-        tracing::debug!(channel = T::ID, %error, "[long-tail] typing failed");
+        tracing::debug!(channel = T::ID, ?error, "[long-tail] typing failed");
         ChannelSendError {
             kind: SendErrorKind::Transient,
             message: format!("{} typing indicator failed", T::DISPLAY),
