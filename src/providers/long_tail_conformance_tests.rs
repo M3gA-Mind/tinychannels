@@ -42,7 +42,7 @@ use tinychannels_conformance::{
     AdapterFixture, ConformanceFeature as Feature, ExpectedScope, WireObservation,
     check_all_features, check_feature,
 };
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{method, path, path_regex};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 const CHANNEL: &str = "chan1";
@@ -395,6 +395,7 @@ impl LongTailFixture {
             fixed_server: Some(server),
             dingtalk_stream: None,
             response_ids,
+            post_scopes: Arc::default(),
             observed: Mutex::new(Vec::new()),
         }
     }
