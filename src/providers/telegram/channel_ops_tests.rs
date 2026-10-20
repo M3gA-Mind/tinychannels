@@ -733,7 +733,6 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 .and_then(|v| v.as_str())
                 .or_else(|| multipart.split("name=\"chat_id\"\r\n\r\n").nth(1).and_then(|value| value.split("\r\n").next()))
                 .unwrap_or_default();
-            assert_eq!(chat, "100", "actual Telegram request must target the configured DM");
             let conversation = tinychannels_bus::ConversationRef {
                 kind: tinychannels_bus::ConversationKind::Dm,
                 id: chat.to_owned(),
@@ -764,6 +763,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             else if path.ends_with("/editMessageText") { ("edit", "text") }
             else if path.ends_with("/deleteMessage") { ("delete", "text") }
             else { continue };
+            assert_eq!(chat, "100", "actual Telegram request must target the configured DM");
             let wire_id = |field: &str| {
                 body.get(field).map(|value| {
                     value
