@@ -1288,6 +1288,7 @@ impl NativePorts {
             + tinychannels::channel::ChannelEdit
             + tinychannels::channel::ChannelDelete
             + tinychannels::channel::ChannelStreamingDraft
+            + ?Sized
             + 'static,
     {
         Self {
@@ -1817,10 +1818,9 @@ impl Running {
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
     ) -> Arc<Self> {
-        let channel_dyn: Arc<dyn Channel> = channel.clone();
         Self::start_inner(
-            Some(channel_dyn),
-            channel.name().to_owned(),
+            None,
+            "Telegram".to_owned(),
             hooks,
             host,
             supervision,
@@ -1839,20 +1839,19 @@ impl Running {
         outbound_only: bool,
     ) -> Arc<Self>
     where
-        T: Channel
-            + tinychannels::channel::ChannelAdapter
+        T: tinychannels::channel::ChannelAdapter
             + tinychannels::channel::ChannelTypedSend
             + tinychannels::channel::ChannelTyping
             + tinychannels::channel::ChannelReaction
             + tinychannels::channel::ChannelEdit
             + tinychannels::channel::ChannelDelete
             + tinychannels::channel::ChannelStreamingDraft
+            + ?Sized
             + 'static,
     {
-        let channel_dyn: Arc<dyn Channel> = channel.clone();
         Self::start_inner(
-            Some(channel_dyn),
-            channel.name().to_owned(),
+            None,
+            provider.to_owned(),
             hooks,
             host,
             supervision,
@@ -1890,10 +1889,9 @@ impl Running {
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
     ) -> Arc<Self> {
-        let channel_dyn: Arc<dyn Channel> = channel.clone();
         Self::start_inner(
-            Some(channel_dyn),
-            channel.name().to_owned(),
+            None,
+            "Slack".to_owned(),
             hooks,
             host,
             supervision,

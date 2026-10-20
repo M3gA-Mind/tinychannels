@@ -29,14 +29,14 @@ pub(crate) struct NativeLaunch {
 impl NativeLaunch {
     pub(crate) fn new<T>(provider: &'static str, channel: Arc<T>) -> Self
     where
-        T: tinychannels::Channel
-            + tinychannels::channel::ChannelAdapter
+        T: tinychannels::channel::ChannelAdapter
             + tinychannels::channel::ChannelTypedSend
             + tinychannels::channel::ChannelTyping
             + tinychannels::channel::ChannelReaction
             + tinychannels::channel::ChannelEdit
             + tinychannels::channel::ChannelDelete
             + tinychannels::channel::ChannelStreamingDraft
+            + ?Sized
             + 'static,
     {
         Self {
