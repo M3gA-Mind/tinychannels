@@ -253,6 +253,31 @@ async fn an_unreachable_api_is_an_uncertain_outcome_and_a_missing_id_is_too() {
 }
 
 #[tokio::test]
+async fn typed_status_uses_the_linq_health_probe() {
+    let healthy_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/phonenumbers"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&healthy_server)
+        .await;
+    let healthy = ChannelAdapter::status(&channel_for(&healthy_server))
+        .await
+        .unwrap();
+    assert_eq!(healthy.health_state.as_deref(), Some("healthy"));
+
+    let rejected_server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/phonenumbers"))
+        .respond_with(ResponseTemplate::new(401))
+        .mount(&rejected_server)
+        .await;
+    let rejected = ChannelAdapter::status(&channel_for(&rejected_server))
+        .await
+        .unwrap();
+    assert_eq!(rejected.health_state.as_deref(), Some("unhealthy"));
+}
+
+#[tokio::test]
 async fn upload_failures_never_reach_a_chat() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

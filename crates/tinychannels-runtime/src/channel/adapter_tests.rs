@@ -57,6 +57,23 @@ fn default_adapter_facts_are_conservative() {
 }
 
 #[tokio::test]
+async fn default_webhook_operations_are_explicitly_unsupported() {
+    let adapter = DefaultAdapter;
+    assert!(!adapter.supports_webhook_delivery());
+    assert!(!adapter.supports_webhook_verification());
+
+    let error = adapter
+        .deliver_webhook(Some("signature"), b"exact request bytes")
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("no typed webhook ingress"));
+    assert_eq!(
+        adapter.verify_webhook("subscribe", "token", "challenge"),
+        None
+    );
+}
+
+#[tokio::test]
 async fn typed_draft_lifecycle_defaults_refuse_unimplemented_operations() {
     let adapter = DefaultAdapter;
     let start = ChannelStreamingDraft::start_draft(&adapter, ChannelOutboundIntent::default())

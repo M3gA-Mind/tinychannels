@@ -5116,10 +5116,114 @@ async fn a_built_linq_launch_starts_as_the_native_linq_adapter() {
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), "linq".to_owned(), None);
-    let running = launch.start(hooks, host, None, true);
+    let running = launch.start(hooks, host, None, false);
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::LinqNativeV2);
     assert_eq!(handle.descriptor().id, "linq");
+    assert!(
+        running.channel.is_none(),
+        "configured Linq launch must not retain the legacy Channel trait object"
+    );
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_linq_webhook_uses_typed_port_and_stamps_module_account() {
+    use base64::Engine as _;
+    use hmac::{Hmac, KeyInit, Mac};
+    use sha2::Sha256;
+    use tinychannels::factory::DefaultHttpClients;
+    use tinychannels_bus::{ChannelInteraction, ChannelInteractionResult};
+
+    let secret = "module-linq-secret";
+    let config = tinychannels_bus::ChannelsConfig {
+        linq: Some(tinychannels_bus::config::LinqConfig {
+            api_token: "token".into(),
+            from_phone: "+15551234567".into(),
+            allowed_senders: vec!["*".into()],
+            webhook_secret: Some(secret.into()),
+        }),
+        ..Default::default()
+    };
+    let hooks = Arc::new(Hooks::default());
+    let (host, callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), "linq:account-a".to_owned(), None);
+    let provider_host = tinychannels::host::ChannelHostBuilder::new()
+        .events(Arc::new(ModuleEvents(
+            host.clone(),
+            "linq:account-a".to_owned(),
+            MediaScope::fixed(None),
+        )))
+        .build();
+    let launch =
+        crate::native::build_native_v2("linq", &config, &provider_host, &DefaultHttpClients)
+            .expect("configured Linq factory");
+    let running = launch.start(hooks, host, None, false);
+    let ports = running.native_ports.as_ref().expect("native ports");
+    assert!(running.channel.is_none());
+    assert!(ports.adapter.supports_webhook_delivery());
+
+    let body = serde_json::json!({
+        "event_type": "message.received",
+        "event_id": "event-typed-1",
+        "created_at": "2025-01-15T12:00:00Z",
+        "data": {
+            "from": "+15557654321",
+            "chat_id": "chat-typed-1",
+            "message": {"id": "message-typed-1", "parts": [{"type": "text", "value": "hello"}]}
+        }
+    })
+    .to_string();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .to_string();
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(format!("{timestamp}.{body}").as_bytes());
+    let signature = format!(
+        "t={timestamp},v1={}",
+        hex::encode(mac.finalize().into_bytes())
+    );
+    let result = running
+        .webhook(ChannelInteraction::DeliverWebhook {
+            signature: Some(signature.clone()),
+            body_base64: base64::engine::general_purpose::STANDARD.encode(body.as_bytes()),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        result,
+        ChannelInteractionResult::WebhookAccepted(ref outcome) if outcome.messages == 1
+    ));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        callbacks.ingress_changed.notified(),
+    )
+    .await
+    .expect("module callback receives accepted ingress");
+    let delivered = callbacks.inbound.lock().await;
+    assert_eq!(delivered.len(), 1);
+    let envelope = &delivered[0].1;
+    assert_eq!(envelope["channel"]["id"], "linq");
+    assert_eq!(envelope["channel"]["accountId"], "linq:account-a");
+    assert_eq!(envelope["messageId"], "message-typed-1");
+    assert_eq!(envelope["text"], "hello");
+    drop(delivered);
+
+    let rejected = running
+        .webhook(ChannelInteraction::DeliverWebhook {
+            signature: Some("t=1,v1=bad".into()),
+            body_base64: base64::engine::general_purpose::STANDARD.encode(body.as_bytes()),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        rejected,
+        tinybus::Error::MethodFailed { name, .. }
+            if name == crate::interaction::WEBHOOK_REJECTED_ERROR
+    ));
+    assert_eq!(callbacks.inbound.lock().await.len(), 1);
     running.stop().await.unwrap();
 }
 
