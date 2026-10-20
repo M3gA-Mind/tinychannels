@@ -178,7 +178,7 @@ fn temporary_route_authority_requires_matching_configured_scope_and_prefers_live
             &message,
             Some(&valid_scope),
             Some(&snapshot_denied),
-            Some(live_allowed),
+            Some(live_allowed.clone()),
         )
         .remote_control
     );
