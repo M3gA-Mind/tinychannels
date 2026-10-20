@@ -921,6 +921,8 @@ async fn aborted_auth_start_keeps_listener_owned_until_connection_shutdown_joins
 #[tokio::test]
 async fn public_adapter_stores_url_backed_voice_and_publishes_typed_media() {
     use crate::channel::ChannelAdapter;
+    use crate::factory::build_yuanbao_channel_with_voice_http_for_test;
+    use crate::host::ChannelHostBuilder;
     use crate::providers::http_test_support::HttpsServer;
     use crate::providers::native::fixtures::StubVoice;
     use crate::providers::yuanbao::connection::test_support::{MockGateway, gateway_config};
@@ -939,14 +941,21 @@ async fn public_adapter_stores_url_backed_voice_and_publishes_typed_media() {
     )
     .await;
     let gateway = MockGateway::bind().await;
-    let config = gateway_config(&gateway.url);
     let voice_store = Arc::new(StubVoice::default());
-    let channel = Arc::new(
-        YuanbaoChannel::new(config)
-            .unwrap()
-            .with_voice_media_store(voice_store.clone())
-            .with_voice_http_client(media_server.client.clone()),
-    );
+    let config = tinychannels_bus::ChannelsConfig {
+        yuanbao: Some(gateway_config(&gateway.url)),
+        ..Default::default()
+    };
+    let host: Arc<dyn crate::host::ChannelHost> = ChannelHostBuilder::new()
+        .voice_media_store(voice_store.clone())
+        .transcriber(Arc::new(
+            crate::providers::native::fixtures::StubTranscriber::default(),
+        ))
+        .build();
+    let channel =
+        build_yuanbao_channel_with_voice_http_for_test(&config, &host, media_server.client.clone())
+            .expect("configured Yuanbao adapter should be built through the host factory");
+    assert!(channel.declared_capabilities().voice_in.supported);
     let (events, mut received) = tokio::sync::mpsc::unbounded_channel();
     let sink = Arc::new(PublicAdapterSink(events));
     let listener = {
@@ -974,7 +983,13 @@ async fn public_adapter_stores_url_backed_voice_and_publishes_typed_media() {
 
     let envelope = next_public_yuanbao_message(&mut received).await;
     assert_eq!(envelope.message_id, "voice-public-1");
+    assert_eq!(envelope.channel.id, "yuanbao");
     assert_eq!(envelope.channel.account_id.as_deref(), Some("bot1"));
+    assert_eq!(
+        envelope.conversation.kind,
+        tinychannels_bus::ConversationKind::Dm
+    );
+    assert_eq!(envelope.conversation.id, "alice");
     assert!(
         envelope.text.is_empty(),
         "signed voice URL must not become model text"
