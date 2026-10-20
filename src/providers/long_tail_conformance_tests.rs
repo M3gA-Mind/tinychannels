@@ -620,8 +620,12 @@ impl LongTailFixture {
                 };
                 continue;
             }
+            if url_path == "/api/v4/users/me" {
+                continue;
+            }
             let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
-            let (operation, message_ids, kinds) = if url_path == "/api/v4/posts" {
+            let (operation, message_ids, kinds, post_id, request_body) =
+                if url_path == "/api/v4/posts" {
                 let kinds = if body.get("file_ids").is_some() {
                     uploaded_kind
                         .take()
@@ -631,21 +635,69 @@ impl LongTailFixture {
                 } else {
                     vec!["text".to_owned()]
                 };
-                ("send", ids.next().into_iter().collect(), kinds)
-            } else {
-                ("typing", Vec::new(), Vec::new())
+                    let response_id = ids.next().unwrap_or_default();
+                    ("send", vec![response_id.clone()], kinds, response_id, body)
+                } else if url_path == "/api/v4/reactions" {
+                    let post_id = body["post_id"].as_str().unwrap_or_default().to_owned();
+                    ("reaction_send", Vec::new(), Vec::new(), post_id, body)
+                } else if url_path.starts_with("/api/v4/users/")
+                    && url_path.contains("/posts/")
+                    && url_path.contains("/reactions/")
+                {
+                    let post_id = url_path
+                        .split("/posts/")
+                        .nth(1)
+                        .and_then(|suffix| suffix.split('/').next())
+                        .unwrap_or_default()
+                        .to_owned();
+                    (
+                        "reaction_send",
+                        Vec::new(),
+                        Vec::new(),
+                        post_id,
+                        json!({"path": url_path}),
+                    )
+                } else if matches!(request.method.as_str(), "PUT" | "DELETE")
+                    && url_path.starts_with("/api/v4/posts/")
+                {
+                    let post_id = url_path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or_default()
+                        .to_owned();
+                    let operation = if request.method.as_str() == "PUT" {
+                        "edit"
+                    } else {
+                        "delete"
+                    };
+                    let kinds = if operation == "edit" {
+                        vec!["text".to_owned()]
+                    } else {
+                        Vec::new()
+                    };
+                    (operation, vec![post_id.clone()], kinds, post_id, body)
+                } else {
+                    ("typing", Vec::new(), Vec::new(), String::new(), body)
+                };
+            let scope = self.post_scopes.lock().get(&post_id).cloned();
+            let (channel_id, thread) = match scope {
+                Some(scope) => scope,
+                None if operation == "send" => (
+                    request_body["channel_id"].as_str().unwrap_or_default().to_owned(),
+                    request_body["root_id"].as_str().map(str::to_owned),
+                ),
+                None if operation == "typing" => (
+                    request_body["channel_id"].as_str().unwrap_or(CHANNEL).to_owned(),
+                    request_body["root_id"].as_str().map(str::to_owned),
+                ),
+                None => (String::new(), None),
             };
-            let channel_id = body["channel_id"].as_str().unwrap_or(CHANNEL);
-            let thread = body["root_id"]
-                .as_str()
-                .or_else(|| body["parent_id"].as_str())
-                .map(str::to_owned);
             self.observed.lock().push(WireObservation {
                 feature,
                 operation: operation.into(),
                 channel: account(self.id),
                 conversation: ConversationRef {
-                    id: channel_id.into(),
+                    id: channel_id,
                     thread_id: thread.clone(),
                     ..Default::default()
                 },
@@ -653,7 +705,7 @@ impl LongTailFixture {
                 thread_id: thread,
                 payload_kinds: kinds,
                 platform_message_ids: message_ids,
-                request: body,
+                request: request_body,
             });
         }
     }
