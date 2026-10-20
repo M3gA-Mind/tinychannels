@@ -224,9 +224,11 @@ struct ManagedConformanceFixture {
 impl ManagedConformanceFixture {
     async fn new() -> (Self, Connection) {
         let (host, backend, server) = connected_host().await;
-        let mut capabilities = tinychannels_bus::ChannelCapabilities::default();
-        capabilities.reactions = true;
-        capabilities.progressive_edits = true;
+        let mut capabilities = tinychannels_bus::ChannelCapabilities {
+            reactions: true,
+            progressive_edits: true,
+            ..Default::default()
+        };
         capabilities
             .actions
             .supported
