@@ -2426,10 +2426,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
             .with_api_base_for_test(server.uri()),
     );
     let running = Running::start_telegram(channel, hooks, host, None, false);
-    assert!(
-        running.channel.is_none(),
-        "Telegram uses its typed adapter ports directly"
-    );
+    assert!(running.channel.is_some(), "Telegram keeps its polling listener");
     let handle = running.adapter_handle();
     let repository = provider_host
         .media_repository()
@@ -2838,10 +2835,7 @@ async fn configured_telegram_native_optional_ports_share_ordered_queue_and_rejec
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_telegram(channel, hooks, host, None, true);
-    assert!(
-        running.channel.is_none(),
-        "Telegram uses its typed adapter ports directly"
-    );
+    assert!(running.channel.is_some(), "Telegram keeps its polling listener");
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::TelegramNativeV2);
 
@@ -3040,10 +3034,7 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
             .with_api_base_for_test(server.uri()),
     );
     let running = Running::start_telegram(channel, hooks, host, None, false);
-    assert!(
-        running.channel.is_none(),
-        "Telegram uses its typed adapter ports directly"
-    );
+    assert!(running.channel.is_some(), "Telegram keeps its polling listener");
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -3655,10 +3646,7 @@ async fn configured_telegram_native_adapter_owns_polling_typing_drafts_and_scope
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_telegram(channel, hooks, host, None, true);
-    assert!(
-        running.channel.is_none(),
-        "Telegram uses its typed adapter ports directly"
-    );
+    assert!(running.channel.is_some(), "Telegram keeps its polling listener");
     let handle = running.adapter_handle();
     let native = handle.native.as_ref().unwrap().clone();
 
@@ -3996,10 +3984,7 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_slack(channel, hooks, host, None, true);
-    assert!(
-        running.channel.is_none(),
-        "Slack uses its typed adapter ports directly"
-    );
+    assert!(running.channel.is_some(), "Slack keeps its socket/polling listener");
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::SlackNativeV2);
     let descriptor = handle.descriptor();
@@ -4854,10 +4839,7 @@ async fn a_built_native_launch_starts_on_the_ordered_queue() {
     let _provider_host = hooks.host(host.clone(), "signal".to_owned(), None);
     let running = launch.start(hooks, host, None, true);
     assert_eq!(running.adapter_handle().mode, AdapterMode::SignalNativeV2);
-    assert!(
-        running.channel.is_none(),
-        "native launches must not retain a legacy Channel transport"
-    );
+    assert!(running.channel.is_some(), "Signal retains its legacy send compatibility path");
     running.stop().await.unwrap();
 }
 
