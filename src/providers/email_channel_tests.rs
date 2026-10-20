@@ -842,7 +842,7 @@ async fn listen_delivers_new_mail_and_reconnects_after_failures() {
     let second = recv(&mut rx).await;
     assert_eq!(second.sender, "bob@example.com");
     assert_eq!(second.content.trim_end(), "Subject: Html\n\nHello Bob");
-    assert!(second.id.starts_with("gen-"), "{}", second.id);
+    assert!(second.id.starts_with("email:"), "{}", second.id);
     assert!(second.timestamp > 1_704_164_645);
 
     let third = recv(&mut rx).await;
