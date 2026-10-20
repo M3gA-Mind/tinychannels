@@ -9,15 +9,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::delivery::progressive::{
-    EDIT_FLUSH_INTERVAL, FILLER_INTERVAL, ProgressiveOutputContext, ProgressiveOutputDispatch,
-    ProgressiveReply, ProgressiveSendError, ProgressiveSender, TYPING_REFRESH_INTERVAL,
+    ProgressiveOutputContext, ProgressiveOutputDispatch, ProgressiveReply, ProgressiveSendError,
+    ProgressiveSender, EDIT_FLUSH_INTERVAL, FILLER_INTERVAL, TYPING_REFRESH_INTERVAL,
 };
 use tinychannels_bus::module_progressive::{
     ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
     ProgressiveTransportResult,
 };
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
-use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use tokio::task::JoinHandle;
 
 const MAX_ACTIVE: usize = 16;
@@ -777,7 +777,16 @@ impl Replies {
                 turn_id,
                 lifetime_ms,
             } => {
-                self.open_output(channel, conversation, turn_id, lifetime_ms)
+                self.open_output(channel, conversation, turn_id, lifetime_ms, false)
+                    .await
+            }
+            ProgressiveCommand::OpenHostedOutput {
+                channel,
+                conversation,
+                turn_id,
+                lifetime_ms,
+            } => {
+                self.open_output(channel, conversation, turn_id, lifetime_ms, true)
                     .await
             }
             ProgressiveCommand::Feed { handle, events } => {
@@ -953,7 +962,8 @@ impl Replies {
     }
 
     async fn open(&self, channel: String) -> Result<ProgressiveResult> {
-        self.open_inner(channel, None, LEGACY_TURN_LIFETIME).await
+        self.open_inner(channel, None, LEGACY_TURN_LIFETIME, false)
+            .await
     }
 
     async fn open_output(
@@ -962,8 +972,14 @@ impl Replies {
         conversation: tinychannels_bus::ConversationRef,
         turn_id: String,
         lifetime_ms: u64,
+        hosted: bool,
     ) -> Result<ProgressiveResult> {
         if channel.id.is_empty()
+            || (hosted
+                && channel
+                    .account_id
+                    .as_deref()
+                    .is_none_or(|account| account.trim().is_empty()))
             || conversation.id.is_empty()
             || turn_id.is_empty()
             || lifetime_ms == 0
@@ -986,6 +1002,7 @@ impl Replies {
                 conversation,
             }),
             lifetime,
+            hosted,
         )
         .await
     }
@@ -995,13 +1012,23 @@ impl Replies {
         channel: String,
         context: Option<ProgressiveOutputContext>,
         lifetime: Duration,
+        hosted: bool,
     ) -> Result<ProgressiveResult> {
         if channel.is_empty() || channel.len() > 4096 {
             return Err(Error::failed("invalid progressive target"));
         }
         let provider_id = tinychannels_bus::provider_id(&channel);
         let running = self.running.lock().await;
-        let (capabilities, media_account_scope) = if let Some(context) = context.as_ref() {
+        let (capabilities, media_account_scope) = if hosted {
+            // Hosted output is authorized by this object's captured callback,
+            // not by a model- or caller-supplied provider capability claim.
+            // Keep the engine conservative; the host still validates the full
+            // scoped address before it emits any delivery effect.
+            (
+                tinychannels_bus::ChannelCapabilities::unknown(),
+                crate::provider::MediaScope::default(),
+            )
+        } else if let Some(context) = context.as_ref() {
             let configured_instance = context
                 .channel
                 .account_id

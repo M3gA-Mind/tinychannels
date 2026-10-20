@@ -365,6 +365,229 @@ async fn open(replies: &Replies) -> String {
     }
 }
 
+#[tokio::test]
+async fn hosted_output_uses_the_captured_callback_without_a_local_provider() {
+    let (replies, callback) = fixture(false).await;
+    let channel = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("relay:tenant-7:telegram-account".into()),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Group,
+        id: "-10042".into(),
+        thread_id: Some("topic-9".into()),
+        ..Default::default()
+    };
+    assert!(replies.running.lock().await.is_empty());
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: channel.clone(),
+            conversation: conversation.clone(),
+            turn_id: "turn-relay-1".into(),
+            lifetime_ms: 30_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected hosted output handle")
+    };
+
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "relay reply".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    match result {
+        ProgressiveResult::DeliveryOutcome { outcome } => {
+            assert!(outcome.error.is_none());
+            assert_eq!(
+                outcome.receipt.platform_message_ids,
+                vec!["fixture-message".to_owned()]
+            );
+        }
+        _ => panic!("hosted final delivery must retain its typed outcome"),
+    }
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+
+    let requests = callback.requests.lock().await;
+    let observer = requests
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::OutputEvent {
+                channel: route,
+                turn_id,
+                channel_ref,
+                conversation: request_conversation,
+                sequence,
+                event,
+            } => Some((
+                route,
+                turn_id,
+                channel_ref,
+                request_conversation,
+                sequence,
+                event,
+            )),
+            _ => None,
+        })
+        .expect("canonical output event is observed by the captured host");
+    assert_eq!(observer.0, "telegram:-10042");
+    assert_eq!(observer.1.as_deref(), Some("turn-relay-1"));
+    assert_eq!(observer.2.as_ref(), Some(&channel));
+    assert_eq!(observer.3.as_ref(), Some(&conversation));
+    assert_eq!(*observer.4, 1);
+    assert!(
+        matches!(observer.5.as_ref(), ChannelOutputEvent::FinalMessage { text, .. } if text == "relay reply")
+    );
+
+    let send = requests
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                channel: route,
+                turn_id,
+                channel_ref,
+                conversation: request_conversation,
+                sequence,
+                segment_index,
+                idempotency_key,
+                parts,
+                text,
+            } => Some((
+                route,
+                turn_id,
+                channel_ref,
+                request_conversation,
+                sequence,
+                segment_index,
+                idempotency_key,
+                parts,
+                text,
+            )),
+            _ => None,
+        })
+        .expect("terminal output is sent through the typed callback");
+    assert_eq!(send.0, "telegram:-10042");
+    assert_eq!(send.1.as_deref(), Some("turn-relay-1"));
+    assert_eq!(send.2.as_ref(), Some(&channel));
+    assert_eq!(send.3.as_ref(), Some(&conversation));
+    // The engine increments its canonical output sequence before dispatching
+    // each event; the terminal typed send retains that same sequence.
+    assert_eq!(send.4.as_ref(), Some(observer.4));
+    assert_eq!(*send.5, Some(0));
+    assert!(send.6.as_deref().is_some_and(|key| !key.is_empty()));
+    assert_eq!(send.8, "relay reply");
+    assert_eq!(
+        send.7,
+        &vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "relay reply".into(),
+                markdown_dialect: None,
+            }
+        }]
+    );
+}
+
+#[tokio::test]
+async fn hosted_output_rejects_missing_account_scope_before_callback() {
+    let (replies, callback) = fixture(false).await;
+    let result = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: None,
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "chat-42".into(),
+                ..Default::default()
+            },
+            turn_id: "turn-relay-2".into(),
+            lifetime_ms: 30_000,
+        })
+        .await;
+    assert!(result.is_err());
+    assert!(callback.requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn hosted_output_keeps_partial_provider_failure_and_receipt() {
+    let (replies, callback) = fixture(false).await;
+    let mut partial = tinychannels_bus::channel::ChannelSendOutcome::default();
+    partial.receipt.platform_message_ids = vec!["accepted-segment".into()];
+    partial.error = Some(tinychannels_bus::channel::ChannelSendError {
+        kind: tinychannels_bus::channel::SendErrorKind::RateLimited,
+        message: "later segment was rate limited".into(),
+        sent_before_error: true,
+        ..Default::default()
+    });
+    *callback.send_result.lock().await =
+        Some(ProgressiveTransportResult::Outcome(Box::new(partial)));
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some("relay:tenant-7:telegram-account".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Group,
+                id: "-10042".into(),
+                ..Default::default()
+            },
+            turn_id: "turn-relay-failure".into(),
+            lifetime_ms: 30_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected hosted output handle")
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "partially delivered".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    match result {
+        ProgressiveResult::DeliveryBatch {
+            outcomes,
+            failure:
+                Some(tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport),
+            ..
+        } => {
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(
+                outcomes[0].receipt.platform_message_ids,
+                vec!["accepted-segment".to_owned()]
+            );
+            let error = outcomes[0]
+                .error
+                .as_ref()
+                .expect("partial delivery retains its error");
+            assert_eq!(
+                error.kind,
+                tinychannels_bus::channel::SendErrorKind::RateLimited
+            );
+            assert!(error.sent_before_error);
+        }
+        _ => panic!("partial host transport failure must not become success"),
+    }
+}
+
 async fn open_scoped(
     replies: &Replies,
     account: &str,
@@ -440,15 +663,13 @@ async fn terminal_retry_reuses_one_module_send_and_rejects_changed_content() {
             ProgressiveResult::Closed
         );
     }
-    assert!(
-        replies
-            .execute(ProgressiveCommand::Finish {
-                handle: handle.clone(),
-                text: "changed fixture".into()
-            })
-            .await
-            .is_err()
-    );
+    assert!(replies
+        .execute(ProgressiveCommand::Finish {
+            handle: handle.clone(),
+            text: "changed fixture".into()
+        })
+        .await
+        .is_err());
     replies
         .execute(ProgressiveCommand::Close { handle })
         .await
@@ -456,11 +677,9 @@ async fn terminal_retry_reuses_one_module_send_and_rejects_changed_content() {
     let sends = callback.sends.lock().await;
     assert_eq!(sends.len(), 1);
     assert_eq!(sends[0]["text"], "final fixture");
-    assert!(
-        sends[0]["idempotencyKey"]
-            .as_str()
-            .is_some_and(|key| !key.is_empty())
-    );
+    assert!(sends[0]["idempotencyKey"]
+        .as_str()
+        .is_some_and(|key| !key.is_empty()));
 }
 
 #[tokio::test]
@@ -630,18 +849,16 @@ async fn handles_cannot_cross_private_runtime_reply_stores() {
     let (first, _) = fixture(false).await;
     let (second, _) = fixture(false).await;
     let handle = open(&first).await;
-    assert!(
-        second
-            .execute(ProgressiveCommand::FeedOutput {
-                handle: handle.clone(),
-                events: vec![ChannelOutputEvent::TextDelta {
-                    text: "fixture".into(),
-                    iteration: None,
-                }]
-            })
-            .await
-            .is_err()
-    );
+    assert!(second
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::TextDelta {
+                text: "fixture".into(),
+                iteration: None,
+            }]
+        })
+        .await
+        .is_err());
     first
         .execute(ProgressiveCommand::Close { handle })
         .await
@@ -675,39 +892,35 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
     )
     .await
     .unwrap();
-    assert!(
-        apply(
-            &mut reply,
-            vec![
-                ChannelOutputEvent::ToolProgress {
-                    label: "fixture-tool".into(),
-                    message: None
-                },
-                ChannelOutputEvent::TextDelta {
-                    text: "extra".into(),
-                    iteration: None,
-                }
-            ],
-            false,
-        )
-        .await
-        .is_err()
-    );
+    assert!(apply(
+        &mut reply,
+        vec![
+            ChannelOutputEvent::ToolProgress {
+                label: "fixture-tool".into(),
+                message: None
+            },
+            ChannelOutputEvent::TextDelta {
+                text: "extra".into(),
+                iteration: None,
+            }
+        ],
+        false,
+    )
+    .await
+    .is_err());
     assert_eq!(reply.state().content.len(), MAX_CONTENT);
     assert!(reply.state().last_tool.is_none());
     let handle = open(&replies).await;
-    assert!(
-        replies
-            .execute(ProgressiveCommand::FeedOutput {
-                handle: handle.clone(),
-                events: vec![ChannelOutputEvent::ThinkingDelta {
-                    text: "x".repeat(MAX_REQUEST),
-                    iteration: None
-                }]
-            })
-            .await
-            .is_err()
-    );
+    assert!(replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::ThinkingDelta {
+                text: "x".repeat(MAX_REQUEST),
+                iteration: None
+            }]
+        })
+        .await
+        .is_err());
     replies
         .execute(ProgressiveCommand::Close { handle })
         .await
@@ -720,25 +933,21 @@ async fn reply_capacity_refuses_seventeenth_and_shutdown_drains_every_worker() {
     for _ in 0..MAX_ACTIVE {
         open(&replies).await;
     }
-    assert!(
-        replies
-            .execute(ProgressiveCommand::Open {
-                channel: "discord:overflow".into()
-            })
-            .await
-            .is_err()
-    );
+    assert!(replies
+        .execute(ProgressiveCommand::Open {
+            channel: "discord:overflow".into()
+        })
+        .await
+        .is_err());
     replies.shutdown().await.unwrap();
     assert!(callback.sends.lock().await.is_empty());
     assert!(replies.state.lock().await.entries.is_empty());
-    assert!(
-        replies
-            .execute(ProgressiveCommand::Open {
-                channel: "discord:after-shutdown".into()
-            })
-            .await
-            .is_err()
-    );
+    assert!(replies
+        .execute(ProgressiveCommand::Open {
+            channel: "discord:after-shutdown".into()
+        })
+        .await
+        .is_err());
 }
 
 #[tokio::test]
@@ -812,11 +1021,9 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
         })
         .await
         .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("terminal progressive event must be unique and last")
-    );
+    assert!(error
+        .to_string()
+        .contains("terminal progressive event must be unique and last"));
 
     let error = replies
         .execute(ProgressiveCommand::FeedOutput {
@@ -827,11 +1034,9 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
         })
         .await
         .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("progressive request exceeds its limit")
-    );
+    assert!(error
+        .to_string()
+        .contains("progressive request exceeds its limit"));
     assert!(callback.requests.lock().await.is_empty());
 
     let error = replies
@@ -841,11 +1046,9 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
         })
         .await
         .unwrap_err();
-    assert!(
-        error
-            .to_string()
-            .contains("progressive content exceeds its limit")
-    );
+    assert!(error
+        .to_string()
+        .contains("progressive content exceeds its limit"));
 
     let legacy_feed: ProgressiveCommand = serde_json::from_value(serde_json::json!({
         "operation": "feed",
@@ -874,21 +1077,15 @@ async fn progressive_commands_validate_event_batches_and_keep_legacy_finish_usab
     assert_eq!(sends[0]["text"], "legacy final");
     drop(sends);
     let requests = callback.requests.lock().await;
-    assert!(
-        requests
-            .iter()
-            .all(|request| !matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
-    );
-    assert!(
-        requests
-            .iter()
-            .all(|request| !matches!(request, ProgressiveTransportRequest::SendTyped { .. }))
-    );
-    assert!(
-        requests
-            .iter()
-            .any(|request| matches!(request, ProgressiveTransportRequest::Send { .. }))
-    );
+    assert!(requests
+        .iter()
+        .all(|request| !matches!(request, ProgressiveTransportRequest::OutputEvent { .. })));
+    assert!(requests
+        .iter()
+        .all(|request| !matches!(request, ProgressiveTransportRequest::SendTyped { .. })));
+    assert!(requests
+        .iter()
+        .any(|request| matches!(request, ProgressiveTransportRequest::Send { .. })));
     drop(requests);
     replies.shutdown().await.unwrap();
 }
@@ -918,11 +1115,9 @@ async fn progressive_open_and_handle_errors_are_closed_after_shutdown() {
         })
         .await
         .unwrap_err();
-    assert!(
-        stopped
-            .to_string()
-            .contains("progressive replies are shutting down")
-    );
+    assert!(stopped
+        .to_string()
+        .contains("progressive replies are shutting down"));
 }
 
 #[tokio::test]
@@ -1030,15 +1225,13 @@ async fn full_reply_within_content_limit_survives_json_expansion() {
 async fn oversized_terminal_content_is_rejected_without_closing_reply() {
     let (replies, callback) = fixture(false).await;
     let handle = open(&replies).await;
-    assert!(
-        replies
-            .execute(ProgressiveCommand::Finish {
-                handle: handle.clone(),
-                text: "x".repeat(MAX_CONTENT + 1)
-            })
-            .await
-            .is_err()
-    );
+    assert!(replies
+        .execute(ProgressiveCommand::Finish {
+            handle: handle.clone(),
+            text: "x".repeat(MAX_CONTENT + 1)
+        })
+        .await
+        .is_err());
     assert_eq!(
         replies
             .execute(ProgressiveCommand::Finish {
@@ -1145,14 +1338,12 @@ async fn feed_updates_text_thinking_and_tool_state_before_terminal_send() {
 async fn invalid_targets_and_excess_event_batches_do_not_consume_reply_capacity() {
     let (replies, _) = fixture(false).await;
     for channel in [String::new(), "x".repeat(4097)] {
-        assert!(
-            replies
-                .execute(ProgressiveCommand::Open { channel })
-                .await
-                .unwrap_err()
-                .to_string()
-                .contains("invalid progressive target")
-        );
+        assert!(replies
+            .execute(ProgressiveCommand::Open { channel })
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("invalid progressive target"));
     }
     assert!(replies.state.lock().await.entries.is_empty());
     let handle = open(&replies).await;
@@ -1286,24 +1477,22 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
     )
     .await
     .unwrap();
-    assert!(
-        apply(
-            &mut reply,
-            vec![
-                ChannelOutputEvent::TextDelta {
-                    text: "not committed".into(),
-                    iteration: None,
-                },
-                ChannelOutputEvent::ThinkingDelta {
-                    text: "extra".into(),
-                    iteration: None
-                }
-            ],
-            false,
-        )
-        .await
-        .is_err()
-    );
+    assert!(apply(
+        &mut reply,
+        vec![
+            ChannelOutputEvent::TextDelta {
+                text: "not committed".into(),
+                iteration: None,
+            },
+            ChannelOutputEvent::ThinkingDelta {
+                text: "extra".into(),
+                iteration: None
+            }
+        ],
+        false,
+    )
+    .await
+    .is_err());
     assert!(reply.state().content.is_empty());
     assert_eq!(reply.state().thinking_accumulator.len(), MAX_CONTENT);
 }
@@ -1404,14 +1593,12 @@ async fn output_callback_failure_cleans_up_without_sending_a_replacement() {
         } if outcomes.is_empty()
     ));
     assert!(callback.sends.lock().await.is_empty());
-    assert!(
-        callback
-            .requests
-            .lock()
-            .await
-            .iter()
-            .any(|request| matches!(request, ProgressiveTransportRequest::OutputEvent { .. }))
-    );
+    assert!(callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .any(|request| matches!(request, ProgressiveTransportRequest::OutputEvent { .. })));
     replies
         .execute(ProgressiveCommand::Close { handle })
         .await
@@ -2596,9 +2783,14 @@ async fn scoped_output_expiry_cleans_an_existing_draft_without_sending_a_reply()
     for _ in 0..5 {
         tokio::task::yield_now().await;
     }
-    assert!(callback.requests.lock().await.iter().any(|request| matches!(request,
-        ProgressiveTransportRequest::Send { message, .. } if message["text"] == "visible draft"
-    )));
+    assert!(callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .any(|request| matches!(request,
+            ProgressiveTransportRequest::Send { message, .. } if message["text"] == "visible draft"
+        )));
 
     tokio::time::advance(Duration::from_millis(150)).await;
     for _ in 0..5 {
@@ -2692,21 +2884,15 @@ async fn native_approval_and_clarification_events_deliver_prompts() {
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert!(
-        delivered
-            .iter()
-            .any(|text| text.contains("May I run the command?"))
-    );
-    assert!(
-        delivered
-            .iter()
-            .any(|text| text.contains("Allow once, Deny"))
-    );
-    assert!(
-        delivered
-            .iter()
-            .any(|text| text.contains("Which folder should I use?"))
-    );
+    assert!(delivered
+        .iter()
+        .any(|text| text.contains("May I run the command?")));
+    assert!(delivered
+        .iter()
+        .any(|text| text.contains("Allow once, Deny")));
+    assert!(delivered
+        .iter()
+        .any(|text| text.contains("Which folder should I use?")));
     assert!(requests.iter().any(|request| matches!(request,
         ProgressiveTransportRequest::OutputEvent { event, .. }
             if matches!(event.as_ref(), ChannelOutputEvent::ApprovalRequest { id, .. } if id == "approval-7")
@@ -4401,11 +4587,9 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             part: tinychannels_bus::ContentPart::Audio { media, codec: Some(codec), .. }
         } if media.opaque_id.as_deref().is_some_and(|id| id.starts_with("tinychannels_media_v1_")) && codec == "ogg_opus"
     )));
-    assert!(
-        !audio_request
-            .iter()
-            .any(|part| matches!(part, tinychannels_bus::OutboundContentPart::Voice { .. }))
-    );
+    assert!(!audio_request
+        .iter()
+        .any(|part| matches!(part, tinychannels_bus::OutboundContentPart::Voice { .. })));
     drop(requests);
 
     let link_turn = ProgressiveOutputContext {
@@ -4471,11 +4655,9 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
                 part: tinychannels_bus::ContentPart::Audio { .. }
             }
     )));
-    assert!(
-        link_request
-            .1
-            .contains("https://media.example/authorized/voice")
-    );
+    assert!(link_request
+        .1
+        .contains("https://media.example/authorized/voice"));
     let canonical_text = link_request
         .0
         .iter()
@@ -4547,17 +4729,13 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             _ => None,
         })
         .unwrap();
-    assert!(
-        !too_long_request
-            .0
-            .iter()
-            .any(|part| matches!(part, tinychannels_bus::OutboundContentPart::Voice { .. }))
-    );
-    assert!(
-        too_long_request
-            .1
-            .contains("Audio reply exceeded the channel size limit")
-    );
+    assert!(!too_long_request
+        .0
+        .iter()
+        .any(|part| matches!(part, tinychannels_bus::OutboundContentPart::Voice { .. })));
+    assert!(too_long_request
+        .1
+        .contains("Audio reply exceeded the channel size limit"));
     assert!(
         too_long_request.0.iter().any(|part| matches!(part,
             tinychannels_bus::OutboundContentPart::Content {
