@@ -10,7 +10,7 @@
 //!
 //! Parsing, rendering, the chat → thread bindings ([`session_store`]) and the
 //! command flow live here. The conversation threads, model routes and
-//! in-memory history belong to the host, which exposes them through
+//! durable session history belongs to the host, which exposes it through
 //! [`RemoteControlHost`].
 
 pub mod session_store;
@@ -71,7 +71,7 @@ pub fn format_session_line(title: &str, id: &str, message_count: usize, active: 
 /// Render the `/new` confirmation.
 pub fn build_new_session_response(title: &str, thread_id: &str) -> String {
     format!(
-        "Started new session **{title}**.\nThread id: `{thread_id}`\nIn-memory channel history cleared for this chat."
+        "Started new session **{title}**.\nThread id: `{thread_id}`\nDurable conversation history reset for this chat."
     )
 }
 
@@ -85,28 +85,24 @@ pub fn build_status_response(
 ) -> String {
     let turn_state = if busy { "in progress ⏳" } else { "idle" };
     format!(
-        "**Status**\n{thread_line}\nProvider: `{provider}`\nModel: `{model}`\nIn-memory turns: {history_len}\nTurn: {turn_state}"
+        "**Status**\n{thread_line}\nProvider: `{provider}`\nModel: `{model}`\nSession turns: {history_len}\nTurn: {turn_state}"
     )
 }
 
 /// Shared remote conversation vocabulary, re-exported for existing library clients.
-pub use tinychannels_bus::module_remote::{NewRemoteThread, RemoteRoute, RemoteThreadSummary};
+pub use tinychannels_bus::module_remote::{
+    NewRemoteThread, RemoteRoute, RemoteSessionScope, RemoteThreadSummary,
+};
 
 /// Host side of remote control: the parts only the host owns.
 #[async_trait]
 pub trait RemoteControlHost: Send + Sync {
     /// The model route for `sender_key` (a conversation history key).
     fn route(&self, sender_key: &str) -> RemoteRoute;
-    /// How many turns of in-memory history the host holds for `sender_key`.
+    /// How many turns belong to the durable session for `sender_key`.
     fn history_len(&self, sender_key: &str) -> usize;
-    /// Drop the in-memory history for `sender_key`.
-    fn clear_history(&self, sender_key: &str);
-    /// Async bridge used by modules whose host history lives across TinyBus.
-    /// Existing synchronous hosts retain their original behavior.
-    async fn clear_history_async(&self, sender_key: &str) -> anyhow::Result<()> {
-        self.clear_history(sender_key);
-        Ok(())
-    }
+    /// Reset the durable session identified by trusted prepared channel scope.
+    async fn clear_history_async(&self, scope: &RemoteSessionScope) -> anyhow::Result<()>;
     /// List the host's conversation threads.
     async fn list_threads(&self) -> anyhow::Result<Vec<RemoteThreadSummary>>;
     /// Create a conversation thread.
@@ -125,6 +121,9 @@ pub struct RemoteCommandContext {
     pub reply_target: String,
     /// Conversation history key of the sender.
     pub sender_key: String,
+    /// Scope prepared by the host for this exact inbound turn. `/new` fails
+    /// closed when this is absent; the sender key is never parsed as identity.
+    pub session_scope: Option<RemoteSessionScope>,
     /// Chat → thread bindings and busy state.
     pub sessions: RemoteSessionStore,
 }
@@ -240,6 +239,10 @@ async fn new_session(
     ctx: &RemoteCommandContext,
     now: chrono::DateTime<chrono::Utc>,
 ) -> String {
+    let Some(session_scope) = ctx.session_scope.as_ref() else {
+        return "Cannot reset this conversation because its trusted channel scope is unavailable."
+            .to_string();
+    };
     let thread_id = format!("thread-{}", uuid::Uuid::new_v4());
     let title = format!(
         "{} {} {}",
@@ -258,7 +261,7 @@ async fn new_session(
         return format!("Failed to create session: {error}");
     }
 
-    if let Err(error) = host.clear_history_async(&ctx.sender_key).await {
+    if let Err(error) = host.clear_history_async(session_scope).await {
         return format!(
             "Created thread `{thread_id}` but failed to clear channel history: {error}"
         );

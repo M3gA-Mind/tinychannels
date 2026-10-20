@@ -1,5 +1,5 @@
 //! Requests for module-owned channel command and presentation preparation.
-use crate::module_remote::RemoteRoute;
+use crate::module_remote::{RemoteRoute, RemoteSessionScope};
 use crate::{ChannelCapabilities, ChannelMessage, LegacyChannelCapabilities};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -20,6 +20,7 @@ pub enum ChannelControlRequest {
         message: Box<ChannelMessage>,
         route: RemoteRoute,
         history_len: usize,
+        session_scope: Option<Box<RemoteSessionScope>>,
         providers: Vec<ProviderDescriptor>,
     },
     RuntimeLimits {

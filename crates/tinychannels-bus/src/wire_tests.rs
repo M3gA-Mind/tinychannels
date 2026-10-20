@@ -69,9 +69,9 @@ fn hosted_progressive_open_keeps_scoped_address_and_is_a_new_contract_revision()
     assert_eq!(wire["conversation"]["topicId"], "topic-3");
     assert_eq!(wire["turn_id"], "turn-1");
     assert_eq!(wire["lifetime_ms"], 30_000);
-    assert_eq!(CONTRACT_VERSION, 28);
-    assert!(is_compatible(28));
-    assert!(!is_compatible(27));
+    assert_eq!(CONTRACT_VERSION, 29);
+    assert!(is_compatible(CONTRACT_VERSION));
+    assert!(!is_compatible(CONTRACT_VERSION - 1));
 }
 
 #[test]
@@ -365,7 +365,7 @@ fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
     }
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible(CONTRACT_VERSION + 1));
-    assert_eq!(CONTRACT_VERSION, 28);
+    assert_eq!(CONTRACT_VERSION, 29);
     assert!(!is_compatible(25));
     assert!(!is_compatible(24));
     assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 25));
@@ -555,6 +555,41 @@ fn runtime_and_remote_commands_have_a_stable_wire() {
             cmd
         );
     }
+}
+
+#[test]
+fn remote_clear_history_carries_full_prepared_session_scope() {
+    let request = crate::module_remote::RemoteHostRequest::ClearHistory {
+        session_scope: crate::module_remote::RemoteSessionScope {
+            channel: crate::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some("telegram:bot-a".into()),
+            },
+            conversation: crate::ConversationRef {
+                kind: crate::ConversationKind::Group,
+                id: "room-1".into(),
+                scope_id: Some("tenant-room".into()),
+                parent_id: Some("parent-1".into()),
+                thread_id: Some("thread-2".into()),
+                topic_id: Some("topic-3".into()),
+            },
+            session_key: "prepared-v22-session-key".into(),
+        },
+    };
+    let encoded = serde_json::to_value(&request).unwrap();
+    assert_eq!(
+        encoded["request"]["session_scope"]["channel"]["accountId"],
+        "telegram:bot-a"
+    );
+    assert_eq!(
+        encoded["request"]["session_scope"]["conversation"]["topicId"],
+        "topic-3"
+    );
+    let decoded = serde_json::to_value(
+        serde_json::from_value::<crate::module_remote::RemoteHostRequest>(encoded).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(decoded, serde_json::to_value(request).unwrap());
 }
 
 #[test]
