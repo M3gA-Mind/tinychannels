@@ -728,9 +728,10 @@ fn the_descriptor_and_defaults_identify_the_native_adapter() {
         false,
     );
     assert_eq!(NativeProvider::proactive_target(&dm_only), None);
-    assert!(channel.supports_reactions() && channel.supports_edit());
-    assert!(channel.supports_reply_to_id() && !channel.supports_thread_id());
-    assert!(channel.declared().reactions && channel.declared().actions.supported.iter().any(|a| a == "edit"));
+    assert!(channel.declared().reactions);
+    assert!(channel.declared().addressing.reply_to_id);
+    assert!(!channel.declared().addressing.thread_id);
+    assert!(channel.declared().actions.supported.iter().any(|action| action == "edit"));
 }
 
 #[tokio::test]

@@ -173,6 +173,16 @@ impl SignalChannel {
         }
     }
 
+    pub(super) async fn health_probe(&self) -> bool {
+        let url = format!("{}/api/v1/check", self.http_url);
+        self.http_client()
+            .get(&url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .is_ok_and(|response| response.status().is_success())
+    }
+
     /// Scoped media storage; enables typed attachments in both directions.
     pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
         self.native.media_repository = Some(repository);
