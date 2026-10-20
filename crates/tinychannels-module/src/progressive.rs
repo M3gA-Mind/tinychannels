@@ -1335,7 +1335,6 @@ async fn run(
     target: ProgressiveTarget,
     capabilities: tinychannels_bus::ChannelCapabilities,
     context: Option<ProgressiveOutputContext>,
-    hosted: bool,
     lifetime: Duration,
     terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
     mut inbox: mpsc::Receiver<Command>,
