@@ -897,7 +897,7 @@ async fn host_aware_factory_sends_typed_image_through_lark_image_upload() {
     let channel =
         crate::factory::build_long_tail_channel_with_host(&config, &host, &clients, "lark")
             .expect("Lark config builds through the host-aware factory");
-    let capabilities = channel.capabilities();
+    let capabilities = channel.declared_capabilities();
     assert!(capabilities.content.image.outbound);
     assert!(capabilities.content.file.outbound);
     assert!(capabilities.content.video.outbound);

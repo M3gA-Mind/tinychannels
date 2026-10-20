@@ -20,7 +20,7 @@ fn a_configured_discord_account_builds_a_native_launch() {
 
     let launch = build_native_v2("discord:work", &config, &host, &DefaultHttpClients)
         .expect("a configured Discord provider must start through its native adapter");
-    assert_eq!(launch.channel.name(), "discord");
+    assert_eq!(launch.provider_id, "discord");
 }
 
 fn signal_config() -> ChannelsConfig {
@@ -41,7 +41,7 @@ fn signal_config() -> ChannelsConfig {
 fn a_configured_signal_account_builds_a_native_launch() {
     let host = NoopHost::arc();
     let launch = build_native_v2("signal", &signal_config(), &host, &DefaultHttpClients).unwrap();
-    assert_eq!(launch.channel.name(), "signal");
+    assert_eq!(launch.provider_id, "signal");
     // An aliased instance name resolves to the same provider.
     assert!(build_native_v2("signal:work", &signal_config(), &host, &DefaultHttpClients).is_some());
 }
@@ -86,7 +86,7 @@ fn long_tail_providers_build_as_native_launches_only_when_configured() {
     };
     let launch = build_native_v2("dingtalk", &config, &host, &DefaultHttpClients)
         .expect("a configured long-tail provider is a native launch");
-    assert_eq!(launch.channel.name(), "dingtalk");
+    assert_eq!(launch.provider_id, "dingtalk");
     assert!(build_native_v2("qq", &config, &host, &DefaultHttpClients).is_none());
     assert!(build_native_v2("slack", &config, &host, &DefaultHttpClients).is_none());
 }
@@ -101,7 +101,7 @@ fn a_configured_imessage_account_builds_a_native_launch() {
         ..Default::default()
     };
     let launch = build_native_v2("imessage", &config, &host, &DefaultHttpClients).unwrap();
-    assert_eq!(launch.channel.name(), "imessage");
+    assert_eq!(launch.provider_id, "imessage");
     assert!(
         build_native_v2(
             "imessage",
@@ -126,7 +126,7 @@ fn a_configured_linq_account_builds_a_native_launch() {
         ..Default::default()
     };
     let launch = build_native_v2("linq", &config, &host, &DefaultHttpClients).unwrap();
-    assert_eq!(launch.channel.name(), "linq");
+    assert_eq!(launch.provider_id, "linq");
     assert!(
         build_native_v2(
             "linq",
@@ -149,7 +149,7 @@ fn a_configured_email_account_builds_a_native_launch() {
         ..Default::default()
     };
     let launch = build_native_v2("email", &config, &host, &DefaultHttpClients).unwrap();
-    assert_eq!(launch.channel.name(), "email");
+    assert_eq!(launch.provider_id, "email");
     assert!(
         build_native_v2(
             "email",

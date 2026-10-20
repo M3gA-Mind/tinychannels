@@ -30,6 +30,21 @@ enum ProviderOperation {
     Interaction(tinychannels_bus::ChannelInteraction),
 }
 
+fn legacy_typed_send_completion(
+    result: std::result::Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels::channel::ChannelSendError,
+    >,
+) -> Result<tinychannels_bus::ChannelInteractionResult> {
+    match result {
+        Ok(outcome) => match outcome.error {
+            Some(error) => Err(Error::failed(error.message)),
+            None => Ok(tinychannels_bus::ChannelInteractionResult::Completed),
+        },
+        Err(error) => Err(Error::failed(error.message)),
+    }
+}
+
 struct TypingRefreshTask {
     recipient: String,
     cancel: watch::Sender<bool>,
@@ -42,7 +57,7 @@ const MAX_TYPING_REFRESH_RECIPIENTS: usize = 64;
 const MAX_TYPING_REFRESH_INTERVAL_SECS: u64 = 60;
 
 async fn dispatch_interaction(
-    channel: Arc<dyn Channel>,
+    channel: Option<Arc<dyn Channel>>,
     native: Option<NativePorts>,
     interaction: tinychannels_bus::ChannelInteraction,
     typing: &mut TypingRefreshes,
@@ -62,7 +77,8 @@ async fn dispatch_interaction(
                 return Err(Error::failed("typing refresh capacity is full"));
             }
             let (cancel, mut canceled) = watch::channel(false);
-            let refresh_channel = Arc::clone(&channel);
+            let refresh_channel = channel.clone();
+            let refresh_native = native.clone();
             let refresh_recipient = recipient.clone();
             let interval = Duration::from_secs(interval_secs);
             let task = tokio::spawn(async move {
@@ -71,12 +87,20 @@ async fn dispatch_interaction(
                         biased;
                         _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
                         _ = tokio::time::sleep(interval) => {
-                            let refresh = refresh_channel.start_typing(&refresh_recipient);
+                            let refresh = async {
+                                if let Some(native) = &refresh_native {
+                                    native.typing.start_typing(&refresh_recipient).await.map_err(|error| anyhow::anyhow!(error.message))
+                                } else if let Some(channel) = &refresh_channel {
+                                    channel.start_typing(&refresh_recipient).await
+                                } else {
+                                    anyhow::bail!("provider typing port is unavailable")
+                                }
+                            };
                             tokio::select! {
                                 biased;
                                 _ = async { let _ = canceled.wait_for(|value| *value).await; } => break,
                                 result = refresh => if let Err(error) = result {
-                                tracing::debug!(channel = refresh_channel.name(), "typing refresh failed: {error}");
+                                tracing::debug!("provider typing refresh failed: {error}");
                                 }
                             }
                         }
@@ -112,7 +136,13 @@ async fn dispatch_interaction(
                     .map_err(|_| Error::failed("provider typing operation failed"))?;
                 Ok(tinychannels_bus::ChannelInteractionResult::Completed)
             } else {
-                crate::interaction::dispatch(channel.as_ref(), Op::StartTyping { recipient }).await
+                crate::interaction::dispatch(
+                    channel
+                        .as_deref()
+                        .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
+                    Op::StartTyping { recipient },
+                )
+                .await
             }
         }
         Op::StopTyping { recipient } => {
@@ -124,7 +154,13 @@ async fn dispatch_interaction(
                     .map_err(|_| Error::failed("provider typing operation failed"))?;
                 Ok(tinychannels_bus::ChannelInteractionResult::Completed)
             } else {
-                crate::interaction::dispatch(channel.as_ref(), Op::StopTyping { recipient }).await
+                crate::interaction::dispatch(
+                    channel
+                        .as_deref()
+                        .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
+                    Op::StopTyping { recipient },
+                )
+                .await
             }
         }
         Op::SendReaction {
@@ -149,7 +185,9 @@ async fn dispatch_interaction(
                 Ok(tinychannels_bus::ChannelInteractionResult::Completed)
             } else {
                 crate::interaction::dispatch(
-                    channel.as_ref(),
+                    channel
+                        .as_deref()
+                        .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
                     Op::SendReaction {
                         channel: channel_ref,
                         conversation,
@@ -175,8 +213,13 @@ async fn dispatch_interaction(
                     },
                 )))
             } else {
-                crate::interaction::dispatch(channel.as_ref(), Op::EditMessage { receipt, intent })
-                    .await
+                crate::interaction::dispatch(
+                    channel
+                        .as_deref()
+                        .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
+                    Op::EditMessage { receipt, intent },
+                )
+                .await
             }
         }
         Op::DeleteMessage { receipt } => {
@@ -188,10 +231,24 @@ async fn dispatch_interaction(
                     .map_err(|_| Error::failed("provider delete failed"))?;
                 Ok(tinychannels_bus::ChannelInteractionResult::Completed)
             } else {
-                crate::interaction::dispatch(channel.as_ref(), Op::DeleteMessage { receipt }).await
+                crate::interaction::dispatch(
+                    channel
+                        .as_deref()
+                        .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
+                    Op::DeleteMessage { receipt },
+                )
+                .await
             }
         }
-        interaction => crate::interaction::dispatch(channel.as_ref(), interaction).await,
+        interaction => {
+            crate::interaction::dispatch(
+                channel
+                    .as_deref()
+                    .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
+                interaction,
+            )
+            .await
+        }
     }
 }
 
@@ -1276,7 +1333,8 @@ impl NativePorts {
 }
 
 pub(crate) struct Running {
-    pub(crate) channel: Arc<dyn Channel>,
+    pub(crate) channel: Option<Arc<dyn Channel>>,
+    provider_name: String,
     native_ports: Option<NativePorts>,
     pub(crate) media_account_scope: MediaScope,
     configured_instance: String,
@@ -1423,7 +1481,7 @@ impl tinychannels::channel::ChannelAdapter for NativeAdapter {
     }
 
     fn proactive_target(&self) -> Option<String> {
-        self.running.channel.proactive_target()
+        self.running.proactive_target()
     }
 
     fn receive_ack_policy(&self) -> tinychannels::channel::ChannelReceiveAckPolicy {
@@ -1667,6 +1725,32 @@ impl ConfiguredAdapterFactory {
 }
 
 impl Running {
+    pub(crate) fn provider_name(&self) -> &str {
+        &self.provider_name
+    }
+
+    pub(crate) fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.native_ports.as_ref().map_or_else(
+            || {
+                self.channel
+                    .as_ref()
+                    .map_or_else(Default::default, |channel| channel.capabilities())
+            },
+            |ports| ports.adapter.declared_capabilities(),
+        )
+    }
+
+    pub(crate) fn proactive_target(&self) -> Option<String> {
+        self.native_ports.as_ref().map_or_else(
+            || {
+                self.channel
+                    .as_ref()
+                    .and_then(|channel| channel.proactive_target())
+            },
+            |ports| ports.adapter.proactive_target(),
+        )
+    }
+
     pub(crate) fn adapter_handle(self: &Arc<Self>) -> ConfiguredAdapterHandle {
         if let Some(ports) = &self.native_ports {
             match ports.provider {
@@ -1706,7 +1790,8 @@ impl Running {
         hooks: Arc<Hooks>,
         host: HostChannels,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, None, false, None)
+        let name = channel.name().to_owned();
+        Self::start_inner(Some(channel), name, hooks, host, None, false, None)
     }
     pub(crate) fn start_supervised(
         channel: Arc<dyn Channel>,
@@ -1714,14 +1799,16 @@ impl Running {
         host: HostChannels,
         policy: ChannelSupervisionPolicy,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, Some(policy), false, None)
+        let name = channel.name().to_owned();
+        Self::start_inner(Some(channel), name, hooks, host, Some(policy), false, None)
     }
     pub(crate) fn start_outbound(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
         host: HostChannels,
     ) -> Arc<Self> {
-        Self::start_inner(channel, hooks, host, None, true, None)
+        let name = channel.name().to_owned();
+        Self::start_inner(Some(channel), name, hooks, host, None, true, None)
     }
     pub(crate) fn start_telegram(
         channel: Arc<tinychannels::TelegramChannel>,
@@ -1732,7 +1819,8 @@ impl Running {
     ) -> Arc<Self> {
         let channel_dyn: Arc<dyn Channel> = channel.clone();
         Self::start_inner(
-            channel_dyn,
+            Some(channel_dyn),
+            channel.name().to_owned(),
             hooks,
             host,
             supervision,
@@ -1763,7 +1851,8 @@ impl Running {
     {
         let channel_dyn: Arc<dyn Channel> = channel.clone();
         Self::start_inner(
-            channel_dyn,
+            Some(channel_dyn),
+            channel.name().to_owned(),
             hooks,
             host,
             supervision,
@@ -1783,9 +1872,9 @@ impl Running {
         outbound_only: bool,
         listener_mode: LongTailListenerMode,
     ) -> Arc<Self> {
-        let channel_dyn: Arc<dyn Channel> = channel.clone();
         Self::start_inner(
-            channel_dyn,
+            None,
+            channel.descriptor().id,
             hooks,
             host,
             supervision,
@@ -1803,7 +1892,8 @@ impl Running {
     ) -> Arc<Self> {
         let channel_dyn: Arc<dyn Channel> = channel.clone();
         Self::start_inner(
-            channel_dyn,
+            Some(channel_dyn),
+            channel.name().to_owned(),
             hooks,
             host,
             supervision,
@@ -1813,7 +1903,8 @@ impl Running {
     }
 
     fn start_inner(
-        channel: Arc<dyn Channel>,
+        channel: Option<Arc<dyn Channel>>,
+        provider_name: String,
         hooks: Arc<Hooks>,
         host: HostChannels,
         supervision: Option<ChannelSupervisionPolicy>,
@@ -1832,7 +1923,7 @@ impl Running {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
-            .unwrap_or_else(|| listen_channel.name().to_owned());
+            .unwrap_or_else(|| provider_name.clone());
         let media_account_scope = hooks
             .media_account_scope
             .lock()
@@ -1842,11 +1933,12 @@ impl Running {
         let worker_instance = configured_instance.clone();
         let worker_scope = media_account_scope.clone();
         let worker_native = native_ports.clone();
+        let worker_provider_name = provider_name.clone();
         let native_listener = worker_native
             .as_ref()
             .is_some_and(|ports| ports.listener_mode == LongTailListenerMode::Adapter);
         let worker = tokio::spawn(async move {
-            let name = listen_channel.name().to_owned();
+            let name = worker_provider_name;
             host.report_status(&name, "connecting", None).await;
             let (tx, rx) = if native_listener {
                 (None, None)
@@ -1907,7 +1999,7 @@ impl Running {
                     std::future::pending::<anyhow::Result<()>>().await
                 } else {
                     listen_with_supervision(
-                        listen_channel,
+                        listen_channel.expect("legacy listener has a legacy provider"),
                         tx.expect("legacy listener owns its inbound sender"),
                         listener_host,
                         supervision,
@@ -1925,11 +2017,28 @@ impl Running {
                     };
                     let _ = command.started.send(());
                     let result = match command.operation {
-                        ProviderOperation::Send(message) => send_channel
-                            .send(&message)
-                            .await
-                            .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
-                            .map_err(|error| Error::failed(error.to_string())),
+                        ProviderOperation::Send(message) => {
+                            if let Some(native) = &worker_native {
+                                let intent =
+                                    tinychannels::channel::outbound_intent_from_send_message(
+                                        tinychannels_bus::provider_id(&worker_instance),
+                                        &message,
+                                    );
+                                let outbound =
+                                    tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
+                                legacy_typed_send_completion(
+                                    native.typed_send.send_typed(&outbound).await,
+                                )
+                            } else if let Some(channel) = &send_channel {
+                                channel
+                                    .send(&message)
+                                    .await
+                                    .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
+                                    .map_err(|error| Error::failed(error.to_string()))
+                            } else {
+                                Err(Error::failed("provider send port is unavailable"))
+                            }
+                        }
                         ProviderOperation::SendTyped(message) => {
                             let sent = if let Some(native) = &worker_native {
                                 match native.typed_send.send_typed(&message).await {
@@ -1976,7 +2085,14 @@ impl Running {
                                     }
                                 }
                             } else {
-                                send_channel.send_typed_with_receipt(&message).await
+                                match &send_channel {
+                                    Some(channel) => {
+                                        channel.send_typed_with_receipt(&message).await
+                                    }
+                                    None => Err(anyhow::anyhow!(
+                                        "provider typed-send port is unavailable"
+                                    )),
+                                }
                             };
                             sent.map(|mut outcome| {
                                 outcome.receipt.idempotency_key =
@@ -2101,6 +2217,7 @@ impl Running {
         });
         Arc::new(Self {
             channel,
+            provider_name,
             native_ports,
             media_account_scope,
             configured_instance,
@@ -2141,17 +2258,26 @@ impl Running {
     }
 
     fn adapter_descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
-        let channel_id = tinychannels_bus::provider_id(self.channel.name()).to_owned();
+        let display_name = self.provider_name();
+        let channel_id = tinychannels_bus::provider_id(display_name).to_owned();
         tinychannels_bus::channel::ChannelDescriptor {
             id: channel_id,
-            display_name: self.channel.name().to_owned(),
+            display_name: display_name.to_owned(),
             account_id: Some(self.configured_instance.clone()),
             metadata: std::collections::BTreeMap::from([
                 (
                     "configuredInstance".into(),
                     self.configured_instance.clone(),
                 ),
-                ("adapterMode".into(), "legacy-backed".into()),
+                (
+                    "adapterMode".into(),
+                    if self.native_ports.is_some() {
+                        "native-v2"
+                    } else {
+                        "legacy-backed"
+                    }
+                    .into(),
+                ),
             ]),
             ..Default::default()
         }
@@ -2161,7 +2287,7 @@ impl Running {
         &self,
         intent: &tinychannels_bus::ChannelOutboundIntent,
     ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
-        let expected_channel = tinychannels_bus::provider_id(self.channel.name());
+        let expected_channel = tinychannels_bus::provider_id(self.provider_name());
         if tinychannels_bus::provider_id(&intent.channel_id) != expected_channel
             || intent.channel_ref.as_ref().is_some_and(|reference| {
                 reference.id != expected_channel
@@ -2265,7 +2391,7 @@ impl Running {
         interaction: tinychannels_bus::ChannelInteraction,
     ) -> std::result::Result<tinychannels_bus::ChannelInteractionResult, RunningSendError> {
         let expected_channel = tinychannels_bus::ChannelRef {
-            id: tinychannels_bus::provider_id(self.channel.name()).to_owned(),
+            id: tinychannels_bus::provider_id(self.provider_name()).to_owned(),
             account_id: Some(self.configured_instance.clone()),
         };
         let valid_receipt = |receipt: &tinychannels_bus::channel::MessageReceipt| {
@@ -2356,7 +2482,13 @@ impl Running {
         &self,
         interaction: tinychannels_bus::ChannelInteraction,
     ) -> Result<tinychannels_bus::ChannelInteractionResult> {
-        crate::interaction::dispatch(self.channel.as_ref(), interaction).await
+        crate::interaction::dispatch(
+            self.channel
+                .as_deref()
+                .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
+            interaction,
+        )
+        .await
     }
 
     async fn submit(
@@ -2423,11 +2555,11 @@ impl tinychannels::channel::ChannelAdapter for Running {
     }
 
     fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.channel.capabilities()
+        Running::declared_capabilities(self)
     }
 
     fn proactive_target(&self) -> Option<String> {
-        self.channel.proactive_target()
+        Running::proactive_target(self)
     }
 
     async fn start(
@@ -2462,7 +2594,7 @@ impl tinychannels::channel::ChannelAdapter for Running {
         tinychannels::channel::ChannelSendError,
     > {
         self.validate_adapter_intent(&intent)?;
-        let capabilities = self.channel.capabilities();
+        let capabilities = self.declared_capabilities();
         if !adapter_payload_supported(&intent.payload, &capabilities) {
             return Err(tinychannels::channel::ChannelSendError {
                 kind: tinychannels::channel::SendErrorKind::BadFormat,
@@ -2532,9 +2664,19 @@ impl tinychannels::channel::ChannelAdapter for Running {
         tinychannels::controllers::ChannelAccountSnapshot,
         tinychannels::channel::ChannelSendError,
     > {
-        let healthy = self.channel.health_check().await;
+        let healthy = if let Some(native) = &self.native_ports {
+            native
+                .adapter
+                .status()
+                .await
+                .is_ok_and(|snapshot| snapshot.health_state.as_deref() == Some("healthy"))
+        } else if let Some(channel) = &self.channel {
+            channel.health_check().await
+        } else {
+            false
+        };
         Ok(tinychannels::controllers::ChannelAccountSnapshot {
-            channel_id: tinychannels_bus::provider_id(self.channel.name()).into(),
+            channel_id: tinychannels_bus::provider_id(self.provider_name()).into(),
             account_id: Some(self.configured_instance.clone()),
             states: vec![
                 tinychannels::controllers::ChannelAccountState::Configured,

@@ -494,7 +494,7 @@ fn dingtalk_factory_wires_host_voice_store_and_ordered_ingress() {
     };
     let bare = build_long_tail_channel_with_host(&config, &host(), &DefaultHttpClients, "dingtalk")
         .expect("configured App Bot should build");
-    assert!(!bare.capabilities().voice_in.supported);
+    assert!(!bare.declared_capabilities().voice_in.supported);
 
     let wired_host: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
         .voice_media_store(Arc::new(StubVoice::default()))
@@ -503,7 +503,7 @@ fn dingtalk_factory_wires_host_voice_store_and_ordered_ingress() {
     let wired =
         build_long_tail_channel_with_host(&config, &wired_host, &DefaultHttpClients, "dingtalk")
             .expect("configured App Bot should build with host ports");
-    let capabilities = wired.capabilities();
+    let capabilities = wired.declared_capabilities();
     assert!(capabilities.voice_in.supported);
     assert_eq!(capabilities.voice_in.max_size_bytes, Some(10 * 1024 * 1024));
     assert!(capabilities.voice_out.supported);
@@ -516,8 +516,8 @@ fn dingtalk_factory_wires_host_voice_store_and_ordered_ingress() {
     let codec_only =
         build_long_tail_channel_with_host(&config, &with_codec, &DefaultHttpClients, "dingtalk")
             .unwrap();
-    assert!(codec_only.capabilities().voice_out.supported);
-    assert!(!codec_only.capabilities().voice_out.synthesis);
+    assert!(codec_only.declared_capabilities().voice_out.supported);
+    assert!(!codec_only.declared_capabilities().voice_out.synthesis);
 
     let with_synthesizer: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
         .voice_media_store(Arc::new(StubVoice::default()))
@@ -530,8 +530,8 @@ fn dingtalk_factory_wires_host_voice_store_and_ordered_ingress() {
         "dingtalk",
     )
     .unwrap();
-    assert!(synthesizer_only.capabilities().voice_out.supported);
-    assert!(!synthesizer_only.capabilities().voice_out.synthesis);
+    assert!(synthesizer_only.declared_capabilities().voice_out.supported);
+    assert!(!synthesizer_only.declared_capabilities().voice_out.synthesis);
 
     let complete_voice_host: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
         .voice_media_store(Arc::new(StubVoice::default()))
@@ -545,8 +545,8 @@ fn dingtalk_factory_wires_host_voice_store_and_ordered_ingress() {
         "dingtalk",
     )
     .unwrap();
-    assert!(voice_ready.capabilities().voice_out.supported);
-    assert!(voice_ready.capabilities().voice_out.synthesis);
+    assert!(voice_ready.declared_capabilities().voice_out.supported);
+    assert!(voice_ready.declared_capabilities().voice_out.synthesis);
 
     let without_store: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
         .synthesizer(Arc::new(FactorySpeechSynthesizer))
@@ -555,8 +555,8 @@ fn dingtalk_factory_wires_host_voice_store_and_ordered_ingress() {
     let no_storage =
         build_long_tail_channel_with_host(&config, &without_store, &DefaultHttpClients, "dingtalk")
             .unwrap();
-    assert!(!no_storage.capabilities().voice_out.supported);
-    assert!(!no_storage.capabilities().voice_out.synthesis);
+    assert!(!no_storage.declared_capabilities().voice_out.supported);
+    assert!(!no_storage.declared_capabilities().voice_out.synthesis);
 }
 
 struct FactorySpeechSynthesizer;

@@ -291,24 +291,37 @@ impl Channels {
         } else {
             None
         };
-        let channel: Arc<dyn tinychannels::Channel> = if let Some(telegram) = &telegram {
-            telegram.clone()
+        if native
+            .as_ref()
+            .is_some_and(|launch| launch.provider_id != tinychannels_bus::provider_id(&name))
+        {
+            return Err(BusError::failed(
+                "native adapter factory returned a mismatched provider identity",
+            ));
+        }
+        let channel: Option<Arc<dyn tinychannels::Channel>> = if let Some(telegram) = &telegram {
+            Some(telegram.clone())
         } else if let Some(slack) = &slack {
-            slack.clone()
+            Some(slack.clone())
         } else if let Some(native) = &whatsapp {
             // A linked session, not its mutable label, is the media authority.
             native.bind_media_authority(&media_account_scope);
-            native.channel()
-        } else if let Some(native) = &native {
-            native.channel.clone()
+            Some(native.channel())
+        } else if native.is_some() {
+            None
         } else {
             build_channels(&config, &owner_host, http)
                 .into_iter()
                 .find(|candidate| candidate.name() == name)
+                .and_then(|candidate| match candidate {
+                    tinychannels::factory::BuiltChannel::Legacy(channel) => Some(channel),
+                    tinychannels::factory::BuiltChannel::LongTail(_) => None,
+                })
                 .ok_or_else(|| BusError::MethodFailed {
                     name: NOT_CONFIGURED_ERROR.to_owned(),
                     message: format!("channel {name} is not present in the supplied config"),
                 })?
+                .into()
         };
 
         if outbound_only && !is_webhook_backed(&name, &config) {
@@ -332,11 +345,22 @@ impl Channels {
             native.start(hooks, self.host.clone(), supervision, outbound_only)
         } else {
             match supervision {
-                Some(policy) => {
-                    Running::start_supervised(channel, hooks, self.host.clone(), policy)
-                }
-                None if outbound_only => Running::start_outbound(channel, hooks, self.host.clone()),
-                None => Running::start(channel, hooks, self.host.clone()),
+                Some(policy) => Running::start_supervised(
+                    channel.expect("legacy provider channel"),
+                    hooks,
+                    self.host.clone(),
+                    policy,
+                ),
+                None if outbound_only => Running::start_outbound(
+                    channel.expect("legacy provider channel"),
+                    hooks,
+                    self.host.clone(),
+                ),
+                None => Running::start(
+                    channel.expect("legacy provider channel"),
+                    hooks,
+                    self.host.clone(),
+                ),
             }
         };
         running.insert(name.clone(), provider);
@@ -588,16 +612,25 @@ impl Channels {
         let host: Arc<dyn ChannelHost> = Arc::new(tinychannels::NoopHost);
         Ok(build_channels(&config, &host, &http)
             .into_iter()
-            .map(|channel| ConfiguredChannelInfo {
-                name: channel.name().to_owned(),
-                ingress: if is_webhook_backed(channel.name(), &config) {
-                    ChannelIngressKind::ExternalWebhook
-                } else {
-                    ChannelIngressKind::Listener
-                },
-                interaction: tinychannels_bus::ChannelInteractionInfoV2 {
-                    capabilities: crate::interaction::configured_capabilities(channel.as_ref()),
-                },
+            .map(|channel| {
+                let name = channel.name();
+                ConfiguredChannelInfo {
+                    name: name.clone(),
+                    ingress: if is_webhook_backed(&name, &config) {
+                        ChannelIngressKind::ExternalWebhook
+                    } else {
+                        ChannelIngressKind::Listener
+                    },
+                    interaction: tinychannels_bus::ChannelInteractionInfoV2 {
+                        capabilities: {
+                            let mut capabilities = channel.capabilities();
+                            capabilities.account.configured = Some(true);
+                            capabilities.account.enabled = Some(true);
+                            capabilities.account.proactive_target = channel.proactive_target();
+                            capabilities
+                        },
+                    },
+                }
             })
             .collect())
     }
@@ -1444,17 +1477,20 @@ impl Channels {
 
     /// Whether `name` is running, and whether the provider reports itself healthy.
     async fn channel_status(&self, name: String) -> BusResult<String> {
-        let channel = {
+        let provider = {
             let running = self.running.lock().await;
             running
                 .get(&name)
                 .filter(|entry| !entry.is_finished())
-                .map(|entry| Arc::clone(&entry.channel))
+                .cloned()
         };
-        let Some(channel) = channel else {
+        let Some(provider) = provider else {
             return Ok("stopped".to_owned());
         };
-        Ok(if channel.health_check().await {
+        let healthy = tinychannels::channel::ChannelAdapter::status(provider.as_ref())
+            .await
+            .is_ok_and(|snapshot| snapshot.health_state.as_deref() == Some("healthy"));
+        Ok(if healthy {
             "connected".to_owned()
         } else {
             "unhealthy".to_owned()
