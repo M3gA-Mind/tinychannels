@@ -12,6 +12,7 @@ use crate::providers::yuanbao::connection::test_support::{
     GatewaySession, MockGateway, gateway_config,
 };
 use async_trait::async_trait;
+use base64::Engine as _;
 use parking_lot::Mutex;
 use std::sync::Arc;
 use tinychannels_bus::channel::{
@@ -58,6 +59,8 @@ impl Fixture {
         .await;
         let gateway = MockGateway::bind().await;
         let voice_store = Arc::new(StubVoice::default());
+        *voice_store.audio_base64.lock().unwrap() =
+            Some(base64::engine::general_purpose::STANDARD.encode(b"voice fixture"));
         let config = tinychannels_bus::ChannelsConfig {
             yuanbao: Some(gateway_config(&gateway.url)),
             ..Default::default()
