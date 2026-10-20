@@ -621,11 +621,11 @@ impl LongTailFixture {
             return;
         };
         let requests = server.requests.lock().unwrap();
-        let mut ids = std::mem::take(&mut *self.response_ids.lock()).into_iter();
         if self.id == "dingtalk" {
             self.record_dingtalk(feature, before, &requests);
             return;
         }
+        let mut ids = std::mem::take(&mut *self.response_ids.lock()).into_iter();
         let mut uploaded_kind = None;
         for request in &requests[before..] {
             if request.target.ends_with("/files") {
@@ -1214,17 +1214,9 @@ async fn the_factory_built_dingtalk_adapter_passes_the_full_conformance_matrix()
     let results = check_all_features(&fixture).await;
     assert_eq!(results.len(), Feature::ALL.len());
     let failed = failures(&results);
-    if !failed.is_empty() {
-        for feature in [Feature::Text, Feature::Image, Feature::Video, Feature::Audio, Feature::File, Feature::VoiceOut] {
-            let result = check_feature(&fixture, feature).await;
-            eprintln!("{feature:?}: {result:?}; observed: {:#?}", fixture.observations());
-        }
-    }
     assert!(
         failed.is_empty(),
-        "DingTalk conformance failures: {failed:#?}; observations: {:#?}; requests: {:#?}",
-        fixture.observations(),
-        fixture.fixed_server.as_ref().unwrap().requests.lock().unwrap()
+        "DingTalk conformance failures: {failed:#?}"
     );
 
     let requests = fixture

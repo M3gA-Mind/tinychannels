@@ -420,7 +420,7 @@ fn validate_file(file: &FileStep) -> Result<(), ChannelSendError> {
         extension.as_str(),
         "pdf" | "zip" | "rar" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
     ) {
-        return Err(pre_dispatch("DingTalk App Bot file type is not supported"));
+        return Err(unsupported("DingTalk App Bot file type is not supported"));
     }
     Ok(())
 }
