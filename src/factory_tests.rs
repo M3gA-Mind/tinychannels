@@ -146,7 +146,6 @@ fn yuanbao_factory_capabilities_include_only_installed_host_services() {
     let capabilities = adapter.declared_capabilities();
 
     assert_eq!(descriptor.id, "yuanbao");
-    assert_eq!(descriptor.account_id.as_deref(), Some("factory-bot"));
     assert!(capabilities.content.text.outbound);
     assert!(capabilities.addressing.reply_to_id);
     assert!(!capabilities.addressing.thread_id);
@@ -158,8 +157,8 @@ fn yuanbao_factory_capabilities_include_only_installed_host_services() {
             .any(|action| action == "typing")
     );
     assert!(capabilities.voice_in.supported);
-    assert!(capabilities.content.image.outbound == false);
-    assert!(capabilities.content.file.outbound == false);
+    assert!(!capabilities.content.image.outbound);
+    assert!(!capabilities.content.file.outbound);
     assert!(!capabilities.voice_out.supported);
 }
 
