@@ -69,6 +69,7 @@ impl crate::host::EventSink for TelegramConformanceEvents {
         &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> anyhow::Result<bool> {
+        eprintln!("Telegram matrix ingress: {ingress:?}");
         match ingress {
             tinychannels_bus::ChannelIngress::Event(event) => {
                 self.events.lock().unwrap().push(event);
@@ -157,6 +158,7 @@ impl crate::host::VoiceMediaStore for TelegramConformanceVoice {
         &self,
         request: crate::host::VoiceMediaRequest,
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        eprintln!("Telegram matrix voice store: {:?}", request.direction);
         let opaque_id = match request.direction {
             tinychannels_bus::HostVoiceMediaDirection::Inbound => "telegram-inbound-voice",
             tinychannels_bus::HostVoiceMediaDirection::Outbound => "telegram-synthesized-voice",
