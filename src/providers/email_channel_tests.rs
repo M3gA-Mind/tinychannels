@@ -1,4 +1,5 @@
 use super::*;
+use tokio::sync::Notify;
 
 #[test]
 fn default_smtp_port_uses_tls_port() {
@@ -657,6 +658,7 @@ enum IdleStep {
 struct ConnScript {
     reject_login: bool,
     reject_store: bool,
+    stall_logout: Option<(Arc<Notify>, Arc<Notify>)>,
     /// The i-th `UID SEARCH` answers with the i-th entry; later ones are empty.
     searches: Vec<Vec<(u32, &'static [u8])>>,
     idles: Vec<IdleStep>,
@@ -759,6 +761,10 @@ async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Ve
             }
             continue;
         } else if upper.starts_with("LOGOUT") {
+            if let Some((observed, release)) = &script.stall_logout {
+                observed.notify_one();
+                release.notified().await;
+            }
             reply.extend_from_slice(b"* BYE\r\n");
         }
         reply.extend_from_slice(format!("{tag} OK done\r\n").as_bytes());
@@ -1037,6 +1043,39 @@ async fn health_check_fails_when_the_probe_stalls() {
         "unhealthy"
     );
     holder.abort();
+}
+
+/// A successful login remains healthy if LOGOUT stalls, but that best-effort
+/// cleanup must still finish within the same total health-probe deadline.
+#[tokio::test(start_paused = true)]
+async fn health_check_bounds_a_stalled_logout_after_successful_login() {
+    let logout_seen = Arc::new(Notify::new());
+    let allow_logout = Arc::new(Notify::new());
+    let (port, server) = fake_imap(vec![ConnScript {
+        stall_logout: Some((logout_seen.clone(), allow_logout.clone())),
+        ..Default::default()
+    }])
+    .await;
+    let channel = imap_channel(&["*"], 30);
+    let probe = tokio::spawn(async move {
+        channel
+            .typed_health_state(plain_session(&channel, port), Duration::from_secs(2))
+            .await
+    });
+
+    logout_seen.notified().await;
+    tokio::time::advance(Duration::from_secs(2)).await;
+    tokio::task::yield_now().await;
+    let completed_before_logout_release = probe.is_finished();
+    allow_logout.notify_one();
+    let state = probe.await.unwrap();
+    let _ = server.await.unwrap();
+
+    assert!(
+        completed_before_logout_release,
+        "health status must finish at its total deadline even when LOGOUT never replies"
+    );
+    assert_eq!(state, "healthy", "login succeeded before cleanup stalled");
 }
 
 /// After the IDLE budget elapses the session re-checks the mailbox and
