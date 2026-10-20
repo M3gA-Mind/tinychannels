@@ -8,7 +8,6 @@
 //! operation it does not implement answers with an explicit `unsupported`
 //! error instead of pretending to succeed.
 
-use crate::traits::{Channel, SendMessage};
 use std::collections::BTreeMap;
 use tinychannels_bus::channel::{
     ChannelDescriptor, ChannelRef, ChannelSendError, ChannelSendOutcome, ConversationRef,
@@ -92,9 +91,11 @@ impl<T> LongTailNative for T where
 {
 }
 
-/// A provider that is also a v2 text adapter.
+/// The listener and descriptor hooks used by the long-tail v2 adapter macro.
+/// Sending is implemented on the typed outbound port; this contract does not
+/// inherit or call the legacy `Channel` transport trait.
 #[async_trait::async_trait]
-pub(crate) trait LongTail: Channel {
+pub(crate) trait LongTail {
     /// Stable provider id (`mattermost`).
     const ID: &'static str;
     /// Human-readable name (`Mattermost`).
@@ -102,6 +103,11 @@ pub(crate) trait LongTail: Channel {
 
     /// The facts this configured account declares.
     fn declared(&self) -> ChannelCapabilities;
+
+    /// Configured default recipient, if this provider has one.
+    fn proactive_target(&self) -> Option<String> {
+        None
+    }
 
     /// Provider-specific descriptor metadata for capabilities that depend on
     /// host services installed on this configured account.
@@ -113,9 +119,6 @@ pub(crate) trait LongTail: Channel {
     fn typing_supported(&self) -> bool {
         false
     }
-
-    /// Final provider-specific addressing applied to the text projection.
-    fn address(&self, _message: &mut SendMessage) {}
 
     /// Run a provider-owned typed listener when this long-tail provider has
     /// migrated away from the module's legacy `Channel::listen` bridge.
@@ -133,23 +136,11 @@ pub(crate) trait LongTail: Channel {
         Ok(())
     }
 
-    /// Send one text message and return the platform message ids the provider
-    /// actually reported. Providers whose API answers with an id override
-    /// this; the default reports none, so the receipt stays empty rather than
-    /// guessing.
-    async fn send_reporting_ids(&self, message: &SendMessage) -> anyhow::Result<Vec<String>> {
-        self.send(message).await.map(|()| Vec::new())
-    }
-
-    /// Declared providers with canonical media support implement typed sends
-    /// through the shared scoped-media planner. Text-only providers retain the
-    /// conservative legacy projection.
+    /// Send a typed message using the provider's native transport.
     async fn send_typed_message(
         &self,
         message: &ChannelOutboundMessage,
-    ) -> Result<ChannelSendOutcome, ChannelSendError> {
-        send_text_typed::<Self>(self, message).await
-    }
+    ) -> Result<ChannelSendOutcome, ChannelSendError>;
 }
 
 pub(crate) fn unsupported<T: LongTail + ?Sized>(operation: &str) -> ChannelSendError {
@@ -195,62 +186,6 @@ pub(crate) async fn send_typed<T: LongTail + ?Sized>(
 ) -> Result<ChannelSendOutcome, ChannelSendError> {
     check_channel::<T>(&message.channel_id, message.channel_ref.as_ref())?;
     provider.send_typed_message(message).await
-}
-
-async fn send_text_typed<T: LongTail + ?Sized>(
-    provider: &T,
-    message: &ChannelOutboundMessage,
-) -> Result<ChannelSendOutcome, ChannelSendError> {
-    if message.conversation_id.trim().is_empty() {
-        return Err(ChannelSendError {
-            kind: SendErrorKind::BadFormat,
-            message: "conversation address is empty".into(),
-            ..Default::default()
-        });
-    }
-    let capabilities = provider.declared();
-    if message.reply_to_id.is_some() && !capabilities.addressing.reply_to_id {
-        return Err(unsupported::<T>("reply addressing"));
-    }
-    let has_thread = message.thread_id.is_some()
-        || message
-            .conversation_ref
-            .as_ref()
-            .is_some_and(|conversation| {
-                conversation.thread_id.is_some() || conversation.topic_id.is_some()
-            });
-    if has_thread && !capabilities.addressing.thread_id {
-        return Err(unsupported::<T>("thread addressing"));
-    }
-    // Only plain text is representable; anything richer is refused before any
-    // request is made.
-    let mut legacy = message
-        .to_legacy_message()
-        .map_err(|_| unsupported::<T>("typed content other than plain text"))?;
-    provider.address(&mut legacy);
-    tracing::debug!(
-        channel = T::ID,
-        chars = legacy.content.chars().count(),
-        "[long-tail] sending text"
-    );
-    let ids = provider
-        .send_reporting_ids(&legacy)
-        .await
-        .map_err(|error| {
-            tracing::debug!(channel = T::ID, %error, "[long-tail] send failed");
-            // The request may have reached the platform; never claim a retry
-            // is safe.
-            ChannelSendError {
-                kind: SendErrorKind::Unknown,
-                message: format!("{} send failed", T::DISPLAY),
-                sent_before_error: true,
-                ..Default::default()
-            }
-        })?;
-    Ok(ChannelSendOutcome {
-        receipt: receipt::<T>(message, ids),
-        error: None,
-    })
 }
 
 /// The receipt for a delivered text message. It carries exactly the ids the
