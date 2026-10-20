@@ -975,6 +975,7 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
             context: None,
             capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
             channel: "discord:fixture".into(),
+            hosted: false,
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:fixture",
@@ -1586,6 +1587,7 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
             context: None,
             capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
             channel: "discord:fixture".into(),
+            hosted: false,
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:fixture",
@@ -1632,6 +1634,7 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
         context: None,
         capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
         channel: "discord:fixture".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     sender
@@ -1659,6 +1662,7 @@ async fn transport_failures_preserve_recovery_classification() {
         context: None,
         capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
         channel: "discord:fixture".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     for result in [
