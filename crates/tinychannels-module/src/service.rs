@@ -709,7 +709,7 @@ impl Channels {
                     name,
                     message,
                     session_scope.as_deref(),
-                    configured_channel.as_ref(),
+                    configured_channel.as_deref(),
                 )
                 .await
             }

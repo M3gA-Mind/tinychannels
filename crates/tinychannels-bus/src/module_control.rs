@@ -35,7 +35,7 @@ pub enum ChannelControlRequest {
         /// The host supplies them when preparing a command through a
         /// temporary callback object that has no running provider map.
         #[serde(default)]
-        configured_channel: Option<ConfiguredControlChannel>,
+        configured_channel: Option<Box<ConfiguredControlChannel>>,
         providers: Vec<ProviderDescriptor>,
     },
     RuntimeLimits {
