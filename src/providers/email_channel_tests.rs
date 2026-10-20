@@ -654,6 +654,7 @@ enum IdleStep {
 #[derive(Clone, Default)]
 struct ConnScript {
     reject_login: bool,
+    reject_store: bool,
     /// The i-th `UID SEARCH` answers with the i-th entry; later ones are empty.
     searches: Vec<Vec<(u32, &'static [u8])>>,
     idles: Vec<IdleStep>,
@@ -724,6 +725,10 @@ async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Ve
                 reply.extend_from_slice(raw);
                 reply.extend_from_slice(b")\r\n");
             }
+        } else if upper.starts_with("UID STORE") && script.reject_store {
+            reply.extend_from_slice(format!("{tag} NO cannot mark seen\\r\\n").as_bytes());
+            let _ = write.write_all(&reply).await;
+            continue;
         } else if upper.starts_with("IDLE") {
             idle_tag = Some(tag.to_string());
             match idles.next() {
@@ -1347,6 +1352,51 @@ async fn rejected_typed_mail_is_retried_without_replaying_accepted_uids() {
         commands.contains("UID STORE 2 +FLAGS (\\Seen)"),
         "{commands}"
     );
+}
+
+#[tokio::test]
+async fn accepted_email_retries_only_failed_seen_acknowledgement() {
+    let channel = imap_channel(&["*"], 30);
+    let (port, server) = fake_imap(vec![ConnScript {
+        searches: vec![vec![(7, ALICE)]],
+        reject_store: true,
+        ..Default::default()
+    }])
+    .await;
+    let mut session = plain_session(&channel, port).await.unwrap();
+    session.select("INBOX").await.unwrap();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let recorder = TypedEmailRecorder(tx);
+    let error = channel
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .await
+        .expect_err("a rejected IMAP STORE must fail the acknowledgement");
+    assert!(error.to_string().contains("cannot mark seen"), "{error:#}");
+    let Some(tinychannels_bus::ChannelIngress::Inbound(accepted)) = rx.try_recv().ok() else {
+        panic!("the email was accepted before the STORE acknowledgement failed");
+    };
+    assert_eq!(accepted.message_id, "a1@example.com");
+    assert!(rx.try_recv().is_err());
+    assert_eq!(channel.seen_messages.lock().await.len(), 1);
+    let _ = session.logout().await;
+    let failed_commands = server.await.unwrap().remove(0).join("\n");
+    assert!(failed_commands.contains("UID STORE 7 +FLAGS (\\Seen)"));
+
+    let (port, server) = fake_imap(vec![ConnScript {
+        searches: vec![vec![(7, ALICE)]],
+        ..Default::default()
+    }])
+    .await;
+    let mut session = plain_session(&channel, port).await.unwrap();
+    session.select("INBOX").await.unwrap();
+    channel
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .await
+        .unwrap();
+    assert!(rx.try_recv().is_err(), "accepted ingress must not be replayed");
+    let _ = session.logout().await;
+    let retry_commands = server.await.unwrap().remove(0).join("\n");
+    assert!(retry_commands.contains("UID STORE 7 +FLAGS (\\Seen)"));
 }
 
 struct BlockingTypedEmailSink(tokio::sync::Notify);

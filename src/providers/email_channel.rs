@@ -664,7 +664,7 @@ impl EmailChannel {
             .uid_store(&uid.to_string(), "+FLAGS (\\Seen)")
             .await?
             .try_collect::<Vec<_>>()
-            .await;
+            .await?;
         Ok(())
     }
 
