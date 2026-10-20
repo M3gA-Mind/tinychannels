@@ -144,8 +144,15 @@ async fn conformance_entrypoints_accept_existing_adapter_trait_objects() {
     let fixture = fixture(ConformanceFeature::Text);
     let adapter: &dyn AdapterFixture = &fixture;
 
-    assert!(check_feature(adapter, ConformanceFeature::Text).await.is_ok());
-    assert_eq!(check_all_features(adapter).await.len(), ConformanceFeature::ALL.len());
+    assert!(
+        check_feature(adapter, ConformanceFeature::Text)
+            .await
+            .is_ok()
+    );
+    assert_eq!(
+        check_all_features(adapter).await.len(),
+        ConformanceFeature::ALL.len()
+    );
 }
 
 #[tokio::test]
