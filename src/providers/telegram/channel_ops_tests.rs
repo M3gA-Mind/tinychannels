@@ -1,5 +1,6 @@
 use super::*;
 use crate::providers::telegram::fixtures::*;
+use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -39,6 +40,7 @@ struct TelegramWireFixture {
 #[derive(Default)]
 struct TelegramConformanceEvents {
     events: std::sync::Mutex<Vec<tinychannels_bus::ChannelEvent>>,
+    inbounds: std::sync::Mutex<Vec<tinychannels_bus::ChannelInboundEnvelope>>,
     notified: tokio::sync::Notify,
 }
 
@@ -60,6 +62,22 @@ impl crate::host::EventSink for TelegramConformanceEvents {
         self.events.lock().unwrap().push(event);
         self.notified.notify_one();
         Ok(())
+    }
+
+    async fn publish_ingress(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> anyhow::Result<bool> {
+        match ingress {
+            tinychannels_bus::ChannelIngress::Event(event) => {
+                self.events.lock().unwrap().push(event);
+            }
+            tinychannels_bus::ChannelIngress::Inbound(envelope) => {
+                self.inbounds.lock().unwrap().push(envelope);
+            }
+        }
+        self.notified.notify_one();
+        Ok(true)
     }
 }
 
@@ -83,9 +101,16 @@ struct TelegramConformanceMedia;
 impl crate::host::MediaRepository for TelegramConformanceMedia {
     async fn store_media(
         &self,
-        _request: crate::host::MediaStoreRequest,
+        request: crate::host::MediaStoreRequest,
     ) -> anyhow::Result<tinychannels_bus::MediaReference> {
-        anyhow::bail!("outbound-only Telegram conformance media store")
+        Ok(tinychannels_bus::MediaReference {
+            opaque_id: Some("telegram-ingress-media".into()),
+            kind: request.metadata.kind,
+            content_type: Some(request.metadata.content_type),
+            file_name: request.metadata.file_name,
+            size_bytes: Some(request.bytes.len() as u64),
+            ..Default::default()
+        })
     }
 
     async fn read_media(
@@ -116,6 +141,114 @@ impl crate::host::MediaRepository for TelegramConformanceMedia {
             content_type: content_type.into(),
             file_name: Some(file_name.into()),
             bytes,
+        })
+    }
+}
+
+#[derive(Default)]
+struct TelegramConformanceVoice {
+    stored: std::sync::Mutex<Vec<crate::host::VoiceMediaRequest>>,
+}
+
+#[async_trait::async_trait]
+impl crate::host::VoiceMediaStore for TelegramConformanceVoice {
+    async fn store_voice(
+        &self,
+        request: crate::host::VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        let opaque_id = match request.direction {
+            tinychannels_bus::HostVoiceMediaDirection::Inbound => "telegram-inbound-voice",
+            tinychannels_bus::HostVoiceMediaDirection::Outbound => "telegram-synthesized-voice",
+        };
+        self.stored.lock().unwrap().push(request.clone());
+        Ok(tinychannels_bus::HostStoreVoiceMediaResult {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some(opaque_id.into()),
+                kind: tinychannels_bus::MediaKind::Audio,
+                content_type: Some(request.mime_type),
+                file_name: request.file_name,
+                size_bytes: Some(request.audio_base64.len() as u64),
+                duration_ms: request.duration_ms,
+                ..Default::default()
+            },
+            accessible_url: None,
+        })
+    }
+
+    async fn read_voice(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        if opaque_id == "telegram-synthesized-voice"
+            && let Some(request) = self.stored.lock().unwrap().iter().rev().find(|request| {
+                request.direction == tinychannels_bus::HostVoiceMediaDirection::Outbound
+            })
+        {
+            return Ok(tinychannels_bus::HostReadVoiceMediaResult {
+                audio_base64: request.audio_base64.clone(),
+                mime_type: request.mime_type.clone(),
+                file_name: request.file_name.clone(),
+            });
+        }
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: BASE64.encode(b"telegram fixture voice bytes"),
+            mime_type: "audio/ogg".into(),
+            file_name: Some("voice.ogg".into()),
+        })
+    }
+}
+
+struct TelegramConformanceTranscriber;
+
+#[async_trait::async_trait]
+impl crate::host::Transcriber for TelegramConformanceTranscriber {
+    fn name(&self) -> &str { "telegram-conformance" }
+
+    async fn transcribe(
+        &self,
+        request: crate::host::TranscriptionRequest,
+    ) -> anyhow::Result<crate::host::TranscriptionResult> {
+        anyhow::ensure!(!request.audio_base64.is_empty(), "voice bytes must reach STT");
+        Ok(crate::host::TranscriptionResult {
+            text: "telegram conformance transcript".into(),
+            language: Some("en".into()),
+            duration_secs: Some(2.0),
+        })
+    }
+}
+
+struct TelegramConformanceSynthesizer;
+
+#[async_trait::async_trait]
+impl crate::host::SpeechSynthesizer for TelegramConformanceSynthesizer {
+    async fn synthesize(
+        &self,
+        request: crate::host::SpeechRequest,
+    ) -> anyhow::Result<crate::host::SpeechResult> {
+        anyhow::ensure!(!request.text.is_empty(), "synthesis text must be present");
+        Ok(crate::host::SpeechResult {
+            audio_base64: BASE64.encode(b"synthesized telegram voice"),
+            mime_type: "audio/wav".into(),
+            duration_ms: Some(1_000),
+            visemes: None,
+        })
+    }
+}
+
+struct TelegramConformanceCodec;
+
+#[async_trait::async_trait]
+impl crate::host::VoiceCodec for TelegramConformanceCodec {
+    async fn transcode(
+        &self,
+        request: crate::host::VoiceCodecRequest,
+    ) -> anyhow::Result<crate::host::VoiceCodecResult> {
+        anyhow::ensure!(request.from == "wav_pcm16" && request.target == "ogg_opus");
+        Ok(crate::host::VoiceCodecResult {
+            audio_base64: request.audio_base64,
+            duration_ms: Some(1_000),
+            waveform: None,
         })
     }
 }
