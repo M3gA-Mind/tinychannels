@@ -2924,15 +2924,18 @@ async fn typed_inbound_preparation_preserves_rich_parts_without_legacy_projectio
                     ..Default::default()
                 },
                 caption: Some("diagram".into()),
+                alt_text: Some("network chart".into()),
             },
             ContentPart::File {
                 media: MediaReference {
                     opaque_id: Some("file-ref-9".into()),
                     file_name: Some("notes.txt".into()),
                     content_type: Some("text/plain".into()),
-                    kind: MediaKind::File,
+                    kind: MediaKind::Document,
                     ..Default::default()
                 },
+                file_name: Some("notes.txt".into()),
+                caption: Some("meeting notes".into()),
             },
         ],
         ..Default::default()
