@@ -17,6 +17,9 @@ jobs:
           submodules: recursive
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
       - name: Verify every native library depends on ports only
         run: |
           python3 scripts/check-webpki-roots.py --self-test

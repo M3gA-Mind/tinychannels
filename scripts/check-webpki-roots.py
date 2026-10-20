@@ -48,6 +48,11 @@ def check_metadata(data: Any) -> list[str]:
         source = package.get("source")
         parsed = version_tuple(version) if isinstance(version, str) else None
         if parsed is not None and parsed >= SAFE_VERSION:
+            if source == REGISTRY:
+                continue
+            errors.append(
+                f"safe-version webpki-roots package has unexpected source {source!r}"
+            )
             continue
         if version != SHIM_VERSION or source != REGISTRY:
             errors.append(
@@ -121,6 +126,11 @@ def self_test() -> None:
     assert check_metadata({"packages": [package("webpki-roots", "0.26.10")], "resolve": {"nodes": []}})
     assert check_metadata(metadata_for(package("webpki-roots", "1.0.9")))
     assert check_metadata(metadata_for(package("webpki-roots", "1.0.10", "git+https://example.invalid/roots")))
+    unexpected_bundle = metadata_for(None)
+    git_bundle = package("webpki-roots", "1.0.10", "git+https://example.invalid/roots")
+    unexpected_bundle["packages"].append(git_bundle)
+    unexpected_bundle["resolve"]["nodes"].append({"id": git_bundle["id"], "deps": []})
+    assert check_metadata(unexpected_bundle)
     bad_shim = package("webpki-roots", SHIM_VERSION, "git+https://example.invalid/roots")
     assert check_metadata({"packages": [bad_shim, package("webpki-roots", "1.0.10")], "resolve": {"nodes": []}})
     missing_edge = metadata_for(None)
@@ -137,7 +147,7 @@ def main() -> int:
         print("usage: check-webpki-roots.py [--self-test]", file=sys.stderr)
         return 2
     result = subprocess.run(
-        ["cargo", "metadata", "--locked", "--format-version", "1"],
+        ["cargo", "metadata", "--locked", "--all-features", "--format-version", "1"],
         check=False,
         capture_output=True,
         text=True,
