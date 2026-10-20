@@ -5115,6 +5115,90 @@ async fn a_built_linq_launch_starts_as_the_native_linq_adapter() {
 }
 
 #[tokio::test]
+async fn configured_linq_webhook_uses_typed_port_and_stamps_module_account() {
+    use base64::Engine as _;
+    use hmac::{Hmac, KeyInit, Mac};
+    use sha2::Sha256;
+    use tinychannels_bus::{ChannelInteraction, ChannelInteractionResult};
+
+    let secret = "module-linq-secret";
+    let config = tinychannels_bus::ChannelsConfig {
+        linq: Some(tinychannels_bus::config::LinqConfig {
+            api_token: "token".into(),
+            from_phone: "+15551234567".into(),
+            allowed_senders: vec!["*".into()],
+            webhook_secret: Some(secret.into()),
+        }),
+        ..Default::default()
+    };
+    let noop: Arc<dyn tinychannels::host::ChannelHost> = tinychannels::host::NoopHost::arc();
+    let launch = crate::native::build_native_v2("linq", &config, &noop, &DefaultHttpClients)
+        .expect("configured Linq factory");
+    let hooks = Arc::new(Hooks::default());
+    let (host, callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), "linq:account-a".to_owned(), None);
+    let running = launch.start(hooks, host, None, true);
+    let ports = running.native_ports.as_ref().expect("native ports");
+    assert!(ports.webhooks.supports_delivery());
+
+    let body = serde_json::json!({
+        "event_type": "message.received",
+        "event_id": "event-typed-1",
+        "created_at": "2025-01-15T12:00:00Z",
+        "data": {
+            "from": "+15557654321",
+            "chat_id": "chat-typed-1",
+            "message": {"id": "message-typed-1", "parts": [{"type": "text", "value": "hello"}]}
+        }
+    })
+    .to_string();
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        .to_string();
+    let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(format!("{timestamp}.{body}").as_bytes());
+    let signature = format!(
+        "t={timestamp},v1={}",
+        hex::encode(mac.finalize().into_bytes())
+    );
+    let result = running
+        .webhook(ChannelInteraction::DeliverWebhook {
+            signature: Some(signature.clone()),
+            body_base64: base64::engine::general_purpose::STANDARD.encode(body.as_bytes()),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        result,
+        ChannelInteractionResult::WebhookAccepted(ref outcome) if outcome.messages == 1
+    ));
+    let delivered = callbacks.inbound.lock().await;
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0]["channel"]["id"], "linq");
+    assert_eq!(delivered[0]["channel"]["accountId"], "linq:account-a");
+    assert_eq!(delivered[0]["messageId"], "message-typed-1");
+    assert_eq!(delivered[0]["text"], "hello");
+    drop(delivered);
+
+    let rejected = running
+        .webhook(ChannelInteraction::DeliverWebhook {
+            signature: Some("t=1,v1=bad".into()),
+            body_base64: base64::engine::general_purpose::STANDARD.encode(body.as_bytes()),
+        })
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        rejected,
+        tinybus::Error::MethodFailed { name, .. }
+            if name == crate::interaction::WEBHOOK_REJECTED_ERROR
+    ));
+    assert_eq!(callbacks.inbound.lock().await.len(), 1);
+    running.stop().await.unwrap();
+}
+
+#[tokio::test]
 async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     use tinychannels::factory::DefaultHttpClients;
     let config = tinychannels_bus::ChannelsConfig {

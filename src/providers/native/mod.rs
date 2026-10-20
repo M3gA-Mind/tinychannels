@@ -218,6 +218,20 @@ pub(crate) trait NativeProvider: Send + Sync {
     /// Send one resolved step and report the message ids the platform issued.
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError>;
 
+    /// Optional raw webhook delivery owned by the provider. The default keeps
+    /// existing providers on their compatibility ingress until migrated.
+    fn supports_webhook_delivery(&self) -> bool {
+        false
+    }
+
+    async fn deliver_webhook(
+        &self,
+        _signature: Option<&str>,
+        _body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        anyhow::bail!("provider has no typed webhook ingress")
+    }
+
     /// Run a provider-owned typed listener when this native adapter supports
     /// inbound events. Most adapters are outbound-only and retain the no-op.
     async fn start_listener(
@@ -371,6 +385,22 @@ macro_rules! native_v2_adapter {
                     health_state: Some("unknown".into()),
                     ..Default::default()
                 })
+            }
+        }
+
+        #[async_trait::async_trait]
+        impl $crate::channel::ChannelWebhook for $ty {
+            fn supports_delivery(&self) -> bool {
+                $crate::providers::native::NativeProvider::supports_webhook_delivery(self)
+            }
+
+            async fn deliver_webhook(
+                &self,
+                signature: Option<&str>,
+                body: &[u8],
+            ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+                $crate::providers::native::NativeProvider::deliver_webhook(self, signature, body)
+                    .await
             }
         }
 

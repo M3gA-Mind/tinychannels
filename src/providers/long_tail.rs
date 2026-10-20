@@ -70,6 +70,7 @@ pub(crate) fn text_capabilities(spec: TextSpec) -> ChannelCapabilities {
 /// The module keeps one typed object per configured account.
 pub trait LongTailNative:
     crate::channel::ChannelAdapter
+    + crate::channel::ChannelWebhook
     + crate::channel::ChannelTypedSend
     + crate::channel::ChannelTyping
     + crate::channel::ChannelReaction
@@ -81,6 +82,7 @@ pub trait LongTailNative:
 
 impl<T> LongTailNative for T where
     T: crate::channel::ChannelAdapter
+        + crate::channel::ChannelWebhook
         + crate::channel::ChannelTypedSend
         + crate::channel::ChannelTyping
         + crate::channel::ChannelReaction
@@ -270,6 +272,9 @@ macro_rules! impl_long_tail_adapter {
                 Ok($crate::providers::long_tail::status::<$ty>())
             }
         }
+
+        #[async_trait::async_trait]
+        impl $crate::channel::ChannelWebhook for $ty {}
 
         #[async_trait::async_trait]
         impl $crate::channel::ChannelTypedSend for $ty {

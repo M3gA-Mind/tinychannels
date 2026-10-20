@@ -261,6 +261,18 @@ impl NativeProvider for LinqChannel {
         self.declared()
     }
 
+    fn supports_webhook_delivery(&self) -> bool {
+        true
+    }
+
+    async fn deliver_webhook(
+        &self,
+        signature: Option<&str>,
+        body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        self.ingest_webhook(signature, body).await
+    }
+
     fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
         vec![("voiceOut", "attachment")]
     }

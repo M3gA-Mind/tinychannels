@@ -96,6 +96,14 @@ async fn dispatch_interaction(
         {
             return result;
         }
+        if let Some(result) = crate::interaction::dispatch_native_webhook(
+            native.webhooks.as_ref(),
+            interaction.clone(),
+        )
+        .await
+        {
+            return result;
+        }
     }
     use tinychannels_bus::ChannelInteraction as Op;
     match interaction {
@@ -1253,6 +1261,7 @@ async fn listen_with_supervision(
 
 async fn listen_adapter_with_supervision(
     adapter: Arc<dyn tinychannels::channel::ChannelAdapter>,
+    webhooks: Arc<dyn tinychannels::channel::ChannelWebhook>,
     sink: Arc<ModuleEvents>,
     host: HostChannels,
     name: String,
@@ -1330,6 +1339,7 @@ impl NativePorts {
         Self {
             provider,
             adapter: channel.clone(),
+            webhooks: channel.clone(),
             typed_send: channel.clone(),
             typing: channel.clone(),
             reactions: channel.clone(),
@@ -1350,6 +1360,7 @@ impl NativePorts {
         Self {
             provider,
             adapter: channel.clone(),
+            webhooks: channel.clone(),
             typed_send: channel.clone(),
             typing: channel.clone(),
             reactions: channel.clone(),
@@ -2496,6 +2507,16 @@ impl Running {
         &self,
         interaction: tinychannels_bus::ChannelInteraction,
     ) -> Result<tinychannels_bus::ChannelInteractionResult> {
+        if let Some(native) = &self.native_ports {
+            if let Some(result) = crate::interaction::dispatch_native_webhook(
+                native.webhooks.as_ref(),
+                interaction.clone(),
+            )
+            .await
+            {
+                return result;
+            }
+        }
         crate::interaction::dispatch(
             self.channel
                 .as_deref()
