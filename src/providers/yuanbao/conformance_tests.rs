@@ -5,7 +5,7 @@ use crate::channel::{
     ChannelTyping,
 };
 use crate::factory::build_yuanbao_channel_with_voice_http_for_test;
-use crate::host::ChannelHostBuilder;
+use crate::host::{ChannelHostBuilder, VoiceMediaRequest, VoiceMediaStore};
 use crate::providers::http_test_support::HttpsServer;
 use crate::providers::native::fixtures::{StubTranscriber, StubVoice};
 use crate::providers::yuanbao::connection::test_support::{
@@ -39,7 +39,7 @@ struct Fixture {
     listener: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<(), ChannelSendError>>>>,
     inbound:
         tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<tinychannels_bus::ChannelIngress>>,
-    voice_store: Arc<StubVoice>,
+    voice_store: Arc<MatrixVoiceStore>,
     observations: Mutex<Vec<WireObservation>>,
     active_feature: Mutex<Feature>,
 }
@@ -58,8 +58,8 @@ impl Fixture {
         )
         .await;
         let gateway = MockGateway::bind().await;
-        let voice_store = Arc::new(StubVoice::default());
-        *voice_store.audio_base64.lock().unwrap() =
+        let voice_store = Arc::new(MatrixVoiceStore::default());
+        *voice_store.inner.audio_base64.lock().unwrap() =
             Some(base64::engine::general_purpose::STANDARD.encode(b"voice fixture"));
         let config = tinychannels_bus::ChannelsConfig {
             yuanbao: Some(gateway_config(&gateway.url)),
@@ -274,9 +274,35 @@ impl Fixture {
             platform_message_ids: vec![],
             request: observed_push,
         });
-        let stored = self.voice_store.stored.lock().unwrap();
+        let stored = self.voice_store.inner.stored.lock().unwrap();
         assert_eq!(stored.len(), 1);
         Ok(None)
+    }
+}
+
+#[derive(Default)]
+struct MatrixVoiceStore {
+    inner: StubVoice,
+    read_calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl VoiceMediaStore for MatrixVoiceStore {
+    async fn store_voice(
+        &self,
+        request: VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        self.inner.store_voice(request).await
+    }
+
+    async fn read_voice(
+        &self,
+        scope: tinychannels_bus::HostVoiceScope,
+        opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        self.read_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.read_voice(scope, opaque_id).await
     }
 }
 
@@ -542,19 +568,32 @@ impl AdapterFixture for Fixture {
                 .await
             }
             Feature::VoiceOut => {
-                self.refuse_send(
-                    feature,
-                    OutboundPayload::Voice {
-                        voice: OutboundVoice::Media {
-                            media: media(MediaKind::Audio),
-                            audio_base64: None,
-                            codec: Some("ogg_opus".into()),
-                            duration_ms: None,
-                            waveform: None,
+                let reads_before = self
+                    .voice_store
+                    .read_calls
+                    .load(std::sync::atomic::Ordering::SeqCst);
+                let result = self
+                    .refuse_send(
+                        feature,
+                        OutboundPayload::Voice {
+                            voice: OutboundVoice::Media {
+                                media: media(MediaKind::Audio),
+                                audio_base64: None,
+                                codec: Some("ogg_opus".into()),
+                                duration_ms: None,
+                                waveform: None,
+                            },
                         },
-                    },
-                )
-                .await
+                    )
+                    .await;
+                assert_eq!(
+                    self.voice_store
+                        .read_calls
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    reads_before,
+                    "undeclared VoiceOut must not resolve host media"
+                );
+                result
             }
             Feature::VoiceSynthesis => {
                 self.refuse_send(
