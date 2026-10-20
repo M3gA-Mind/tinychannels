@@ -334,6 +334,7 @@ impl EmailChannel {
     async fn fetch_unseen<S: ImapStream>(
         &self,
         session: &mut Session<S>,
+        uid_validity: u32,
     ) -> Result<Vec<ParsedEmail>> {
         // Search for unseen messages
         let uids = session.uid_search("UNSEEN").await?;
@@ -351,7 +352,7 @@ impl EmailChannel {
             .join(",");
 
         // Fetch message bodies
-        let messages = session.uid_fetch(&uid_set, "RFC822").await?;
+        let messages = session.uid_fetch(&uid_set, "UID BODY.PEEK[]").await?;
         let messages: Vec<Fetch> = messages.try_collect().await?;
 
         for msg in messages {
@@ -365,8 +366,20 @@ impl EmailChannel {
                 let content = format!("Subject: {}\n\n{}", subject, body_text);
                 let msg_id = parsed
                     .message_id()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| format!("gen-{}", Uuid::new_v4()));
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        let identity = format!(
+                            "{}:{}:{}:{}:{}",
+                            self.config.imap_host.to_ascii_lowercase(),
+                            self.config.username.to_ascii_lowercase(),
+                            self.config.imap_folder,
+                            uid_validity,
+                            uid
+                        );
+                        format!("email:{}", hex::encode(sha2::Sha256::digest(identity)))
+                    });
 
                 #[allow(clippy::cast_sign_loss)]
                 let ts = parsed
