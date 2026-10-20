@@ -4347,6 +4347,12 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
         ))
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/check"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
     let instance = "signal:account-a".to_owned();
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
@@ -4383,6 +4389,7 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
         descriptor.metadata.get("adapterMode").map(String::as_str),
         Some("native-v2")
     );
+    assert_eq!(handle.status().await.unwrap().health_state.as_deref(), Some("healthy"));
 
     let channel_ref = tinychannels_bus::ChannelRef {
         id: "signal".into(),
