@@ -2860,6 +2860,7 @@ async fn configured_telegram_native_optional_ports_share_ordered_queue_and_rejec
         },
         ..Default::default()
     };
+    running.validate_adapter_intent(&intent).expect("adapter scope accepts the account selected by hooks");
     let sent = handle.send(intent.clone()).await.unwrap();
     assert_eq!(
         sent.receipt.primary_platform_message_id.as_deref(),
