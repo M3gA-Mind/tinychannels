@@ -2629,6 +2629,7 @@ dependencies = [
  "tinychannels-bus",
  "tinychannels-runtime",
  "tinystoragedrivers-api",
+ "tinystoragedrivers-document",
  "tinystoragedrivers-testkit",
  "tinystoragedrivers-types",
  "tokio",
