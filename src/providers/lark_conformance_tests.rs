@@ -52,6 +52,21 @@ struct LarkFixture {
     voice_in_enabled: bool,
 }
 
+#[derive(Clone)]
+struct LarkFixtureSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
+
+#[async_trait]
+impl ChannelInboundSink for LarkFixtureSink {
+    async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        self.0.send(ingress).map_err(|_| ChannelSendError {
+            kind: SendErrorKind::Transient,
+            message: "Lark conformance sink closed".into(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
+}
+
 impl LarkFixture {
     async fn start() -> Self {
         Self::start_with_voice_ingress(false).await
@@ -118,7 +133,7 @@ impl LarkFixture {
             Some(base64::engine::general_purpose::STANDARD.encode(b"voice-source"));
         let host = ChannelHostBuilder::new()
             .media_repository(media.clone())
-            .voice_media_store(voice)
+            .voice_media_store(voice.clone())
             .voice_codec(Arc::new(FixtureVoiceCodec));
         let host = if voice_in_enabled {
             host.transcriber(Arc::new(StubTranscriber::default()))
@@ -132,7 +147,7 @@ impl LarkFixture {
                 app_id: "app-id".into(),
                 app_secret: "app-secret".into(),
                 encrypt_key: None,
-                verification_token: None,
+                verification_token: Some("verify-token".into()),
                 allowed_users: vec!["*".into()],
                 use_feishu: true,
                 receive_mode: if voice_in_enabled {
@@ -154,7 +169,7 @@ impl LarkFixture {
             media,
             observations: Mutex::new(Vec::new()),
             issued_message_ids,
-            voice_store: Arc::new(StubVoice::default()),
+            voice_store: voice,
             webhook_port,
             voice_in_enabled,
         }
@@ -179,6 +194,154 @@ impl LarkFixture {
 
     async fn request_count(&self) -> usize {
         self.server.requests.lock().unwrap().len()
+    }
+
+    async fn receive_voice_in(&self) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+        let port = self.webhook_port.ok_or_else(|| ChannelSendError {
+            kind: SendErrorKind::BadFormat,
+            message: "Lark voice ingress fixture is not configured".into(),
+            unsupported: true,
+            ..Default::default()
+        })?;
+        let payload = serde_json::json!({
+            "header": {
+                "event_type": "im.message.receive_v1",
+                "event_id": "event-voice-in-1",
+                "token": "verify-token"
+            },
+            "event": {
+                "sender": {
+                    "sender_type": "user",
+                    "sender_id": {"open_id": "ou-voice-sender"}
+                },
+                "message": {
+                    "message_id": "om-voice-in-1",
+                    "chat_id": CHANNEL,
+                    "chat_type": "p2p",
+                    "message_type": "audio",
+                    "content": serde_json::json!({
+                        "file_key": "fixture-voice",
+                        "duration": 1000
+                    }).to_string(),
+                    "create_time": "1760900000000"
+                }
+            }
+        });
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let sink = LarkFixtureSink(sender);
+        let adapter = self.channel.clone();
+        let listener = tokio::spawn(async move {
+            ChannelAdapter::start(adapter.as_ref(), &sink).await
+        });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .map_err(|_| ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "could not create Lark conformance client".into(),
+                retryable: true,
+                ..Default::default()
+            })?;
+        let post_result = async {
+            for _ in 0..100 {
+                if listener.is_finished() {
+                    return Err(ChannelSendError {
+                        kind: SendErrorKind::Transient,
+                        message: "Lark webhook listener stopped before accepting an event".into(),
+                        retryable: true,
+                        ..Default::default()
+                    });
+                }
+                match client
+                    .post(format!("http://127.0.0.1:{port}/lark"))
+                    .json(&payload)
+                    .send()
+                    .await
+                {
+                    Ok(response) => return Ok(response),
+                    Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+                }
+            }
+            Err(ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "Lark webhook did not become ready".into(),
+                retryable: true,
+                ..Default::default()
+            })
+        }
+        .await;
+        let ingress_result = match post_result {
+            Ok(response) if response.status().is_success() => tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                receiver.recv(),
+            )
+            .await
+            .ok()
+            .flatten()
+            .ok_or_else(|| ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "Lark voice event was not delivered to the typed sink".into(),
+                retryable: true,
+                ..Default::default()
+            }),
+            Ok(response) => Err(ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: format!("Lark webhook returned {}", response.status()),
+                retryable: true,
+                ..Default::default()
+            }),
+            Err(error) => Err(error),
+        };
+        let stop_result = ChannelAdapter::stop(self.channel.as_ref()).await;
+        let listener_result = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            listener,
+        )
+        .await
+        .map_err(|_| ChannelSendError {
+            kind: SendErrorKind::Transient,
+            message: "Lark typed listener did not stop".into(),
+            retryable: true,
+            ..Default::default()
+        })?
+        .map_err(|_| ChannelSendError {
+            kind: SendErrorKind::Transient,
+            message: "Lark typed listener task failed".into(),
+            retryable: true,
+            ..Default::default()
+        })?;
+        stop_result?;
+        listener_result?;
+        let ingress = ingress_result?;
+        let ChannelIngress::Inbound(envelope) = ingress else {
+            return Err(ChannelSendError {
+                kind: SendErrorKind::BadFormat,
+                message: "Lark voice fixture received a non-message ingress".into(),
+                ..Default::default()
+            });
+        };
+        let mut payload_kinds = Vec::new();
+        for part in &envelope.parts {
+            if let ContentPart::VoiceNote { voice_note } = part {
+                payload_kinds.push("audio".into());
+                if voice_note.transcript.is_some() {
+                    payload_kinds.push("transcript".into());
+                }
+            }
+        }
+        self.observations.lock().push(WireObservation {
+            feature: Feature::VoiceIn,
+            operation: "voice_in".into(),
+            channel: envelope.channel.clone(),
+            conversation: envelope.conversation.clone(),
+            reply_to_id: envelope.reply_to_id.clone(),
+            thread_id: envelope.conversation.thread_id.clone(),
+            payload_kinds,
+            platform_message_ids: Vec::new(),
+            request: payload,
+        });
+        Ok(None)
     }
 
     async fn send_and_record(
@@ -287,11 +450,27 @@ impl AdapterFixture for LarkFixture {
     }
 
     fn expected_scope(&self, _feature: Feature) -> ExpectedScope {
-        ExpectedScope {
-            channel: channel_ref(),
-            conversation: conversation_ref(),
-            reply_to_id: None,
-            thread_id: None,
+        if _feature == Feature::VoiceIn {
+            ExpectedScope {
+                channel: ChannelRef {
+                    id: "lark".into(),
+                    account_id: None,
+                },
+                conversation: ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Dm,
+                    id: CHANNEL.into(),
+                    ..Default::default()
+                },
+                reply_to_id: None,
+                thread_id: None,
+            }
+        } else {
+            ExpectedScope {
+                channel: channel_ref(),
+                conversation: conversation_ref(),
+                reply_to_id: None,
+                thread_id: None,
+            }
         }
     }
 
@@ -538,6 +717,7 @@ impl AdapterFixture for LarkFixture {
             }
             // These inbound-only features have no outbound adapter operation;
             // the actual fixture has no ingress event source installed.
+            Feature::VoiceIn if self.voice_in_enabled => self.receive_voice_in().await,
             Feature::VoiceIn | Feature::InboundReactions | Feature::ReadReceipts => {
                 Err(ChannelSendError {
                     kind: SendErrorKind::BadFormat,
@@ -565,4 +745,45 @@ async fn the_host_aware_lark_adapter_passes_the_full_conformance_matrix() {
         })
         .collect::<Vec<_>>();
     assert!(failed.is_empty(), "Lark conformance failures: {failed:#?}");
+}
+
+#[tokio::test]
+async fn configured_lark_voice_in_is_observed_through_its_typed_webhook_listener() {
+    use tinychannels_conformance::check_feature;
+
+    let fixture = LarkFixture::start_with_voice_ingress(true).await;
+    let capabilities = fixture.channel.declared_capabilities();
+    assert!(capabilities.voice_in.supported);
+
+    check_feature(&fixture, Feature::VoiceIn)
+        .await
+        .unwrap_or_else(|error| panic!("Lark voice ingress conformance failed: {error}"));
+
+    let requests = fixture.server.requests.lock().unwrap();
+    let download = requests
+        .iter()
+        .find(|request| {
+            request.method == "GET"
+                && request
+                    .target
+                    .ends_with("/resources/fixture-voice?type=file")
+        })
+        .expect("the typed listener must download the actual voice resource");
+    assert!(
+        download
+            .headers
+            .to_ascii_lowercase()
+            .contains("authorization: bearer t-conformance"),
+        "voice download must use the token issued to the configured app"
+    );
+    let stored = fixture.voice_store.stored.lock().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].direction, tinychannels_bus::HostVoiceMediaDirection::Inbound);
+    assert_eq!(stored[0].mime_type, "audio/ogg");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&stored[0].audio_base64)
+            .unwrap(),
+        include_bytes!("telegram/fixtures/sine-ogg-opus.ogg")
+    );
 }
