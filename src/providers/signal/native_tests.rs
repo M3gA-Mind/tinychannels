@@ -6,15 +6,15 @@ use crate::channel::{
 use crate::providers::native::fixtures::stored_media;
 use crate::providers::signal::fixtures::*;
 use crate::traits::Channel;
+use async_trait::async_trait;
 use serde_json::json;
+use std::sync::Mutex;
 use tinychannels_bus::channel::{MessageReceipt, MessageReceiptPart};
 use tinychannels_bus::{
     ChannelIngress, ChannelOutboundIntent, ChannelOutboundMessage, ChannelRef, ContentPart,
     ConversationKind, MediaKind, MediaReference, OutboundContentPart, OutboundPayload,
     OutboundVoice,
 };
-use async_trait::async_trait;
-use std::sync::Mutex;
 
 #[derive(Default)]
 struct InboundRecorder(Mutex<Vec<ChannelIngress>>);
@@ -109,18 +109,19 @@ async fn typed_listener_connects_to_sse_publishes_and_stops() {
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/api/v1/events"))
         .and(wiremock::matchers::query_param("account", ACCOUNT))
-        .respond_with(wiremock::ResponseTemplate::new(200).insert_header(
-            "content-type",
-            "text/event-stream",
-        ).set_body(format!(
-            "data: {}\n\n",
-            json!({"envelope": {
-                "sourceNumber": PEER,
-                "sourceName": "Ada",
-                "timestamp": 1_700_000_000_500u64,
-                "dataMessage": {"message": "typed hello", "timestamp": 1_700_000_000_500u64}
-            }})
-        )))
+        .respond_with(
+            wiremock::ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body(format!(
+                    "data: {}\n\n",
+                    json!({"envelope": {
+                        "sourceNumber": PEER,
+                        "sourceName": "Ada",
+                        "timestamp": 1_700_000_000_500u64,
+                        "dataMessage": {"message": "typed hello", "timestamp": 1_700_000_000_500u64}
+                    }})
+                )),
+        )
         .mount(&server)
         .await;
     let channel = Arc::new(channel_for(&server));

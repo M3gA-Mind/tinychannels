@@ -13,8 +13,8 @@ mod capabilities;
 mod inbound;
 mod native;
 
-use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::channel::ChannelInboundSink;
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -369,10 +369,7 @@ impl SignalChannel {
     }
 }
 
-async fn sleep_or_cancel(
-    cancellation: &mut Option<watch::Receiver<bool>>,
-    seconds: u64,
-) -> bool {
+async fn sleep_or_cancel(cancellation: &mut Option<watch::Receiver<bool>>, seconds: u64) -> bool {
     if let Some(cancel) = cancellation.as_mut() {
         tokio::select! {
             biased;
@@ -550,7 +547,9 @@ impl Channel for SignalChannel {
                 } else {
                     bytes_stream.next().await
                 };
-                let Some(chunk) = next_chunk else { break; };
+                let Some(chunk) = next_chunk else {
+                    break;
+                };
                 let chunk = match chunk {
                     Ok(c) => c,
                     Err(e) => {
@@ -625,6 +624,7 @@ impl Channel for SignalChannel {
                             };
                             if !keep_running {
                                 return Ok(());
+                            }
                         }
                     }
                     Err(e) => {

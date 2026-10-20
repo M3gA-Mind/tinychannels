@@ -213,12 +213,12 @@ impl SignalChannel {
             }
         };
         let event = channel_event(
-                "signal",
-                event_id,
-                Some(accepted.timestamp),
-                Some(Self::conversation_of(&accepted.target)),
-                kind,
-            );
+            "signal",
+            event_id,
+            Some(accepted.timestamp),
+            Some(Self::conversation_of(&accepted.target)),
+            kind,
+        );
         self.publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
             .await;
     }
@@ -267,12 +267,12 @@ impl SignalChannel {
                 )
             };
             let event = channel_event(
-                    "signal",
-                    format!("signal:{label}:{stamp}:{sender}"),
-                    when,
-                    Some(Self::conversation_of(&sender)),
-                    kind,
-                );
+                "signal",
+                format!("signal:{label}:{stamp}:{sender}"),
+                when,
+                Some(Self::conversation_of(&sender)),
+                kind,
+            );
             self.publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
                 .await;
         }
@@ -294,15 +294,15 @@ impl SignalChannel {
         }
         let _ = envelope;
         let event = channel_event(
-                "signal",
-                event_id,
-                Some(accepted.timestamp),
-                Some(Self::conversation_of(&accepted.target)),
-                ChannelEventKind::MessageDeleted {
-                    message_id: format!("sig_{stamp}"),
-                    provider_message_id: Some(stamp.to_string()),
-                },
-            );
+            "signal",
+            event_id,
+            Some(accepted.timestamp),
+            Some(Self::conversation_of(&accepted.target)),
+            ChannelEventKind::MessageDeleted {
+                message_id: format!("sig_{stamp}"),
+                provider_message_id: Some(stamp.to_string()),
+            },
+        );
         self.publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
             .await;
     }
@@ -359,11 +359,13 @@ impl SignalChannel {
         };
         let data = accepted.data;
         if let Some(reaction) = &data.reaction {
-            self.dispatch_reaction(envelope, &accepted, reaction, sink).await;
+            self.dispatch_reaction(envelope, &accepted, reaction, sink)
+                .await;
             return true;
         }
         if let Some(deleted) = &data.remote_delete {
-            self.dispatch_delete(envelope, &accepted, deleted, sink).await;
+            self.dispatch_delete(envelope, &accepted, deleted, sink)
+                .await;
             return true;
         }
         let has_attachments = data.attachments.as_ref().is_some_and(|a| !a.is_empty());
@@ -400,7 +402,10 @@ impl SignalChannel {
             ..Default::default()
         };
         if self
-            .publish_typed(sink, tinychannels_bus::ChannelIngress::Inbound(envelope_out))
+            .publish_typed(
+                sink,
+                tinychannels_bus::ChannelIngress::Inbound(envelope_out),
+            )
             .await
         {
             return true;
