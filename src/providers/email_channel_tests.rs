@@ -850,8 +850,14 @@ async fn listen_delivers_new_mail_and_reconnects_after_failures() {
             || first_conn.contains(&format!("{prefix} 2,1 {suffix}"))
     };
     assert!(either("UID FETCH", "RFC822"), "{first_conn}");
-    assert!(first_conn.contains("UID STORE 1 +FLAGS (\\Seen)"), "{first_conn}");
-    assert!(first_conn.contains("UID STORE 2 +FLAGS (\\Seen)"), "{first_conn}");
+    assert!(
+        first_conn.contains("UID STORE 1 +FLAGS (\\Seen)"),
+        "{first_conn}"
+    );
+    assert!(
+        first_conn.contains("UID STORE 2 +FLAGS (\\Seen)"),
+        "{first_conn}"
+    );
     assert!(first_conn.contains("DONE"), "{first_conn}");
     assert!(
         !transcripts[1].iter().any(|l| l.contains("SELECT")),
@@ -1303,7 +1309,10 @@ async fn rejected_typed_mail_is_retried_without_replaying_accepted_uids() {
     assert_eq!(channel.seen_messages.lock().await.len(), 1);
     let _ = session.logout().await;
     let commands = server.await.unwrap().remove(0).join("\n");
-    assert!(commands.contains("UID STORE 1 +FLAGS (\\Seen)"), "{commands}");
+    assert!(
+        commands.contains("UID STORE 1 +FLAGS (\\Seen)"),
+        "{commands}"
+    );
     assert!(
         !commands.contains("UID STORE 2"),
         "the rejected second UID must remain unseen: {commands}"
@@ -1330,8 +1339,14 @@ async fn rejected_typed_mail_is_retried_without_replaying_accepted_uids() {
     assert_eq!(channel.seen_messages.lock().await.len(), 2);
     let _ = session.logout().await;
     let commands = server.await.unwrap().remove(0).join("\n");
-    assert!(commands.contains("UID STORE 1 +FLAGS (\\Seen)"), "{commands}");
-    assert!(commands.contains("UID STORE 2 +FLAGS (\\Seen)"), "{commands}");
+    assert!(
+        commands.contains("UID STORE 1 +FLAGS (\\Seen)"),
+        "{commands}"
+    );
+    assert!(
+        commands.contains("UID STORE 2 +FLAGS (\\Seen)"),
+        "{commands}"
+    );
 }
 
 struct BlockingTypedEmailSink(tokio::sync::Notify);
@@ -1371,18 +1386,16 @@ async fn stopping_a_backpressured_email_listener_releases_it_without_acknowledgi
     tokio::time::timeout(HANG_GUARD, sink.0.notified())
         .await
         .expect("typed ingress reaches the deliberately blocked sink");
-    NativeProvider::stop_listener(channel.as_ref()).await.unwrap();
+    NativeProvider::stop_listener(channel.as_ref())
+        .await
+        .unwrap();
     tokio::time::timeout(HANG_GUARD, listener)
         .await
         .expect("stop interrupts ingress backpressure")
         .unwrap()
         .unwrap();
     assert!(channel.seen_messages.lock().await.is_empty());
-    assert!(channel
-        .listener_cancel
-        .lock()
-        .unwrap()
-        .is_none());
+    assert!(channel.listener_cancel.lock().unwrap().is_none());
     let commands = server.await.unwrap().remove(0).join("\n");
     assert!(
         !commands.contains("UID STORE"),
@@ -1415,11 +1428,7 @@ async fn aborting_email_listener_start_releases_ownership_for_restart() {
         .expect("listener registered before connecting");
     abandoned.abort();
     let _ = abandoned.await;
-    assert!(channel
-        .listener_cancel
-        .lock()
-        .unwrap()
-        .is_none());
+    assert!(channel.listener_cancel.lock().unwrap().is_none());
 
     let (port, server) = fake_imap(vec![ConnScript {
         searches: vec![vec![(11, ALICE)]],
@@ -1444,7 +1453,9 @@ async fn aborting_email_listener_start_releases_ownership_for_restart() {
         tinychannels_bus::ChannelIngress::Inbound(envelope)
             if envelope.message_id == "a1@example.com"
     ));
-    NativeProvider::stop_listener(channel.as_ref()).await.unwrap();
+    NativeProvider::stop_listener(channel.as_ref())
+        .await
+        .unwrap();
     tokio::time::timeout(HANG_GUARD, listener)
         .await
         .expect("restarted listener stops")

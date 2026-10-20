@@ -4928,6 +4928,14 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::EmailNativeV2);
     assert_eq!(handle.descriptor().id, "email");
+    assert_eq!(
+        running
+            .native_ports
+            .as_ref()
+            .map(|ports| ports.listener_mode),
+        Some(crate::provider::LongTailListenerMode::Adapter),
+        "email IMAP ingress must run through its typed adapter listener"
+    );
     running.stop().await.unwrap();
 }
 

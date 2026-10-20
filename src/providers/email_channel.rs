@@ -35,7 +35,10 @@ use std::collections::HashSet;
 #[cfg(feature = "email")]
 use std::sync::Arc;
 #[cfg(feature = "email")]
-use std::sync::{Mutex as StdMutex, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    Mutex as StdMutex,
+    atomic::{AtomicU64, Ordering},
+};
 #[cfg(feature = "email")]
 use std::time::Duration;
 #[cfg(feature = "email")]
@@ -69,11 +72,11 @@ mod inbound;
 #[cfg(feature = "email")]
 mod native;
 
+#[cfg(feature = "email")]
+use crate::channel::{ChannelInboundSink, ChannelSendError};
 pub use crate::config::EmailConfig;
 #[cfg(feature = "email")]
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
-#[cfg(feature = "email")]
-use crate::channel::{ChannelInboundSink, ChannelSendError};
 use crate::providers::mail::{ImapCredentials, MailSecret, SmtpCredentials, SmtpSecurity};
 #[cfg(feature = "email")]
 use crate::providers::mail::{LettreMailSender, MailCredentials, MailSender, OutboundEmail};
@@ -653,11 +656,7 @@ impl EmailChannel {
     }
 
     #[cfg(feature = "email")]
-    async fn mark_uid_seen<S: ImapStream>(
-        &self,
-        session: &mut Session<S>,
-        uid: u32,
-    ) -> Result<()> {
+    async fn mark_uid_seen<S: ImapStream>(&self, session: &mut Session<S>, uid: u32) -> Result<()> {
         if uid == 0 {
             return Ok(());
         }

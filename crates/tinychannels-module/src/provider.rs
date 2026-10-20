@@ -1846,7 +1846,7 @@ impl Running {
         let provider_name = channel.descriptor().id;
         let legacy: Arc<dyn Channel> = channel.clone();
         let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
-        let listener_mode = if provider_name == "signal" {
+        let listener_mode = if matches!(provider_name, "signal" | "email") {
             LongTailListenerMode::Adapter
         } else {
             LongTailListenerMode::Legacy
