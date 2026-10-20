@@ -405,6 +405,33 @@ fn make_channel() -> IrcChannel {
     })
 }
 
+#[tokio::test]
+async fn typed_send_without_connection_reports_uncertain_delivery() {
+    use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
+
+    let channel = make_channel();
+    let intent = ChannelOutboundIntent {
+        channel_id: "irc".into(),
+        conversation_id: "#openhuman".into(),
+        idempotency_key: "offline-send".into(),
+        payload: OutboundPayload::Text {
+            text: "hello".into(),
+        },
+        ..Default::default()
+    };
+
+    let error = crate::providers::long_tail::LongTail::send_typed_message(
+        &channel,
+        &tinychannels_bus::ChannelOutboundMessage::from_intent(&intent),
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Unknown);
+    assert!(error.sent_before_error);
+    assert_eq!(error.message, "IRC send failed");
+}
+
 #[test]
 fn parse_prefix_without_command_returns_none() {
     assert!(IrcMessage::parse(":server.example ").is_none());
