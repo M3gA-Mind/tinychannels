@@ -1,4 +1,5 @@
 use serde_json::{Value, json};
+use tinychannels::delivery::DeliveryQueueStore;
 use tinystoragedrivers_core::schema::{MigrateOptions, Registry};
 use tinystoragedrivers_core::{
     CollectionSpec, MemoryStorage, Precondition, Scope, ScopedStorage, StorageBackend, WriteOptions,
@@ -145,25 +146,21 @@ async fn v21_media_file_and_voice_payloads_survive_storage_schema_upgrade() {
         ("channels_delivery_pending", "legacy-voice", voice),
     ])
     .await;
-    let store = tinychannels::storage::DocumentDeliveryStore::new(
-        std::sync::Arc::clone(storage.documents()),
-    );
+    let store = tinychannels::storage::DocumentDeliveryStore::new(std::sync::Arc::clone(
+        storage.documents(),
+    ));
     let loaded = store.load_pending_all().await.unwrap();
     assert_eq!(loaded.len(), 3);
 
     for entry in loaded {
         match (entry.id.as_str(), entry.intent.payload) {
-            (
-                "legacy-media",
-                tinychannels_bus::OutboundPayload::Media { text, media_urls },
-            ) => {
+            ("legacy-media", tinychannels_bus::OutboundPayload::Media { text, media_urls }) => {
                 assert_eq!(text.as_deref(), Some("caption"));
                 assert_eq!(media_urls, ["https://example.test/image.png"]);
             }
-            (
-                "legacy-files",
-                tinychannels_bus::OutboundPayload::Files { file_urls },
-            ) => assert_eq!(file_urls, ["https://example.test/file.pdf"]),
+            ("legacy-files", tinychannels_bus::OutboundPayload::Files { file_urls }) => {
+                assert_eq!(file_urls, ["https://example.test/file.pdf"])
+            }
             (
                 "legacy-voice",
                 tinychannels_bus::OutboundPayload::Voice {
