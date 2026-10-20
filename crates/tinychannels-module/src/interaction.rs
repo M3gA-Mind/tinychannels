@@ -9,7 +9,7 @@ pub(crate) fn configured_adapter_capabilities(
     let descriptor = adapter.descriptor();
     debug_assert_eq!(
         descriptor.id,
-        tinychannels_bus::provider_id(provider.channel.name())
+        tinychannels_bus::provider_id(provider.provider_name())
     );
     let mut capabilities = adapter.declared_capabilities();
     capabilities.account.configured = Some(true);

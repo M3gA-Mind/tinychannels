@@ -3954,6 +3954,22 @@ async fn a_long_tail_provider_starts_as_a_native_adapter_and_is_listed() {
         }),
         ..Default::default()
     };
+    let described = service
+        .describe_configured_channels(config.clone(), Default::default())
+        .await
+        .expect("configured native provider is described");
+    let mattermost = described
+        .iter()
+        .find(|channel| channel.name == "mattermost")
+        .expect("Mattermost is listed from the configured factory instance");
+    assert_eq!(
+        mattermost.interaction.capabilities.account.configured,
+        Some(true)
+    );
+    assert_eq!(
+        mattermost.interaction.capabilities.account.enabled,
+        Some(true)
+    );
     service
         .start_channel("mattermost".into(), config.clone())
         .await
@@ -3962,5 +3978,40 @@ async fn a_long_tail_provider_starts_as_a_native_adapter_and_is_listed() {
     let running = service.running.lock().await.get("mattermost").cloned();
     let running = running.expect("mattermost is running");
     assert_eq!(running.adapter_handle().descriptor().id, "mattermost");
+    assert_eq!(
+        service
+            .channel_status("mattermost".into())
+            .await
+            .expect("native adapter status is available"),
+        "unhealthy",
+        "unknown provider health is not reported as connected"
+    );
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn starting_an_unconfigured_provider_reports_not_configured() {
+    let service = inbound_preparation_service().await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let finished = Running::start(
+        Arc::new(CaptureChannel(tx)),
+        Arc::new(Hooks::default()),
+        service.host.clone(),
+    );
+    finished.stop().await.unwrap();
+    service
+        .running
+        .lock()
+        .await
+        .insert("mattermost".into(), finished);
+
+    let error = service
+        .start_channel("mattermost".into(), ChannelsConfig::default())
+        .await
+        .expect_err("an absent provider is not started");
+    assert!(matches!(
+        error,
+        BusError::MethodFailed { name, .. } if name == NOT_CONFIGURED_ERROR
+    ));
     service.shutdown().await.unwrap();
 }

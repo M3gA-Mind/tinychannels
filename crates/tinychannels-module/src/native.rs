@@ -5,7 +5,6 @@
 use crate::host::HostChannels;
 use crate::provider::{Hooks, LongTailListenerMode, Running};
 use std::sync::Arc;
-use tinychannels::Channel;
 use tinychannels::factory::HttpClientFactory;
 use tinychannels::host::ChannelHost;
 use tinychannels_bus::ChannelsConfig;
@@ -23,14 +22,14 @@ type Start = Box<
 
 /// A built native provider and the way to start it.
 pub(crate) struct NativeLaunch {
-    pub(crate) channel: Arc<dyn Channel>,
+    pub(crate) provider_id: String,
     start: Start,
 }
 
 impl NativeLaunch {
     pub(crate) fn new<T>(provider: &'static str, channel: Arc<T>) -> Self
     where
-        T: Channel
+        T: tinychannels::Channel
             + tinychannels::channel::ChannelAdapter
             + tinychannels::channel::ChannelTypedSend
             + tinychannels::channel::ChannelTyping
@@ -40,9 +39,8 @@ impl NativeLaunch {
             + tinychannels::channel::ChannelStreamingDraft
             + 'static,
     {
-        let dynamic: Arc<dyn Channel> = channel.clone();
         Self {
-            channel: dynamic,
+            provider_id: channel.descriptor().id,
             start: Box::new(move |hooks, host, supervision, outbound_only| {
                 Running::start_native(provider, channel, hooks, host, supervision, outbound_only)
             }),
@@ -55,9 +53,8 @@ impl NativeLaunch {
         channel: Arc<dyn tinychannels::LongTailNative>,
         listener_mode: LongTailListenerMode,
     ) -> Self {
-        let dynamic: Arc<dyn Channel> = channel.clone();
         Self {
-            channel: dynamic,
+            provider_id: channel.descriptor().id,
             start: Box::new(move |hooks, host, supervision, outbound_only| {
                 Running::start_long_tail(
                     provider,

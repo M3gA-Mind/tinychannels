@@ -156,6 +156,9 @@ impl NativeProvider for QQChannel {
             let file = match step {
                 Step::Text(_) => continue,
                 Step::File(file) => {
+                    if file.mime.to_ascii_lowercase().starts_with("audio/") {
+                        return Err(unsupported("QQ standalone audio messages"));
+                    }
                     file_type(file, false)?;
                     file
                 }
