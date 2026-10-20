@@ -57,17 +57,6 @@ struct GatewayResponse {
 }
 
 impl DingTalkChannel {
-    #[cfg(test)]
-    pub(crate) fn seed_conformance_group(&self, conversation_id: &str) {
-        self.robot_contexts
-            .try_write()
-            .expect("conformance context is seeded before listener startup")
-            .insert(
-                format!("group:{conversation_id}"),
-                serde_json::json!({"robotCode":"conformance-robot"}),
-            );
-    }
-
     pub fn new(client_id: String, client_secret: String, allowed_users: Vec<String>) -> Self {
         Self {
             client_id,
