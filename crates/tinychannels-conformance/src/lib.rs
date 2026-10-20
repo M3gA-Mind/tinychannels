@@ -324,7 +324,9 @@ pub async fn check_feature(
             | ConformanceFeature::ManagedThreadList
     );
     if managed_thread_operation && observation.platform_message_ids.is_empty() {
-        return Err(format!("declared {feature:?} returned no thread identifiers"));
+        return Err(format!(
+            "declared {feature:?} returned no thread identifiers"
+        ));
     }
     if requires_receipt && fixture.receipt_required(feature) {
         let Some(receipt) = receipt else {
@@ -452,10 +454,10 @@ impl ConformanceFeature {
                 "draft_finalize",
                 "draft_cancel_cleanup",
             ],
-        Self::ManagedReaction => &["reaction_send"],
-        Self::ManagedThreadCreate => &["thread_create"],
-        Self::ManagedThreadUpdate => &["thread_update"],
-        Self::ManagedThreadList => &["thread_list"],
+            Self::ManagedReaction => &["reaction_send"],
+            Self::ManagedThreadCreate => &["thread_create"],
+            Self::ManagedThreadUpdate => &["thread_update"],
+            Self::ManagedThreadList => &["thread_list"],
             _ => &["send"],
         }
     }

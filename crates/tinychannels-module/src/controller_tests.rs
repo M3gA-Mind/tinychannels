@@ -36,8 +36,7 @@ impl BackendFixture {
             }
             ChannelBackendRequest::ProgressiveTransport(request) => {
                 use tinychannels_bus::module_progressive::{
-                    ProgressiveTransportRequest as Request,
-                    ProgressiveTransportResult as Response,
+                    ProgressiveTransportRequest as Request, ProgressiveTransportResult as Response,
                 };
                 match *request {
                     Request::SendTyped {
@@ -51,12 +50,13 @@ impl BackendFixture {
                         outcome.receipt.primary_platform_message_id =
                             Some("managed-message-1".into());
                         outcome.receipt.platform_message_ids = vec!["managed-message-1".into()];
-                        outcome.receipt.parts.push(
-                            tinychannels_bus::channel::MessageReceiptPart {
+                        outcome
+                            .receipt
+                            .parts
+                            .push(tinychannels_bus::channel::MessageReceiptPart {
                                 platform_message_id: "managed-message-1".into(),
                                 ..Default::default()
-                            },
-                        );
+                            });
                         Ok(ChannelBackendResult::ProgressiveTransport(Box::new(
                             Response::Outcome(Box::new(outcome)),
                         )))
@@ -217,10 +217,8 @@ impl ManagedConformanceFixture {
         );
         let mut configured = std::collections::HashMap::new();
         configured.insert("mattermost:managed-fixture".to_owned(), running.clone());
-        let replies = crate::progressive::Replies::new(
-            host.clone(),
-            Arc::new(Mutex::new(configured)),
-        );
+        let replies =
+            crate::progressive::Replies::new(host.clone(), Arc::new(Mutex::new(configured)));
         (
             Self {
                 host,
@@ -242,17 +240,20 @@ impl ManagedConformanceFixture {
         platform_message_ids: Vec<String>,
         request: serde_json::Value,
     ) {
-        self.observed.lock().unwrap().push(tinychannels_conformance::WireObservation {
-            feature,
-            operation: operation.to_owned(),
-            channel,
-            conversation,
-            reply_to_id: None,
-            thread_id: None,
-            payload_kinds: Vec::new(),
-            platform_message_ids,
-            request,
-        });
+        self.observed
+            .lock()
+            .unwrap()
+            .push(tinychannels_conformance::WireObservation {
+                feature,
+                operation: operation.to_owned(),
+                channel,
+                conversation,
+                reply_to_id: None,
+                thread_id: None,
+                payload_kinds: Vec::new(),
+                platform_message_ids,
+                request,
+            });
     }
 
     async fn shutdown(self, server: Connection) {
@@ -276,8 +277,7 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
         use tinychannels_conformance::ConformanceFeature as Feature;
         let channel = tinychannels_bus::ChannelRef {
             id: "mattermost".into(),
-            account_id: (feature == Feature::Edit)
-                .then(|| "mattermost:managed-fixture".into()),
+            account_id: (feature == Feature::Edit).then(|| "mattermost:managed-fixture".into()),
         };
         let conversation = match feature {
             Feature::ManagedReaction => tinychannels_bus::ConversationRef {
@@ -324,31 +324,52 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
         Option<tinychannels_bus::channel::ChannelSendOutcome>,
         tinychannels_bus::channel::ChannelSendError,
     > {
-        use tinychannels_bus::module_controller::{ChannelControllerRequest as Request, ChannelControllerResult as Response};
+        use tinychannels_bus::module_controller::{
+            ChannelControllerRequest as Request, ChannelControllerResult as Response,
+        };
         use tinychannels_bus::module_progressive::{
-            ChannelOutputEvent, ProgressiveCommand, ProgressiveResult,
-            ProgressiveTransportRequest, ProgressiveTransportResult,
+            ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
+            ProgressiveTransportResult,
         };
         use tinychannels_conformance::ConformanceFeature as Feature;
 
         let config = ChannelsConfig::default();
         match feature {
             Feature::ManagedReaction => {
-                let result = dispatch(&self.host, Request::SendReaction {
-                    config,
-                    channel: "mattermost".into(),
-                    reaction: serde_json::json!({
-                        "channel_id": "managed-room-1",
-                        "message_id": "managed-source-1",
-                        "emoji": "eyes"
-                    }),
-                })
+                let result = dispatch(
+                    &self.host,
+                    Request::SendReaction {
+                        config,
+                        channel: "mattermost".into(),
+                        reaction: serde_json::json!({
+                            "channel_id": "managed-room-1",
+                            "message_id": "managed-source-1",
+                            "emoji": "eyes"
+                        }),
+                    },
+                )
                 .await
                 .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let request = self.backend.0.lock().await.last().cloned().ok_or_default()?;
-                let response = self.backend.1.lock().await.last().cloned().ok_or_default()?;
+                let request = self
+                    .backend
+                    .0
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let response = self
+                    .backend
+                    .1
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
                 let (channel, reaction) = match request {
-                    ChannelBackendRequest::SendReaction { channel, reaction } => (channel, reaction),
+                    ChannelBackendRequest::SendReaction { channel, reaction } => {
+                        (channel, reaction)
+                    }
                     _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
                 };
                 if !matches!(result, Response::SendReaction(ref result) if result.success)
@@ -364,7 +385,10 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                     .get("message_id")
                     .and_then(serde_json::Value::as_str)
                     .ok_or_default()?;
-                let channel_ref = tinychannels_bus::ChannelRef { id: channel, account_id: None };
+                let channel_ref = tinychannels_bus::ChannelRef {
+                    id: channel,
+                    account_id: None,
+                };
                 let conversation = tinychannels_bus::ConversationRef {
                     kind: tinychannels_bus::ConversationKind::Channel,
                     id: conversation_id.to_owned(),
@@ -381,15 +405,32 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 Ok(None)
             }
             Feature::ManagedThreadCreate => {
-                let result = dispatch(&self.host, Request::CreateThread {
-                    config,
-                    channel: "mattermost".into(),
-                    title: "managed fixture thread".into(),
-                })
+                let result = dispatch(
+                    &self.host,
+                    Request::CreateThread {
+                        config,
+                        channel: "mattermost".into(),
+                        title: "managed fixture thread".into(),
+                    },
+                )
                 .await
                 .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let request = self.backend.0.lock().await.last().cloned().ok_or_default()?;
-                let response = self.backend.1.lock().await.last().cloned().ok_or_default()?;
+                let request = self
+                    .backend
+                    .0
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let response = self
+                    .backend
+                    .1
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
                 let (channel, title) = match request {
                     ChannelBackendRequest::CreateThread { channel, title } => (channel, title),
                     _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
@@ -405,7 +446,10 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 self.record(
                     feature,
                     "thread_create",
-                    tinychannels_bus::ChannelRef { id: channel.clone(), account_id: None },
+                    tinychannels_bus::ChannelRef {
+                        id: channel.clone(),
+                        account_id: None,
+                    },
                     tinychannels_bus::ConversationRef {
                         kind: tinychannels_bus::ConversationKind::Channel,
                         id: channel,
@@ -417,18 +461,39 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 Ok(None)
             }
             Feature::ManagedThreadUpdate => {
-                let result = dispatch(&self.host, Request::UpdateThread {
-                    config,
-                    channel: "mattermost".into(),
-                    thread_id: "managed-thread-1".into(),
-                    action: "close".into(),
-                })
+                let result = dispatch(
+                    &self.host,
+                    Request::UpdateThread {
+                        config,
+                        channel: "mattermost".into(),
+                        thread_id: "managed-thread-1".into(),
+                        action: "close".into(),
+                    },
+                )
                 .await
                 .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let request = self.backend.0.lock().await.last().cloned().ok_or_default()?;
-                let response = self.backend.1.lock().await.last().cloned().ok_or_default()?;
+                let request = self
+                    .backend
+                    .0
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let response = self
+                    .backend
+                    .1
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
                 let (channel, thread_id, action) = match request {
-                    ChannelBackendRequest::UpdateThread { channel, thread_id, action } => (channel, thread_id, action),
+                    ChannelBackendRequest::UpdateThread {
+                        channel,
+                        thread_id,
+                        action,
+                    } => (channel, thread_id, action),
                     _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
                 };
                 if !matches!((&result, &response),
@@ -440,7 +505,10 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 self.record(
                     feature,
                     "thread_update",
-                    tinychannels_bus::ChannelRef { id: channel.clone(), account_id: None },
+                    tinychannels_bus::ChannelRef {
+                        id: channel.clone(),
+                        account_id: None,
+                    },
                     tinychannels_bus::ConversationRef {
                         kind: tinychannels_bus::ConversationKind::Channel,
                         id: channel,
@@ -452,15 +520,32 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 Ok(None)
             }
             Feature::ManagedThreadList => {
-                let result = dispatch(&self.host, Request::ListThreads {
-                    config,
-                    channel: "mattermost".into(),
-                    active: Some(true),
-                })
+                let result = dispatch(
+                    &self.host,
+                    Request::ListThreads {
+                        config,
+                        channel: "mattermost".into(),
+                        active: Some(true),
+                    },
+                )
                 .await
                 .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                let request = self.backend.0.lock().await.last().cloned().ok_or_default()?;
-                let response = self.backend.1.lock().await.last().cloned().ok_or_default()?;
+                let request = self
+                    .backend
+                    .0
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
+                let response = self
+                    .backend
+                    .1
+                    .lock()
+                    .await
+                    .last()
+                    .cloned()
+                    .ok_or_default()?;
                 let (channel, active) = match request {
                     ChannelBackendRequest::ListThreads { channel, active } => (channel, active),
                     _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
@@ -471,17 +556,23 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                             .threads
                             .iter()
                             .map(|thread| &thread.thread_id)
-                            .eq(wire.threads.iter().map(|thread| &thread.thread_id)) => result
+                            .eq(wire.threads.iter().map(|thread| &thread.thread_id)) =>
+                    {
+                        result
                             .threads
                             .iter()
                             .map(|thread| thread.thread_id.clone())
-                            .collect::<Vec<_>>(),
+                            .collect::<Vec<_>>()
+                    }
                     _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
                 };
                 self.record(
                     feature,
                     "thread_list",
-                    tinychannels_bus::ChannelRef { id: channel.clone(), account_id: None },
+                    tinychannels_bus::ChannelRef {
+                        id: channel.clone(),
+                        account_id: None,
+                    },
                     tinychannels_bus::ConversationRef {
                         kind: tinychannels_bus::ConversationKind::Channel,
                         id: channel,
@@ -534,9 +625,11 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 let responses = self.backend.1.lock().await.clone();
                 let index = requests
                     .iter()
-                    .rposition(|request| matches!(request,
+                    .rposition(|request| {
+                        matches!(request,
                         ChannelBackendRequest::ProgressiveTransport(request)
-                            if matches!(request.as_ref(), ProgressiveTransportRequest::Edit { .. })))
+                            if matches!(request.as_ref(), ProgressiveTransportRequest::Edit { .. }))
+                    })
                     .ok_or_default()?;
                 let ChannelBackendRequest::ProgressiveTransport(request) = &requests[index] else {
                     unreachable!()
@@ -553,7 +646,8 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 };
                 let response = responses.get(index).cloned().ok_or_default()?;
                 let response_value = match &response {
-                    ChannelBackendResult::ProgressiveTransport(response) => match response.as_ref() {
+                    ChannelBackendResult::ProgressiveTransport(response) => match response.as_ref()
+                    {
                         ProgressiveTransportResult::Success(value) => value.clone(),
                         _ => return Err(tinychannels_bus::channel::ChannelSendError::default()),
                     },
@@ -579,10 +673,13 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 outcome.receipt.conversation = Some(conversation);
                 outcome.receipt.primary_platform_message_id = Some(returned_id.clone());
                 outcome.receipt.platform_message_ids = vec![returned_id.clone()];
-                outcome.receipt.parts.push(tinychannels_bus::channel::MessageReceiptPart {
-                    platform_message_id: returned_id,
-                    ..Default::default()
-                });
+                outcome
+                    .receipt
+                    .parts
+                    .push(tinychannels_bus::channel::MessageReceiptPart {
+                        platform_message_id: returned_id,
+                        ..Default::default()
+                    });
                 outcome.receipt.idempotency_key = Some(message_id.clone());
                 Ok(Some(outcome))
             }
@@ -596,10 +693,17 @@ async fn managed_controller_and_progressive_paths_pass_shared_conformance_featur
     let (fixture, server) = ManagedConformanceFixture::new().await;
     let results = tinychannels_conformance::check_managed_features(&fixture).await;
     for (feature, result) in &results {
-        assert!(result.is_ok(), "{feature:?}: {}", result.as_ref().unwrap_err());
+        assert!(
+            result.is_ok(),
+            "{feature:?}: {}",
+            result.as_ref().unwrap_err()
+        );
     }
     assert_eq!(
-        results.iter().map(|(feature, _)| *feature).collect::<Vec<_>>(),
+        results
+            .iter()
+            .map(|(feature, _)| *feature)
+            .collect::<Vec<_>>(),
         tinychannels_conformance::ConformanceFeature::MANAGED,
     );
     let requests = fixture.backend.0.lock().await.clone();
