@@ -70,8 +70,8 @@ fn hosted_progressive_open_keeps_scoped_address_and_is_a_new_contract_revision()
     assert_eq!(wire["turn_id"], "turn-1");
     assert_eq!(wire["lifetime_ms"], 30_000);
     assert_eq!(CONTRACT_VERSION, 29);
-    assert!(is_compatible(28));
-    assert!(!is_compatible(27));
+    assert!(is_compatible(CONTRACT_VERSION));
+    assert!(!is_compatible(CONTRACT_VERSION - 1));
 }
 
 #[test]
