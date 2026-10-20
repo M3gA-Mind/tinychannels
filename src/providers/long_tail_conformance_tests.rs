@@ -1214,64 +1214,65 @@ async fn the_factory_built_dingtalk_adapter_passes_the_full_conformance_matrix()
         "DingTalk conformance failures: {failed:#?}"
     );
 
-    let requests = fixture
-        .fixed_server
-        .as_ref()
-        .unwrap()
-        .requests
-        .lock()
-        .unwrap();
-    assert!(
-        requests.iter().any(|request| {
-            request.target == "/v1.0/gateway/connections/open"
-                && request.body["clientId"] == "fixture-app-key"
-                && request.body["clientSecret"] == "fixture-app-secret"
-        }),
-        "configured credentials must be used in the actual Stream registration: {requests:#?}"
-    );
-    assert!(
-        requests.iter().any(|request| {
-            request.target == "/v1.0/oauth2/accessToken"
-                && request.body
-                    == json!({"appKey":"fixture-app-key","appSecret":"fixture-app-secret"})
-        }),
-        "configured credentials must be used in the actual token request: {requests:#?}"
-    );
-    let sends = requests
-        .iter()
-        .filter(|request| request.target == "/v1.0/robot/groupMessages/send")
-        .collect::<Vec<_>>();
-    assert_eq!(
-        sends.len(),
-        3,
-        "text, file, and voice are declared send features"
-    );
-    assert!(
-        sends.iter().all(|request| {
-            request.body["robotCode"] == "conformance-robot"
-                && request.body["openConversationId"] == CHANNEL
-                && request
-                    .headers
-                    .to_ascii_lowercase()
-                    .contains("x-acs-dingtalk-access-token: fixture-token")
-        }),
-        "sends must use callback-established robot context, configured group, and issued token: {sends:#?}"
-    );
-    let uploads = requests
-        .iter()
-        .filter(|request| request.target.starts_with("/media/upload?"))
-        .collect::<Vec<_>>();
-    assert_eq!(uploads.len(), 2, "file and voice each upload");
-    assert!(
-        sends.iter().any(|request| {
-            request.body["msgKey"] == "sampleFile"
-                && request.body["msgParam"]
-                    .as_str()
-                    .is_some_and(|params| params.contains("dingtalk-uploaded-media"))
-        }),
-        "the file response media_id must be used by the subsequent send: {sends:#?}"
-    );
-    drop(requests);
+    {
+        let requests = fixture
+            .fixed_server
+            .as_ref()
+            .unwrap()
+            .requests
+            .lock()
+            .unwrap();
+        assert!(
+            requests.iter().any(|request| {
+                request.target == "/v1.0/gateway/connections/open"
+                    && request.body["clientId"] == "fixture-app-key"
+                    && request.body["clientSecret"] == "fixture-app-secret"
+            }),
+            "configured credentials must be used in the actual Stream registration: {requests:#?}"
+        );
+        assert!(
+            requests.iter().any(|request| {
+                request.target == "/v1.0/oauth2/accessToken"
+                    && request.body
+                        == json!({"appKey":"fixture-app-key","appSecret":"fixture-app-secret"})
+            }),
+            "configured credentials must be used in the actual token request: {requests:#?}"
+        );
+        let sends = requests
+            .iter()
+            .filter(|request| request.target == "/v1.0/robot/groupMessages/send")
+            .collect::<Vec<_>>();
+        assert_eq!(
+            sends.len(),
+            3,
+            "text, file, and voice are declared send features"
+        );
+        assert!(
+            sends.iter().all(|request| {
+                request.body["robotCode"] == "conformance-robot"
+                    && request.body["openConversationId"] == CHANNEL
+                    && request
+                        .headers
+                        .to_ascii_lowercase()
+                        .contains("x-acs-dingtalk-access-token: fixture-token")
+            }),
+            "sends must use callback-established robot context, configured group, and issued token: {sends:#?}"
+        );
+        let uploads = requests
+            .iter()
+            .filter(|request| request.target.starts_with("/media/upload?"))
+            .collect::<Vec<_>>();
+        assert_eq!(uploads.len(), 2, "file and voice each upload");
+        assert!(
+            sends.iter().any(|request| {
+                request.body["msgKey"] == "sampleFile"
+                    && request.body["msgParam"]
+                        .as_str()
+                        .is_some_and(|params| params.contains("dingtalk-uploaded-media"))
+            }),
+            "the file response media_id must be used by the subsequent send: {sends:#?}"
+        );
+    }
     fixture.stop_dingtalk().await;
 }
 
