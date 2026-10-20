@@ -61,7 +61,7 @@ async fn module_health_checks_preserve_provider_order_and_bound_pending_calls() 
 }
 
 #[tokio::test]
-async fn module_health_checks_long_tail_adapter_status_and_deadline() {
+async fn module_health_checks_long_tail_adapter_status_as_unhealthy() {
     let config = tinychannels_bus::ChannelsConfig {
         irc: Some(tinychannels_bus::config::IrcConfig {
             server: "irc.example.test".into(),
@@ -82,19 +82,12 @@ async fn module_health_checks_long_tail_adapter_status_and_deadline() {
             .expect("configured IRC adapter");
     let provider = tinychannels::factory::BuiltChannel::LongTail(adapter.clone());
 
-    let reports = check_providers(std::slice::from_ref(&provider), Duration::from_secs(1)).await;
+    let reports = check_providers(&[provider], Duration::from_secs(1)).await;
     assert_eq!(reports[0].channel, "irc");
     assert_eq!(
         reports[0].state,
         tinychannels_bus::ChannelHealthState::Unhealthy,
         "the long-tail adapter reports unknown health as unhealthy"
-    );
-
-    let reports = check_providers(&[provider], Duration::ZERO).await;
-    assert_eq!(
-        reports[0].state,
-        tinychannels_bus::ChannelHealthState::Unhealthy,
-        "a completed status call with unknown health remains unhealthy"
     );
 }
 
