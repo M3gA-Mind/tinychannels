@@ -906,7 +906,7 @@ async fn an_empty_search_fetches_nothing() {
     let channel = imap_channel(&["*"], 30);
     let mut session = plain_session(&channel, port).await.unwrap();
     session.select("INBOX").await.unwrap();
-    assert!(channel.fetch_unseen(&mut session).await.unwrap().is_empty());
+    assert!(channel.fetch_unseen(&mut session, 1234).await.unwrap().is_empty());
     let _ = session.logout().await;
     let commands = server.await.unwrap().remove(0).join("\n");
     assert!(!commands.contains("UID FETCH"), "{commands}");
@@ -925,7 +925,7 @@ async fn fetched_mail_stays_unseen_until_ingress_is_accepted() {
     let channel = imap_channel(&["*"], 30);
     let mut session = plain_session(&channel, port).await.unwrap();
     session.select("INBOX").await.unwrap();
-    let messages = channel.fetch_unseen(&mut session).await.unwrap();
+    let messages = channel.fetch_unseen(&mut session, 1234).await.unwrap();
     assert_eq!(messages.len(), 1);
     let _ = session.logout().await;
     let commands = server.await.unwrap().remove(0).join("\n");
@@ -1311,7 +1311,7 @@ async fn rejected_typed_mail_is_retried_without_replaying_accepted_uids() {
         accepted: std::sync::Mutex::new(Vec::new()),
     };
     let error = channel
-        .process_unseen_to(&mut session, &EmailDelivery::Typed(&rejecting))
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&rejecting), 1234)
         .await
         .expect_err("a rejected typed ingress must stop this delivery pass");
     assert!(error.downcast_ref::<InboundSinkRejected>().is_some());
@@ -1346,7 +1346,7 @@ async fn rejected_typed_mail_is_retried_without_replaying_accepted_uids() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     let recorder = TypedEmailRecorder(tx);
     channel
-        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder), 1234)
         .await
         .unwrap();
     let Some(tinychannels_bus::ChannelIngress::Inbound(retried)) = rx.try_recv().ok() else {
@@ -1381,7 +1381,7 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     let recorder = TypedEmailRecorder(tx);
     let error = channel
-        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder), 1234)
         .await
         .expect_err("a rejected IMAP STORE must fail the acknowledgement");
     assert!(error.to_string().contains("cannot mark seen"), "{error:#}");
@@ -1403,7 +1403,7 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
     let mut session = plain_session(&channel, port).await.unwrap();
     session.select("INBOX").await.unwrap();
     channel
-        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder), 1234)
         .await
         .unwrap();
     assert!(
@@ -1429,7 +1429,7 @@ async fn accepted_email_without_message_id_is_not_replayed_after_store_retry() {
     let mut session = plain_session(&channel, port).await.unwrap();
     session.select("INBOX").await.unwrap();
     channel
-        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder), 1234)
         .await
         .expect_err("the first Seen acknowledgement is rejected");
     let Some(tinychannels_bus::ChannelIngress::Inbound(first)) = rx.try_recv().ok() else {
@@ -1446,7 +1446,7 @@ async fn accepted_email_without_message_id_is_not_replayed_after_store_retry() {
     let mut session = plain_session(&channel, port).await.unwrap();
     session.select("INBOX").await.unwrap();
     channel
-        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder), 1234)
         .await
         .unwrap();
     assert!(
