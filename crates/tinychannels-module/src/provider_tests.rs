@@ -5119,6 +5119,7 @@ async fn configured_linq_webhook_uses_typed_port_and_stamps_module_account() {
     use base64::Engine as _;
     use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
+    use tinychannels::factory::DefaultHttpClients;
     use tinychannels_bus::{ChannelInteraction, ChannelInteractionResult};
 
     let secret = "module-linq-secret";
@@ -5139,7 +5140,7 @@ async fn configured_linq_webhook_uses_typed_port_and_stamps_module_account() {
     let _provider_host = hooks.host(host.clone(), "linq:account-a".to_owned(), None);
     let running = launch.start(hooks, host, None, true);
     let ports = running.native_ports.as_ref().expect("native ports");
-    assert!(ports.webhooks.supports_delivery());
+    assert!(ports.adapter.supports_webhook_delivery());
 
     let body = serde_json::json!({
         "event_type": "message.received",
@@ -5176,10 +5177,11 @@ async fn configured_linq_webhook_uses_typed_port_and_stamps_module_account() {
     ));
     let delivered = callbacks.inbound.lock().await;
     assert_eq!(delivered.len(), 1);
-    assert_eq!(delivered[0]["channel"]["id"], "linq");
-    assert_eq!(delivered[0]["channel"]["accountId"], "linq:account-a");
-    assert_eq!(delivered[0]["messageId"], "message-typed-1");
-    assert_eq!(delivered[0]["text"], "hello");
+    let envelope = &delivered[0].1;
+    assert_eq!(envelope["channel"]["id"], "linq");
+    assert_eq!(envelope["channel"]["accountId"], "linq:account-a");
+    assert_eq!(envelope["messageId"], "message-typed-1");
+    assert_eq!(envelope["text"], "hello");
     drop(delivered);
 
     let rejected = running

@@ -345,6 +345,19 @@ macro_rules! native_v2_adapter {
                 $crate::providers::native::NativeProvider::proactive_target(self)
             }
 
+            fn supports_webhook_delivery(&self) -> bool {
+                $crate::providers::native::NativeProvider::supports_webhook_delivery(self)
+            }
+
+            async fn deliver_webhook(
+                &self,
+                signature: Option<&str>,
+                body: &[u8],
+            ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+                $crate::providers::native::NativeProvider::deliver_webhook(self, signature, body)
+                    .await
+            }
+
             async fn start(
                 &self,
                 sink: &(dyn $crate::channel::ChannelInboundSink + Send + Sync),
@@ -385,22 +398,6 @@ macro_rules! native_v2_adapter {
                     health_state: Some("unknown".into()),
                     ..Default::default()
                 })
-            }
-        }
-
-        #[async_trait::async_trait]
-        impl $crate::channel::ChannelWebhook for $ty {
-            fn supports_delivery(&self) -> bool {
-                $crate::providers::native::NativeProvider::supports_webhook_delivery(self)
-            }
-
-            async fn deliver_webhook(
-                &self,
-                signature: Option<&str>,
-                body: &[u8],
-            ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
-                $crate::providers::native::NativeProvider::deliver_webhook(self, signature, body)
-                    .await
             }
         }
 

@@ -219,7 +219,7 @@ async fn deliver_webhook(
 /// Route a migrated provider's webhook through its typed owner port while
 /// keeping exact-byte authentication and the existing bounded wire contract.
 pub(crate) async fn dispatch_native_webhook(
-    provider: &dyn tinychannels::channel::ChannelWebhook,
+    provider: &dyn tinychannels::channel::ChannelAdapter,
     interaction: ChannelInteraction,
 ) -> Option<tinybus::Result<ChannelInteractionResult>> {
     use ChannelInteraction as Op;
@@ -227,14 +227,14 @@ pub(crate) async fn dispatch_native_webhook(
         Op::DeliverWebhook {
             signature,
             body_base64,
-        } if provider.supports_delivery() => {
+        } if provider.supports_webhook_delivery() => {
             Some(deliver_webhook_typed(provider, signature.as_deref(), &body_base64).await)
         }
         Op::VerifyWebhook {
             mode,
             verify_token,
             challenge,
-        } if provider.supports_verification() => Some(
+        } if provider.supports_webhook_verification() => Some(
             provider
                 .verify_webhook(&mode, &verify_token, &challenge)
                 .map(ChannelInteractionResult::WebhookChallenge)
@@ -245,7 +245,7 @@ pub(crate) async fn dispatch_native_webhook(
 }
 
 async fn deliver_webhook_typed(
-    provider: &dyn tinychannels::channel::ChannelWebhook,
+    provider: &dyn tinychannels::channel::ChannelAdapter,
     signature: Option<&str>,
     body_base64: &str,
 ) -> tinybus::Result<ChannelInteractionResult> {

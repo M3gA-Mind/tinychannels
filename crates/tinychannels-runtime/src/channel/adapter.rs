@@ -16,31 +16,6 @@ pub trait ChannelInboundSink: Send + Sync {
     -> Result<(), ChannelSendError>;
 }
 
-/// Optional provider-owned raw webhook operations. Hosts pass exact request
-/// bytes and leave authentication, verification and ingestion to the provider.
-#[async_trait]
-pub trait ChannelWebhook: Send + Sync {
-    fn supports_delivery(&self) -> bool {
-        false
-    }
-
-    fn supports_verification(&self) -> bool {
-        false
-    }
-
-    async fn deliver_webhook(
-        &self,
-        _signature: Option<&str>,
-        _body: &[u8],
-    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
-        anyhow::bail!("provider has no typed webhook delivery")
-    }
-
-    fn verify_webhook(&self, _mode: &str, _verify_token: &str, _challenge: &str) -> Option<String> {
-        None
-    }
-}
-
 /// Base channel adapter contract.
 #[async_trait]
 pub trait ChannelAdapter: Send + Sync {
@@ -57,6 +32,28 @@ pub trait ChannelAdapter: Send + Sync {
 
     fn receive_ack_policy(&self) -> ChannelReceiveAckPolicy {
         ChannelReceiveAckPolicy::AfterReceiveRecord
+    }
+
+    /// Whether raw provider webhook delivery is implemented by this adapter.
+    fn supports_webhook_delivery(&self) -> bool {
+        false
+    }
+
+    /// Authenticate and ingest exact raw request bytes through the provider.
+    async fn deliver_webhook(
+        &self,
+        _signature: Option<&str>,
+        _body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        anyhow::bail!("provider has no typed webhook ingress")
+    }
+
+    fn supports_webhook_verification(&self) -> bool {
+        false
+    }
+
+    fn verify_webhook(&self, _mode: &str, _verify_token: &str, _challenge: &str) -> Option<String> {
+        None
     }
 
     async fn start(
