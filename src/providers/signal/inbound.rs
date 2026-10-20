@@ -17,7 +17,6 @@ use tinychannels_bus::{
     ChannelEventKind, ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef,
     SenderRef,
 };
-use tokio::sync::mpsc;
 use tokio::sync::{mpsc, watch};
 
 fn signal_ref() -> ChannelRef {
