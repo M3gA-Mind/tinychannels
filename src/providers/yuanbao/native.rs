@@ -99,7 +99,7 @@ impl NativeProvider for YuanbaoChannel {
     }
 
     fn proactive_target(&self) -> Option<String> {
-        crate::traits::Channel::proactive_target(self)
+        None
     }
 
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
