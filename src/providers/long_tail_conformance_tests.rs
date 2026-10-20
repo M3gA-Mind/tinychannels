@@ -19,11 +19,11 @@ use crate::host::{
     MediaRepository, MediaScope, MediaStoreRequest, StoredMedia, VoiceMediaRequest, VoiceMediaStore,
 };
 use async_trait::async_trait;
+use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use futures_util::{SinkExt, StreamExt};
 use tinychannels_bus::channel::{
     ChannelRef, ChannelSendError, ChannelSendOutcome, ConversationRef, MessageReceipt,
     SendErrorKind,
@@ -367,37 +367,32 @@ impl LongTailFixture {
         let next_id = Arc::new(AtomicU64::new(9000));
         let response_ids_for_server = response_ids.clone();
         let counter = next_id.clone();
-        let server = HttpsServer::start(move |request| {
-            match request.target.as_str() {
-                "/v1.0/gateway/connections/open" => (
-                    200,
-                    json!({"endpoint":format!("ws://{stream_address}/"),"ticket":"conformance-ticket"}).to_string(),
-                ),
-                "/v1.0/oauth2/accessToken" => {
-                    (200, r#"{"accessToken":"fixture-token"}"#.into())
-                }
-                target if target.starts_with("/media/upload?") => {
-                    (200, r#"{"media_id":"dingtalk-uploaded-media"}"#.into())
-                }
-                "/v1.0/robot/groupMessages/send" => {
-                    let id = counter.fetch_add(1, Ordering::SeqCst).to_string();
-                    response_ids_for_server.lock().push(id.clone());
-                    (200, json!({"processQueryKey":id}).to_string())
-                }
-                _ => (404, r#"{"message":"unexpected request"}"#.into()),
+        let server = HttpsServer::start(move |request| match request.target.as_str() {
+            "/v1.0/gateway/connections/open" => (
+                200,
+                json!({"endpoint":format!("ws://{stream_address}/"),"ticket":"conformance-ticket"})
+                    .to_string(),
+            ),
+            "/v1.0/oauth2/accessToken" => (200, r#"{"accessToken":"fixture-token"}"#.into()),
+            target if target.starts_with("/media/upload?") => {
+                (200, r#"{"media_id":"dingtalk-uploaded-media"}"#.into())
             }
+            "/v1.0/robot/groupMessages/send" => {
+                let id = counter.fetch_add(1, Ordering::SeqCst).to_string();
+                response_ids_for_server.lock().push(id.clone());
+                (200, json!({"processQueryKey":id}).to_string())
+            }
+            _ => (404, r#"{"message":"unexpected request"}"#.into()),
         })
         .await;
 
         let (callback_ready_tx, callback_ready_rx) = tokio::sync::oneshot::channel();
         let stream = tokio::spawn(async move {
-            let (socket, _) = tokio::time::timeout(
-                std::time::Duration::from_secs(8),
-                stream_listener.accept(),
-            )
-            .await
-            .expect("DingTalk adapter should connect to the local Stream fixture")
-            .unwrap();
+            let (socket, _) =
+                tokio::time::timeout(std::time::Duration::from_secs(8), stream_listener.accept())
+                    .await
+                    .expect("DingTalk adapter should connect to the local Stream fixture")
+                    .unwrap();
             let mut websocket = accept_async(socket).await.unwrap();
             websocket
                 .send(Message::Text(
@@ -1237,7 +1232,8 @@ async fn the_factory_built_dingtalk_adapter_passes_the_full_conformance_matrix()
     assert!(
         requests.iter().any(|request| {
             request.target == "/v1.0/oauth2/accessToken"
-                && request.body == json!({"appKey":"fixture-app-key","appSecret":"fixture-app-secret"})
+                && request.body
+                    == json!({"appKey":"fixture-app-key","appSecret":"fixture-app-secret"})
         }),
         "configured credentials must be used in the actual token request: {requests:#?}"
     );
@@ -1245,7 +1241,11 @@ async fn the_factory_built_dingtalk_adapter_passes_the_full_conformance_matrix()
         .iter()
         .filter(|request| request.target == "/v1.0/robot/groupMessages/send")
         .collect::<Vec<_>>();
-    assert_eq!(sends.len(), 3, "text, file, and voice are declared send features");
+    assert_eq!(
+        sends.len(),
+        3,
+        "text, file, and voice are declared send features"
+    );
     assert!(
         sends.iter().all(|request| {
             request.body["robotCode"] == "conformance-robot"
