@@ -2,13 +2,15 @@
 
 use super::api_tests::{FixtureVoiceCodec, fixture_client, is_token_request, token_ok};
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
-    ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink, ChannelReaction,
+    ChannelStreamingDraft, ChannelTyping,
 };
 use crate::factory::{HttpClientFactory, build_long_tail_channel_with_host};
 use crate::host::ChannelHostBuilder;
 use crate::providers::http_test_support::HttpsServer;
-use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
+use crate::providers::native::fixtures::{
+    RecordingEvents, StubMedia, StubTranscriber, StubVoice, stored_media,
+};
 use async_trait::async_trait;
 use base64::Engine as _;
 use parking_lot::Mutex;
@@ -19,8 +21,8 @@ use tinychannels_bus::channel::{
     SendErrorKind,
 };
 use tinychannels_bus::{
-    ChannelOutboundIntent, ContentPart, MediaKind, MediaReference, OutboundContentPart,
-    OutboundPayload, OutboundVoice,
+    ChannelIngress, ChannelOutboundIntent, ContentPart, MediaKind, MediaReference,
+    OutboundContentPart, OutboundPayload, OutboundVoice,
 };
 use tinychannels_conformance::{
     AdapterFixture, ConformanceFeature as Feature, ExpectedScope, WireObservation,
@@ -45,43 +47,70 @@ struct LarkFixture {
     media: Arc<StubMedia>,
     observations: Mutex<Vec<WireObservation>>,
     issued_message_ids: Arc<Mutex<Vec<String>>>,
+    voice_store: Arc<StubVoice>,
+    webhook_port: Option<u16>,
+    voice_in_enabled: bool,
 }
 
 impl LarkFixture {
     async fn start() -> Self {
+        Self::start_with_voice_ingress(false).await
+    }
+
+    async fn start_with_voice_ingress(voice_in_enabled: bool) -> Self {
+        let webhook_port = if voice_in_enabled {
+            let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = probe.local_addr().unwrap().port();
+            drop(probe);
+            Some(port)
+        } else {
+            None
+        };
         let next_id = Arc::new(AtomicUsize::new(1));
         let issued_message_ids = Arc::new(Mutex::new(Vec::new()));
-        let server = HttpsServer::start({
+        let server = HttpsServer::start_with_bytes({
             let next_id = next_id.clone();
             let issued = issued_message_ids.clone();
             move |request| {
                 if is_token_request(request) {
-                    token_ok("t-conformance")
+                    let (status, body) = token_ok("t-conformance");
+                    (status, body.into_bytes())
+                } else if request.method == "GET"
+                    && request
+                        .target
+                        .ends_with("/resources/fixture-voice?type=file")
+                {
+                    (
+                        200,
+                        include_bytes!("telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+                    )
                 } else if request.target == "/open-apis/im/v1/images" {
                     (
                         200,
-                        r#"{"code":0,"data":{"image_key":"img-conformance"}}"#.into(),
+                        r#"{"code":0,"data":{"image_key":"img-conformance"}}"#.as_bytes().to_vec(),
                     )
                 } else if request.target == "/open-apis/im/v1/files" {
                     (
                         200,
-                        r#"{"code":0,"data":{"file_key":"file-conformance"}}"#.into(),
+                        r#"{"code":0,"data":{"file_key":"file-conformance"}}"#.as_bytes().to_vec(),
                     )
                 } else if request.target.starts_with("/open-apis/im/v1/messages?") {
                     let id = format!("om-{}", next_id.fetch_add(1, Ordering::SeqCst));
                     issued.lock().push(id.clone());
                     (
                         200,
-                        format!(r#"{{"code":0,"data":{{"message_id":"{id}"}}}}"#),
+                        format!(r#"{{"code":0,"data":{{"message_id":"{id}"}}}}"#).into_bytes(),
                     )
                 } else {
                     (
                         404,
-                        r#"{"code":99991663,"msg":"unexpected request"}"#.into(),
+                        r#"{"code":99991663,"msg":"unexpected request"}"
+                            .as_bytes()
+                            .to_vec(),
                     )
                 }
             }
-        })
+        }, "audio/ogg")
         .await;
         let media = Arc::new(StubMedia::default());
         let voice = Arc::new(StubVoice::default());
@@ -90,8 +119,14 @@ impl LarkFixture {
         let host = ChannelHostBuilder::new()
             .media_repository(media.clone())
             .voice_media_store(voice)
-            .voice_codec(Arc::new(FixtureVoiceCodec))
-            .build();
+            .voice_codec(Arc::new(FixtureVoiceCodec));
+        let host = if voice_in_enabled {
+            host.transcriber(Arc::new(StubTranscriber::default()))
+                .events(Arc::new(RecordingEvents::delivering()))
+                .build()
+        } else {
+            host.build()
+        };
         let config = tinychannels_bus::ChannelsConfig {
             lark: Some(tinychannels_bus::config::LarkConfig {
                 app_id: "app-id".into(),
@@ -100,8 +135,12 @@ impl LarkFixture {
                 verification_token: None,
                 allowed_users: vec!["*".into()],
                 use_feishu: true,
-                receive_mode: Default::default(),
-                port: None,
+                receive_mode: if voice_in_enabled {
+                    tinychannels_bus::config::LarkReceiveMode::Webhook
+                } else {
+                    Default::default()
+                },
+                port: webhook_port,
             }),
             ..Default::default()
         };
@@ -115,6 +154,9 @@ impl LarkFixture {
             media,
             observations: Mutex::new(Vec::new()),
             issued_message_ids,
+            voice_store: Arc::new(StubVoice::default()),
+            webhook_port,
+            voice_in_enabled,
         }
     }
 
