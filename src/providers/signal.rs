@@ -22,7 +22,7 @@ use serde::Deserialize;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::watch;
 use uuid::Uuid;
 
 const GROUP_TARGET_PREFIX: &str = "group:";
@@ -400,16 +400,11 @@ impl SignalChannel {
     }
 }
 
-async fn sleep_or_cancel(cancellation: &mut Option<watch::Receiver<bool>>, seconds: u64) -> bool {
-    if let Some(cancel) = cancellation.as_mut() {
-        tokio::select! {
-            biased;
-            _ = cancel.wait_for(|value| *value) => false,
-            _ = tokio::time::sleep(Duration::from_secs(seconds)) => true,
-        }
-    } else {
-        tokio::time::sleep(Duration::from_secs(seconds)).await;
-        true
+async fn sleep_or_cancel(cancellation: &mut watch::Receiver<bool>, seconds: u64) -> bool {
+    tokio::select! {
+        biased;
+        _ = cancellation.wait_for(|value| *value) => false,
+        _ = tokio::time::sleep(Duration::from_secs(seconds)) => true,
     }
 }
 
@@ -417,22 +412,11 @@ impl SignalChannel {
     async fn dispatch_sse_envelope(
         &self,
         envelope: &Envelope,
-        tx: Option<&mpsc::Sender<ChannelMessage>>,
-        sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
-        cancellation: &mut Option<watch::Receiver<bool>>,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+        cancellation: &mut watch::Receiver<bool>,
     ) -> anyhow::Result<Option<bool>> {
-        if let Some(sink) = sink {
-            if let Some(cancellation) = cancellation.as_mut() {
-                return self
-                    .dispatch_typed_until_cancel(envelope, sink, cancellation)
-                    .await;
-            }
-            return Ok(Some(self.dispatch_typed_envelope(envelope, sink).await));
-        }
-        Ok(match tx {
-            Some(tx) => Some(self.dispatch_envelope(envelope, tx).await),
-            None => Some(false),
-        })
+        self.dispatch_typed_until_cancel(envelope, sink, cancellation)
+            .await
     }
 
     async fn listen_typed(
@@ -440,14 +424,13 @@ impl SignalChannel {
         sink: &(dyn ChannelInboundSink + Send + Sync),
         cancellation: watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
-        self.listen_loop(None, Some(sink), Some(cancellation)).await
+        self.listen_loop(sink, cancellation).await
     }
 
     async fn listen_loop(
         &self,
-        tx: Option<mpsc::Sender<ChannelMessage>>,
-        sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
-        mut cancellation: Option<watch::Receiver<bool>>,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+        mut cancellation: watch::Receiver<bool>,
     ) -> anyhow::Result<()> {
         let mut url = reqwest::Url::parse(&format!("{}/api/v1/events", self.http_url))?;
         url.query_pairs_mut().append_pair("account", &self.account);
@@ -458,7 +441,7 @@ impl SignalChannel {
         let max_delay_secs = 60u64;
 
         loop {
-            if cancellation.as_ref().is_some_and(|cancel| *cancel.borrow()) {
+            if *cancellation.borrow() {
                 return Ok(());
             }
             let request = self
@@ -466,28 +449,20 @@ impl SignalChannel {
                 .get(url.clone())
                 .header("Accept", "text/event-stream")
                 .send();
-            let resp = if let Some(cancel) = cancellation.as_mut() {
-                tokio::select! {
-                    biased;
-                    _ = cancel.wait_for(|value| *value) => return Ok(()),
-                    response = request => response,
-                }
-            } else {
-                request.await
+            let resp = tokio::select! {
+                biased;
+                _ = cancellation.wait_for(|value| *value) => return Ok(()),
+                response = request => response,
             };
 
             let resp = match resp {
                 Ok(r) if r.status().is_success() => r,
                 Ok(r) => {
                     let status = r.status();
-                    let body = if let Some(cancel) = cancellation.as_mut() {
-                        tokio::select! {
-                            biased;
-                            _ = cancel.wait_for(|value| *value) => return Ok(()),
-                            body = r.text() => body.unwrap_or_default(),
-                        }
-                    } else {
-                        r.text().await.unwrap_or_default()
+                    let body = tokio::select! {
+                        biased;
+                        _ = cancellation.wait_for(|value| *value) => return Ok(()),
+                        body = r.text() => body.unwrap_or_default(),
                     };
                     tracing::warn!("Signal SSE returned {status}: {body}");
                     if !sleep_or_cancel(&mut cancellation, retry_delay_secs).await {
@@ -513,14 +488,10 @@ impl SignalChannel {
             let mut current_data = String::new();
 
             loop {
-                let next_chunk = if let Some(cancel) = cancellation.as_mut() {
-                    tokio::select! {
-                        biased;
-                        _ = cancel.wait_for(|value| *value) => return Ok(()),
-                        chunk = bytes_stream.next() => chunk,
-                    }
-                } else {
-                    bytes_stream.next().await
+                let next_chunk = tokio::select! {
+                    biased;
+                    _ = cancellation.wait_for(|value| *value) => return Ok(()),
+                    chunk = bytes_stream.next() => chunk,
                 };
                 let Some(chunk) = next_chunk else {
                     break;
@@ -561,7 +532,6 @@ impl SignalChannel {
                                         match self
                                             .dispatch_sse_envelope(
                                                 envelope,
-                                                tx.as_ref(),
                                                 sink,
                                                 &mut cancellation,
                                             )
@@ -595,7 +565,6 @@ impl SignalChannel {
                             match self
                                 .dispatch_sse_envelope(
                                     envelope,
-                                    tx.as_ref(),
                                     sink,
                                     &mut cancellation,
                                 )
