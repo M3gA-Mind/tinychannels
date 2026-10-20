@@ -660,15 +660,16 @@ impl AdapterFixture for Fixture {
             }
             Feature::VoiceIn => self.voice_in().await,
             Feature::Image => {
-                self.send_and_record(
-                    feature,
-                    content(ContentPart::Image {
-                        media: media(MediaKind::Image),
-                        caption: Some("image caption".into()),
-                        alt_text: None,
-                    }),
-                )
-                .await
+                let payload = content(ContentPart::Image {
+                    media: media(MediaKind::Image),
+                    caption: Some("image caption".into()),
+                    alt_text: None,
+                });
+                if self.media_repository.is_some() {
+                    self.send_and_record(feature, payload).await
+                } else {
+                    self.refuse_send(feature, payload).await
+                }
             }
             Feature::Video => {
                 self.refuse_send(
@@ -696,15 +697,16 @@ impl AdapterFixture for Fixture {
                 .await
             }
             Feature::File => {
-                self.send_and_record(
-                    feature,
-                    content(ContentPart::File {
-                        media: media(MediaKind::Document),
-                        file_name: Some("fixture.pdf".into()),
-                        caption: Some("file caption".into()),
-                    }),
-                )
-                .await
+                let payload = content(ContentPart::File {
+                    media: media(MediaKind::Document),
+                    file_name: Some("fixture.pdf".into()),
+                    caption: Some("file caption".into()),
+                });
+                if self.media_repository.is_some() {
+                    self.send_and_record(feature, payload).await
+                } else {
+                    self.refuse_send(feature, payload).await
+                }
             }
             Feature::Sticker => {
                 self.refuse_send(
