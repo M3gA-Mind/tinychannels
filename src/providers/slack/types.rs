@@ -136,6 +136,16 @@ impl SlackChannel {
         self.http_client.clone()
     }
 
+    pub(crate) async fn health_status(&self) -> bool {
+        self.http_client()
+            .get(self.api_url("auth.test"))
+            .bearer_auth(&self.bot_token)
+            .send()
+            .await
+            .map(|response| response.status().is_success())
+            .unwrap_or(false)
+    }
+
     /// Empty allowlist denies everyone; `"*"` allows everyone.
     pub(crate) fn is_user_allowed(&self, user_id: &str) -> bool {
         self.allowed_users.iter().any(|u| u == "*" || u == user_id)

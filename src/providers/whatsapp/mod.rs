@@ -147,6 +147,20 @@ impl WhatsAppChannel {
         self.http_client.clone()
     }
 
+    pub(crate) async fn health_status(&self) -> bool {
+        let url = self.graph_url(&self.endpoint_id);
+        if api::ensure_secure(&url).is_err() {
+            return false;
+        }
+        self.http_client()
+            .get(&url)
+            .bearer_auth(&self.access_token)
+            .send()
+            .await
+            .map(|response| response.status().is_success())
+            .unwrap_or(false)
+    }
+
     /// Check if a phone number is allowed (E.164 format: +1234567890)
     fn is_number_allowed(&self, phone: &str) -> bool {
         self.allowed_numbers.iter().any(|n| n == "*" || n == phone)
@@ -374,17 +388,7 @@ impl Channel for WhatsAppChannel {
     }
 
     async fn health_check(&self) -> bool {
-        let url = self.graph_url(&self.endpoint_id);
-        if api::ensure_secure(&url).is_err() {
-            return false;
-        }
-        self.http_client()
-            .get(&url)
-            .bearer_auth(&self.access_token)
-            .send()
-            .await
-            .map(|response| response.status().is_success())
-            .unwrap_or(false)
+        self.health_status().await
     }
 
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
@@ -516,13 +520,18 @@ impl crate::channel::ChannelAdapter for WhatsAppChannel {
         tinychannels_runtime::controllers::ChannelAccountSnapshot,
         crate::channel::ChannelSendError,
     > {
+        let health_state = if self.health_status().await {
+            "healthy"
+        } else {
+            "unhealthy"
+        };
         Ok(tinychannels_bus::controllers::ChannelAccountSnapshot {
             channel_id: "whatsapp".into(),
             states: vec![
                 tinychannels_bus::controllers::ChannelAccountState::Configured,
                 tinychannels_bus::controllers::ChannelAccountState::Enabled,
             ],
-            health_state: Some("unknown".into()),
+            health_state: Some(health_state.into()),
             ..Default::default()
         })
     }
