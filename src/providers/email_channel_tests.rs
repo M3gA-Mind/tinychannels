@@ -1063,22 +1063,38 @@ async fn health_check_bounds_a_stalled_logout_after_successful_login() {
             .await
     });
 
-    tokio::time::timeout(HANG_GUARD, logout_seen.notified())
+    if tokio::time::timeout(HANG_GUARD, logout_seen.notified())
         .await
-        .expect("the fake server observed the logout request");
+        .is_err()
+    {
+        allow_logout.notify_one();
+        let _ = server.await;
+        panic!("the fake server observed the logout request");
+    }
     tokio::time::pause();
     tokio::time::advance(Duration::from_secs(2)).await;
-    tokio::task::yield_now().await;
-    let completed_before_logout_release = probe.is_finished();
+    let completion_before_logout_release =
+        tokio::time::timeout(Duration::from_secs(1), &mut probe).await;
     allow_logout.notify_one();
-    let state = probe.await.unwrap();
+    let (completed_before_logout_release, state) = match completion_before_logout_release {
+        Ok(Ok(state)) => (true, Some(state)),
+        Ok(Err(_)) => (true, None),
+        Err(_) => match probe.await {
+            Ok(state) => (false, Some(state)),
+            Err(_) => (false, None),
+        },
+    };
     let _ = server.await.unwrap();
 
     assert!(
         completed_before_logout_release,
         "health status must finish at its total deadline even when LOGOUT never replies"
     );
-    assert_eq!(state, "healthy", "login succeeded before cleanup stalled");
+    assert_eq!(
+        state,
+        Some("healthy"),
+        "login succeeded before cleanup stalled"
+    );
 }
 
 /// After the IDLE budget elapses the session re-checks the mailbox and
