@@ -11,11 +11,15 @@ fn the_schema_composes_and_declares_every_collection_as_module_scoped() {
         .iter()
         .map(|item| {
             assert_eq!(item.scope(), ScopeClass::Module, "{}", item.name());
-            assert!(
-                matches!(item, Item::Collection { version: 2, .. }),
-                "{}",
-                item.name()
-            );
+            let expected_version = if item.name() == MEDIA_METADATA {
+                MEDIA_METADATA_VERSION
+            } else {
+                SCHEMA_VERSION
+            };
+            assert!(matches!(
+                item,
+                Item::Collection { version, .. } if *version == expected_version
+            ), "{}", item.name());
             item.name()
         })
         .collect();

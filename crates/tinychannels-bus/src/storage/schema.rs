@@ -23,8 +23,7 @@ use super::migrate;
 /// The owner every collection below is prefixed with.
 pub const OWNER: &str = "channels";
 
-/// Body version of every `channels.*` collection. Version 1 is the pre-registry
-/// layout stored under the legacy names; the migration steps write 2.
+/// Body version of collections that have legacy v1 layouts and migrate to v2.
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// Entries awaiting a terminal outcome.
@@ -43,6 +42,9 @@ pub const REMOTE_META: &str = "channels.remote_meta";
 
 /// Scoped metadata for opaque channel media references.
 pub const MEDIA_METADATA: &str = "channels.media_metadata";
+/// The media metadata collection starts at v1; no earlier granted layout
+/// exists to migrate.
+pub const MEDIA_METADATA_VERSION: u32 = 1;
 
 /// The canonical collection shape requested by the module's media store.
 ///
@@ -110,7 +112,11 @@ pub fn storage_schema() -> Schema {
     let owner = Owner::new(OWNER).unwrap_or_else(|_| unreachable!("`{OWNER}` is a valid owner"));
     let schema = COLLECTIONS.iter().fold(Schema::new(owner), |schema, name| {
         if *name == MEDIA_METADATA {
-            schema.collection_with(SCHEMA_VERSION, media_metadata_spec(), ScopeClass::Module)
+            schema.collection_with(
+                MEDIA_METADATA_VERSION,
+                media_metadata_spec(),
+                ScopeClass::Module,
+            )
         } else {
             schema.collection(name, SCHEMA_VERSION, ScopeClass::Module)
         }
