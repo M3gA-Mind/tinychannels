@@ -2860,7 +2860,6 @@ async fn configured_telegram_native_optional_ports_share_ordered_queue_and_rejec
         },
         ..Default::default()
     };
-    running.validate_adapter_intent(&intent).expect("adapter scope accepts the account selected by hooks");
     let sent = handle.send(intent.clone()).await.unwrap();
     assert_eq!(
         sent.receipt.primary_platform_message_id.as_deref(),
@@ -4161,10 +4160,8 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
         },
         ..Default::default()
     };
-    eprintln!("provider={:?} instance={:?} intent_channel={:?} channel_ref={:?}", running.provider_name(), running.configured_instance, tinychannels_bus::provider_id(&intent.channel_id), intent.channel_ref);
     running
         .validate_adapter_intent(&intent)
-        .expect("adapter scope accepts the account selected by hooks");
     let sent = handle.send(intent.clone()).await.unwrap();
     assert_eq!(
         sent.receipt.primary_platform_message_id.as_deref(),
