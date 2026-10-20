@@ -1286,11 +1286,16 @@ async fn configured_slack_reactions_use_native_web_api_without_managed_fallback(
     assert!(api_error.to_string().contains("channel_not_found"));
 
     let before_invalid = server.received_requests().await.unwrap().len();
-    assert!(backend
-        .send_reaction(&config, "slack", serde_json::json!({}))
-        .await
-        .is_err());
-    assert_eq!(server.received_requests().await.unwrap().len(), before_invalid);
+    assert!(
+        backend
+            .send_reaction(&config, "slack", serde_json::json!({}))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        before_invalid
+    );
     assert!(fixture.0.lock().await.is_empty());
     assert_eq!(before_invalid, 3);
     host.shutdown().await.unwrap();
