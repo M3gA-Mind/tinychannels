@@ -57,7 +57,14 @@ fn scoped_channel_media_collection_is_declared_for_module_storage() {
     let media = schema
         .items
         .iter()
-        .find(|item| item.name() == "channels.media_metadata")
+        .find(|item| item.name() == MEDIA_METADATA)
         .expect("the channel media store collection is declared");
-    assert!(matches!(media, Item::Collection { scope: ScopeClass::Module, .. }));
+    assert!(matches!(
+        media,
+        Item::Collection {
+            scope: ScopeClass::Module,
+            spec,
+            ..
+        } if spec == &media_metadata_spec()
+    ));
 }

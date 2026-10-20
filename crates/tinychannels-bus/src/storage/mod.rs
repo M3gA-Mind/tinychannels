@@ -11,4 +11,4 @@ pub mod records;
 pub mod schema;
 
 pub use records::ChatBinding;
-pub use schema::storage_schema;
+pub use schema::{MEDIA_METADATA, media_metadata_spec, storage_schema};
