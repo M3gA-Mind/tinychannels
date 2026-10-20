@@ -1807,6 +1807,82 @@ async fn send_draft_surfaces_api_rejection() {
     assert!(err.contains("chat not found"), "{err}");
 }
 
+fn streaming_draft_intent(text: &str) -> tinychannels_bus::ChannelOutboundIntent {
+    tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: "telegram-draft-key".into(),
+        channel_id: "telegram".into(),
+        conversation_id: "100:7".into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("configured-bot".into()),
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Group,
+            id: "100:7".into(),
+            scope_id: Some("configured-bot".into()),
+            thread_id: Some("7".into()),
+            ..Default::default()
+        }),
+        reply_to_id: Some("55".into()),
+        payload: tinychannels_bus::OutboundPayload::Text { text: text.into() },
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn typed_draft_lifecycle_uses_telegram_placeholder_edit_and_final_wire_calls() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 321 })),
+    )
+    .await;
+    mount_post(&server, "editMessageText", ok()).await;
+    let channel = streaming(&server);
+
+    let draft_id = tinychannels_runtime::channel::ChannelStreamingDraft::start_draft(
+        &channel,
+        streaming_draft_intent(""),
+    )
+    .await
+    .unwrap()
+    .expect("Telegram start returns its real provider message ID");
+    tinychannels_runtime::channel::ChannelStreamingDraft::update_draft(
+        &channel,
+        &draft_id,
+        streaming_draft_intent("partial"),
+    )
+    .await
+    .unwrap();
+    tinychannels_runtime::channel::ChannelStreamingDraft::finalize_draft(
+        &channel,
+        &draft_id,
+        streaming_draft_intent("final <tool_call>{}</tool_call>"),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(draft_id, "321");
+    assert_eq!(
+        json_bodies(&server, "sendMessage").await,
+        vec![serde_json::json!({
+            "chat_id": "100",
+            "text": "...",
+            "message_thread_id": "7",
+            "reply_to_message_id": 55,
+        })]
+    );
+    let edits = json_bodies(&server, "editMessageText").await;
+    assert_eq!(edits.len(), 2);
+    assert_eq!(
+        edits[0],
+        serde_json::json!({ "chat_id": "100", "message_id": 321, "text": "partial" })
+    );
+    assert_eq!(edits[1]["parse_mode"], "MarkdownV2");
+    assert_eq!(edits[1]["text"], "final ");
+}
+
 fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessage {
     tinychannels_bus::ChannelOutboundMessage {
         channel_id: "telegram".into(),
