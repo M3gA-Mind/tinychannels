@@ -1,6 +1,7 @@
 //! Test host for the storage bus: a real in-process broker serving the
 //! `Storage` objects over an in-memory backend, with the knobs the delivery
-//! tests need (scope switching and one-shot faults on the delivery records).
+//! tests need (scope switching and persistent or one-shot faults on delivery
+//! operations).
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
