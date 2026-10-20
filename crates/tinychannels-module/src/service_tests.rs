@@ -3954,6 +3954,22 @@ async fn a_long_tail_provider_starts_as_a_native_adapter_and_is_listed() {
         }),
         ..Default::default()
     };
+    let described = service
+        .describe_configured_channels(config.clone(), Default::default())
+        .await
+        .expect("configured native provider is described");
+    let mattermost = described
+        .iter()
+        .find(|channel| channel.name == "mattermost")
+        .expect("Mattermost is listed from the configured factory instance");
+    assert_eq!(
+        mattermost.interaction.capabilities.account.configured,
+        Some(true)
+    );
+    assert_eq!(
+        mattermost.interaction.capabilities.account.enabled,
+        Some(true)
+    );
     service
         .start_channel("mattermost".into(), config.clone())
         .await
