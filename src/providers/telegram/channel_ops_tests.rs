@@ -29,6 +29,7 @@ impl tinychannels_runtime::adapters::LocalOutboundSink for TelegramConformanceSi
 
 struct TelegramWireFixture {
     adapter: tinychannels_runtime::adapters::LocalChannelAdapter,
+    channel: Arc<TelegramChannel>,
     server: MockServer,
     observations: std::sync::Mutex<Vec<tinychannels_conformance::WireObservation>>,
     request_cursor: std::sync::Mutex<usize>,
@@ -43,9 +44,17 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
 
     fn expected_scope(
         &self,
-        _feature: tinychannels_conformance::ConformanceFeature,
+        feature: tinychannels_conformance::ConformanceFeature,
     ) -> tinychannels_conformance::ExpectedScope {
-        self.scope.clone()
+        let mut scope = self.scope.clone();
+        if feature == tinychannels_conformance::ConformanceFeature::ReplyAddressing {
+            scope.reply_to_id = Some("321".into());
+        }
+        if feature == tinychannels_conformance::ConformanceFeature::ThreadAddressing {
+            scope.thread_id = Some("77".into());
+            scope.conversation.thread_id = Some("77".into());
+        }
+        scope
     }
 
     fn clear_observations(&self) {
@@ -2376,16 +2385,44 @@ async fn typed_send_receipt_uses_actual_telegram_ids_and_full_address() {
 
 #[tokio::test]
 async fn configured_telegram_adapter_passes_mock_wire_conformance() {
-    use tinychannels_conformance::{ConformanceFeature, ExpectedScope, check_feature};
+    use tinychannels_conformance::{ConformanceFeature, ExpectedScope, check_all_features};
 
     let server = mock_api().await;
+    for endpoint in ["sendMessage", "sendLocation", "sendContact", "sendPoll"] {
+        mount_post(
+            &server,
+            endpoint,
+            ok_with(serde_json::json!({ "message_id": 321 })),
+        )
+        .await;
+    }
+    for endpoint in ["setMessageReaction", "sendChatAction", "deleteMessage"] {
+        mount_post(&server, endpoint, ok_with(serde_json::json!(true))).await;
+    }
     mount_post(
         &server,
-        "sendMessage",
+        "editMessageText",
         ok_with(serde_json::json!({ "message_id": 321 })),
     )
     .await;
-    let channel = Arc::new(channel_for(&server, &["*"]));
+    let config = tinychannels_bus::ChannelsConfig {
+        telegram: Some(tinychannels_bus::config::TelegramConfig {
+            bot_token: TOKEN.into(),
+            chat_id: Some("100".into()),
+            allowed_users: vec!["*".into()],
+            stream_mode: crate::config::StreamMode::Off,
+            draft_update_interval_ms: 1_000,
+            silent_streaming: false,
+            mention_only: false,
+        }),
+        ..Default::default()
+    };
+    let host: Arc<dyn crate::host::ChannelHost> = crate::NoopHost::arc();
+    let mut channel = crate::build_telegram_channel(&config, &host, &crate::DefaultHttpClients)
+        .expect("configured factory builds Telegram");
+    Arc::get_mut(&mut channel)
+        .expect("new factory adapter is uniquely owned")
+        .set_api_base_for_tests(server.uri());
     let scope = ExpectedScope {
         channel: tinychannels_bus::ChannelRef {
             id: "telegram".into(),
@@ -2411,30 +2448,19 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
     );
     let fixture = TelegramWireFixture {
         adapter,
+        channel,
         server,
         observations: std::sync::Mutex::new(Vec::new()),
         request_cursor: std::sync::Mutex::new(0),
         scope,
     };
-    check_feature(&fixture, ConformanceFeature::Text)
-        .await
-        .unwrap();
-    let observation = fixture.observations().pop().unwrap();
-    assert_eq!(observation.request["chat_id"], "100");
-    assert_eq!(observation.request["text"], "hello\\-kit");
-    assert_eq!(observation.platform_message_ids, ["321"]);
-
-    check_feature(&fixture, ConformanceFeature::VoiceSynthesis)
-        .await
-        .unwrap();
-    assert!(
-        fixture.observations().is_empty(),
-        "undeclared voice synthesis must not reach the mock platform"
-    );
-    check_feature(&fixture, ConformanceFeature::Image)
-        .await
-        .unwrap();
-    assert!(fixture.observations().is_empty());
+    let results = check_all_features(&fixture).await;
+    assert_eq!(results.len(), ConformanceFeature::ALL.len());
+    let failures = results
+        .into_iter()
+        .filter_map(|(feature, result)| result.err().map(|error| format!("{feature:?}: {error}")))
+        .collect::<Vec<_>>();
+    assert!(failures.is_empty(), "Telegram conformance failures: {failures:#?}");
 }
 
 #[tokio::test]
