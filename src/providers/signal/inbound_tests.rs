@@ -448,16 +448,16 @@ async fn rejected_events_are_delivered_on_retry_before_dedup_commits() {
                 assert_eq!(message.text, "retry");
             }
             (1, ChannelIngress::Event(event)) => {
-                assert_eq!(event.event_id, "signal:reaction:added:1700000000123:+123456789:1700000001002");
-                assert!(matches!(event.event, ChannelEventKind::ReactionAdded { .. }));
+                assert_eq!(event.event_id, "signal:reaction:added:1700000000123:+15551111:1700000001002");
+                assert!(matches!(&event.event, ChannelEventKind::ReactionAdded { .. }));
             }
             (2, ChannelIngress::Event(event)) => {
-                assert_eq!(event.event_id, "signal:delete:1700000000123:+123456789");
-                assert!(matches!(event.event, ChannelEventKind::MessageDeleted { .. }));
+                assert_eq!(event.event_id, "signal:delete:1700000000123:+15551111");
+                assert!(matches!(&event.event, ChannelEventKind::MessageDeleted { .. }));
             }
             (3, ChannelIngress::Event(event)) => {
-                assert_eq!(event.event_id, "signal:read:1700000000123:+123456789");
-                assert!(matches!(event.event, ChannelEventKind::ReadReceipt { .. }));
+                assert_eq!(event.event_id, "signal:read:1700000000123:+15551111");
+                assert!(matches!(&event.event, ChannelEventKind::ReadReceipt { .. }));
             }
             _ => panic!("retry delivered the wrong ingress for case {index}: {ingress:?}"),
         }
