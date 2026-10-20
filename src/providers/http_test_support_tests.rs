@@ -16,6 +16,7 @@ pub(super) struct Request {
 
 pub(super) struct HttpsServer {
     pub client: reqwest::Client,
+    pub address: std::net::SocketAddr,
     pub requests: Arc<Mutex<Vec<Request>>>,
     task: tokio::task::JoinHandle<()>,
 }
@@ -47,6 +48,8 @@ impl HttpsServer {
             "api.dingtalk.com",
             "bots.qq.com",
             "api.sgroup.qq.com",
+            "open.feishu.cn",
+            "open.larksuite.com",
         ] {
             builder = builder.resolve(host, address);
         }
@@ -109,6 +112,7 @@ impl HttpsServer {
         });
         Self {
             client,
+            address,
             requests,
             task,
         }
