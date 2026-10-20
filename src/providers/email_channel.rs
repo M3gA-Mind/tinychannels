@@ -604,6 +604,7 @@ impl EmailChannel {
 
     /// Fetch unseen messages and send to channel
     #[cfg(feature = "email")]
+    #[cfg(test)]
     async fn process_unseen<S: ImapStream>(
         &self,
         session: &mut Session<S>,
