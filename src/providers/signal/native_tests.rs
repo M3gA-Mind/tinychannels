@@ -1,7 +1,7 @@
 use super::*;
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction as ReactionPort, ChannelTypedSend,
-    ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink,
+    ChannelReaction as ReactionPort, ChannelTypedSend, ChannelTyping,
 };
 use crate::providers::native::fixtures::stored_media;
 use crate::providers::signal::fixtures::*;
@@ -9,9 +9,23 @@ use crate::traits::Channel;
 use serde_json::json;
 use tinychannels_bus::channel::{MessageReceipt, MessageReceiptPart};
 use tinychannels_bus::{
-    ChannelOutboundIntent, ChannelOutboundMessage, ChannelRef, ContentPart, ConversationKind,
-    MediaKind, MediaReference, OutboundContentPart, OutboundPayload, OutboundVoice,
+    ChannelIngress, ChannelOutboundIntent, ChannelOutboundMessage, ChannelRef, ContentPart,
+    ConversationKind, MediaKind, MediaReference, OutboundContentPart, OutboundPayload,
+    OutboundVoice,
 };
+use async_trait::async_trait;
+use std::sync::Mutex;
+
+#[derive(Default)]
+struct InboundRecorder(Mutex<Vec<ChannelIngress>>);
+
+#[async_trait]
+impl ChannelInboundSink for InboundRecorder {
+    async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        self.0.lock().unwrap().push(ingress);
+        Ok(())
+    }
+}
 
 async fn send(
     channel: &SignalChannel,
@@ -87,6 +101,60 @@ fn edit_intent(body: &str) -> ChannelOutboundIntent {
         payload: OutboundPayload::Text { text: body.into() },
         ..Default::default()
     }
+}
+
+#[tokio::test]
+async fn typed_listener_connects_to_sse_publishes_and_stops() {
+    let server = wiremock::MockServer::start().await;
+    wiremock::Mock::given(wiremock::matchers::method("GET"))
+        .and(wiremock::matchers::path("/api/v1/events"))
+        .and(wiremock::matchers::query_param("account", ACCOUNT))
+        .respond_with(wiremock::ResponseTemplate::new(200).insert_header(
+            "content-type",
+            "text/event-stream",
+        ).set_body(format!(
+            "data: {}\\n\\n",
+            json!({"envelope": {
+                "sourceNumber": PEER,
+                "sourceName": "Ada",
+                "timestamp": 1_700_000_000_500u64,
+                "dataMessage": {"message": "typed hello", "timestamp": 1_700_000_000_500u64}
+            }})
+        )))
+        .mount(&server)
+        .await;
+    let channel = Arc::new(channel_for(&server));
+    let sink = Arc::new(InboundRecorder::default());
+    let listener_channel = channel.clone();
+    let listener_sink = sink.clone();
+    let listener = tokio::spawn(async move {
+        ChannelAdapter::start(listener_channel.as_ref(), listener_sink.as_ref()).await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if !sink.0.lock().unwrap().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("typed Signal SSE event should reach the adapter sink");
+    let got = sink.0.lock().unwrap();
+    let ChannelIngress::Inbound(envelope) = &got[0] else {
+        panic!("expected typed inbound message, got {:?}", got[0]);
+    };
+    assert_eq!(envelope.text, "typed hello");
+    assert_eq!(envelope.sender.name.as_deref(), Some("Ada"));
+    drop(got);
+
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), listener)
+        .await
+        .expect("Signal listener should acknowledge cancellation")
+        .unwrap()
+        .unwrap();
 }
 
 #[tokio::test]
