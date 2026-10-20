@@ -508,12 +508,12 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
         if feature == Feature::InboundReactions {
             self.capture_configured_ingress().await?;
             let captured = self.events.events.lock().unwrap().last().cloned()
-                .ok_or_else(unsupported_fixture_operation)?;
+                .ok_or_else(|| fixture_operation_failed("listener emitted no reaction event"))?;
             let requests = self.server.received_requests().await.unwrap_or_default();
             let request = requests
                 .iter()
                 .find(|request| request.url.path().ends_with("/getUpdates"))
-                .ok_or_else(unsupported_fixture_operation)?;
+                .ok_or_else(|| fixture_operation_failed("listener emitted no getUpdates request"))?;
             let conversation = captured.conversation.clone().unwrap_or_default();
             let (operation, payload) = match &captured.event {
                 tinychannels_bus::ChannelEventKind::ReactionAdded { reaction, .. } => {
@@ -522,7 +522,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 tinychannels_bus::ChannelEventKind::ReactionRemoved { reaction, .. } => {
                     ("reaction_receive", reaction.value.clone())
                 }
-                _ => return Err(unsupported_fixture_operation()),
+                other => return Err(fixture_operation_failed(format!("unexpected inbound event: {other:?}"))),
             };
             self.observations.lock().unwrap().push(
                 tinychannels_conformance::WireObservation {
