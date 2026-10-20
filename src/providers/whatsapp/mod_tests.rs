@@ -996,13 +996,32 @@ mod v2 {
             .respond_with(ResponseTemplate::new(200))
             .mount(&server)
             .await;
-        assert!(channel(&server).health_check().await);
+        let healthy = channel(&server);
+        assert!(healthy.health_check().await);
+        assert_eq!(
+            tinychannels_runtime::channel::ChannelAdapter::status(&healthy)
+                .await
+                .unwrap()
+                .health_state
+                .as_deref(),
+            Some("healthy"),
+            "adapter status must report the actual Graph API result"
+        );
         server.reset().await;
         Mock::given(method("GET"))
             .respond_with(ResponseTemplate::new(401))
             .mount(&server)
             .await;
-        assert!(!channel(&server).health_check().await);
+        let unhealthy = channel(&server);
+        assert!(!unhealthy.health_check().await);
+        assert_eq!(
+            tinychannels_runtime::channel::ChannelAdapter::status(&unhealthy)
+                .await
+                .unwrap()
+                .health_state
+                .as_deref(),
+            Some("unhealthy")
+        );
         let insecure = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
             .with_api_base_for_test("http://graph.example.invalid");
         assert!(!insecure.health_check().await);

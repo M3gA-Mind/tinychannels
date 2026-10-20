@@ -83,6 +83,11 @@ async fn the_legacy_channel_reports_the_same_facts() {
 #[tokio::test]
 async fn the_adapter_describes_itself_and_manages_no_lifecycle_of_its_own() {
     let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(wiremock::matchers::path("/users/@me"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
     let channel = DiscordChannel::new("t".into(), None, Some(" 77 ".into()), vec![], false, false)
         .with_api_base(server.uri());
 
@@ -115,6 +120,7 @@ async fn the_adapter_describes_itself_and_manages_no_lifecycle_of_its_own() {
     ChannelAdapter::stop(&channel).await.unwrap();
     let status = ChannelAdapter::status(&channel).await.unwrap();
     assert_eq!(status.channel_id, "discord");
+    assert_eq!(status.health_state.as_deref(), Some("healthy"));
 }
 
 #[tokio::test]

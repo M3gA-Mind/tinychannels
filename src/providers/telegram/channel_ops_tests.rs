@@ -3238,13 +3238,31 @@ async fn health_check_reflects_get_me_status() {
         .await;
     let ch = channel_for(&server, &["*"]);
     assert!(ch.health_check().await);
+    assert_eq!(
+        ChannelAdapter::status(&ch)
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
+        Some("healthy"),
+        "adapter status must report the actual getMe result"
+    );
 
     let failing = mock_api().await;
     Mock::given(method("GET"))
         .respond_with(ResponseTemplate::new(401))
         .mount(&failing)
         .await;
-    assert!(!channel_for(&failing, &["*"]).health_check().await);
+    let failing_channel = channel_for(&failing, &["*"]);
+    assert!(!failing_channel.health_check().await);
+    assert_eq!(
+        ChannelAdapter::status(&failing_channel)
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
+        Some("unhealthy")
+    );
 
     let mut dead = TelegramChannel::new("tok".into(), vec!["*".into()], false);
     dead.api_base = dead_base();
