@@ -20,12 +20,57 @@ use tinystoragedrivers_types::{
 };
 
 /// One-shot faults and counters on the delivery records.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct Faults {
-    pub(crate) fail_pending_write: AtomicBool,
-    pub(crate) fail_queue_read: AtomicBool,
+    pub(crate) plan: FaultPlan,
+    pub(crate) fail_pending_write: FaultSwitch,
+    pub(crate) fail_queue_read: FaultSwitch,
     pub(crate) lose_result_reply: AtomicBool,
     pub(crate) pending_reads: AtomicUsize,
+}
+
+#[derive(Debug)]
+pub(crate) struct FaultSwitch {
+    active: AtomicBool,
+    plan: FaultPlan,
+    operation: &'static str,
+}
+
+impl FaultSwitch {
+    fn new(plan: FaultPlan, operation: &'static str) -> Self {
+        Self {
+            active: AtomicBool::new(false),
+            plan,
+            operation,
+        }
+    }
+
+    pub(crate) fn store(&self, value: bool, _ordering: Ordering) {
+        self.active.store(value, Ordering::SeqCst);
+        if value {
+            self.plan
+                .fail_operation_nth(self.operation, 1, tinystoragedrivers_types::ErrorKind::Backend);
+        } else {
+            self.plan.clear();
+        }
+    }
+
+    pub(crate) fn load(&self, _ordering: Ordering) -> bool {
+        self.active.load(Ordering::SeqCst)
+    }
+}
+
+impl Default for Faults {
+    fn default() -> Self {
+        let plan = FaultPlan::new();
+        Self {
+            fail_pending_write: FaultSwitch::new(plan.clone(), "documents.put_with"),
+            fail_queue_read: FaultSwitch::new(plan.clone(), "documents.query"),
+            plan,
+            lose_result_reply: AtomicBool::new(false),
+            pending_reads: AtomicUsize::new(0),
+        }
+    }
 }
 
 /// A storage host on a bus connection.
@@ -68,11 +113,11 @@ impl StorageHost {
             let local = backend
                 .for_scope(&Scope::new("tenant:fixture").ok()?)
                 .ok()?;
-            let docs = Arc::new(ScopeSwitchDocs {
+            let docs = Arc::new(Failing::with_plan(Arc::new(ScopeSwitchDocs {
                 backend,
                 faults,
                 current,
-            });
+            }), bound.1.plan.clone()));
             Some(StorageServer::new(Storage::new(
                 docs,
                 Arc::clone(local.streams()),
@@ -240,11 +285,6 @@ impl DocumentStore for ScopeSwitchDocs {
         precondition: Precondition,
         options: WriteOptions,
     ) -> Result<Version> {
-        if collection == PENDING_COLLECTION
-            && self.faults.fail_pending_write.swap(false, Ordering::SeqCst)
-        {
-            return Err(StorageError::backend("fixture pending write failed"));
-        }
         let version = self
             .inner()
             .put_with(collection, id, doc, precondition, options)
@@ -268,17 +308,11 @@ impl DocumentStore for ScopeSwitchDocs {
     ) -> Result<tinystoragedrivers_types::Page<Versioned<Value>>> {
         if collection == PENDING_COLLECTION {
             self.faults.pending_reads.fetch_add(1, Ordering::SeqCst);
-            if self.faults.fail_queue_read.load(Ordering::SeqCst) {
-                return Err(StorageError::backend("fixture pending read failed"));
-            }
         }
         self.inner().query(collection, query).await
     }
 
     async fn count(&self, collection: &str, filter: &Filter) -> Result<u64> {
-        if collection == PENDING_COLLECTION && self.faults.fail_queue_read.load(Ordering::SeqCst) {
-            return Err(StorageError::backend("fixture pending read failed"));
-        }
         self.inner().count(collection, filter).await
     }
 
