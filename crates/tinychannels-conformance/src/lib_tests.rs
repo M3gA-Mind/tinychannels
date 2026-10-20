@@ -140,6 +140,15 @@ fn fixture(feature: ConformanceFeature) -> Fixture {
 }
 
 #[tokio::test]
+async fn conformance_entrypoints_accept_existing_adapter_trait_objects() {
+    let fixture = fixture(ConformanceFeature::Text);
+    let adapter: &dyn AdapterFixture = &fixture;
+
+    assert!(check_feature(adapter, ConformanceFeature::Text).await.is_ok());
+    assert_eq!(check_all_features(adapter).await.len(), ConformanceFeature::ALL.len());
+}
+
+#[tokio::test]
 async fn receiptless_platform_send_requires_real_wire_evidence_without_fabricated_ids() {
     let mut fixture = fixture(ConformanceFeature::Text);
     fixture.requires_receipt = false;
