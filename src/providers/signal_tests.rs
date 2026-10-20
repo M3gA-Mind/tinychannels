@@ -3,6 +3,7 @@ use crate::channel::{ChannelAdapter, ChannelInboundSink, ChannelTyping};
 use crate::providers::native::NativeProvider;
 use async_trait::async_trait;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 
 fn make_channel() -> SignalChannel {
     SignalChannel::new(
