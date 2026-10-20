@@ -376,7 +376,14 @@ async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_se
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    drop(listener);
+    let server = tokio::spawn(async move {
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                break;
+            };
+            drop(stream);
+        }
+    });
     let channel = MattermostChannel::with_http_client(
         format!("http://{address}"),
         "test-token".into(),
@@ -395,7 +402,7 @@ async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_se
 
     let send_error = ChannelTypedSend::send_typed(
         &channel,
-        ChannelOutboundMessage {
+        &ChannelOutboundMessage {
             channel_id: "mattermost".into(),
             conversation_id: "channel-1".into(),
             channel_ref: Some(ChannelRef {
@@ -407,6 +414,9 @@ async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_se
                 id: "channel-1".into(),
                 ..Default::default()
             }),
+            reply_to_id: None,
+            thread_id: None,
+            turn_id: None,
             idempotency_key: "transport-failure".into(),
             parts: vec![OutboundContentPart::Content {
                 part: ContentPart::Text {
@@ -414,7 +424,6 @@ async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_se
                     markdown_dialect: None,
                 },
             }],
-            ..Default::default()
         },
     )
     .await
@@ -477,6 +486,7 @@ async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_se
     assert_eq!(identity_error.kind, SendErrorKind::Transient);
     assert!(identity_error.retryable);
     assert!(!identity_error.sent_before_error);
+    server.abort();
 }
 
 #[tokio::test]
