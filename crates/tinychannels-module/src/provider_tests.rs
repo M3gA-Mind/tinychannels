@@ -5132,12 +5132,19 @@ async fn configured_linq_webhook_uses_typed_port_and_stamps_module_account() {
         }),
         ..Default::default()
     };
-    let noop: Arc<dyn tinychannels::host::ChannelHost> = tinychannels::host::NoopHost::arc();
-    let launch = crate::native::build_native_v2("linq", &config, &noop, &DefaultHttpClients)
-        .expect("configured Linq factory");
     let hooks = Arc::new(Hooks::default());
     let (host, callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), "linq:account-a".to_owned(), None);
+    let provider_host = tinychannels::host::ChannelHostBuilder::new()
+        .events(Arc::new(ModuleEvents(
+            host.clone(),
+            "linq:account-a".to_owned(),
+            MediaScope::fixed(None),
+        )))
+        .build();
+    let launch =
+        crate::native::build_native_v2("linq", &config, &provider_host, &DefaultHttpClients)
+            .expect("configured Linq factory");
     let running = launch.start(hooks, host, None, true);
     let ports = running.native_ports.as_ref().expect("native ports");
     assert!(ports.adapter.supports_webhook_delivery());
