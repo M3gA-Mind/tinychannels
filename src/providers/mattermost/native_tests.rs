@@ -118,7 +118,10 @@ async fn configured_mattermost_reaction_uses_authenticated_native_v4_requests() 
         false,
     )
     .await;
-    assert!(result.is_ok(), "Mattermost reaction request failed: {result:?}");
+    assert!(
+        result.is_ok(),
+        "Mattermost reaction request failed: {result:?}"
+    );
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2);
     assert!(requests.iter().all(|request| {

@@ -626,15 +626,15 @@ impl LongTailFixture {
             let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
             let (operation, message_ids, kinds, post_id, request_body) =
                 if url_path == "/api/v4/posts" {
-                let kinds = if body.get("file_ids").is_some() {
-                    uploaded_kind
-                        .take()
-                        .into_iter()
-                        .map(str::to_owned)
-                        .collect()
-                } else {
-                    vec!["text".to_owned()]
-                };
+                    let kinds = if body.get("file_ids").is_some() {
+                        uploaded_kind
+                            .take()
+                            .into_iter()
+                            .map(str::to_owned)
+                            .collect()
+                    } else {
+                        vec!["text".to_owned()]
+                    };
                     let response_id = ids.next().unwrap_or_default();
                     ("send", vec![response_id.clone()], kinds, response_id, body)
                 } else if url_path == "/api/v4/reactions" {
@@ -660,11 +660,7 @@ impl LongTailFixture {
                 } else if matches!(request.method.as_str(), "PUT" | "DELETE")
                     && url_path.starts_with("/api/v4/posts/")
                 {
-                    let post_id = url_path
-                        .rsplit('/')
-                        .next()
-                        .unwrap_or_default()
-                        .to_owned();
+                    let post_id = url_path.rsplit('/').next().unwrap_or_default().to_owned();
                     let operation = if request.method.as_str() == "PUT" {
                         "edit"
                     } else {
@@ -683,11 +679,17 @@ impl LongTailFixture {
             let (channel_id, thread) = match scope {
                 Some(scope) => scope,
                 None if operation == "send" => (
-                    request_body["channel_id"].as_str().unwrap_or_default().to_owned(),
+                    request_body["channel_id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned(),
                     request_body["root_id"].as_str().map(str::to_owned),
                 ),
                 None if operation == "typing" => (
-                    request_body["channel_id"].as_str().unwrap_or(CHANNEL).to_owned(),
+                    request_body["channel_id"]
+                        .as_str()
+                        .unwrap_or(CHANNEL)
+                        .to_owned(),
                     request_body["root_id"].as_str().map(str::to_owned),
                 ),
                 None => (String::new(), None),
@@ -1165,27 +1167,119 @@ impl AdapterFixture for LongTailFixture {
                 .await
             }
             Feature::Reactions => {
-                self.refused(ChannelReaction::send_reaction(
+                if !channel.declared_capabilities().reactions {
+                    return self
+                        .refused(ChannelReaction::send_reaction(
+                            channel,
+                            &account(self.id),
+                            &target,
+                            "m1",
+                            &tinychannels_bus::channel::ChannelReaction::default(),
+                            false,
+                        ))
+                        .await;
+                }
+                let setup = ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        OutboundPayload::Text {
+                            text: "reaction target".into(),
+                        },
+                    ),
+                )
+                .await?;
+                let message_id = setup
+                    .receipt
+                    .primary_platform_message_id
+                    .as_deref()
+                    .ok_or_else(|| crate::providers::native::pre_dispatch("missing post ID"))?;
+                let before = self.request_count().await;
+                ChannelReaction::send_reaction(
                     channel,
                     &account(self.id),
                     &target,
-                    "m1",
-                    &tinychannels_bus::channel::ChannelReaction::default(),
+                    message_id,
+                    &tinychannels_bus::channel::ChannelReaction {
+                        value: "thumbsup".into(),
+                        custom_emoji_id: None,
+                    },
                     false,
-                ))
-                .await
+                )
+                .await?;
+                self.record(feature, before).await;
+                Ok(None)
             }
             Feature::Edit => {
-                self.refused(ChannelEdit::edit(
+                if !channel
+                    .declared_capabilities()
+                    .actions
+                    .supported
+                    .iter()
+                    .any(|action| action == "edit")
+                {
+                    return self
+                        .refused(ChannelEdit::edit(
+                            channel,
+                            &MessageReceipt::default(),
+                            self.intent(feature, OutboundPayload::Text { text: "e".into() }),
+                        ))
+                        .await;
+                }
+                let setup = ChannelAdapter::send(
                     channel,
-                    &MessageReceipt::default(),
-                    self.intent(feature, OutboundPayload::Text { text: "e".into() }),
-                ))
-                .await
+                    self.intent(
+                        feature,
+                        OutboundPayload::Text {
+                            text: "edit target".into(),
+                        },
+                    ),
+                )
+                .await?;
+                let before = self.request_count().await;
+                let receipt = ChannelEdit::edit(
+                    channel,
+                    &setup.receipt,
+                    self.intent(
+                        feature,
+                        OutboundPayload::Text {
+                            text: "edited text".into(),
+                        },
+                    ),
+                )
+                .await?;
+                self.record(feature, before).await;
+                Ok(Some(ChannelSendOutcome {
+                    receipt,
+                    error: None,
+                }))
             }
             Feature::Delete => {
-                self.refused(ChannelDelete::delete(channel, &MessageReceipt::default()))
-                    .await
+                if !channel
+                    .declared_capabilities()
+                    .actions
+                    .supported
+                    .iter()
+                    .any(|action| action == "delete")
+                {
+                    return self
+                        .refused(ChannelDelete::delete(channel, &MessageReceipt::default()))
+                        .await;
+                }
+                let setup = ChannelAdapter::send(
+                    channel,
+                    self.intent(
+                        feature,
+                        OutboundPayload::Text {
+                            text: "delete target".into(),
+                        },
+                    ),
+                )
+                .await?;
+                let before = self.request_count().await;
+                ChannelDelete::delete(channel, &setup.receipt).await?;
+                self.record(feature, before).await;
+                Ok(None)
             }
             Feature::StreamingDraft => {
                 self.refused(ChannelStreamingDraft::upsert_draft(

@@ -142,8 +142,9 @@ impl NativeProvider for MattermostChannel {
                 "Mattermost reactions require an emoji name",
             ));
         }
-        let emoji_name = mattermost_emoji_name(&reaction.value)
-            .ok_or_else(|| crate::providers::native::pre_dispatch("invalid Mattermost emoji name"))?;
+        let emoji_name = mattermost_emoji_name(&reaction.value).ok_or_else(|| {
+            crate::providers::native::pre_dispatch("invalid Mattermost emoji name")
+        })?;
         let user_id = self.bot_user_id().await?;
         let url = if remove {
             format!(
@@ -243,7 +244,10 @@ impl MattermostChannel {
             .await
             .map_err(|_| mattermost_request_error("identity lookup", false))?;
         if !response.status().is_success() {
-            return Err(mattermost_status_error(response.status(), "identity lookup"));
+            return Err(mattermost_status_error(
+                response.status(),
+                "identity lookup",
+            ));
         }
         let identity: serde_json::Value = response.json().await.map_err(|_| ChannelSendError {
             kind: SendErrorKind::Unknown,
@@ -379,9 +383,9 @@ fn mattermost_emoji_name(value: &str) -> Option<String> {
     };
     let name = known.unwrap_or_else(|| value.trim_matches(':'));
     (!name.is_empty()
-        && name
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '+')))
+        && name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-' | '+')
+        }))
     .then(|| name.to_owned())
 }
 

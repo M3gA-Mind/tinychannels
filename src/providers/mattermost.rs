@@ -924,7 +924,10 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
             ..Default::default()
         });
         capabilities.reactions = true;
-        capabilities.actions.supported.extend(["edit", "delete"].map(String::from));
+        capabilities
+            .actions
+            .supported
+            .extend(["edit", "delete"].map(String::from));
         if self.media_repository.is_some() {
             capabilities
                 .content
@@ -1018,8 +1021,10 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         &self,
         receipt: &tinychannels_bus::channel::MessageReceipt,
         intent: tinychannels_bus::ChannelOutboundIntent,
-    ) -> Result<tinychannels_bus::channel::MessageReceipt, tinychannels_bus::channel::ChannelSendError>
-    {
+    ) -> Result<
+        tinychannels_bus::channel::MessageReceipt,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
         crate::providers::native::edit(self, receipt, &intent).await
     }
 

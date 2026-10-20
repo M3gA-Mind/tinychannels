@@ -477,15 +477,17 @@ impl HostBackend {
             return Ok(None);
         };
         let clients = tinychannels::factory::ConfiguredHttpClients::new(self.proxy.clone())?;
-        Ok(Some(tinychannels::providers::MattermostChannel::with_http_client(
-            mattermost.url.clone(),
-            mattermost.bot_token.clone(),
-            mattermost.channel_id.clone(),
-            mattermost.allowed_users.clone(),
-            mattermost.thread_replies.unwrap_or(true),
-            mattermost.mention_only.unwrap_or(false),
-            clients.client_for("channel.mattermost"),
-        )))
+        Ok(Some(
+            tinychannels::providers::MattermostChannel::with_http_client(
+                mattermost.url.clone(),
+                mattermost.bot_token.clone(),
+                mattermost.channel_id.clone(),
+                mattermost.allowed_users.clone(),
+                mattermost.thread_replies.unwrap_or(true),
+                mattermost.mention_only.unwrap_or(false),
+                clients.client_for("channel.mattermost"),
+            ),
+        ))
     }
 
     async fn invoke(&self, request: ChannelBackendRequest) -> anyhow::Result<ChannelBackendResult> {

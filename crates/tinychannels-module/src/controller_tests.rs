@@ -1419,24 +1419,39 @@ async fn configured_mattermost_reactions_use_native_v4_without_managed_fallback(
     assert!(api_error.to_string().contains("HTTP 403"));
 
     let before_invalid = server.received_requests().await.unwrap().len();
-    assert!(backend
-        .send_reaction(&config, "mattermost", serde_json::json!({}))
-        .await
-        .is_err());
-    assert_eq!(server.received_requests().await.unwrap().len(), before_invalid);
+    assert!(
+        backend
+            .send_reaction(&config, "mattermost", serde_json::json!({}))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        before_invalid
+    );
     let create_thread = backend
         .create_thread(&config, "mattermost", "not a root post")
         .await
         .expect_err("Mattermost generic thread creation remains unsupported");
-    assert!(create_thread.to_string().contains("no native thread create"));
+    assert!(
+        create_thread
+            .to_string()
+            .contains("no native thread create")
+    );
     let list_threads = backend
         .list_threads(&config, "mattermost", None)
         .await
         .expect_err("Mattermost generic thread listing remains unsupported");
     assert!(list_threads.to_string().contains("no native thread list"));
 
-    assert_eq!(before_invalid, 6, "only native identity and operation calls were made");
-    assert!(fixture.0.lock().await.is_empty(), "no managed fallback is allowed");
+    assert_eq!(
+        before_invalid, 6,
+        "only native identity and operation calls were made"
+    );
+    assert!(
+        fixture.0.lock().await.is_empty(),
+        "no managed fallback is allowed"
+    );
     host.shutdown().await.unwrap();
 }
 
