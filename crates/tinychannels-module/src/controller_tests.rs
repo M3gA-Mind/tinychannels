@@ -728,10 +728,29 @@ async fn managed_controller_and_progressive_paths_pass_shared_conformance_featur
     let (fixture, server) = ManagedConformanceFixture::new().await;
     let results = tinychannels_conformance::check_managed_features(&fixture).await;
     let callbacks = fixture.backend.0.lock().await.clone();
+    let callback_summary = callbacks
+        .iter()
+        .map(|request| match request {
+            ChannelBackendRequest::ProgressiveTransport(request) => match request.as_ref() {
+                tinychannels_bus::module_progressive::ProgressiveTransportRequest::SendTyped {
+                    ..
+                } => "SendTyped",
+                tinychannels_bus::module_progressive::ProgressiveTransportRequest::Edit {
+                    ..
+                } => "Edit",
+                _ => "other progressive",
+            },
+            ChannelBackendRequest::SendReaction { .. } => "SendReaction",
+            ChannelBackendRequest::CreateThread { .. } => "CreateThread",
+            ChannelBackendRequest::UpdateThread { .. } => "UpdateThread",
+            ChannelBackendRequest::ListThreads { .. } => "ListThreads",
+            _ => "other",
+        })
+        .collect::<Vec<_>>();
     for (feature, result) in &results {
         assert!(
             result.is_ok(),
-            "{feature:?}: {}; callbacks: {callbacks:?}",
+            "{feature:?}: {}; callbacks: {callback_summary:?}",
             result.as_ref().unwrap_err(),
         );
     }
