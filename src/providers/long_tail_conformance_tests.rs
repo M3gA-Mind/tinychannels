@@ -1272,6 +1272,22 @@ async fn the_factory_built_dingtalk_adapter_passes_the_full_conformance_matrix()
             }),
             "the file response media_id must be used by the subsequent send: {sends:#?}"
         );
+        assert!(
+            sends.iter().any(|request| {
+                request.body["msgKey"] == "sampleAudio"
+                    && request.body["msgParam"]
+                        .as_str()
+                        .and_then(|params| serde_json::from_str::<serde_json::Value>(params).ok())
+                        .is_some_and(|params| params["mediaId"] == "dingtalk-uploaded-media")
+            }),
+            "the voice response media_id must be used by the subsequent send: {sends:#?}"
+        );
+        assert!(
+            uploads.iter().all(|request| request
+                .target
+                .contains("access_token=fixture-token")),
+            "both media uploads must use the token issued by the OAuth endpoint: {uploads:#?}"
+        );
     }
     fixture.stop_dingtalk().await;
 }
