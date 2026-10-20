@@ -4,7 +4,12 @@
 //! and run `cargo run --locked --example generate_v1_fixture` there. The JSON
 //! contains public storage-port records, not hand-written storage DTOs.
 
-use std::{collections::BTreeMap, error::Error, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    error::Error,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use tinychannels::{
     delivery::{
@@ -61,7 +66,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .save_result(DeliveryTerminalResult {
             id: "fixture-result-1".into(),
             intent_fingerprint: "0123456789abcdef".repeat(4),
-            completed_at_unix_ms: 1_700_000_000_789,
+            completed_at_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)?
+                .as_millis()
+                .try_into()?,
         })
         .await?;
 
