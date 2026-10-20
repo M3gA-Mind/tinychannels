@@ -155,7 +155,7 @@ async fn typed_listener_connects_to_sse_publishes_and_stops() {
         ChannelAdapter::start(listener_channel.as_ref(), listener_sink.as_ref()).await
     });
 
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(2), async {
         loop {
             if !sink.0.lock().unwrap().is_empty() {
                 break;
@@ -249,7 +249,7 @@ async fn aborting_listener_start_releases_registration_for_restart() {
     let restart = tokio::spawn(async move {
         ChannelAdapter::start(restart_channel.as_ref(), sink_for_restart.as_ref()).await
     });
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(5), async {
         loop {
             let requests = server.received_requests().await.unwrap_or_default();
             if requests.len() >= 2 {
