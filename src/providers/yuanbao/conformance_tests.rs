@@ -255,7 +255,7 @@ impl Fixture {
         assert_eq!(transcript.text, "hello");
         assert_eq!(transcript.language.as_deref(), Some("en"));
         let observed_push: serde_json::Value = serde_json::from_slice(
-            &crate::providers::yuanbao::connection::test_support::decode_conn_msg(&push)
+            &crate::providers::yuanbao::proto::decode_conn_msg(&push)
                 .unwrap()
                 .data,
         )
@@ -468,7 +468,7 @@ impl AdapterFixture for Fixture {
                 self.refuse_send(
                     feature,
                     content(ContentPart::Sticker {
-                        media: media(MediaKind::Sticker),
+                        media: media(MediaKind::Unknown),
                         pack_id: None,
                         sticker_id: None,
                         emoji: None,
