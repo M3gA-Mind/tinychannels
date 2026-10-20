@@ -648,7 +648,11 @@ impl DiscordChannel {
     }
 
     /// `MESSAGE_UPDATE`: a user edited a message.
-    pub(super) async fn handle_message_update(
+    pub(super) async fn handle_message_update(&self, d: &Value, bot_user_id: &str) {
+        self.handle_message_update_to(d, bot_user_id, None).await;
+    }
+
+    pub(super) async fn handle_message_update_to(
         &self,
         d: &Value,
         bot_user_id: &str,
@@ -681,27 +685,34 @@ impl DiscordChannel {
         let source_timestamp = chrono::DateTime::parse_from_rfc3339(edited_at)
             .ok()
             .and_then(|at| u64::try_from(at.timestamp_millis()).ok());
-        self.publish_event_to(ChannelEvent {
-            version: 2,
-            event_id: format!("discord:edit:{message_id}:{edited_at}"),
-            source_event_id: Some(message_id.to_owned()),
-            source_timestamp,
-            channel: channel_ref(),
-            conversation: Some(Self::conversation_for(channel_id, guild_id, &info)),
-            event: ChannelEventKind::MessageUpdated {
-                message_id: format!("discord_{message_id}"),
-                provider_message_id: Some(message_id.to_owned()),
-                parts: vec![ContentPart::Text {
-                    text: content.to_owned(),
-                    markdown_dialect: None,
-                }],
+        self.publish_event_to(
+            ChannelEvent {
+                version: 2,
+                event_id: format!("discord:edit:{message_id}:{edited_at}"),
+                source_event_id: Some(message_id.to_owned()),
+                source_timestamp,
+                channel: channel_ref(),
+                conversation: Some(Self::conversation_for(channel_id, guild_id, &info)),
+                event: ChannelEventKind::MessageUpdated {
+                    message_id: format!("discord_{message_id}"),
+                    provider_message_id: Some(message_id.to_owned()),
+                    parts: vec![ContentPart::Text {
+                        text: content.to_owned(),
+                        markdown_dialect: None,
+                    }],
+                },
             },
-        }, typed_tx)
+            typed_tx,
+        )
         .await;
     }
 
     /// `MESSAGE_DELETE`: a message was removed.
-    pub(super) async fn handle_message_delete(
+    pub(super) async fn handle_message_delete(&self, d: &Value) {
+        self.handle_message_delete_to(d, None).await;
+    }
+
+    pub(super) async fn handle_message_delete_to(
         &self,
         d: &Value,
         typed_tx: Option<&tokio::sync::mpsc::Sender<ChannelIngress>>,
@@ -718,23 +729,30 @@ impl DiscordChannel {
         if !self.in_scope(guild_id, channel_id, &info) {
             return;
         }
-        self.publish_event_to(ChannelEvent {
-            version: 2,
-            event_id: format!("discord:delete:{message_id}"),
-            source_event_id: Some(message_id.to_owned()),
-            source_timestamp: None,
-            channel: channel_ref(),
-            conversation: Some(Self::conversation_for(channel_id, guild_id, &info)),
-            event: ChannelEventKind::MessageDeleted {
-                message_id: format!("discord_{message_id}"),
-                provider_message_id: Some(message_id.to_owned()),
+        self.publish_event_to(
+            ChannelEvent {
+                version: 2,
+                event_id: format!("discord:delete:{message_id}"),
+                source_event_id: Some(message_id.to_owned()),
+                source_timestamp: None,
+                channel: channel_ref(),
+                conversation: Some(Self::conversation_for(channel_id, guild_id, &info)),
+                event: ChannelEventKind::MessageDeleted {
+                    message_id: format!("discord_{message_id}"),
+                    provider_message_id: Some(message_id.to_owned()),
+                },
             },
-        }, typed_tx)
+            typed_tx,
+        )
         .await;
     }
 
     /// `MESSAGE_REACTION_ADD` / `MESSAGE_REACTION_REMOVE`.
-    pub(super) async fn handle_reaction(
+    pub(super) async fn handle_reaction(&self, d: &Value, bot_user_id: &str, added: bool) {
+        self.handle_reaction_to(d, bot_user_id, added, None).await;
+    }
+
+    pub(super) async fn handle_reaction_to(
         &self,
         d: &Value,
         bot_user_id: &str,
@@ -799,24 +817,31 @@ impl DiscordChannel {
                 },
             )
         };
-        self.publish_event_to(ChannelEvent {
-            version: 2,
-            event_id: format!(
-                "discord:reaction:{verb}:{channel_id}:{message_id}:{user_id}:{}",
-                custom_id.as_deref().unwrap_or(name)
-            ),
-            source_event_id: None,
-            source_timestamp: None,
-            channel: channel_ref(),
-            conversation: Some(Self::conversation_for(channel_id, guild_id, &info)),
-            event: kind,
-        }, typed_tx)
+        self.publish_event_to(
+            ChannelEvent {
+                version: 2,
+                event_id: format!(
+                    "discord:reaction:{verb}:{channel_id}:{message_id}:{user_id}:{}",
+                    custom_id.as_deref().unwrap_or(name)
+                ),
+                source_event_id: None,
+                source_timestamp: None,
+                channel: channel_ref(),
+                conversation: Some(Self::conversation_for(channel_id, guild_id, &info)),
+                event: kind,
+            },
+            typed_tx,
+        )
         .await;
     }
 
     /// `INTERACTION_CREATE` for a button press: acknowledge it, then publish
     /// the opaque action id for the host to validate.
-    pub(super) async fn handle_interaction(
+    pub(super) async fn handle_interaction(&self, d: &Value) {
+        self.handle_interaction_to(d, None).await;
+    }
+
+    pub(super) async fn handle_interaction_to(
         &self,
         d: &Value,
         typed_tx: Option<&tokio::sync::mpsc::Sender<ChannelIngress>>,
@@ -877,20 +902,25 @@ impl DiscordChannel {
         if !self.in_scope(guild_id, channel_id, &info) {
             return;
         }
-        self.publish_event_to(ChannelEvent {
-            version: 2,
-            event_id: format!("discord:interaction:{interaction_id}"),
-            source_event_id: Some(interaction_id.to_owned()),
-            source_timestamp: None,
-            channel: channel_ref(),
-            conversation: Some(Self::conversation_for(channel_id, guild_id, &info)),
-            event: ChannelEventKind::ButtonCallback {
-                query_id: interaction_id.to_owned(),
-                action_id: action_id.to_owned(),
-                provider_message_id: message.and_then(|m| str_field(m, "id")).map(str::to_owned),
-                actor: user_ref(user),
+        self.publish_event_to(
+            ChannelEvent {
+                version: 2,
+                event_id: format!("discord:interaction:{interaction_id}"),
+                source_event_id: Some(interaction_id.to_owned()),
+                source_timestamp: None,
+                channel: channel_ref(),
+                conversation: Some(Self::conversation_for(channel_id, guild_id, &info)),
+                event: ChannelEventKind::ButtonCallback {
+                    query_id: interaction_id.to_owned(),
+                    action_id: action_id.to_owned(),
+                    provider_message_id: message
+                        .and_then(|m| str_field(m, "id"))
+                        .map(str::to_owned),
+                    actor: user_ref(user),
+                },
             },
-        }, typed_tx)
+            typed_tx,
+        )
         .await;
     }
 }

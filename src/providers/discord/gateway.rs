@@ -176,13 +176,8 @@ impl DiscordChannel {
         bot_user_id: &str,
         tx: &tokio::sync::mpsc::Sender<ChannelMessage>,
     ) -> bool {
-        self.handle_dispatch_to(
-            event_type,
-            d,
-            bot_user_id,
-            &GatewaySink::Legacy(tx.clone()),
-        )
-        .await
+        self.handle_dispatch_to(event_type, d, bot_user_id, &GatewaySink::Legacy(tx.clone()))
+            .await
     }
 
     async fn handle_dispatch_to(
@@ -200,7 +195,7 @@ impl DiscordChannel {
                 }
             },
             "MESSAGE_UPDATE" => {
-                self.handle_message_update(
+                self.handle_message_update_to(
                     d,
                     bot_user_id,
                     match sink {
@@ -212,7 +207,7 @@ impl DiscordChannel {
                 true
             }
             "MESSAGE_DELETE" => {
-                self.handle_message_delete(
+                self.handle_message_delete_to(
                     d,
                     match sink {
                         GatewaySink::Typed(tx) => Some(tx),
@@ -223,7 +218,7 @@ impl DiscordChannel {
                 true
             }
             "MESSAGE_REACTION_ADD" => {
-                self.handle_reaction(
+                self.handle_reaction_to(
                     d,
                     bot_user_id,
                     true,
@@ -236,7 +231,7 @@ impl DiscordChannel {
                 true
             }
             "MESSAGE_REACTION_REMOVE" => {
-                self.handle_reaction(
+                self.handle_reaction_to(
                     d,
                     bot_user_id,
                     false,
@@ -264,7 +259,7 @@ impl DiscordChannel {
                 true
             }
             "INTERACTION_CREATE" => {
-                self.handle_interaction(
+                self.handle_interaction_to(
                     d,
                     match sink {
                         GatewaySink::Typed(tx) => Some(tx),

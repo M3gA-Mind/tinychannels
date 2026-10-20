@@ -269,35 +269,44 @@ impl ChannelAdapter for DiscordChannel {
             *active = Some(cancel);
         }
         let _cleanup = GatewayListenerGuard(self);
-        let (tx, mut inbound) = tokio::sync::mpsc::channel(1);
-        let gateway = self.run_gateway(tx);
+        let (tx, mut inbound) = tokio::sync::mpsc::channel(32);
+        let gateway = self.run_gateway_typed(tx);
         tokio::pin!(gateway);
+        let delivery = async {
+            while let Some(ingress) = inbound.recv().await {
+                sink.push(ingress).await?;
+            }
+            Ok::<(), ChannelSendError>(())
+        };
+        tokio::pin!(delivery);
 
-        loop {
-            tokio::select! {
-                biased;
-                changed = cancellation.changed() => {
-                    if changed.is_err() || *cancellation.borrow() {
-                        return Ok(());
+        tokio::select! {
+            biased;
+            changed = cancellation.changed() => {
+                let _ = changed;
+                Ok(())
+            }
+            result = &mut gateway => {
+                let result = result.map_err(gateway_error);
+                result?;
+                tokio::select! {
+                    biased;
+                    changed = cancellation.changed() => {
+                        let _ = changed;
+                        Ok(())
                     }
+                    delivery_result = &mut delivery => delivery_result,
                 }
-                result = &mut gateway => return result.map_err(gateway_error),
-                message = inbound.recv() => {
-                    let Some(message) = message else {
-                        return Ok(());
-                    };
-                    let envelope = crate::inbound_envelope_from_legacy_message(&message);
-                    tokio::select! {
-                        biased;
-                        changed = cancellation.changed() => {
-                            if changed.is_err() || *cancellation.borrow() {
-                                return Ok(());
-                            }
-                        }
-                        result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => {
-                            result?;
-                        }
+            }
+            delivery_result = &mut delivery => {
+                delivery_result?;
+                tokio::select! {
+                    biased;
+                    changed = cancellation.changed() => {
+                        let _ = changed;
+                        Ok(())
                     }
+                    result = &mut gateway => result.map_err(gateway_error),
                 }
             }
         }

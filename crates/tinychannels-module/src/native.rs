@@ -82,12 +82,12 @@ pub(crate) fn build_native_v2(
     http: &dyn HttpClientFactory,
 ) -> Option<NativeLaunch> {
     match tinychannels_bus::provider_id(name) {
-        "discord" => tinychannels::factory::build_discord_channel(config, host, http).map(
-            |channel| {
+        "discord" => {
+            tinychannels::factory::build_discord_channel(config, host, http).map(|channel| {
                 let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
                 NativeLaunch::long_tail("Discord", adapter, LongTailListenerMode::Adapter)
-            },
-        ),
+            })
+        }
         "signal" => {
             tinychannels::factory::build_signal_channel(config, host, http).map(|channel| {
                 let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
