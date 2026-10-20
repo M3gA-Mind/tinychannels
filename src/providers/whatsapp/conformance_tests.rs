@@ -578,7 +578,6 @@ impl AdapterFixture for CloudKit {
             _ => crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent)
                 .await
                 .map(Some),
-            Feature::ManagedReaction | Feature::ManagedThreadCreate | Feature::ManagedThreadUpdate | Feature::ManagedThreadList => Err(ChannelSendError::default()),
         };
         self.observe_wire(feature);
         match result {
@@ -640,6 +639,10 @@ async fn the_cloud_adapter_declares_exactly_what_the_protocol_and_its_ports_allo
         Feature::Delete => facts.actions.supported.iter().any(|a| a == "delete"),
         Feature::ReadReceipts => facts.events.supported.iter().any(|e| e == "read_receipt"),
         Feature::StreamingDraft => facts.progressive_edits,
+        Feature::ManagedReaction
+        | Feature::ManagedThreadCreate
+        | Feature::ManagedThreadUpdate
+        | Feature::ManagedThreadList => false,
     };
     let supported = [
         Feature::Text,
