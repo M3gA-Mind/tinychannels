@@ -37,6 +37,12 @@ pub enum ChannelInboundPreparationMode {
     Typed,
 }
 
+impl ChannelInboundPreparationMode {
+    fn is_legacy_text(&self) -> bool {
+        *self == Self::LegacyText
+    }
+}
+
 /// Host-selected namespace and session isolation applied to provider data.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PrepareChannelInboundRequest {
@@ -44,7 +50,7 @@ pub struct PrepareChannelInboundRequest {
     pub namespace: String,
     pub session_policy: SessionKeyPolicy,
     /// Existing callers remain text-only unless they explicitly opt in.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "ChannelInboundPreparationMode::is_legacy_text")]
     pub preparation_mode: ChannelInboundPreparationMode,
 }
 

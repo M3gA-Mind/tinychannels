@@ -17,7 +17,7 @@ fn inbound_vocabulary_preserves_optional_sender_and_existing_message_wire_shape(
     let wire = serde_json::to_value(&request).unwrap();
     assert_eq!(wire["source"]["kind"], "legacy");
     assert_eq!(wire["source"]["envelope"], serde_json::Value::Null);
-    assert_eq!(wire["preparation_mode"], "legacy_text");
+    assert!(wire.get("preparation_mode").is_none());
     assert!(wire["source"]["message"].get("sender_name").is_none());
     let restored: PrepareChannelInboundRequest = serde_json::from_value(wire.clone()).unwrap();
     assert_eq!(serde_json::to_value(restored).unwrap(), wire);

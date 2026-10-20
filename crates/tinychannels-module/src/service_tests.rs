@@ -2893,8 +2893,9 @@ async fn typed_inbound_preparation_preserves_rich_parts_without_legacy_projectio
         ChannelInboundPreparationMode, ChannelInboundSource, PrepareChannelInboundRequest,
     };
     use tinychannels_bus::{
-        ChannelInboundEnvelope, ChannelRef, ContentPart, ConversationKind, ConversationRef,
-        MediaKind, MediaReference, SenderRef,
+        ChannelInboundEnvelope, ChannelMessage, ChannelRef, ContentPart, ConversationKind,
+        ConversationRef, MediaKind, MediaReference, SenderRef, VoiceNote, VoiceTranscript,
+        VoiceTranscriptSource, VoiceTranscriptState,
     };
 
     let service = inbound_preparation_service().await;
@@ -2970,6 +2971,92 @@ async fn typed_inbound_preparation_preserves_rich_parts_without_legacy_projectio
         })
         .await;
     assert!(legacy.is_err(), "legacy preparation remains fail closed");
+
+    for (index, part) in envelope.parts.iter().cloned().enumerate() {
+        let mut single_part = envelope.clone();
+        single_part.message_id = format!("single-part-{index}");
+        single_part.parts = vec![part];
+        let prepared = service
+            .prepare_channel_inbound(PrepareChannelInboundRequest {
+                source: ChannelInboundSource::Envelope {
+                    envelope: single_part.clone(),
+                    timestamp: 124,
+                },
+                namespace: "openhuman".into(),
+                session_policy: Default::default(),
+                preparation_mode: ChannelInboundPreparationMode::Typed,
+            })
+            .await
+            .expect("image-only and file-only typed messages are representable");
+        assert_eq!(prepared.envelope, single_part);
+        assert!(prepared.message.content.is_empty());
+    }
+
+    let mut ordered = envelope.clone();
+    ordered.message_id = "ordered-parts-5".into();
+    ordered.parts = vec![
+        ContentPart::Text {
+            text: "before".into(),
+            markdown_dialect: None,
+        },
+        ContentPart::VoiceNote {
+            voice_note: VoiceNote {
+                transcript: Some(VoiceTranscript {
+                    text: "spoken words".into(),
+                    language: Some("en".into()),
+                    state: VoiceTranscriptState::Complete,
+                    source: VoiceTranscriptSource::HostStt,
+                }),
+                ..Default::default()
+            },
+        },
+        envelope.parts[0].clone(),
+        ContentPart::Text {
+            text: "after".into(),
+            markdown_dialect: None,
+        },
+    ];
+    let prepared = service
+        .prepare_channel_inbound(PrepareChannelInboundRequest {
+            source: ChannelInboundSource::Envelope {
+                envelope: ordered.clone(),
+                timestamp: 125,
+            },
+            namespace: "openhuman".into(),
+            session_policy: Default::default(),
+            preparation_mode: ChannelInboundPreparationMode::Typed,
+        })
+        .await
+        .unwrap();
+    assert_eq!(prepared.message.content, "before\nspoken words\nafter");
+    assert_eq!(prepared.envelope, ordered);
+
+    let legacy_message = ChannelMessage {
+        id: envelope.message_id.clone(),
+        sender: envelope.sender.id.clone(),
+        reply_target: envelope.conversation.id.clone(),
+        content: "stale legacy view".into(),
+        channel: envelope.channel.id.clone(),
+        timestamp: 126,
+        thread_ts: envelope.conversation.thread_id.clone(),
+        topic_id: envelope.conversation.topic_id.clone(),
+        reply_to_id: envelope.reply_to_id.clone(),
+        sender_name: None,
+    };
+    let prepared = service
+        .prepare_channel_inbound(PrepareChannelInboundRequest {
+            source: ChannelInboundSource::Legacy {
+                message: legacy_message,
+                envelope: Some(envelope.clone()),
+            },
+            namespace: "openhuman".into(),
+            session_policy: Default::default(),
+            preparation_mode: ChannelInboundPreparationMode::Typed,
+        })
+        .await
+        .unwrap();
+    assert_eq!(prepared.envelope, envelope);
+    assert!(prepared.message.content.is_empty());
     service.shutdown().await.unwrap();
 }
 
