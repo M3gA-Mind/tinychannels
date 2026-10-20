@@ -228,6 +228,7 @@ async fn tapbacks_become_reaction_events_once() {
 async fn read_state_of_sent_messages_becomes_read_receipts() {
     let rig = rig();
     let row = db::ReadRow {
+        rowid: 1,
         guid: "SENT9".into(),
         recipient: PEER.into(),
         date_read: 700_000_000_000_000_000,

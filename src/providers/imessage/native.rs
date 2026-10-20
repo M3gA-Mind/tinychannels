@@ -258,6 +258,25 @@ impl NativeProvider for IMessageChannel {
         vec![("voiceOut", "attachment")]
     }
 
+    async fn health_state(&self) -> &'static str {
+        if self.is_healthy_on(std::env::consts::OS) {
+            "healthy"
+        } else {
+            "unhealthy"
+        }
+    }
+
+    async fn start_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        self.listen_typed(sink).await
+    }
+
+    async fn stop_listener(&self) -> Result<(), ChannelSendError> {
+        self.stop_typed_listener().await
+    }
+
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
         let recipient = target.conversation.id.as_str();
         match step {
