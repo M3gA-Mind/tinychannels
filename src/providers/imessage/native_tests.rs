@@ -96,6 +96,23 @@ fn message(to: &str, parts: Vec<OutboundContentPart>) -> ChannelOutboundMessage 
 }
 
 #[tokio::test]
+async fn typed_status_uses_the_configured_messages_database_health() {
+    let rig = rig();
+    let snapshot = ChannelAdapter::status(&rig.channel).await.unwrap();
+    let expected = if cfg!(target_os = "macos") {
+        "healthy"
+    } else {
+        "unhealthy"
+    };
+    assert_eq!(snapshot.health_state.as_deref(), Some(expected));
+
+    let mut missing = IMessageChannel::new(vec!["*".into()]);
+    missing.db_path = Some(rig.dir.path().join("missing-chat.db"));
+    let snapshot = ChannelAdapter::status(&missing).await.unwrap();
+    assert_eq!(snapshot.health_state.as_deref(), Some("unhealthy"));
+}
+
+#[tokio::test]
 async fn typed_listener_retries_rejected_rows_without_replaying_accepted_predecessors() {
     let rig = rig();
     let reject_second = Arc::new(RejectSecondIngress::default());
