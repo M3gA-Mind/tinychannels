@@ -2839,7 +2839,7 @@ async fn inbound_voice_transcript_projects_to_legacy_text_and_preserves_typed_sc
         Some(VoiceTranscript {
             text: "transcription failed".into(),
             language: Some("en".into()),
-            state: VoiceTranscriptState::Failed,
+            state: VoiceTranscriptState::Unavailable,
             source: VoiceTranscriptSource::HostStt,
         }),
         Some(VoiceTranscript {
