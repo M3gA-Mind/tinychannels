@@ -636,6 +636,8 @@ const ALICE: &[u8] = b"From: Alice <alice@example.com>\r\nSubject: Hi\r\nMessage
 const MALLORY: &[u8] =
     b"From: mallory@evil.test\r\nSubject: Spam\r\nMessage-ID: <m1@evil.test>\r\n\r\nBuy now\r\n";
 const ALICE_AGAIN: &[u8] = b"From: alice@example.com\r\nSubject: Hi again\r\nMessage-ID: <a1@example.com>\r\n\r\nSame id\r\n";
+const ALICE_NO_MESSAGE_ID: &[u8] =
+    b"From: alice@example.com\r\nSubject: No Message-ID\r\n\r\nStable by UID\r\n";
 const BOB_HTML: &[u8] = b"From: bob@example.com\r\nSubject: Html\r\nContent-Type: text/html\r\n\r\n<p>Hello <b>Bob</b></p>\r\n";
 const BAD_DATE: &[u8] = b"From: carol@example.com\r\nSubject: Odd date\r\nMessage-ID: <c1@example.com>\r\nDate: Sat, 31 Feb 2024 10:00:00 +0000\r\n\r\nWhen?\r\n";
 
@@ -1411,6 +1413,49 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
     let _ = session.logout().await;
     let retry_commands = server.await.unwrap().remove(0).join("\n");
     assert!(retry_commands.contains("UID STORE 7 +FLAGS (\\Seen)"));
+}
+
+#[tokio::test]
+async fn accepted_email_without_message_id_is_not_replayed_after_store_retry() {
+    let channel = imap_channel(&["*"], 30);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let recorder = TypedEmailRecorder(tx);
+    let (port, server) = fake_imap(vec![ConnScript {
+        searches: vec![vec![(7, ALICE_NO_MESSAGE_ID)]],
+        reject_store: true,
+        ..Default::default()
+    }])
+    .await;
+    let mut session = plain_session(&channel, port).await.unwrap();
+    session.select("INBOX").await.unwrap();
+    channel
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .await
+        .expect_err("the first Seen acknowledgement is rejected");
+    let Some(tinychannels_bus::ChannelIngress::Inbound(first)) = rx.try_recv().ok() else {
+        panic!("the first ingress should have been accepted");
+    };
+    drop(session);
+    let _ = server.await.unwrap();
+
+    let (port, server) = fake_imap(vec![ConnScript {
+        searches: vec![vec![(7, ALICE_NO_MESSAGE_ID)]],
+        ..Default::default()
+    }])
+    .await;
+    let mut session = plain_session(&channel, port).await.unwrap();
+    session.select("INBOX").await.unwrap();
+    channel
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .await
+        .unwrap();
+    assert!(
+        rx.try_recv().is_err(),
+        "retrying STORE must not deliver a message with no Message-ID twice"
+    );
+    drop(session);
+    let _ = server.await.unwrap();
+    assert!(!first.message_id.is_empty());
 }
 
 struct BlockingTypedEmailSink(tokio::sync::Notify);
