@@ -134,6 +134,110 @@ async fn configured_mattermost_reaction_uses_authenticated_native_v4_requests() 
 }
 
 #[tokio::test]
+async fn mattermost_reaction_errors_distinguish_safe_retry_from_unknown_mutation() {
+    use crate::channel::ChannelReaction;
+    use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef, SendErrorKind};
+    use wiremock::matchers::{body_json, header, method, path};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/users/me"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/users/me"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "bot-user-1" })))
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/reactions"))
+        .and(header("authorization", "Bearer test-token"))
+        .and(body_json(json!({
+            "user_id": "bot-user-1",
+            "post_id": "post-500",
+            "emoji_name": "thumbsup"
+        })))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/reactions"))
+        .and(header("authorization", "Bearer test-token"))
+        .and(body_json(json!({
+            "user_id": "bot-user-1",
+            "post_id": "post-429",
+            "emoji_name": "thumbsup"
+        })))
+        .respond_with(ResponseTemplate::new(429).insert_header("retry-after", "2"))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let channel = channel(&server, Arc::new(StubMedia::default()));
+    let channel_ref = ChannelRef {
+        id: "mattermost".into(),
+        account_id: Some("account-1".into()),
+    };
+    let conversation = ConversationRef {
+        kind: ConversationKind::Channel,
+        id: "channel-1".into(),
+        ..Default::default()
+    };
+    let reaction = tinychannels_bus::channel::ChannelReaction {
+        value: "thumbsup".into(),
+        custom_emoji_id: None,
+    };
+
+    let identity_error = ChannelReaction::send_reaction(
+        &channel,
+        &channel_ref,
+        &conversation,
+        "post-identity",
+        &reaction,
+        false,
+    )
+    .await
+    .expect_err("failed identity lookup must be reported");
+    assert_eq!(identity_error.kind, SendErrorKind::Transient);
+    assert!(identity_error.retryable);
+    assert!(!identity_error.sent_before_error);
+
+    let mutation_error = ChannelReaction::send_reaction(
+        &channel,
+        &channel_ref,
+        &conversation,
+        "post-500",
+        &reaction,
+        false,
+    )
+    .await
+    .expect_err("ambiguous server failure must be reported");
+    assert_eq!(mutation_error.kind, SendErrorKind::Unknown);
+    assert!(!mutation_error.retryable);
+    assert!(mutation_error.sent_before_error);
+
+    let rate_limit = ChannelReaction::send_reaction(
+        &channel,
+        &channel_ref,
+        &conversation,
+        "post-429",
+        &reaction,
+        false,
+    )
+    .await
+    .expect_err("rate limiting must be reported");
+    assert_eq!(rate_limit.kind, SendErrorKind::RateLimited);
+    assert!(rate_limit.retryable);
+    assert_eq!(rate_limit.retry_after, Some(2.0));
+}
+
+#[tokio::test]
 async fn typed_edit_and_delete_use_the_provider_returned_post_id() {
     use crate::channel::{ChannelDelete, ChannelEdit, ChannelTypedSend};
     use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
