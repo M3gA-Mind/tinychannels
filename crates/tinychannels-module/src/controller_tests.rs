@@ -87,8 +87,7 @@ impl BackendFixture {
                     ))),
                     Request::OutputEvent { .. }
                     | Request::Delete { .. }
-                    | Request::Typing { .. }
-                    | Request::SendTyped { .. } => Ok(ChannelBackendResult::ProgressiveTransport(
+                    | Request::Typing { .. } => Ok(ChannelBackendResult::ProgressiveTransport(
                         Box::new(Response::Acknowledged),
                     )),
                 }
@@ -751,6 +750,9 @@ async fn managed_controller_and_progressive_paths_pass_shared_conformance_featur
                 tinychannels_bus::module_progressive::ProgressiveTransportRequest::Edit {
                     ..
                 } => "Edit",
+                tinychannels_bus::module_progressive::ProgressiveTransportRequest::Send {
+                    ..
+                } => "Send",
                 _ => "other progressive",
             },
             ChannelBackendRequest::SendReaction { .. } => "SendReaction",
