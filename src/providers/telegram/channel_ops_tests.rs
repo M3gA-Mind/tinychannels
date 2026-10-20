@@ -607,6 +607,55 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 emoji: Some("👍".into()),
                 alt_text: None,
             }),
+            Feature::VoiceOut => tinychannels_bus::OutboundPayload::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: tinychannels_bus::MediaReference {
+                        opaque_id: Some("telegram-voice-out".into()),
+                        kind: tinychannels_bus::MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    audio_base64: None,
+                    codec: Some("ogg_opus".into()),
+                    duration_ms: Some(1_000),
+                    waveform: None,
+                },
+            },
+            Feature::VoiceSynthesis => {
+                let accepted_codecs = vec!["ogg_opus".to_owned()];
+                let prepared = crate::host::prepare_voice_reply(
+                    tinychannels_bus::HostVoiceScope {
+                        configured_instance: "telegram-conformance".into(),
+                        channel: self.scope.channel.clone(),
+                        conversation: self.scope.conversation.clone(),
+                        turn_id: "conformance-turn".into(),
+                    },
+                    "speak this".into(),
+                    None,
+                    &TelegramConformanceSynthesizer,
+                    &TelegramConformanceCodec,
+                    self.voice.as_ref(),
+                    crate::host::VoiceReplyConstraints {
+                        accepted_codecs: &accepted_codecs,
+                        max_size_bytes: Some(8 * 1024 * 1024),
+                        max_duration_ms: None,
+                    },
+                )
+                .await
+                .map_err(|error| tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
+                    message: error.to_string(),
+                    ..Default::default()
+                })?;
+                tinychannels_bus::OutboundPayload::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media {
+                        media: prepared.note.media,
+                        audio_base64: None,
+                        codec: prepared.note.codec,
+                        duration_ms: prepared.note.duration_ms,
+                        waveform: prepared.note.waveform,
+                    },
+                }
+            }
             Feature::Location => rich_part(tinychannels_bus::ContentPart::Location {
                 latitude: 25.0,
                 longitude: 55.0,
@@ -709,6 +758,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             else if path.ends_with("/sendAudio") { ("send", "audio") }
             else if path.ends_with("/sendDocument") { ("send", "file") }
             else if path.ends_with("/sendSticker") { ("send", "sticker") }
+            else if path.ends_with("/sendVoice") { ("send", "voice") }
             else if path.ends_with("/sendChatAction") { ("typing", "text") }
             else if path.ends_with("/setMessageReaction") { ("reaction_send", "text") }
             else if path.ends_with("/editMessageText") { ("edit", "text") }
@@ -2984,6 +3034,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         )
         .await;
     }
+    mount_post(&server, "sendVoice", ok_with(serde_json::json!({"message_id": 321}))).await;
     for endpoint in ["setMessageReaction", "sendChatAction", "deleteMessage"] {
         mount_post(&server, endpoint, ok_with(serde_json::json!(true))).await;
     }
@@ -2996,19 +3047,21 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
     mount_post(
         &server,
         "getUpdates",
-        ok_with(serde_json::json!([{
-            "update_id": 901,
-            "message_reaction": {
-                "chat": {"id": 100, "type": "private"},
-                "message_id": 321,
-                "user": {"id": 9, "username": "conformance"},
-                "date": 1_700_000_000,
-                "old_reaction": [],
-                "new_reaction": [{"type": "emoji", "emoji": "👍"}]
-            }
-        }])),
+        ok_with(serde_json::Value::Array(telegram_conformance_updates())),
     )
     .await;
+    mount_post(
+        &server,
+        "getFile",
+        ok_with(serde_json::json!({"file_path":"voice/conformance.oga","file_size":4})),
+    ).await;
+    Mock::given(method("GET"))
+        .and(path(format!("/file/bot{TOKEN}/voice/conformance.oga")))
+        .respond_with(ResponseTemplate::new(200)
+            .insert_header("content-type", "audio/ogg")
+            .set_body_bytes(b"OggS"))
+        .mount(&server)
+        .await;
     let config = tinychannels_bus::ChannelsConfig {
         telegram: Some(tinychannels_bus::config::TelegramConfig {
             bot_token: TOKEN.into(),
@@ -3022,9 +3075,15 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         ..Default::default()
     };
     let events = Arc::new(TelegramConformanceEvents::default());
+    let voice = Arc::new(TelegramConformanceVoice::default());
+    let transcriber = Arc::new(TelegramConformanceTranscriber);
     let host: Arc<dyn crate::host::ChannelHost> = crate::host::ChannelHostBuilder::new()
         .events(events.clone())
         .media_repository(Arc::new(TelegramConformanceMedia))
+        .voice_media_store(voice.clone())
+        .transcriber(transcriber.clone())
+        .synthesizer(Arc::new(TelegramConformanceSynthesizer))
+        .voice_codec(Arc::new(TelegramConformanceCodec))
         .build();
     let mut channel = crate::build_telegram_channel(&config, &host, &crate::DefaultHttpClients)
         .expect("configured factory builds Telegram");
@@ -3062,6 +3121,8 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         request_cursor: std::sync::Mutex::new(0),
         scope,
         events,
+        voice,
+        transcriber,
     };
     let results = check_all_features(&fixture).await;
     assert_eq!(results.len(), ConformanceFeature::ALL.len());
