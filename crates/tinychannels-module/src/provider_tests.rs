@@ -2082,7 +2082,8 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
         let (cancel, _) = watch::channel(false);
         let running = Arc::new(Running {
             media_account_scope: crate::provider::MediaScope::default(),
-            channel: Arc::new(InteractionChannel::default()),
+            channel: Some(Arc::new(InteractionChannel::default())),
+            provider_name: "interaction-fixture".into(),
             configured_instance: "interaction-fixture:account-a".into(),
             send,
             cancel,
@@ -2124,7 +2125,8 @@ async fn configured_adapter_rejects_account_scope_mismatch_before_dispatch() {
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: crate::provider::MediaScope::default(),
-        channel: Arc::new(InteractionChannel::default()),
+        channel: Some(Arc::new(InteractionChannel::default())),
+        provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
@@ -2158,7 +2160,8 @@ async fn configured_adapter_preserves_partial_receipt_and_disables_retry() {
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: crate::provider::MediaScope::default(),
-        channel: Arc::new(InteractionChannel::default()),
+        channel: Some(Arc::new(InteractionChannel::default())),
+        provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
@@ -2226,7 +2229,8 @@ async fn send_configured_outcome(
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: crate::provider::MediaScope::default(),
-        channel: Arc::new(InteractionChannel::default()),
+        channel: Some(Arc::new(InteractionChannel::default())),
+        provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
@@ -3575,7 +3579,8 @@ async fn legacy_running_adapter_reports_status_and_refuses_second_start() {
     let (cancel, _) = watch::channel(false);
     let running = Arc::new(Running {
         media_account_scope: MediaScope::default(),
-        channel: Arc::new(InteractionChannel::default()),
+        channel: Some(Arc::new(InteractionChannel::default())),
+        provider_name: "interaction-fixture".into(),
         configured_instance: "interaction-fixture:account-a".into(),
         send,
         cancel,
@@ -5724,4 +5729,21 @@ async fn configured_lark_webhook_delivers_scoped_provider_identity_through_facto
     assert_eq!(inbound[0].1["sender"]["id"], "ou-alice");
     assert_eq!(inbound[0].1["conversation"]["id"], "oc-chat-a");
     assert_eq!(inbound[0].1["text"], "typed webhook");
+}
+
+#[test]
+fn legacy_send_surfaces_native_typed_send_outcome_errors() {
+    let error = tinychannels::channel::ChannelSendError {
+        message: "provider rejected send".into(),
+        ..Default::default()
+    };
+    let result = legacy_typed_send_completion(Ok(tinychannels_bus::channel::ChannelSendOutcome {
+        error: Some(error),
+        ..Default::default()
+    }));
+    assert!(matches!(
+        result,
+        Err(tinybus::Error::MethodFailed { message, .. })
+            if message == "provider rejected send"
+    ));
 }

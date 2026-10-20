@@ -1085,7 +1085,7 @@ impl Replies {
                 .get(configured_instance)
                 .ok_or_else(|| Error::failed("scoped channel instance is not configured"))?;
             (
-                provider.channel.capabilities(),
+                provider.declared_capabilities(),
                 provider.media_account_scope.clone(),
             )
         } else {
@@ -1098,7 +1098,7 @@ impl Replies {
                 },
                 |provider| {
                     (
-                        provider.channel.capabilities(),
+                        provider.declared_capabilities(),
                         provider.media_account_scope.clone(),
                     )
                 },
