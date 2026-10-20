@@ -321,6 +321,46 @@ impl LarkFixture {
                 ..Default::default()
             });
         };
+        assert_eq!(
+            envelope.channel,
+            ChannelRef {
+                id: "lark".into(),
+                account_id: None,
+            }
+        );
+        assert_eq!(envelope.conversation.kind, tinychannels_bus::ConversationKind::Dm);
+        assert_eq!(envelope.conversation.id, CHANNEL);
+        assert!(envelope.conversation.thread_id.is_none());
+        assert_eq!(envelope.message_id, "om-voice-in-1");
+        let voice_notes = envelope
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::VoiceNote { voice_note } => Some(voice_note),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(voice_notes.len(), 1);
+        let voice_note = voice_notes[0];
+        assert_eq!(voice_note.media.opaque_id.as_deref(), Some("voice-1"));
+        assert_eq!(voice_note.media.kind, MediaKind::Audio);
+        assert!(voice_note.media.path.is_none());
+        assert!(voice_note.media.url.is_none());
+        assert!(voice_note.media.local_cache_path.is_none());
+        let transcript = voice_note
+            .transcript
+            .as_ref()
+            .expect("configured host transcriber should enrich the voice note");
+        assert_eq!(transcript.text, "hello");
+        assert_eq!(transcript.language.as_deref(), Some("en"));
+        assert_eq!(
+            transcript.state,
+            tinychannels_bus::VoiceTranscriptState::Complete
+        );
+        assert_eq!(
+            transcript.source,
+            tinychannels_bus::VoiceTranscriptSource::HostStt
+        );
         let mut payload_kinds = Vec::new();
         for part in &envelope.parts {
             if let ContentPart::VoiceNote { voice_note } = part {
