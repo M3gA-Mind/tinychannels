@@ -674,6 +674,33 @@ async fn stored_voice_scope_matches_normalized_ingress_turn_and_conversation() {
 }
 
 #[tokio::test]
+async fn stored_voice_scope_preserves_telegram_forum_topic_thread_identity() {
+    let server = mock_api().await;
+    mount_voice_download(&server, vec![1, 2, 3]).await;
+    let store = RecordingVoiceStore::default();
+    let channel = channel_for(&server, &["alice"]).with_voice_media_store(Arc::new(store.clone()));
+    let mut update = voice_update("supergroup", Some("caption"), Some(3));
+    update["message"]["message_thread_id"] = serde_json::json!(42);
+    let message = channel
+        .parse_update_message_or_voice(&update)
+        .await
+        .expect("voice message is accepted independently of STT");
+    let voice_note = channel
+        .voice_note_for_ingress(&update, &message)
+        .await
+        .unwrap()
+        .expect("durable voice reference");
+    let envelope =
+        TelegramChannel::inbound_envelope_from_update(&update, &message, Some(voice_note));
+
+    let scopes = store.0.lock().unwrap();
+    assert_eq!(scopes.len(), 1);
+    assert_eq!(scopes[0].conversation, envelope.conversation);
+    assert_eq!(scopes[0].conversation.thread_id.as_deref(), Some("42"));
+    assert_eq!(scopes[0].conversation.topic_id.as_deref(), Some("42"));
+}
+
+#[tokio::test]
 async fn telegram_photo_download_enters_ordered_typed_media_ingress() {
     let server = mock_api().await;
     mount_post(
