@@ -4,8 +4,14 @@ use crate::channel::{
     ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
     ChannelTyping,
 };
-use crate::factory::build_yuanbao_channel_with_voice_http_for_test;
-use crate::host::{ChannelHostBuilder, VoiceMediaRequest, VoiceMediaStore};
+use crate::factory::{
+    build_yuanbao_channel_with_media_http_for_test,
+    build_yuanbao_channel_with_voice_http_for_test,
+};
+use crate::host::{
+    ChannelHostBuilder, MediaRepository, MediaScope, MediaStoreRequest, StoredMedia,
+    VoiceMediaRequest, VoiceMediaStore,
+};
 use crate::providers::http_test_support::HttpsServer;
 use crate::providers::native::fixtures::{StubTranscriber, StubVoice};
 use crate::providers::yuanbao::connection::test_support::{
@@ -35,17 +41,27 @@ struct Fixture {
     channel: Arc<dyn crate::providers::long_tail::LongTailNative>,
     _media_server: HttpsServer,
     _gateway: MockGateway,
+    cos_server: Option<wiremock::MockServer>,
     session: tokio::sync::Mutex<GatewaySession>,
     listener: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<(), ChannelSendError>>>>,
     inbound:
         tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<tinychannels_bus::ChannelIngress>>,
     voice_store: Arc<MatrixVoiceStore>,
+    media_repository: Option<Arc<MatrixMediaRepository>>,
     observations: Mutex<Vec<WireObservation>>,
     active_feature: Mutex<Feature>,
 }
 
 impl Fixture {
     async fn start() -> Self {
+        Self::start_with_media(false).await
+    }
+
+    async fn start_with_media_repository() -> Self {
+        Self::start_with_media(true).await
+    }
+
+    async fn start_with_media(enable_media: bool) -> Self {
         let audio = include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg").to_vec();
         let response_audio = audio.clone();
         let media_server = HttpsServer::start_with_bytes(
@@ -61,19 +77,72 @@ impl Fixture {
         let voice_store = Arc::new(MatrixVoiceStore::default());
         *voice_store.inner.audio_base64.lock().unwrap() =
             Some(base64::engine::general_purpose::STANDARD.encode(b"voice fixture"));
+        let cos_server = enable_media.then(|| async { wiremock::MockServer::start().await });
+        let cos_server = match cos_server {
+            Some(server) => Some(server.await),
+            None => None,
+        };
+        let media_repository = enable_media.then(|| Arc::new(MatrixMediaRepository::default()));
+        if let Some(server) = &cos_server {
+            use wiremock::matchers::{method, path};
+            use wiremock::{Mock, ResponseTemplate};
+            Mock::given(method("POST"))
+                .and(path("/api/resource/genUploadInfo"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "code": 0,
+                    "data": {
+                        "bucketName": "fixture-bucket",
+                        "region": "fixture-region",
+                        "location": "up/yuanbao-media",
+                        "encryptTmpSecretId": "fixture-key-id",
+                        "encryptTmpSecretKey": "fixture-key-secret",
+                        "encryptToken": "fixture-upload-token",
+                        "resourceUrl": "https://cdn.example/yuanbao-uploaded",
+                    }
+                })))
+                .expect(2)
+                .mount(server)
+                .await;
+            let uploaded = media_repository.as_ref().unwrap().uploaded.clone();
+            Mock::given(method("PUT"))
+                .and(path("/up/yuanbao-media"))
+                .respond_with(move |request: &wiremock::Request| {
+                    uploaded.lock().push(request.body.clone());
+                    ResponseTemplate::new(200)
+                })
+                .expect(2)
+                .mount(server)
+                .await;
+        }
+        let mut yuanbao_config = gateway_config(&gateway.url);
+        if let Some(server) = &cos_server {
+            yuanbao_config.api_domain = server.uri();
+        }
         let config = tinychannels_bus::ChannelsConfig {
-            yuanbao: Some(gateway_config(&gateway.url)),
+            yuanbao: Some(yuanbao_config),
             ..Default::default()
         };
-        let host: Arc<dyn crate::host::ChannelHost> = ChannelHostBuilder::new()
+        let mut host_builder = ChannelHostBuilder::new()
             .voice_media_store(voice_store.clone())
-            .transcriber(Arc::new(StubTranscriber::default()))
-            .build();
-        let channel = build_yuanbao_channel_with_voice_http_for_test(
-            &config,
-            &host,
-            media_server.client.clone(),
-        )
+            .transcriber(Arc::new(StubTranscriber::default()));
+        if let Some(repository) = &media_repository {
+            host_builder = host_builder.media_repository(repository.clone());
+        }
+        let host: Arc<dyn crate::host::ChannelHost> = host_builder.build();
+        let channel = if let Some(server) = &cos_server {
+            build_yuanbao_channel_with_media_http_for_test(
+                &config,
+                &host,
+                media_server.client.clone(),
+                server.uri(),
+            )
+        } else {
+            build_yuanbao_channel_with_voice_http_for_test(
+                &config,
+                &host,
+                media_server.client.clone(),
+            )
+        }
         .expect("factory should build configured Yuanbao adapter");
         let (ingress_tx, ingress_rx) = tokio::sync::mpsc::unbounded_channel();
         let sink = IngressSink(ingress_tx);
@@ -92,10 +161,12 @@ impl Fixture {
             channel,
             _media_server: media_server,
             _gateway: gateway,
+            cos_server,
             session: tokio::sync::Mutex::new(session),
             listener: tokio::sync::Mutex::new(Some(listener)),
             inbound: tokio::sync::Mutex::new(ingress_rx),
             voice_store,
+            media_repository,
             observations: Mutex::new(Vec::new()),
             active_feature: Mutex::new(Feature::Text),
         }
