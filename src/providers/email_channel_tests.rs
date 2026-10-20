@@ -726,7 +726,7 @@ async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Ve
                 reply.extend_from_slice(b")\r\n");
             }
         } else if upper.starts_with("UID STORE") && script.reject_store {
-            reply.extend_from_slice(format!("{tag} NO cannot mark seen\\r\\n").as_bytes());
+            reply.extend_from_slice(format!("{tag} NO cannot mark seen\r\n").as_bytes());
             let _ = write.write_all(&reply).await;
             continue;
         } else if upper.starts_with("IDLE") {
