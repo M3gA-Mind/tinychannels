@@ -5094,8 +5094,8 @@ async fn a_built_native_launch_starts_on_the_ordered_queue() {
     let running = launch.start(hooks, host.clone(), None, true);
     assert_eq!(running.adapter_handle().mode, AdapterMode::SignalNativeV2);
     assert!(
-        running.channel.is_some(),
-        "Signal retains its legacy send compatibility path"
+        running.channel.is_none(),
+        "Signal typed launch must not retain the legacy Channel trait object"
     );
     running.stop().await.unwrap();
 }
