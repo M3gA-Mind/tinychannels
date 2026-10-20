@@ -887,7 +887,7 @@ async fn processing_stops_when_the_receiver_is_gone() {
     session.select("INBOX").await.unwrap();
     channel.process_unseen(&mut session, &tx).await.unwrap();
     assert!(channel.seen_messages.lock().await.is_empty());
-    let _ = session.logout().await;
+    drop(session);
     let transcripts = server.await.unwrap();
     assert!(!transcripts[0].iter().any(|l| l.contains("UID STORE")));
 }
