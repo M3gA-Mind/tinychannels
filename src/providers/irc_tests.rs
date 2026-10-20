@@ -406,7 +406,7 @@ fn make_channel() -> IrcChannel {
 }
 
 #[tokio::test]
-async fn typed_send_without_connection_reports_uncertain_delivery() {
+async fn typed_send_without_connection_is_retryable_before_dispatch() {
     use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
 
     let channel = make_channel();
@@ -427,9 +427,10 @@ async fn typed_send_without_connection_reports_uncertain_delivery() {
     .await
     .unwrap_err();
 
-    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Unknown);
-    assert!(error.sent_before_error);
-    assert_eq!(error.message, "IRC send failed");
+    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Transient);
+    assert!(error.retryable);
+    assert!(!error.sent_before_error);
+    assert_eq!(error.message, "IRC is not connected");
 }
 
 #[test]
