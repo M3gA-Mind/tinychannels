@@ -5,10 +5,10 @@
 use super::native::{SIGNAL_MAX_FILE_BYTES, SIGNAL_MAX_VOICE_BYTES};
 use super::{DataMessage, Envelope, SignalChannel};
 use crate::channel::ChannelInboundSink;
+use crate::providers::native::SeenReservationResult;
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, channel_event, media_of, publish, publish_event,
 };
-use crate::providers::native::SeenReservationResult;
 use crate::traits::ChannelMessage;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
