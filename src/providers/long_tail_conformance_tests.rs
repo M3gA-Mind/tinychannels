@@ -671,7 +671,18 @@ impl LongTailFixture {
                     } else {
                         Vec::new()
                     };
-                    (operation, vec![post_id.clone()], kinds, post_id, body)
+                    let observation = if operation == "delete" {
+                        json!({"path": url_path})
+                    } else {
+                        body
+                    };
+                    (
+                        operation,
+                        vec![post_id.clone()],
+                        kinds,
+                        post_id,
+                        observation,
+                    )
                 } else {
                     ("typing", Vec::new(), Vec::new(), String::new(), body)
                 };
