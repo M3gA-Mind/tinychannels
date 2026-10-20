@@ -78,7 +78,7 @@ impl Default for Faults {
 
 /// A storage host on a bus connection.
 pub(crate) struct StorageHost {
-    pub(crate) backend: MemoryBackend,
+    pub(crate) backend: Arc<MemoryBackend>,
     pub(crate) faults: Arc<Faults>,
     /// The scope the host binds callers to; changing it re-binds live callers.
     pub(crate) scope: Arc<Mutex<String>>,
@@ -107,7 +107,7 @@ impl std::ops::Deref for Snapshot {
 impl StorageHost {
     /// Serve storage on `connection`, bound to `scope`.
     pub(crate) async fn serve(connection: &Connection, scope: &str) -> Self {
-        let backend = MemoryBackend::new();
+        let backend = Arc::new(MemoryBackend::new());
         let faults = Arc::new(Faults::default());
         let current = Arc::new(Mutex::new(scope.to_owned()));
         let bound = (backend.clone(), faults.clone(), current.clone());
@@ -169,7 +169,7 @@ impl StorageHost {
     pub(crate) fn docs(&self, scope: &str) -> Arc<dyn DocumentStore> {
         Arc::clone(
             self.backend
-                .for_scope(&Scope::new(format!("tenant:{scope}")).unwrap())
+                .for_scope(&Scope::new(&format!("tenant:{scope}")).unwrap())
                 .unwrap()
                 .documents(),
         )
@@ -253,7 +253,7 @@ struct ScopeSwitchDocs {
 
 impl ScopeSwitchDocs {
     fn inner(&self) -> Arc<dyn DocumentStore> {
-        let scope = Scope::new(format!("tenant:{}", self.current.lock().unwrap())).unwrap();
+        let scope = Scope::new(&format!("tenant:{}", self.current.lock().unwrap())).unwrap();
         Arc::clone(self.backend.for_scope(&scope).unwrap().documents())
     }
 }
