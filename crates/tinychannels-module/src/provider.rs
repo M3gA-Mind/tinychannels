@@ -98,20 +98,13 @@ async fn dispatch_interaction(
     use tinychannels_bus::ChannelInteraction as Op;
     match interaction {
         describe @ (Op::Describe | Op::DescribeV2) => {
-            if let Some(native) = &native {
-                Ok(crate::interaction::describe_adapter(
-                    native.adapter.as_ref(),
-                    matches!(describe, Op::Describe),
-                ))
-            } else {
-                crate::interaction::dispatch(
-                    channel
-                        .as_deref()
-                        .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
-                    describe,
-                )
-                .await
-            }
+            crate::interaction::dispatch(
+                channel
+                    .as_deref()
+                    .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
+                describe,
+            )
+            .await
         }
         Op::StartTypingRefresh {
             recipient,
