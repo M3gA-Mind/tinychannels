@@ -577,7 +577,11 @@ async fn rpc_routes_direct_and_group_messages_and_typing() {
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "result": {"timestamp": 1_700_000_000_123u64}
                 })))
-                .expect(1)
+                .expect(if method_name == "sendTyping" && recipient == "group:team" {
+                    2
+                } else {
+                    1
+                })
                 .mount(&server)
                 .await;
             if method_name == "send" {
