@@ -334,6 +334,42 @@ impl IrcChannel {
         Ok(())
     }
 
+    async fn send_text(&self, recipient: &str, text: &str) -> anyhow::Result<()> {
+        let mut guard = self.writer.lock().await;
+        let writer = guard
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("IRC not connected"))?;
+
+        Self::send_text_connected(writer, recipient, text).await
+    }
+
+    async fn send_text_connected(
+        writer: &mut WriteHalf,
+        recipient: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        // Calculate safe payload size:
+        // 512 - sender prefix (~64 bytes for :nick!user@host) - "PRIVMSG " - target - " :" - "\r\n"
+        let overhead = SENDER_PREFIX_RESERVE + 10 + recipient.len() + 2;
+        let max_payload = 512_usize.saturating_sub(overhead);
+        for chunk in split_message(text, max_payload) {
+            Self::send_raw(writer, &format!("PRIVMSG {recipient} :{chunk}")).await?;
+        }
+        Ok(())
+    }
+
+    fn typed_send_failure(error: anyhow::Error) -> tinychannels_bus::channel::ChannelSendError {
+        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
+
+        tracing::debug!(%error, "[irc] typed send failed");
+        ChannelSendError {
+            kind: SendErrorKind::Unknown,
+            message: "IRC send failed".into(),
+            sent_before_error: true,
+            ..Default::default()
+        }
+    }
+
     async fn listen_owned(
         &self,
         ingress: IrcIngress<'_>,
@@ -701,22 +737,7 @@ impl Channel for IrcChannel {
     }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let mut guard = self.writer.lock().await;
-        let writer = guard
-            .as_mut()
-            .ok_or_else(|| anyhow::anyhow!("IRC not connected"))?;
-
-        // Calculate safe payload size:
-        // 512 - sender prefix (~64 bytes for :nick!user@host) - "PRIVMSG " - target - " :" - "\r\n"
-        let overhead = SENDER_PREFIX_RESERVE + 10 + message.recipient.len() + 2;
-        let max_payload = 512_usize.saturating_sub(overhead);
-        let chunks = split_message(&message.content, max_payload);
-
-        for chunk in chunks {
-            Self::send_raw(writer, &format!("PRIVMSG {} :{chunk}", message.recipient)).await?;
-        }
-
-        Ok(())
+        self.send_text(&message.recipient, &message.content).await
     }
 
     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
@@ -751,6 +772,61 @@ impl crate::providers::long_tail::LongTail for IrcChannel {
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
         use crate::providers::long_tail::{TextSpec, text_capabilities};
         text_capabilities(TextSpec::default())
+    }
+
+    async fn send_typed_message(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
+
+        if message.conversation_id.trim().is_empty() {
+            return Err(ChannelSendError {
+                kind: SendErrorKind::BadFormat,
+                message: "conversation address is empty".into(),
+                ..Default::default()
+            });
+        }
+        let has_thread = message.reply_to_id.is_some()
+            || message.thread_id.is_some()
+            || message
+                .conversation_ref
+                .as_ref()
+                .is_some_and(|conversation| {
+                    conversation.thread_id.is_some() || conversation.topic_id.is_some()
+                });
+        if has_thread {
+            return Err(crate::providers::long_tail::unsupported::<Self>(
+                "reply or thread addressing",
+            ));
+        }
+        let text = message
+            .legacy_text()
+            .map_err(|_| crate::providers::long_tail::unsupported::<Self>("non-text content"))?;
+        let recipient = message
+            .conversation_ref
+            .as_ref()
+            .map_or(message.conversation_id.as_str(), |conversation| {
+                conversation.id.as_str()
+            });
+
+        let mut guard = self.writer.lock().await;
+        let Some(writer) = guard.as_mut() else {
+            return Err(ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "IRC is not connected".into(),
+                retryable: true,
+                sent_before_error: false,
+                ..Default::default()
+            });
+        };
+        Self::send_text_connected(writer, recipient, &text)
+            .await
+            .map_err(Self::typed_send_failure)?;
+        Ok(tinychannels_bus::channel::ChannelSendOutcome::default())
     }
 
     async fn start_listener(

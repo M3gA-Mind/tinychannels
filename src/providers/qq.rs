@@ -684,7 +684,7 @@ impl QQChannel {
 #[async_trait]
 impl Channel for QQChannel {
     fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::long_tail::LongTail::declared(self)
+        crate::providers::native::NativeProvider::declared_capabilities(self)
     }
 
     fn name(&self) -> &str {
@@ -751,15 +751,6 @@ impl Channel for QQChannel {
 
     async fn health_check(&self) -> bool {
         self.fetch_access_token().await.is_ok()
-    }
-}
-
-impl crate::providers::long_tail::LongTail for QQChannel {
-    const ID: &'static str = "qq";
-    const DISPLAY: &'static str = "QQ";
-
-    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::native::NativeProvider::declared_capabilities(self)
     }
 }
 

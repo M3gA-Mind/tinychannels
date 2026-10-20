@@ -643,19 +643,24 @@ impl Channel for MattermostChannel {
     }
 
     async fn start_typing(&self, recipient: &str) -> Result<()> {
-        // Cancel any existing typing loop before starting a new one.
-        self.stop_typing(recipient).await?;
+        self.start_typing_loop(recipient).await
+    }
 
+    async fn stop_typing(&self, _recipient: &str) -> Result<()> {
+        self.stop_typing_loop()
+    }
+}
+
+impl MattermostChannel {
+    async fn start_typing_loop(&self, recipient: &str) -> Result<()> {
+        self.stop_typing_loop()?;
         let client = self.http_client();
         let token = self.bot_token.clone();
         let base_url = self.base_url.clone();
-
-        // recipient is "channel_id" or "channel_id:root_id"
         let (channel_id, parent_id) = match recipient.split_once(':') {
             Some((channel, parent)) => (channel.to_string(), Some(parent.to_string())),
             None => (recipient.to_string(), None),
         };
-
         let handle = tokio::spawn(async move {
             let url = format!("{base_url}/api/v4/users/me/typing");
             loop {
@@ -665,30 +670,24 @@ impl Channel for MattermostChannel {
                         .unwrap()
                         .insert("parent_id".to_string(), serde_json::json!(pid));
                 }
-
-                if let Ok(r) = client
+                if let Ok(response) = client
                     .post(&url)
                     .bearer_auth(&token)
                     .json(&body)
                     .send()
                     .await
-                    && !r.status().is_success()
+                    && !response.status().is_success()
                 {
-                    tracing::debug!(status = %r.status(), "Mattermost typing indicator failed");
+                    tracing::debug!(status = %response.status(), "Mattermost typing indicator failed");
                 }
-
-                // Mattermost typing events expire after ~6s; re-fire every 4s.
                 tokio::time::sleep(std::time::Duration::from_secs(4)).await;
             }
         });
-
-        let mut guard = self.typing_handle.lock();
-        *guard = Some(handle);
-
+        *self.typing_handle.lock() = Some(handle);
         Ok(())
     }
 
-    async fn stop_typing(&self, _recipient: &str) -> Result<()> {
+    fn stop_typing_loop(&self) -> Result<()> {
         let mut guard = self.typing_handle.lock();
         if let Some(handle) = guard.take() {
             handle.abort();
@@ -981,6 +980,24 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         true
     }
 
+    async fn set_typing(
+        &self,
+        conversation_id: &str,
+        start: bool,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        let result = if start {
+            self.start_typing_loop(conversation_id).await
+        } else {
+            self.stop_typing_loop()
+        };
+        result.map_err(|_| tinychannels_bus::channel::ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Transient,
+            message: "Mattermost typing indicator failed".into(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
+
     async fn start_listener(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
@@ -1014,20 +1031,6 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
             cancel.send_replace(true);
         }
         Ok(())
-    }
-
-    async fn send_reporting_ids(&self, message: &SendMessage) -> Result<Vec<String>> {
-        self.post_message(message).await
-    }
-
-    fn address(&self, message: &mut SendMessage) {
-        // Mattermost packs the thread root into the recipient (`channel:root`).
-        if let Some(root) = message
-            .thread_ts
-            .take_if(|_| !message.recipient.contains(':'))
-        {
-            message.recipient = format!("{}:{root}", message.recipient);
-        }
     }
 
     async fn send_typed_message(

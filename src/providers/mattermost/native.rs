@@ -105,9 +105,9 @@ impl NativeProvider for MattermostChannel {
 
     async fn set_typing(&self, conversation: &str, on: bool) -> Result<(), ChannelSendError> {
         let result = if on {
-            crate::traits::Channel::start_typing(self, conversation).await
+            self.start_typing_loop(conversation).await
         } else {
-            crate::traits::Channel::stop_typing(self, conversation).await
+            self.stop_typing_loop()
         };
         result.map_err(|_| ChannelSendError {
             kind: SendErrorKind::Transient,
