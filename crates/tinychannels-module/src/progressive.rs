@@ -101,6 +101,9 @@ impl Sender {
         match result {
             ChannelBackendResult::ProgressiveTransport(result) => match *result {
                 ProgressiveTransportResult::Acknowledged => Ok(Value::Null),
+                ProgressiveTransportResult::Accepted => Err(ProgressiveSendError::Other(
+                    anyhow::anyhow!("hosted acceptance is only valid for typed sends"),
+                )),
                 ProgressiveTransportResult::Outcome(outcome) => match outcome.error {
                     None => serde_json::to_value(outcome.receipt)
                         .map_err(|error| ProgressiveSendError::Other(error.into())),
@@ -1130,6 +1133,7 @@ impl Replies {
             },
             capabilities,
             context,
+            hosted,
             lifetime,
             terminal_feed.clone(),
             inbox,
@@ -1311,6 +1315,7 @@ async fn run(
     target: ProgressiveTarget,
     capabilities: tinychannels_bus::ChannelCapabilities,
     context: Option<ProgressiveOutputContext>,
+    hosted: bool,
     lifetime: Duration,
     terminal_feed: Arc<Mutex<Option<TerminalMemo>>>,
     mut inbox: mpsc::Receiver<Command>,
