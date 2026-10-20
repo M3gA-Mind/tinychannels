@@ -188,6 +188,29 @@ pub(super) fn response_status_ok(value: &serde_json::Value) -> bool {
     value.get("ok").and_then(serde_json::Value::as_bool) == Some(true)
 }
 
+impl TelegramChannel {
+    pub(crate) async fn health_status(&self) -> bool {
+        let timeout_duration = Duration::from_secs(5);
+
+        match tokio::time::timeout(
+            timeout_duration,
+            self.http_client().get(self.api_url("getMe")).send(),
+        )
+        .await
+        {
+            Ok(Ok(response)) => response.status().is_success(),
+            Ok(Err(error)) => {
+                tracing::debug!("Telegram health check failed: {error}");
+                false
+            }
+            Err(_) => {
+                tracing::debug!("Telegram health check timed out after 5s");
+                false
+            }
+        }
+    }
+}
+
 fn typed_send_error(error: anyhow::Error) -> crate::channel::ChannelSendError {
     if let Some(partial) = error.downcast_ref::<super::channel_send::PartialTextSendError>() {
         return partial.error.clone();
@@ -2375,24 +2398,7 @@ Ensure only one `openhuman` process is using this bot token."
     }
 
     async fn health_check(&self) -> bool {
-        let timeout_duration = Duration::from_secs(5);
-
-        match tokio::time::timeout(
-            timeout_duration,
-            self.http_client().get(self.api_url("getMe")).send(),
-        )
-        .await
-        {
-            Ok(Ok(resp)) => resp.status().is_success(),
-            Ok(Err(e)) => {
-                tracing::debug!("Telegram health check failed: {e}");
-                false
-            }
-            Err(_) => {
-                tracing::debug!("Telegram health check timed out after 5s");
-                false
-            }
-        }
+        self.health_status().await
     }
 
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
@@ -2980,13 +2986,18 @@ impl crate::channel::ChannelAdapter for TelegramChannel {
         tinychannels_runtime::controllers::ChannelAccountSnapshot,
         crate::channel::ChannelSendError,
     > {
+        let health_state = if self.health_status().await {
+            "healthy"
+        } else {
+            "unhealthy"
+        };
         Ok(tinychannels_bus::controllers::ChannelAccountSnapshot {
             channel_id: "telegram".into(),
             states: vec![
                 tinychannels_bus::controllers::ChannelAccountState::Configured,
                 tinychannels_bus::controllers::ChannelAccountState::Enabled,
             ],
-            health_state: Some("unknown".into()),
+            health_state: Some(health_state.into()),
             ..Default::default()
         })
     }

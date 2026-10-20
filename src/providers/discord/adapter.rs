@@ -258,13 +258,18 @@ impl ChannelAdapter for DiscordChannel {
     async fn status(
         &self,
     ) -> Result<tinychannels_runtime::controllers::ChannelAccountSnapshot, ChannelSendError> {
+        let health_state = if self.health_status().await {
+            "healthy"
+        } else {
+            "unhealthy"
+        };
         Ok(tinychannels_bus::controllers::ChannelAccountSnapshot {
             channel_id: "discord".into(),
             states: vec![
                 tinychannels_bus::controllers::ChannelAccountState::Configured,
                 tinychannels_bus::controllers::ChannelAccountState::Enabled,
             ],
-            health_state: Some("unknown".into()),
+            health_state: Some(health_state.into()),
             ..Default::default()
         })
     }
