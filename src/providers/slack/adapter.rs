@@ -296,12 +296,62 @@ impl crate::channel::ChannelDelete for SlackChannel {
 
 #[async_trait]
 impl crate::channel::ChannelStreamingDraft for SlackChannel {
+    async fn start_draft(
+        &self,
+        intent: ChannelOutboundIntent,
+    ) -> Result<Option<String>, ChannelSendError> {
+        self.upsert_draft(None, intent)
+            .await
+            .map(|receipt| receipt.primary_platform_message_id)
+    }
+
+    async fn update_draft(
+        &self,
+        draft_id: &str,
+        intent: ChannelOutboundIntent,
+    ) -> Result<(), ChannelSendError> {
+        let previous = legacy_draft_receipt(draft_id, &intent);
+        self.upsert_draft(Some(&previous), intent).await.map(|_| ())
+    }
+
+    async fn finalize_draft(
+        &self,
+        draft_id: &str,
+        intent: ChannelOutboundIntent,
+    ) -> Result<(), ChannelSendError> {
+        // Slack's existing finalization path is the same provider edit as an
+        // intermediate update; no extra send or overflow messages are needed.
+        crate::channel::ChannelStreamingDraft::update_draft(self, draft_id, intent).await
+    }
+
     async fn upsert_draft(
         &self,
         previous: Option<&MessageReceipt>,
         intent: ChannelOutboundIntent,
     ) -> Result<MessageReceipt, ChannelSendError> {
         self.upsert_draft_v2(previous, intent).await
+    }
+}
+
+fn legacy_draft_receipt(draft_id: &str, intent: &ChannelOutboundIntent) -> MessageReceipt {
+    let channel = intent.channel_ref.clone().unwrap_or_else(|| ChannelRef {
+        id: intent.channel_id.clone(),
+        ..Default::default()
+    });
+    let conversation = intent
+        .conversation_ref
+        .clone()
+        .unwrap_or_else(|| ConversationRef {
+            id: intent.conversation_id.clone(),
+            thread_id: intent.thread_id.clone(),
+            ..Default::default()
+        });
+    MessageReceipt {
+        channel: Some(channel),
+        conversation: Some(conversation),
+        primary_platform_message_id: Some(draft_id.to_owned()),
+        platform_message_ids: vec![draft_id.to_owned()],
+        ..Default::default()
     }
 }
 
