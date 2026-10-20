@@ -27,14 +27,30 @@ pub(crate) struct NativeLaunch {
 }
 
 impl NativeLaunch {
-    pub(crate) fn new(
+    pub(crate) fn new<T>(
         provider: &'static str,
-        channel: Arc<dyn tinychannels::LongTailNative>,
-    ) -> Self {
+        channel: Arc<T>,
+    ) -> Self
+    where
+        T: tinychannels::LongTailNative + tinychannels::traits::Channel + 'static,
+    {
+        let adapter: Arc<dyn tinychannels::LongTailNative> = channel.clone();
+        let legacy: Arc<dyn tinychannels::traits::Channel> = channel;
         Self {
-            provider_id: channel.descriptor().id,
+            provider_id: adapter.descriptor().id,
             start: Box::new(move |hooks, host, supervision, outbound_only| {
-                Running::start_native(provider, channel, hooks, host, supervision, outbound_only)
+                Running::start_native(provider, legacy, adapter, hooks, host, supervision, outbound_only)
+            }),
+        }
+    }
+
+    fn signal(channel: Arc<tinychannels::SignalChannel>) -> Self {
+        let adapter: Arc<dyn tinychannels::LongTailNative> = channel.clone();
+        let legacy: Arc<dyn tinychannels::traits::Channel> = channel;
+        Self {
+            provider_id: adapter.descriptor().id,
+            start: Box::new(move |hooks, host, supervision, outbound_only| {
+                Running::start_signal(legacy, adapter, hooks, host, supervision, outbound_only)
             }),
         }
     }
@@ -97,7 +113,7 @@ pub(crate) fn build_native_v2(
         "discord" => tinychannels::factory::build_discord_channel(config, host, http)
             .map(|channel| NativeLaunch::new("Discord", channel)),
         "signal" => tinychannels::factory::build_signal_channel(config, host, http)
-            .map(|channel| NativeLaunch::new("Signal", channel)),
+            .map(NativeLaunch::signal),
         "imessage" => tinychannels::factory::build_imessage_channel(config, host)
             .map(|channel| NativeLaunch::new("iMessage", channel)),
         "linq" => tinychannels::factory::build_linq_channel(config, host, http)

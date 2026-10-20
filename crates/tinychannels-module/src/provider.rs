@@ -1293,7 +1293,7 @@ impl NativePorts {
             edits: channel.clone(),
             deletes: channel.clone(),
             drafts: channel,
-            listener_mode: LongTailListenerMode::Adapter,
+            listener_mode: LongTailListenerMode::Legacy,
         }
     }
 
@@ -1318,11 +1318,15 @@ impl NativePorts {
     }
 
     fn telegram(channel: Arc<tinychannels::TelegramChannel>) -> Self {
-        Self::native(channel, "Telegram")
+        let mut ports = Self::native(channel, "Telegram");
+        ports.listener_mode = LongTailListenerMode::Legacy;
+        ports
     }
 
     fn slack(channel: Arc<tinychannels::SlackChannel>) -> Self {
-        Self::native(channel, "Slack")
+        let mut ports = Self::native(channel, "Slack");
+        ports.listener_mode = LongTailListenerMode::Legacy;
+        ports
     }
 }
 
@@ -1826,6 +1830,7 @@ impl Running {
     /// native v2 executor (the WhatsApp Cloud and Web adapters).
     pub(crate) fn start_native(
         provider: &'static str,
+        legacy: Arc<dyn Channel>,
         channel: Arc<dyn tinychannels::LongTailNative>,
         hooks: Arc<Hooks>,
         host: HostChannels,
@@ -1834,13 +1839,32 @@ impl Running {
     ) -> Arc<Self> {
         let provider_name = channel.descriptor().id;
         Self::start_inner(
-            None,
+            Some(legacy),
             provider_name,
             hooks,
             host,
             supervision,
             outbound_only,
-            Some(NativePorts::native(channel, provider)),
+            Some(NativePorts::long_tail(channel, provider, LongTailListenerMode::Legacy)),
+        )
+    }
+
+    pub(crate) fn start_signal(
+        legacy: Arc<dyn Channel>,
+        channel: Arc<dyn tinychannels::LongTailNative>,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: Option<ChannelSupervisionPolicy>,
+        outbound_only: bool,
+    ) -> Arc<Self> {
+        Self::start_inner(
+            Some(legacy),
+            "signal".into(),
+            hooks,
+            host,
+            supervision,
+            outbound_only,
+            Some(NativePorts::long_tail(channel, "Signal", LongTailListenerMode::Adapter)),
         )
     }
 
