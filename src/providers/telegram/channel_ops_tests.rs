@@ -263,26 +263,30 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             )
             .await
             .map_err(|_| unsupported_fixture_operation())?;
-            drop(event);
+            let _ = event;
             listener.abort();
             let requests = self.server.received_requests().await.unwrap_or_default();
             let request = requests
                 .iter()
                 .find(|request| request.url.path().ends_with("/getUpdates"))
-                .ok_or_else(unsupported_fixture_operation)?;
+                .ok_or_else(|| {
+                    eprintln!("no getUpdates request; captured {} requests", requests.len());
+                    unsupported_fixture_operation()
+                })?;
             let captured = self.events.events.lock().unwrap().last().cloned();
             let Some(captured) = captured else {
+                eprintln!("no event captured, requests={:?}", requests.iter().map(|r| r.url.path()).collect::<Vec<_>>());
                 return Err(unsupported_fixture_operation());
             };
             let conversation = captured.conversation.clone().unwrap_or_default();
-            let (operation, payload) = match captured.event {
+            let (operation, payload) = match &captured.event {
                 tinychannels_bus::ChannelEventKind::ReactionAdded { reaction, .. } => {
-                    ("reaction_receive", reaction.value)
+                    ("reaction_receive", reaction.value.clone())
                 }
                 tinychannels_bus::ChannelEventKind::ReactionRemoved { reaction, .. } => {
-                    ("reaction_receive", reaction.value)
+                    ("reaction_receive", reaction.value.clone())
                 }
-                _ => return Err(unsupported_fixture_operation()),
+                _ => { eprintln!("unexpected event {:?}", captured.event); return Err(unsupported_fixture_operation()) },
             };
             self.observations.lock().unwrap().push(
                 tinychannels_conformance::WireObservation {
@@ -396,7 +400,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                     Feature::Presentation => "presentation",
                     _ => "text",
                 })
-            } else if path.ends_with("/sendLocation") { ("send", "location") }
+            } else if path.ends_with("/sendLocation") || path.ends_with("/sendVenue") { ("send", "location") }
             else if path.ends_with("/sendContact") { ("send", "contact") }
             else if path.ends_with("/sendPoll") { ("send", "poll") }
             else if path.ends_with("/sendChatAction") { ("typing", "text") }
