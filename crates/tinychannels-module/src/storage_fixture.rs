@@ -22,7 +22,6 @@ use tinystoragedrivers_types::{
 /// One-shot faults and counters on the delivery records.
 #[derive(Debug)]
 pub(crate) struct Faults {
-    pub(crate) plan: FaultPlan,
     pub(crate) fail_pending_write: FaultSwitch,
     pub(crate) fail_queue_read: FaultSwitch,
     pub(crate) lose_result_reply: AtomicBool,
@@ -31,35 +30,28 @@ pub(crate) struct Faults {
 
 #[derive(Debug)]
 pub(crate) struct FaultSwitch {
-    plan: FaultPlan,
+    active: AtomicBool,
     operation: &'static str,
 }
 
 impl FaultSwitch {
-    fn new(plan: FaultPlan, operation: &'static str) -> Self {
-        Self { plan, operation }
+    fn new(operation: &'static str) -> Self {
+        Self {
+            active: AtomicBool::new(false),
+            operation,
+        }
     }
 
     pub(crate) fn store(&self, value: bool, _ordering: Ordering) {
-        if value {
-            self.plan.fail_operation_nth(
-                self.operation,
-                1,
-                tinystoragedrivers_types::ErrorKind::Backend,
-            );
-        } else {
-            self.plan.clear();
-        }
+        self.active.store(value, Ordering::SeqCst);
     }
 }
 
 impl Default for Faults {
     fn default() -> Self {
-        let plan = FaultPlan::new();
         Self {
-            fail_pending_write: FaultSwitch::new(plan.clone(), "documents.put_with"),
-            fail_queue_read: FaultSwitch::new(plan.clone(), "documents.query"),
-            plan,
+            fail_pending_write: FaultSwitch::new("documents.put_with"),
+            fail_queue_read: FaultSwitch::new("documents.query"),
             lose_result_reply: AtomicBool::new(false),
             pending_reads: AtomicUsize::new(0),
         }
@@ -106,14 +98,11 @@ impl StorageHost {
             let local = backend
                 .for_scope(&Scope::new("tenant:fixture").ok()?)
                 .ok()?;
-            let docs = Arc::new(Failing::with_plan(
-                Arc::new(ScopeSwitchDocs {
-                    backend,
-                    faults,
-                    current,
-                }),
-                bound.1.plan.clone(),
-            ));
+            let docs = Arc::new(ScopeSwitchDocs {
+                backend,
+                faults,
+                current,
+            });
             Some(StorageServer::new(Storage::new(
                 docs,
                 Arc::clone(local.streams()),
@@ -246,6 +235,19 @@ impl ScopeSwitchDocs {
         let scope = Scope::new(&format!("tenant:{}", self.current.lock().unwrap())).unwrap();
         Arc::clone(self.backend.for_scope(&scope).unwrap().documents())
     }
+
+    fn failing_inner(&self, switch: &FaultSwitch) -> Option<Failing<dyn DocumentStore>> {
+        if !switch.active.load(Ordering::SeqCst) {
+            return None;
+        }
+        let plan = FaultPlan::new();
+        plan.fail_operation_nth(
+            switch.operation,
+            1,
+            tinystoragedrivers_types::ErrorKind::Backend,
+        );
+        Some(Failing::with_plan(self.inner(), plan))
+    }
 }
 
 #[async_trait]
@@ -281,10 +283,15 @@ impl DocumentStore for ScopeSwitchDocs {
         precondition: Precondition,
         options: WriteOptions,
     ) -> Result<Version> {
-        let version = self
-            .inner()
-            .put_with(collection, id, doc, precondition, options)
-            .await?;
+        let version = if let Some(failing) = self.failing_inner(&self.faults.fail_pending_write) {
+            failing
+                .put_with(collection, id, doc, precondition, options)
+                .await?
+        } else {
+            self.inner()
+                .put_with(collection, id, doc, precondition, options)
+                .await?
+        };
         if collection == RESULTS_COLLECTION
             && self.faults.lose_result_reply.swap(false, Ordering::SeqCst)
         {
@@ -305,7 +312,11 @@ impl DocumentStore for ScopeSwitchDocs {
         if collection == PENDING_COLLECTION {
             self.faults.pending_reads.fetch_add(1, Ordering::SeqCst);
         }
-        self.inner().query(collection, query).await
+        if let Some(failing) = self.failing_inner(&self.faults.fail_queue_read) {
+            failing.query(collection, query).await
+        } else {
+            self.inner().query(collection, query).await
+        }
     }
 
     async fn count(&self, collection: &str, filter: &Filter) -> Result<u64> {
