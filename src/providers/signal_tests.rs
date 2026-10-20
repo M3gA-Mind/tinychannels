@@ -577,11 +577,13 @@ async fn rpc_routes_direct_and_group_messages_and_typing() {
                 .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                     "result": {"timestamp": 1_700_000_000_123u64}
                 })))
-                .expect(if method_name == "sendTyping" && recipient == "group:team" {
-                    2
-                } else {
-                    1
-                })
+                .expect(
+                    if method_name == "sendTyping" && recipient == "group:team" {
+                        2
+                    } else {
+                        1
+                    },
+                )
                 .mount(&server)
                 .await;
             if method_name == "send" {
@@ -667,7 +669,10 @@ async fn rpc_reports_errors_and_handles_empty_and_result_responses() {
         );
     }
     let unavailable = mock_signal("http://127.0.0.1:0".into());
-    assert_eq!(NativeProvider::health_state(&unavailable).await, "unhealthy");
+    assert_eq!(
+        NativeProvider::health_state(&unavailable).await,
+        "unhealthy"
+    );
     assert!(
         unavailable
             .rpc_request("send", serde_json::json!({}))
@@ -725,7 +730,10 @@ async fn typed_sse_retries_failures_and_stops_after_accepted_ingress() {
     }
     let channel = Arc::new(channel);
     let (tx, mut rx) = mpsc::channel(1);
-    let sink = Arc::new(StopAfterFirst { channel: channel.clone(), tx });
+    let sink = Arc::new(StopAfterFirst {
+        channel: channel.clone(),
+        tx,
+    });
     let listener_channel = channel.clone();
     let listener = tokio::spawn(async move {
         NativeProvider::start_listener(listener_channel.as_ref(), sink.as_ref()).await

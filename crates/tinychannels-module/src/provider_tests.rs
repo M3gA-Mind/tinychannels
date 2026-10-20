@@ -4390,7 +4390,13 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
         Some("native-v2")
     );
     assert_eq!(
-        handle.adapter.status().await.unwrap().health_state.as_deref(),
+        handle
+            .adapter
+            .status()
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
         Some("healthy")
     );
 

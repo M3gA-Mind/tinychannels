@@ -648,7 +648,10 @@ async fn typed_provider_ports_send_and_preserve_typed_errors() {
     };
     ReactionPort::send_reaction(
         &channel,
-        &ChannelRef { id: "signal".into(), account_id: None },
+        &ChannelRef {
+            id: "signal".into(),
+            account_id: None,
+        },
         &conversation(PEER),
         "1700000000001",
         &thumbs,
@@ -731,7 +734,14 @@ fn the_descriptor_and_defaults_identify_the_native_adapter() {
     assert!(channel.declared().reactions);
     assert!(channel.declared().addressing.reply_to_id);
     assert!(!channel.declared().addressing.thread_id);
-    assert!(channel.declared().actions.supported.iter().any(|action| action == "edit"));
+    assert!(
+        channel
+            .declared()
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "edit")
+    );
 }
 
 #[tokio::test]
