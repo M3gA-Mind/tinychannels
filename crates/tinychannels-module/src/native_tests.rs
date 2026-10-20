@@ -92,6 +92,31 @@ fn long_tail_providers_build_as_native_launches_only_when_configured() {
 }
 
 #[test]
+fn native_launch_accepts_typed_adapters_without_the_legacy_channel_trait() {
+    let host: Arc<dyn ChannelHost> = NoopHost::arc();
+    let config = ChannelsConfig {
+        dingtalk: Some(tinychannels_bus::config::DingTalkConfig {
+            client_id: "id".into(),
+            client_secret: "secret".into(),
+            allowed_users: vec![],
+        }),
+        ..Default::default()
+    };
+    let channel = tinychannels::factory::build_long_tail_channel_with_host(
+        &config,
+        &host,
+        &DefaultHttpClients,
+        "dingtalk",
+    )
+    .expect("DingTalk is a configured typed adapter");
+
+    // LongTailNative intentionally does not implement legacy Channel. Passing
+    // its trait object here proves native launch uses only the typed ports.
+    let launch = NativeLaunch::new("DingTalk", channel);
+    assert_eq!(launch.provider_id, "dingtalk");
+}
+
+#[test]
 fn a_configured_imessage_account_builds_a_native_launch() {
     let host = NoopHost::arc();
     let config = ChannelsConfig {
