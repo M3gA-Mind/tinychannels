@@ -477,10 +477,14 @@ async fn typed_read_receipts_retry_a_rejected_row_sharing_the_accepted_timestamp
             .await
     });
     started.await.unwrap();
-    let retry_result = tokio::time::timeout(Duration::from_secs(2), recording.entered.notified()).await;
+    let retry_result =
+        tokio::time::timeout(Duration::from_secs(2), recording.entered.notified()).await;
     stop_retry.send(true).unwrap();
     retry.await.unwrap().unwrap();
-    assert!(retry_result.is_ok(), "the rejected tied-timestamp receipt is retried");
+    assert!(
+        retry_result.is_ok(),
+        "the rejected tied-timestamp receipt is retried"
+    );
     let delivered = recording.items.lock().unwrap();
     assert_eq!(delivered.len(), 1);
     assert!(matches!(
