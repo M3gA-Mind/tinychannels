@@ -128,21 +128,14 @@ pub(crate) trait LongTail: Send + Sync {
         Err(unsupported::<Self>("typing indicators"))
     }
 
-    /// Run a provider-owned typed listener when this long-tail provider has
-    /// migrated away from the module's legacy `Channel::listen` bridge.
+    /// Run the provider-owned typed listener.
     async fn start_listener(
         &self,
-        _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
-    ) -> Result<(), ChannelSendError> {
-        // Until a provider opts into the typed listener path, the configured
-        // module keeps owning its existing legacy listener.
-        Ok(())
-    }
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError>;
 
     /// Stop a provider-owned typed listener and release its connection.
-    async fn stop_listener(&self) -> Result<(), ChannelSendError> {
-        Ok(())
-    }
+    async fn stop_listener(&self) -> Result<(), ChannelSendError>;
 
     /// Send a typed message using the provider's native transport.
     async fn send_typed_message(

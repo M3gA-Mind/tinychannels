@@ -366,7 +366,7 @@ impl YuanbaoChannel {
 #[async_trait]
 impl Channel for YuanbaoChannel {
     fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::long_tail::LongTail::declared(self)
+        crate::providers::native::NativeProvider::declared_capabilities(self)
     }
 
     fn name(&self) -> &str {
@@ -930,38 +930,6 @@ impl Drop for YuanbaoChannel {
         {
             active.cancel.send_replace(true);
         }
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::providers::long_tail::LongTail for YuanbaoChannel {
-    const ID: &'static str = "yuanbao";
-    const DISPLAY: &'static str = "Yuanbao";
-
-    fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
-        crate::providers::native::NativeProvider::declared_capabilities(self)
-    }
-
-    async fn send_typed_message(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels_bus::channel::ChannelSendError,
-    > {
-        crate::providers::native::outbound::send_typed(self, message).await
-    }
-
-    fn typing_supported(&self) -> bool {
-        true
-    }
-
-    async fn set_typing(
-        &self,
-        conversation_id: &str,
-        start: bool,
-    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
-        crate::providers::native::NativeProvider::set_typing(self, conversation_id, start).await
     }
 }
 
