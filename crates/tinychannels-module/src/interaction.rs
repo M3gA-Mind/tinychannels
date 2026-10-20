@@ -216,6 +216,59 @@ async fn deliver_webhook(
     }
 }
 
+/// Route a migrated provider's webhook through its typed owner port while
+/// keeping exact-byte authentication and the existing bounded wire contract.
+pub(crate) async fn dispatch_native_webhook(
+    provider: &dyn tinychannels::channel::ChannelAdapter,
+    interaction: ChannelInteraction,
+) -> Option<tinybus::Result<ChannelInteractionResult>> {
+    use ChannelInteraction as Op;
+    match interaction {
+        Op::DeliverWebhook {
+            signature,
+            body_base64,
+        } if provider.supports_webhook_delivery() => {
+            Some(deliver_webhook_typed(provider, signature.as_deref(), &body_base64).await)
+        }
+        Op::VerifyWebhook {
+            mode,
+            verify_token,
+            challenge,
+        } if provider.supports_webhook_verification() => Some(
+            provider
+                .verify_webhook(&mode, &verify_token, &challenge)
+                .map(ChannelInteractionResult::WebhookChallenge)
+                .ok_or_else(webhook_rejected),
+        ),
+        _ => None,
+    }
+}
+
+async fn deliver_webhook_typed(
+    provider: &dyn tinychannels::channel::ChannelAdapter,
+    signature: Option<&str>,
+    body_base64: &str,
+) -> tinybus::Result<ChannelInteractionResult> {
+    use base64::Engine as _;
+    if body_base64.len() > 4 * 1024 * 1024 * 4 / 3 + 4 {
+        return Err(webhook_rejected());
+    }
+    let body = base64::engine::general_purpose::STANDARD
+        .decode(body_base64.as_bytes())
+        .map_err(|_| webhook_rejected())?;
+    match provider.deliver_webhook(signature, &body).await {
+        Ok(outcome) => Ok(ChannelInteractionResult::WebhookAccepted(outcome)),
+        Err(error)
+            if error
+                .downcast_ref::<tinychannels::WebhookRejected>()
+                .is_some() =>
+        {
+            Err(webhook_rejected())
+        }
+        Err(_) => Err(webhook_failed()),
+    }
+}
+
 pub(crate) async fn dispatch(
     provider: &dyn Channel,
     interaction: ChannelInteraction,

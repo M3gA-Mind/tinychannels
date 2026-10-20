@@ -34,6 +34,28 @@ pub trait ChannelAdapter: Send + Sync {
         ChannelReceiveAckPolicy::AfterReceiveRecord
     }
 
+    /// Whether raw provider webhook delivery is implemented by this adapter.
+    fn supports_webhook_delivery(&self) -> bool {
+        false
+    }
+
+    /// Authenticate and ingest exact raw request bytes through the provider.
+    async fn deliver_webhook(
+        &self,
+        _signature: Option<&str>,
+        _body: &[u8],
+    ) -> anyhow::Result<tinychannels_bus::WebhookDeliveryOutcome> {
+        anyhow::bail!("provider has no typed webhook ingress")
+    }
+
+    fn supports_webhook_verification(&self) -> bool {
+        false
+    }
+
+    fn verify_webhook(&self, _mode: &str, _verify_token: &str, _challenge: &str) -> Option<String> {
+        None
+    }
+
     async fn start(
         &self,
         sink: &(dyn ChannelInboundSink + Send + Sync),
