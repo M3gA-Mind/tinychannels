@@ -1214,7 +1214,12 @@ async fn the_factory_built_dingtalk_adapter_passes_the_full_conformance_matrix()
     let results = check_all_features(&fixture).await;
     assert_eq!(results.len(), Feature::ALL.len());
     let failed = failures(&results);
-    assert!(failed.is_empty(), "DingTalk conformance failures: {failed:#?}");
+    assert!(
+        failed.is_empty(),
+        "DingTalk conformance failures: {failed:#?}; observations: {:#?}; requests: {:#?}",
+        fixture.observations(),
+        fixture.fixed_server.as_ref().unwrap().requests.lock().unwrap()
+    );
 
     let requests = fixture
         .fixed_server
