@@ -115,6 +115,109 @@ async fn the_adapter_describes_itself_without_starting_a_gateway() {
 }
 
 #[tokio::test]
+async fn gateway_listener_cleans_up_after_aborted_start_and_restarts_once() {
+    use futures_util::{SinkExt, StreamExt};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio_tungstenite::tungstenite::Message;
+    use wiremock::matchers::path;
+
+    struct Sink;
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for Sink {
+        async fn push(
+            &self,
+            _: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), ChannelSendError> {
+            Ok(())
+        }
+    }
+
+    let rest = MockServer::start().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let websocket_url = format!("ws://{}", listener.local_addr().unwrap());
+    Mock::given(method("GET"))
+        .and(path("/gateway/bot"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"url": websocket_url})))
+        .mount(&rest)
+        .await;
+
+    let sessions = Arc::new(AtomicUsize::new(0));
+    let accepted = sessions.clone();
+    let (ready_tx, mut ready_rx) = tokio::sync::mpsc::channel(2);
+    let gateway = tokio::spawn(async move {
+        for _ in 0..2 {
+            let (socket, _) = listener.accept().await.unwrap();
+            accepted.fetch_add(1, Ordering::SeqCst);
+            let mut websocket = tokio_tungstenite::accept_async(socket).await.unwrap();
+            websocket
+                .send(Message::Text(
+                    json!({"op": 10, "d": {"heartbeat_interval": 60_000}})
+                        .to_string()
+                        .into(),
+                ))
+                .await
+                .unwrap();
+            let identify = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                websocket.next(),
+            )
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&identify.to_string()).unwrap()["op"],
+                2
+            );
+            ready_tx.send(()).await.unwrap();
+            while websocket.next().await.is_some() {}
+        }
+    });
+
+    let channel = Arc::new(channel_for(&rest));
+    let sink = Arc::new(Sink);
+    let first_channel = channel.clone();
+    let first_sink = sink.clone();
+    let first = tokio::spawn(async move {
+        ChannelAdapter::start(first_channel.as_ref(), first_sink.as_ref()).await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), ready_rx.recv())
+        .await
+        .expect("first Gateway session starts")
+        .unwrap();
+
+    let duplicate = ChannelAdapter::start(channel.as_ref(), sink.as_ref()).await;
+    assert!(duplicate.is_err(), "a second Gateway session must be rejected");
+
+    // Aborting the caller drops the typed start future; its ownership guard
+    // must release the active-session slot and close the Gateway connection.
+    first.abort();
+    let _ = first.await;
+
+    let second_channel = channel.clone();
+    let second_sink = sink.clone();
+    let second = tokio::spawn(async move {
+        ChannelAdapter::start(second_channel.as_ref(), second_sink.as_ref()).await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), ready_rx.recv())
+        .await
+        .expect("the same configured channel can restart after caller cancellation")
+        .unwrap();
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), second)
+        .await
+        .expect("stop cancels and joins the second Gateway session")
+        .unwrap()
+        .unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), gateway)
+        .await
+        .expect("both mock Gateway sessions close")
+        .unwrap()
+        .unwrap();
+    assert_eq!(sessions.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn every_extension_trait_reaches_discord_through_the_adapter() {
     let server = MockServer::start().await;
     mount_message_post(&server, 600).await;
