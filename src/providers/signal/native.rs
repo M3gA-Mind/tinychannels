@@ -281,10 +281,11 @@ impl NativeProvider for SignalChannel {
     }
 
     async fn set_typing(&self, conversation: &str, on: bool) -> Result<(), ChannelSendError> {
-        let mut params = self.addressed(conversation);
         if !on {
-            params["stop"] = true.into();
+            // Signal indicators expire remotely; signal-cli has no stop RPC.
+            return Ok(());
         }
+        let mut params = self.addressed(conversation);
         self.call("sendTyping", params, "typing").await.map(|_| ())
     }
 
