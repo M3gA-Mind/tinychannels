@@ -94,6 +94,11 @@ impl OutboundSender {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_test_cos_endpoint(&mut self, endpoint: String) {
+        self.cos_endpoint = Some(endpoint);
+    }
+
     /// Resolve the `from_account` to put on the next outbound frame.
     /// Prefers the server-issued `bot_id` cached after sign-token / auth-bind
     /// — matches hermes-agent `_bot_id = token_data["bot_id"]` (yuanbao.py:400).
