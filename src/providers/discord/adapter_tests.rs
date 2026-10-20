@@ -212,7 +212,6 @@ async fn gateway_listener_cleans_up_after_aborted_start_and_restarts_once() {
     tokio::time::timeout(std::time::Duration::from_secs(2), gateway)
         .await
         .expect("both mock Gateway sessions close")
-        .unwrap()
         .unwrap();
     assert_eq!(sessions.load(Ordering::SeqCst), 2);
 }
