@@ -188,6 +188,9 @@ async fn typed_edit_and_delete_use_the_provider_returned_post_id() {
             id: "channel-1".into(),
             ..Default::default()
         }),
+        reply_to_id: None,
+        thread_id: None,
+        turn_id: None,
         idempotency_key: key.into(),
         parts: vec![OutboundContentPart::Content {
             part: ContentPart::Text {
@@ -195,7 +198,6 @@ async fn typed_edit_and_delete_use_the_provider_returned_post_id() {
                 markdown_dialect: None,
             },
         }],
-        ..Default::default()
     };
     let original = ChannelTypedSend::send_typed(&channel, &make_text("edit-target", "before"))
         .await
