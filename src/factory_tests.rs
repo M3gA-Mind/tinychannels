@@ -21,7 +21,7 @@ fn host() -> Arc<dyn ChannelHost> {
 fn names(config: &ChannelsConfig) -> Vec<String> {
     build_channels(config, &host(), &DefaultHttpClients)
         .iter()
-        .map(|channel| channel.name().to_owned())
+        .map(|channel| channel.name())
         .collect()
 }
 
@@ -455,7 +455,8 @@ fn the_cloud_builder_wires_the_host_ports_into_the_declared_capabilities() {
     let bare =
         build_whatsapp_cloud_channel(&cloud_config(None), &host(), &DefaultHttpClients).unwrap();
     assert!(
-        !bare.capabilities().content.image.outbound && !bare.capabilities().voice_out.supported
+        !bare.declared_capabilities().content.image.outbound
+            && !bare.declared_capabilities().voice_out.supported
     );
     let wired_host: Arc<dyn ChannelHost> = crate::ChannelHostBuilder::new()
         .media_repository(Arc::new(MemoryMedia::default()))
@@ -463,8 +464,8 @@ fn the_cloud_builder_wires_the_host_ports_into_the_declared_capabilities() {
         .build();
     let wired = build_whatsapp_cloud_channel(&cloud_config(None), &wired_host, &DefaultHttpClients)
         .unwrap();
-    assert!(wired.capabilities().content.image.outbound);
-    assert!(wired.capabilities().voice_out.supported);
+    assert!(wired.declared_capabilities().content.image.outbound);
+    assert!(wired.declared_capabilities().voice_out.supported);
     // Anything but a complete Cloud stanza is not a Cloud channel.
     let incomplete = ChannelsConfig {
         whatsapp: Some(WhatsAppConfig {
@@ -498,7 +499,7 @@ fn the_web_builder_wires_ports_and_refuses_cloud_shaped_stanzas() {
         .build();
     let channel = build_whatsapp_web_channel(&web(None, Some("label")), &wired_host).unwrap();
     assert!(
-        crate::Channel::capabilities(channel.as_ref())
+        tinychannels_runtime::ChannelAdapter::declared_capabilities(channel.as_ref())
             .content
             .image
             .outbound
@@ -518,9 +519,9 @@ fn the_slack_stanza_builds_a_socket_mode_provider_only_when_configured() {
     }))
     .unwrap();
     let slack = build_slack_channel(&config, &host(), &DefaultHttpClients).unwrap();
-    assert_eq!(slack.name(), "slack");
+    assert_eq!(slack.descriptor().id, "slack");
     assert_eq!(slack.proactive_target().as_deref(), Some("C1"));
-    let capabilities = slack.capabilities();
+    let capabilities = slack.declared_capabilities();
     assert!(capabilities.addressing.thread_id && capabilities.reactions);
     assert!(
         !capabilities.content.image.outbound,
