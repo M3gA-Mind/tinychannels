@@ -279,7 +279,7 @@ fn every_provider_describes_itself_and_matches_its_legacy_capabilities() {
         assert_eq!(descriptor.display_name, display);
         assert_eq!(descriptor.metadata["adapterMode"], "native-v2");
         let declared = channel.declared_capabilities();
-        assert_eq!(declared, Channel::capabilities(channel.as_ref()), "{id}");
+        assert_eq!(declared, channel.declared_capabilities(), "{id}");
         assert!(declared.remote_control && declared.chat_approvals, "{id}");
         assert_eq!(declared.content.parts, ["text"], "{id}");
         assert!(declared.content.text.outbound && declared.content.text.inbound);

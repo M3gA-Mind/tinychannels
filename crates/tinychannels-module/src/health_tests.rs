@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 struct FixtureChannel(&'static str, Option<bool>);
 
@@ -29,10 +30,16 @@ impl tinychannels::Channel for FixtureChannel {
 
 #[tokio::test]
 async fn module_health_checks_preserve_provider_order_and_bound_pending_calls() {
-    let providers: Vec<Arc<dyn tinychannels::Channel>> = vec![
-        Arc::new(FixtureChannel("healthy", Some(true))),
-        Arc::new(FixtureChannel("unhealthy", Some(false))),
-        Arc::new(FixtureChannel("pending", None)),
+    let providers: Vec<tinychannels::factory::BuiltChannel> = vec![
+        tinychannels::factory::BuiltChannel::Legacy(Arc::new(FixtureChannel(
+            "healthy",
+            Some(true),
+        ))),
+        tinychannels::factory::BuiltChannel::Legacy(Arc::new(FixtureChannel(
+            "unhealthy",
+            Some(false),
+        ))),
+        tinychannels::factory::BuiltChannel::Legacy(Arc::new(FixtureChannel("pending", None))),
     ];
     let reports = check_providers(&providers, Duration::ZERO).await;
     assert_eq!(reports.len(), 3);

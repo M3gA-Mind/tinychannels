@@ -73,7 +73,7 @@ pub use factory::build_email_channel;
 #[cfg(feature = "whatsapp-web")]
 pub use factory::build_whatsapp_web_channel;
 pub use factory::{
-    ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
+    BuiltChannel, ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
     build_discord_channel, build_imessage_channel, build_linq_channel, build_long_tail_channel,
     build_long_tail_channel_with_host, build_signal_channel, build_slack_channel,
     build_telegram_channel, build_whatsapp_cloud_channel,

@@ -746,6 +746,40 @@ pub fn build_email_channel(
     Some(Arc::new(email))
 }
 
+/// One configured provider built from the shared factory.
+/// Long-tail providers use their native typed adapter; other providers remain
+/// on the legacy compatibility transport until their runtime migration lands.
+pub enum BuiltChannel {
+    Legacy(Arc<dyn Channel>),
+    LongTail(Arc<dyn LongTailNative>),
+}
+
+impl BuiltChannel {
+    /// Stable provider identifier for this configured instance.
+    pub fn name(&self) -> String {
+        match self {
+            Self::Legacy(channel) => channel.name().to_owned(),
+            Self::LongTail(channel) => channel.descriptor().id,
+        }
+    }
+
+    /// Capability facts from the configured provider instance.
+    pub fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        match self {
+            Self::Legacy(channel) => channel.capabilities(),
+            Self::LongTail(channel) => channel.declared_capabilities(),
+        }
+    }
+
+    /// Configured default recipient, if the provider declares one.
+    pub fn proactive_target(&self) -> Option<String> {
+        match self {
+            Self::Legacy(channel) => channel.proactive_target(),
+            Self::LongTail(channel) => channel.proactive_target(),
+        }
+    }
+}
+
 /// Build every provider that `config` enables.
 ///
 /// Order is stable and matches the declaration order below, so a caller that
@@ -757,33 +791,33 @@ pub fn build_channels(
     config: &ChannelsConfig,
     host: &Arc<dyn ChannelHost>,
     http: &dyn HttpClientFactory,
-) -> Vec<Arc<dyn Channel>> {
-    let mut channels: Vec<Arc<dyn Channel>> = Vec::new();
+) -> Vec<BuiltChannel> {
+    let mut channels: Vec<BuiltChannel> = Vec::new();
 
     if config.telegram.is_some()
         && let Some(telegram) = build_telegram_channel(config, host, http)
     {
-        channels.push(telegram);
+        channels.push(BuiltChannel::Legacy(telegram));
     }
 
     if let Some(discord) = build_discord_channel(config, host, http) {
-        channels.push(discord);
+        channels.push(BuiltChannel::Legacy(discord));
     }
 
     if let Some(slack) = build_slack_channel(config, host, http) {
-        channels.push(slack);
+        channels.push(BuiltChannel::Legacy(slack));
     }
 
     if let Some(mattermost) = build_long_tail_channel_with_host(config, host, http, "mattermost") {
-        channels.push(mattermost);
+        channels.push(BuiltChannel::LongTail(mattermost));
     }
 
     if let Some(imessage) = build_imessage_channel(config, host) {
-        channels.push(imessage);
+        channels.push(BuiltChannel::Legacy(imessage));
     }
 
     if let Some(signal) = build_signal_channel(config, host, http) {
-        channels.push(signal);
+        channels.push(BuiltChannel::Legacy(signal));
     }
 
     if let Some(wa) = config.whatsapp.as_ref() {
@@ -792,13 +826,17 @@ pub fn build_channels(
         match wa.backend_type() {
             "cloud" if wa.is_cloud_config() => {
                 if let Some(channel) = build_whatsapp_cloud_channel(config, host, http) {
-                    channels.push(channel);
+                    channels.push(BuiltChannel::Legacy(channel));
                 }
             }
             "cloud" => tracing::warn!(
                 "[channels] whatsapp cloud configured but missing phone_number_id, access_token or verify_token"
             ),
-            "web" => channels.extend(build_whatsapp_web(wa, host)),
+            "web" => channels.extend(
+                build_whatsapp_web(wa, host)
+                    .into_iter()
+                    .map(BuiltChannel::Legacy),
+            ),
             _ => tracing::warn!(
                 "[channels] whatsapp config invalid: neither phone_number_id (Cloud API) nor session_path (Web) is set"
             ),
@@ -806,32 +844,32 @@ pub fn build_channels(
     }
 
     if let Some(linq) = build_linq_channel(config, host, http) {
-        channels.push(linq);
+        channels.push(BuiltChannel::Legacy(linq));
     }
 
     #[cfg(feature = "email")]
     if let Some(email) = build_email_channel(config, host) {
-        channels.push(email);
+        channels.push(BuiltChannel::Legacy(email));
     }
 
     if let Some(irc) = build_long_tail_channel_with_host(config, host, http, "irc") {
-        channels.push(irc);
+        channels.push(BuiltChannel::LongTail(irc));
     }
 
     if let Some(lark) = build_long_tail_channel_with_host(config, host, http, "lark") {
-        channels.push(lark);
+        channels.push(BuiltChannel::LongTail(lark));
     }
 
     if let Some(dingtalk) = build_long_tail_channel_with_host(config, host, http, "dingtalk") {
-        channels.push(dingtalk);
+        channels.push(BuiltChannel::LongTail(dingtalk));
     }
 
     if let Some(qq) = build_long_tail_channel_with_host(config, host, http, "qq") {
-        channels.push(qq);
+        channels.push(BuiltChannel::LongTail(qq));
     }
 
     if let Some(yuanbao) = build_long_tail_channel_with_host(config, host, http, "yuanbao") {
-        channels.push(yuanbao);
+        channels.push(BuiltChannel::LongTail(yuanbao));
     }
 
     channels

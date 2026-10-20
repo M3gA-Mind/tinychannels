@@ -1,8 +1,8 @@
 //! Shared v2 adapter surface for the text-only long-tail providers (Lark,
 //! Mattermost, IRC, QQ, DingTalk and Yuanbao).
 //!
-//! Each provider keeps its own transport and `Channel` listener; this module
-//! gives it the portable adapter traits so a configured account is described,
+//! Each provider keeps its own transport and typed listener; this module gives
+//! it the portable adapter traits so a configured account is described,
 //! validated and driven through `ChannelAdapter` like Telegram and Slack. A
 //! provider states what it supports once, in `LongTail::declared`, and every
 //! operation it does not implement answers with an explicit `unsupported`
@@ -67,11 +67,11 @@ pub(crate) fn text_capabilities(spec: TextSpec) -> ChannelCapabilities {
     }
 }
 
-/// A configured provider object that serves both the legacy listener and every
-/// portable v2 adapter trait. The module keeps one such object per account.
+/// The complete typed adapter surface required by a native long-tail provider.
+/// This deliberately does not inherit the legacy `Channel` transport trait.
+/// The module keeps one typed object per configured account.
 pub trait LongTailNative:
-    Channel
-    + crate::channel::ChannelAdapter
+    crate::channel::ChannelAdapter
     + crate::channel::ChannelTypedSend
     + crate::channel::ChannelTyping
     + crate::channel::ChannelReaction
@@ -82,8 +82,7 @@ pub trait LongTailNative:
 }
 
 impl<T> LongTailNative for T where
-    T: Channel
-        + crate::channel::ChannelAdapter
+    T: crate::channel::ChannelAdapter
         + crate::channel::ChannelTypedSend
         + crate::channel::ChannelTyping
         + crate::channel::ChannelReaction
