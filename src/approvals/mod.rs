@@ -71,7 +71,7 @@ pub struct ApprovalSurface {
 }
 
 impl ApprovalSurface {
-    /// A surface over the runtime's channels, keyed by [`Channel::name`].
+    /// A surface over the runtime's channels, keyed by each adapter descriptor id.
     pub fn new(channels_by_name: Arc<HashMap<String, Arc<dyn ChannelAdapter>>>) -> Self {
         Self {
             channels_by_name,
