@@ -42,6 +42,8 @@ pub const REMOTE_META: &str = "channels.remote_meta";
 
 /// Scoped metadata for opaque channel media references.
 pub const MEDIA_METADATA: &str = "channels.media_metadata";
+/// Blob prefix holding channel media bytes referenced by `MEDIA_METADATA`.
+pub const MEDIA_BLOB_PREFIX: &str = "channels/media/";
 /// The media metadata collection starts at v1; no earlier granted layout
 /// exists to migrate.
 pub const MEDIA_METADATA_VERSION: u32 = 1;
@@ -121,6 +123,7 @@ pub fn storage_schema() -> Schema {
             schema.collection(name, SCHEMA_VERSION, ScopeClass::Module)
         }
     });
+    let schema = schema.blobs(MEDIA_BLOB_PREFIX, ScopeClass::Module);
     migrate::steps()
         .into_iter()
         .fold(schema, |schema, step| schema.step(step))

@@ -9,22 +9,22 @@ fn the_schema_composes_and_declares_every_collection_as_module_scoped() {
     let declared: Vec<_> = schema
         .items
         .iter()
-        .map(|item| {
+        .filter_map(|item| {
             assert_eq!(item.scope(), ScopeClass::Module, "{}", item.name());
+            let Item::Collection { version, .. } = item else {
+                return None;
+            };
             let expected_version = if item.name() == MEDIA_METADATA {
                 MEDIA_METADATA_VERSION
             } else {
                 SCHEMA_VERSION
             };
-            assert!(
-                matches!(
-                    item,
-                    Item::Collection { version, .. } if *version == expected_version
-                ),
+            assert_eq!(
+                *version, expected_version,
                 "{}",
                 item.name()
             );
-            item.name()
+            Some(item.name())
         })
         .collect();
     assert_eq!(declared, COLLECTIONS);
@@ -83,7 +83,7 @@ fn scoped_channel_media_blob_prefix_is_declared_for_module_storage() {
     let media_blobs = schema
         .items
         .iter()
-        .find(|item| matches!(item, Item::Blobs { prefix, .. } if prefix == "channels/media/"))
+        .find(|item| matches!(item, Item::Blobs { prefix, .. } if prefix == MEDIA_BLOB_PREFIX))
         .expect("the channel media blob prefix is declared");
     assert_eq!(media_blobs.scope(), ScopeClass::Module);
 }

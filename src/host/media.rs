@@ -11,8 +11,10 @@ use sha2::{Digest, Sha256};
 use tinystoragedrivers_core::{BlobReader, BlobStore, DocumentStore, Filter, Precondition, Query};
 use tokio::io::AsyncReadExt;
 
-use tinychannels_bus::storage::{MEDIA_METADATA as MEDIA_COLLECTION, media_metadata_spec};
-const MEDIA_KEY_PREFIX: &str = "channels/media/";
+use tinychannels_bus::storage::{
+    MEDIA_BLOB_PREFIX, MEDIA_METADATA as MEDIA_COLLECTION, media_metadata_spec,
+};
+const MEDIA_KEY_PREFIX: &str = MEDIA_BLOB_PREFIX;
 const OPAQUE_ID_PREFIX: &str = "tinychannels_media_v1_";
 
 /// The identity required to store or resolve media for one channel turn.
