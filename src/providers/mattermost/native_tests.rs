@@ -197,21 +197,21 @@ async fn mattermost_rejects_invalid_reactions_before_any_http_request() {
     for (post_id, reaction) in [
         (
             "",
-            ChannelReaction {
+            tinychannels_bus::channel::ChannelReaction {
                 value: "thumbsup".into(),
                 custom_emoji_id: None,
             },
         ),
         (
             "post-1",
-            ChannelReaction {
+            tinychannels_bus::channel::ChannelReaction {
                 value: "not an emoji".into(),
                 custom_emoji_id: None,
             },
         ),
         (
             "post-1",
-            ChannelReaction {
+            tinychannels_bus::channel::ChannelReaction {
                 value: "thumbsup".into(),
                 custom_emoji_id: Some("custom-1".into()),
             },
@@ -260,7 +260,7 @@ async fn mattermost_identity_json_errors_never_submit_a_reaction() {
                 ..Default::default()
             },
             "post-1",
-            &ChannelReaction {
+            &tinychannels_bus::channel::ChannelReaction {
                 value: "thumbsup".into(),
                 custom_emoji_id: None,
             },
@@ -316,13 +316,16 @@ async fn mattermost_native_edit_and_delete_report_ambiguous_server_failures() {
                 id: "channel-1".into(),
                 ..Default::default()
             }),
+            turn_id: None,
+            reply_to_id: None,
+            thread_id: None,
+            idempotency_key: "edit-test".into(),
             parts: vec![OutboundContentPart::Content {
                 part: ContentPart::Text {
                     text: "before".into(),
                     markdown_dialect: None,
                 },
             }],
-            ..Default::default()
         },
     )
         .await
