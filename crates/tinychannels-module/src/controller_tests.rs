@@ -72,10 +72,23 @@ impl BackendFixture {
                             "conversation": conversation,
                         })),
                     ))),
+                    Request::Send {
+                        channel_ref,
+                        conversation,
+                        message,
+                        ..
+                    } => Ok(ChannelBackendResult::ProgressiveTransport(Box::new(
+                        Response::Success(serde_json::json!({
+                            "message_id": "managed-message-1",
+                            "channel": channel_ref,
+                            "conversation": conversation,
+                            "message": message,
+                        })),
+                    ))),
                     Request::OutputEvent { .. }
                     | Request::Delete { .. }
                     | Request::Typing { .. }
-                    | Request::Send { .. } => Ok(ChannelBackendResult::ProgressiveTransport(
+                    | Request::SendTyped { .. } => Ok(ChannelBackendResult::ProgressiveTransport(
                         Box::new(Response::Acknowledged),
                     )),
                 }
