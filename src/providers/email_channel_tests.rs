@@ -859,7 +859,8 @@ async fn listen_delivers_new_mail_and_reconnects_after_failures() {
     );
 }
 
-/// A closed receiver ends delivery quietly instead of erroring the session.
+/// A closed receiver ends delivery quietly without acknowledging an undelivered
+/// message.
 #[tokio::test]
 async fn processing_stops_when_the_receiver_is_gone() {
     let (port, server) = fake_imap(vec![ConnScript {
@@ -873,11 +874,10 @@ async fn processing_stops_when_the_receiver_is_gone() {
     let mut session = plain_session(&channel, port).await.unwrap();
     session.select("INBOX").await.unwrap();
     channel.process_unseen(&mut session, &tx).await.unwrap();
-    // Only the first message was offered before delivery stopped.
-    assert_eq!(channel.seen_messages.lock().await.len(), 1);
+    assert!(channel.seen_messages.lock().await.is_empty());
     let _ = session.logout().await;
     let transcripts = server.await.unwrap();
-    assert!(transcripts[0].iter().any(|l| l.contains("UID STORE")));
+    assert!(!transcripts[0].iter().any(|l| l.contains("UID STORE")));
 }
 
 /// An empty mailbox fetches nothing and marks nothing.
