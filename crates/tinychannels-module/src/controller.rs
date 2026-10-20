@@ -309,6 +309,8 @@ struct HostBackend {
     telegram_api_base: Option<String>,
     /// Discord REST base override (tests and proxies).
     discord_api_base: Option<String>,
+    /// Slack Web API base override (tests and proxies).
+    slack_api_base: Option<String>,
 }
 
 impl HostBackend {
@@ -327,6 +329,7 @@ impl HostBackend {
             discord_token,
             telegram_api_base: None,
             discord_api_base: None,
+            slack_api_base: None,
         }
     }
 
@@ -421,6 +424,38 @@ impl HostBackend {
             );
         }
         Ok(())
+    }
+
+    fn slack_native(
+        &self,
+        config: &ChannelsConfig,
+        channel: &str,
+    ) -> anyhow::Result<Option<tinychannels::providers::slack::SlackChannel>> {
+        use tinychannels::factory::HttpClientFactory as _;
+        if channel != "slack" {
+            return Ok(None);
+        }
+        let Some(slack) = config
+            .slack
+            .as_ref()
+            .filter(|slack| !slack.bot_token.trim().is_empty())
+        else {
+            return Ok(None);
+        };
+        let clients = tinychannels::factory::ConfiguredHttpClients::new(self.proxy.clone())?;
+        let mut native = tinychannels::providers::slack::SlackChannel::with_http_client(
+            slack.bot_token.clone(),
+            slack.channel_id.clone(),
+            slack.allowed_users.clone(),
+            clients.client_for("channel.slack"),
+        );
+        if let Some(app_token) = &slack.app_token {
+            native = native.with_app_token(Some(app_token.clone()));
+        }
+        if let Some(base) = &self.slack_api_base {
+            native = native.with_api_base(base.clone());
+        }
+        Ok(Some(native))
     }
 
     async fn invoke(&self, request: ChannelBackendRequest) -> anyhow::Result<ChannelBackendResult> {
@@ -714,6 +749,36 @@ impl ChannelBackend for HostBackend {
                 .controller_reaction(&request)
                 .await
                 .map_err(|error| anyhow::anyhow!(error.message))?;
+            return Ok(ChannelReactionResult {
+                success: true,
+                ..Default::default()
+            });
+        }
+        if let Some(slack) = self.slack_native(config, channel)? {
+            let request =
+                tinychannels::providers::discord::DiscordReactionRequest::from_value(&reaction)
+                    .map_err(anyhow::Error::msg)?;
+            let reaction = tinychannels_bus::channel::ChannelReaction {
+                value: request.emoji.unwrap_or_default(),
+                custom_emoji_id: request.custom_emoji_id,
+            };
+            tinychannels::channel::ChannelReaction::send_reaction(
+                &slack,
+                &tinychannels_bus::channel::ChannelRef {
+                    id: "slack".into(),
+                    account_id: None,
+                },
+                &tinychannels_bus::channel::ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Channel,
+                    id: request.channel_id,
+                    ..Default::default()
+                },
+                &request.message_id,
+                &reaction,
+                request.remove,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!(error.message))?;
             return Ok(ChannelReactionResult {
                 success: true,
                 ..Default::default()

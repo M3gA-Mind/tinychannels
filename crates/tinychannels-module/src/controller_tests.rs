@@ -1180,7 +1180,129 @@ async fn bot_token_telegram_reactions_and_threads_never_reach_the_host_backend()
 }
 
 #[tokio::test]
-async fn bot_token_channels_without_native_port_fail_explicitly_not_via_host() {
+async fn configured_slack_reactions_use_native_web_api_without_managed_fallback() {
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/reactions.add"))
+        .and(header("authorization", "Bearer s"))
+        .and(body_json(serde_json::json!({
+            "channel": "C1",
+            "timestamp": "171.2",
+            "name": "thumbsup"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/reactions.remove"))
+        .and(header("authorization", "Bearer s"))
+        .and(body_json(serde_json::json!({
+            "channel": "C1",
+            "timestamp": "171.2",
+            "name": "tada"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/reactions.add"))
+        .and(header("authorization", "Bearer s"))
+        .and(body_json(serde_json::json!({
+            "channel": "C2",
+            "timestamp": "172.3",
+            "name": "eyes"
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": false, "error": "channel_not_found"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (host, fixture, _server) = connected_host().await;
+    let mut backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    backend.slack_api_base = Some(server.uri());
+    let config = ChannelsConfig {
+        slack: Some(tinychannels::config::SlackConfig {
+            bot_token: "s".into(),
+            app_token: None,
+            channel_id: Some("C1".into()),
+            allowed_users: vec![],
+        }),
+        ..Default::default()
+    };
+
+    let result = backend
+        .send_reaction(
+            &config,
+            "slack",
+            serde_json::json!({
+                "channelId": "C1",
+                "messageId": "171.2",
+                "emoji": "👍"
+            }),
+        )
+        .await
+        .expect("configured Slack reaction should use the native adapter");
+    assert!(result.success);
+    let removed = backend
+        .send_reaction(
+            &config,
+            "slack",
+            serde_json::json!({
+                "channelId": "C1",
+                "messageId": "171.2",
+                "emoji": ":tada:",
+                "remove": true
+            }),
+        )
+        .await
+        .expect("configured Slack reaction removal should use the native adapter");
+    assert!(removed.success);
+
+    let api_error = backend
+        .send_reaction(
+            &config,
+            "slack",
+            serde_json::json!({
+                "channelId": "C2",
+                "messageId": "172.3",
+                "emoji": "👀"
+            }),
+        )
+        .await
+        .expect_err("Slack API rejection must be returned to the caller");
+    assert!(api_error.to_string().contains("channel_not_found"));
+
+    let before_invalid = server.received_requests().await.unwrap().len();
+    assert!(
+        backend
+            .send_reaction(&config, "slack", serde_json::json!({}))
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        before_invalid
+    );
+    assert!(fixture.0.lock().await.is_empty());
+    assert_eq!(before_invalid, 3);
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn slack_threads_without_native_port_fail_explicitly_not_via_host() {
     let (host, fixture, _server) = connected_host().await;
     let backend = HostBackend::new(
         host.clone(),
@@ -1198,10 +1320,6 @@ async fn bot_token_channels_without_native_port_fail_explicitly_not_via_host() {
         ..Default::default()
     };
     for error in [
-        backend
-            .send_reaction(&config, "slack", serde_json::json!({}))
-            .await
-            .map(|_| ()),
         backend
             .create_thread(&config, "slack", "t")
             .await
