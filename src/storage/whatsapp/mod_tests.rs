@@ -247,7 +247,7 @@ async fn a_failing_store_fails_the_write_instead_of_pretending_it_is_durable() {
     docs.put(
         IDENTITY,
         &format!("{}:bad", account_label("session")),
-        serde_json::json!({ "account": account_label("session"), "key": "bad", "value": "!!not-base64!!" }),
+        serde_json::json!({ "account": account_label("session"), "key": "bad", "data_b64": "!!not-base64!!" }),
         Precondition::None,
     )
     .await
