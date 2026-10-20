@@ -121,13 +121,6 @@ impl WhatsAppNative {
         }
     }
 
-    fn channel(&self) -> Arc<dyn tinychannels::Channel> {
-        match self {
-            Self::Cloud(channel) => channel.clone(),
-            Self::Web(channel) => channel.clone(),
-        }
-    }
-
     /// Web learns its account from the linked session; bind the media scope to it.
     fn bind_media_authority(&self, scope: &crate::provider::MediaScope) {
         if let Self::Web(channel) = self {
@@ -299,30 +292,16 @@ impl Channels {
                 "native adapter factory returned a mismatched provider identity",
             ));
         }
-        let channel: Option<Arc<dyn tinychannels::Channel>> = if let Some(telegram) = &telegram {
-            Some(telegram.clone())
-        } else if let Some(slack) = &slack {
-            Some(slack.clone())
-        } else if let Some(native) = &whatsapp {
+        if let Some(whatsapp) = &whatsapp {
             // A linked session, not its mutable label, is the media authority.
-            native.bind_media_authority(&media_account_scope);
-            Some(native.channel())
-        } else if native.is_some() {
-            None
-        } else {
-            build_channels(&config, &owner_host, http)
-                .into_iter()
-                .find(|candidate| candidate.name() == name)
-                .and_then(|candidate| match candidate {
-                    tinychannels::factory::BuiltChannel::Legacy(channel) => Some(channel),
-                    tinychannels::factory::BuiltChannel::LongTail(_) => None,
-                })
-                .ok_or_else(|| BusError::MethodFailed {
-                    name: NOT_CONFIGURED_ERROR.to_owned(),
-                    message: format!("channel {name} is not present in the supplied config"),
-                })?
-                .into()
-        };
+            whatsapp.bind_media_authority(&media_account_scope);
+        }
+        if telegram.is_none() && slack.is_none() && whatsapp.is_none() && native.is_none() {
+            return Err(BusError::MethodFailed {
+                name: NOT_CONFIGURED_ERROR.to_owned(),
+                message: format!("channel {name} is not present in the supplied config"),
+            });
+        }
 
         if outbound_only && !is_webhook_backed(&name, &config) {
             return Err(BusError::failed(
@@ -344,24 +323,10 @@ impl Channels {
         } else if let Some(native) = native {
             native.start(hooks, self.host.clone(), supervision, outbound_only)
         } else {
-            match supervision {
-                Some(policy) => Running::start_supervised(
-                    channel.expect("legacy provider channel"),
-                    hooks,
-                    self.host.clone(),
-                    policy,
-                ),
-                None if outbound_only => Running::start_outbound(
-                    channel.expect("legacy provider channel"),
-                    hooks,
-                    self.host.clone(),
-                ),
-                None => Running::start(
-                    channel.expect("legacy provider channel"),
-                    hooks,
-                    self.host.clone(),
-                ),
-            }
+            return Err(BusError::MethodFailed {
+                name: NOT_CONFIGURED_ERROR.to_owned(),
+                message: format!("channel {name} has no native adapter"),
+            });
         };
         running.insert(name.clone(), provider);
         self.provider_activations.lock().await.insert(
