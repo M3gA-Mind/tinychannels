@@ -747,11 +747,34 @@ async fn lifecycle_hooks_are_owned_by_the_module_runtime() {
             Ok(())
         }
     }
-    let channel = channel_for_url();
-    ChannelAdapter::start(&channel, &NoSink).await.unwrap();
-    ChannelAdapter::stop(&channel).await.unwrap();
+    let channel = Arc::new(channel_for_url());
+    let sink = Arc::new(NoSink);
+    let listener_channel = channel.clone();
+    let listener_sink = sink.clone();
+    let listener = tokio::spawn(async move {
+        ChannelAdapter::start(listener_channel.as_ref(), listener_sink.as_ref()).await
+    });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if channel.listener_cancel.lock().unwrap().as_ref().is_some() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("listener should register before stop");
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), listener)
+        .await
+        .expect("module stop should cancel the provider listener")
+        .unwrap()
+        .unwrap();
     assert_eq!(
-        ChannelAdapter::status(&channel).await.unwrap().channel_id,
+        ChannelAdapter::status(channel.as_ref())
+            .await
+            .unwrap()
+            .channel_id,
         "signal"
     );
 }
