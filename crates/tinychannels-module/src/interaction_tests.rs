@@ -10,7 +10,8 @@ impl tinychannels::channel::ChannelAdapter for NativeDescribeAdapter {
         tinychannels_bus::channel::ChannelDescriptor {
             id: "fixture".into(),
             display_name: "Fixture".into(),
-            account_id: Some("fixture:one".into()),
+            // Raw provider descriptors may not know the configured account.
+            account_id: None,
             ..Default::default()
         }
     }
@@ -67,10 +68,14 @@ impl tinychannels::channel::ChannelStreamingDraft for NativeDraftLifecyclePort {
         let tinychannels_bus::OutboundPayload::Text { text } = intent.payload else {
             panic!("draft start must use a typed text payload")
         };
+        let channel = intent.channel_ref.unwrap();
+        let conversation = intent.conversation_ref.unwrap();
         self.0.lock().unwrap().push(format!(
-            "start:{}:{}:{text}",
-            intent.channel_ref.unwrap().account_id.unwrap(),
-            intent.conversation_id
+            "start:{}:{}:{}:{}:{text}",
+            channel.account_id.unwrap(),
+            conversation.scope_id.unwrap(),
+            conversation.id,
+            intent.conversation_id,
         ));
         Ok(Some("draft-id".into()))
     }
@@ -140,6 +145,7 @@ async fn native_draft_lifecycle_converts_v1_interactions_to_scoped_typed_intents
     let started = dispatch_native_draft(
         &adapter,
         &drafts,
+        "fixture:configured",
         ChannelInteraction::SendDraft {
             message: SendMessage::new("partial", "room"),
         },
@@ -152,6 +158,7 @@ async fn native_draft_lifecycle_converts_v1_interactions_to_scoped_typed_intents
     let updated = dispatch_native_draft(
         &adapter,
         &drafts,
+        "fixture:configured",
         ChannelInteraction::UpdateDraft {
             recipient: "room".into(),
             message_id: "draft-id".into(),
@@ -166,6 +173,7 @@ async fn native_draft_lifecycle_converts_v1_interactions_to_scoped_typed_intents
     let finalized = dispatch_native_draft(
         &adapter,
         &drafts,
+        "fixture:configured",
         ChannelInteraction::FinalizeDraft {
             recipient: "room".into(),
             message_id: "draft-id".into(),
@@ -180,7 +188,7 @@ async fn native_draft_lifecycle_converts_v1_interactions_to_scoped_typed_intents
     assert_eq!(
         *drafts.0.lock().unwrap(),
         [
-            "start:fixture:one:room:partial",
+            "start:fixture:configured:fixture:configured:room:room:partial",
             "update:draft-id:more",
             "finalize:draft-id:final"
         ]
