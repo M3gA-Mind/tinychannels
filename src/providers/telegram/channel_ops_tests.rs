@@ -74,26 +74,48 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
     > {
         use tinychannels_conformance::ConformanceFeature as Feature;
         let payload = match feature {
-            Feature::Text => tinychannels_bus::OutboundPayload::Text {
-                text: "hello-kit".into(),
-            },
-            Feature::Image => tinychannels_bus::OutboundPayload::Media {
-                text: None,
-                media_urls: vec!["https://example.invalid/image.png".into()],
-            },
-            Feature::VoiceSynthesis => tinychannels_bus::OutboundPayload::Voice {
-                voice: tinychannels_bus::OutboundVoice::Synthesize {
-                    text: "speak this".into(),
-                    voice: None,
-                },
-            },
+            Feature::Text | Feature::ReplyAddressing | Feature::ThreadAddressing => {
+                tinychannels_bus::OutboundPayload::Text {
+                    text: "hello-kit".into(),
+                }
+            }
+            Feature::Location => rich_part(tinychannels_bus::ContentPart::Location {
+                latitude: 25.0,
+                longitude: 55.0,
+                label: Some("Conformance place".into()),
+                address: Some("1 Test Street".into()),
+                accuracy_meters: None,
+                live_until_unix_ms: None,
+            }),
+            Feature::Contact => rich_part(tinychannels_bus::ContentPart::Contact {
+                display_name: "Conformance User".into(),
+                phone_numbers: vec![tinychannels_bus::ContactMethod {
+                    value: "+15555550123".into(),
+                    label: None,
+                }],
+                emails: vec![],
+                organization: None,
+            }),
+            Feature::Buttons => rich_part(tinychannels_bus::ContentPart::Buttons {
+                rows: vec![vec![tinychannels_bus::ButtonAction {
+                    id: "conformance".into(),
+                    label: "Continue".into(),
+                    style: None,
+                    disabled: false,
+                }]],
+            }),
+            Feature::Poll => rich_part(tinychannels_bus::ContentPart::Poll {
+                question: "Choose one".into(),
+                options: vec!["Alpha".into(), "Beta".into()],
+                multiple_choice: false,
+                closes_at_unix_ms: None,
+                provider_poll_id: None,
+            }),
+            Feature::Presentation => rich_part(tinychannels_bus::ContentPart::Presentation {
+                blocks: serde_json::json!({"type":"text","text":"Conformance card"}),
+            }),
             _ => {
-                return Err(tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
-                    message: "fixture does not implement this operation".into(),
-                    unsupported: true,
-                    ..Default::default()
-                });
+                return Err(unsupported_fixture_operation());
             }
         };
         let intent = tinychannels_bus::ChannelOutboundIntent {
@@ -102,6 +124,8 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             conversation_id: "100".into(),
             channel_ref: Some(self.scope.channel.clone()),
             conversation_ref: Some(self.scope.conversation.clone()),
+            reply_to_id: (feature == Feature::ReplyAddressing).then(|| "321".into()),
+            thread_id: (feature == Feature::ThreadAddressing).then(|| "77".into()),
             payload,
             ..Default::default()
         };
@@ -111,10 +135,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
         let request_end = requests.len();
         requests = requests.drain(*cursor..).collect();
         *cursor = request_end;
-        for request in requests
-            .into_iter()
-            .filter(|request| request.url.path().ends_with("/sendMessage"))
-        {
+        for request in requests {
             let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
             let chat = body
                 .get("chat_id")
@@ -125,11 +146,18 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 id: chat.to_owned(),
                 ..Default::default()
             };
-            let payload_kinds = if body.get("text").is_some() {
-                vec!["text".into()]
-            } else {
-                vec![]
-            };
+            let path = request.url.path();
+            let (operation, kind) = if path.ends_with("/sendMessage") {
+                ("send", match feature {
+                    Feature::Text | Feature::ReplyAddressing | Feature::ThreadAddressing => "text",
+                    Feature::Buttons => "buttons",
+                    Feature::Presentation => "presentation",
+                    _ => "text",
+                })
+            } else if path.ends_with("/sendLocation") { ("send", "location") }
+            else if path.ends_with("/sendContact") { ("send", "contact") }
+            else if path.ends_with("/sendPoll") { ("send", "poll") }
+            else { continue };
             let wire_id = |field: &str| {
                 body.get(field).map(|value| {
                     value
@@ -143,12 +171,12 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 .unwrap()
                 .push(tinychannels_conformance::WireObservation {
                     feature,
-                    operation: "send".into(),
+                    operation: operation.into(),
                     channel: self.scope.channel.clone(),
                     conversation,
                     reply_to_id: wire_id("reply_to_message_id"),
                     thread_id: wire_id("message_thread_id"),
-                    payload_kinds,
+                    payload_kinds: vec![kind.into()],
                     platform_message_ids: result
                         .as_ref()
                         .ok()
