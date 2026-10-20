@@ -27,7 +27,7 @@ pub(crate) struct NativeLaunch {
 }
 
 impl NativeLaunch {
-    fn with_legacy<T>(provider: &'static str, channel: Arc<T>) -> Self
+    pub(crate) fn with_legacy<T>(provider: &'static str, channel: Arc<T>) -> Self
     where
         T: tinychannels::LongTailNative + tinychannels::traits::Channel + 'static,
     {
