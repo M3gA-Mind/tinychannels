@@ -3980,6 +3980,7 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_slack(channel, hooks, host, None, true);
+    assert!(running.channel.is_none(), "Slack uses its typed adapter ports directly");
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::SlackNativeV2);
     let descriptor = handle.descriptor();
@@ -4834,6 +4835,7 @@ async fn a_built_native_launch_starts_on_the_ordered_queue() {
     let _provider_host = hooks.host(host.clone(), "signal".to_owned(), None);
     let running = launch.start(hooks, host, None, true);
     assert_eq!(running.adapter_handle().mode, AdapterMode::SignalNativeV2);
+    assert!(running.channel.is_none(), "native launches must not retain a legacy Channel transport");
     running.stop().await.unwrap();
 }
 
