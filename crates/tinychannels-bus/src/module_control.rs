@@ -11,6 +11,16 @@ pub struct ProviderDescriptor {
     pub aliases: Vec<String>,
 }
 
+/// Module-described authority for the exact configured instance associated
+/// with a route-preparation request.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ConfiguredControlChannel {
+    /// Configured instance name, which may include an account suffix.
+    pub name: String,
+    /// Capabilities returned by the module's configured-instance descriptor.
+    pub capabilities: ChannelCapabilities,
+}
+
 /// Bounded facts: execution, parsing and formatting remain in the module.
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "operation", content = "request", rename_all = "snake_case")]
@@ -21,6 +31,11 @@ pub enum ChannelControlRequest {
         route: RemoteRoute,
         history_len: usize,
         session_scope: Option<Box<RemoteSessionScope>>,
+        /// Trusted descriptor facts for the exact active configured channel.
+        /// The host supplies them when preparing a command through a
+        /// temporary callback object that has no running provider map.
+        #[serde(default)]
+        configured_channel: Option<Box<ConfiguredControlChannel>>,
         providers: Vec<ProviderDescriptor>,
     },
     RuntimeLimits {

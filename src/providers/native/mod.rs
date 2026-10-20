@@ -19,7 +19,7 @@ pub(crate) use outbound::{Sent, Step, Target, to_anyhow};
 
 use async_trait::async_trait;
 use parking_lot::Mutex;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use tinychannels_bus::ChannelCapabilities;
 use tinychannels_bus::channel::{
@@ -70,7 +70,48 @@ pub(crate) struct HostPorts {
     pub(crate) voice_synthesis: bool,
     pub(crate) events: Option<Arc<dyn EventSink>>,
     /// Remembered inbound keys so a redelivered event is dropped.
-    seen: Arc<Mutex<VecDeque<String>>>,
+    seen: Arc<Mutex<SeenState>>,
+}
+
+#[derive(Default)]
+struct SeenState {
+    accepted: VecDeque<String>,
+    pending: HashSet<String>,
+}
+
+/// A dedupe reservation commits only after the provider's ingress sink accepts
+/// the event. Dropping it (including when a listener future is cancelled)
+/// makes the event eligible for retry.
+pub(crate) struct SeenReservation {
+    seen: Arc<Mutex<SeenState>>,
+    key: String,
+    active: bool,
+}
+
+pub(crate) enum SeenReservationResult {
+    /// The event was already accepted and can be safely suppressed.
+    Accepted,
+    /// Another dispatch owns the key, but has not been accepted yet.
+    Pending,
+    /// This dispatch owns the key until it commits or is dropped.
+    Reserved(SeenReservation),
+}
+
+impl SeenReservation {
+    pub(crate) fn commit(mut self) {
+        let mut state = self.seen.lock();
+        state.pending.remove(&self.key);
+        remember_seen(&mut state, self.key.clone());
+        self.active = false;
+    }
+}
+
+impl Drop for SeenReservation {
+    fn drop(&mut self) {
+        if self.active {
+            self.seen.lock().pending.remove(&self.key);
+        }
+    }
 }
 
 /// Inbound keys remembered per adapter.
@@ -79,21 +120,46 @@ const SEEN_WINDOW: usize = 2048;
 impl HostPorts {
     /// Whether `key` was recorded earlier, without recording it.
     pub(crate) fn has_seen(&self, key: &str) -> bool {
-        self.seen.lock().iter().any(|seen| seen == key)
+        self.seen.lock().accepted.iter().any(|seen| seen == key)
     }
 
     /// Record `key`; false when it was already seen.
     pub(crate) fn mark_seen(&self, key: String) -> bool {
-        let mut seen = self.seen.lock();
-        if seen.contains(&key) {
+        let mut state = self.seen.lock();
+        if state.accepted.contains(&key) || state.pending.contains(&key) {
             return false;
         }
-        if seen.len() >= SEEN_WINDOW {
-            seen.pop_front();
-        }
-        seen.push_back(key);
+        remember_seen(&mut state, key);
         true
     }
+
+    /// Reserve a key while an ingress write is in progress. Only a completed
+    /// write calls [`SeenReservation::commit`]; cancellation and rejection
+    /// release the reservation through `Drop`.
+    pub(crate) fn reserve_seen(&self, key: String) -> SeenReservationResult {
+        let mut state = self.seen.lock();
+        if state.accepted.contains(&key) {
+            return SeenReservationResult::Accepted;
+        }
+        if !state.pending.insert(key.clone()) {
+            return SeenReservationResult::Pending;
+        }
+        SeenReservationResult::Reserved(SeenReservation {
+            seen: Arc::clone(&self.seen),
+            key,
+            active: true,
+        })
+    }
+}
+
+fn remember_seen(state: &mut SeenState, key: String) {
+    if state.accepted.contains(&key) {
+        return;
+    }
+    if state.accepted.len() >= SEEN_WINDOW {
+        state.accepted.pop_front();
+    }
+    state.accepted.push_back(key);
 }
 
 /// A message addressed for an edit or delete.

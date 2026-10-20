@@ -58,6 +58,7 @@ pub(crate) async fn prepare(
             route,
             history_len,
             session_scope,
+            configured_channel: _,
             providers,
         } => {
             let remote = crate::remote::execute(

@@ -18,6 +18,30 @@ impl crate::channel::ChannelInboundSink for RejectingTypedSink {
     }
 }
 
+#[derive(Default)]
+struct RecordingTypedSink(std::sync::Mutex<Vec<ChannelIngress>>);
+
+#[async_trait]
+impl crate::channel::ChannelInboundSink for RecordingTypedSink {
+    async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
+        self.0.lock().unwrap().push(ingress);
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct BlockingTypedSink {
+    started: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl crate::channel::ChannelInboundSink for BlockingTypedSink {
+    async fn push(&self, _ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
+        self.started.notify_one();
+        std::future::pending().await
+    }
+}
+
 fn channel_pair() -> (mpsc::Sender<ChannelMessage>, mpsc::Receiver<ChannelMessage>) {
     mpsc::channel(8)
 }
@@ -382,4 +406,132 @@ async fn rejected_typed_events_stop_reaction_receipt_and_delete_dispatch() {
             .await,
         "a rejected delete must propagate to listener supervision"
     );
+}
+
+#[tokio::test]
+async fn rejected_events_are_delivered_on_retry_before_dedup_commits() {
+    let server = mock_daemon(b"").await;
+    let channel = channel_for(&server);
+    let rejecting = RejectingTypedSink;
+    let accepting = RecordingTypedSink::default();
+    let cases = [
+        data_envelope(json!({"message": "retry", "timestamp": 1_700_000_001_001u64})),
+        data_envelope(json!({
+            "timestamp": 1_700_000_001_002u64,
+            "reaction": {"emoji": "👍", "targetSentTimestamp": 1_700_000_000_123u64},
+        })),
+        data_envelope(json!({
+            "timestamp": 1_700_000_001_003u64,
+            "remoteDelete": {"timestamp": 1_700_000_000_123u64},
+        })),
+        serde_json::from_value(json!({
+            "sourceNumber": PEER,
+            "receiptMessage": {
+                "when": 1_700_000_001_004u64,
+                "timestamps": [1_700_000_000_123u64],
+                "isRead": true,
+            },
+        }))
+        .unwrap(),
+    ];
+
+    for (index, envelope) in cases.into_iter().enumerate() {
+        assert!(!channel.dispatch_typed_envelope(&envelope, &rejecting).await);
+        let before_retry = accepting.0.lock().unwrap().len();
+        assert!(channel.dispatch_typed_envelope(&envelope, &accepting).await);
+        let ingress = {
+            let delivered = accepting.0.lock().unwrap();
+            assert_eq!(
+                delivered.len(),
+                before_retry + 1,
+                "case {index} retry delivery"
+            );
+            delivered.last().unwrap().clone()
+        };
+        match (index, &ingress) {
+            (0, ChannelIngress::Inbound(message)) => {
+                assert_eq!(message.message_id, "sig_1700000001001");
+                assert_eq!(message.text, "retry");
+            }
+            (1, ChannelIngress::Event(event)) => {
+                assert_eq!(
+                    event.event_id,
+                    "signal:reaction:added:1700000000123:+15551111:1700000001002"
+                );
+                assert!(matches!(
+                    &event.event,
+                    ChannelEventKind::ReactionAdded { .. }
+                ));
+            }
+            (2, ChannelIngress::Event(event)) => {
+                assert_eq!(event.event_id, "signal:delete:1700000000123:+15551111");
+                assert!(matches!(
+                    &event.event,
+                    ChannelEventKind::MessageDeleted { .. }
+                ));
+            }
+            (3, ChannelIngress::Event(event)) => {
+                assert_eq!(event.event_id, "signal:read:1700000000123:+15551111");
+                assert!(matches!(&event.event, ChannelEventKind::ReadReceipt { .. }));
+            }
+            _ => panic!("retry delivered the wrong ingress for case {index}: {ingress:?}"),
+        }
+        assert!(channel.dispatch_typed_envelope(&envelope, &accepting).await);
+        assert_eq!(
+            accepting.0.lock().unwrap().len(),
+            before_retry + 1,
+            "case {index} duplicate suppression"
+        );
+    }
+
+    assert_eq!(accepting.0.lock().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn cancelled_blocked_delivery_can_be_retried() {
+    let server = mock_daemon(b"").await;
+    let channel = channel_for(&server);
+    let blocked = Arc::new(BlockingTypedSink::default());
+    let (cancel_tx, mut cancel_rx) = watch::channel(false);
+    let envelope = data_envelope(json!({
+        "message": "retry after cancellation",
+        "timestamp": 1_700_000_001_101u64,
+    }));
+    let dispatch_channel = channel.clone();
+    let dispatch_envelope = envelope;
+    let retry_envelope = data_envelope(json!({
+        "message": "retry after cancellation",
+        "timestamp": 1_700_000_001_101u64,
+    }));
+    let dispatch_sink = blocked.clone();
+    let dispatch = tokio::spawn(async move {
+        dispatch_channel
+            .dispatch_typed_until_cancel(&dispatch_envelope, dispatch_sink.as_ref(), &mut cancel_rx)
+            .await
+    });
+
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        blocked.started.notified(),
+    )
+    .await
+    .expect("listener must reach the blocked sink");
+    let concurrent = RecordingTypedSink::default();
+    assert!(
+        !channel
+            .dispatch_typed_envelope(&retry_envelope, &concurrent)
+            .await,
+        "a duplicate must not be acknowledged while the first push is pending"
+    );
+    assert!(concurrent.0.lock().unwrap().is_empty());
+    cancel_tx.send(true).unwrap();
+    assert_eq!(dispatch.await.unwrap().unwrap(), None);
+
+    let accepting = RecordingTypedSink::default();
+    assert!(
+        channel
+            .dispatch_typed_envelope(&retry_envelope, &accepting)
+            .await
+    );
+    assert_eq!(accepting.0.lock().unwrap().len(), 1);
 }
