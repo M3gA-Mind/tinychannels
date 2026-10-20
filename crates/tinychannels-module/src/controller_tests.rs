@@ -719,6 +719,7 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                     .to_owned();
                 let channel = channel_ref.clone().ok_or_default()?;
                 let conversation = conversation.clone().ok_or_default()?;
+                eprintln!("managed canonical outcome={outcome:?}; wire id={returned_id}");
                 if outcome.receipt.channel.as_ref() != Some(&channel)
                     || outcome.receipt.conversation.as_ref() != Some(&conversation)
                     || outcome.receipt.primary_platform_message_id.as_deref()
