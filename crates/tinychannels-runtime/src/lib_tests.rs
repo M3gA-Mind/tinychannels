@@ -139,10 +139,7 @@ impl Channel for CleanExitListener {
         Ok(())
     }
 
-    async fn listen(
-        &self,
-        _: tokio::sync::mpsc::Sender<ChannelMessage>,
-    ) -> anyhow::Result<()> {
+    async fn listen(&self, _: tokio::sync::mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         let count = {
             let mut entries = self.entries.lock().expect("entries lock");
             entries.push(tokio::time::Instant::now());

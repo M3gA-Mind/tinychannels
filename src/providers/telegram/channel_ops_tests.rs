@@ -279,12 +279,9 @@ async fn send_reaction_rejection_does_not_drop_reply_text() {
     mount_post(&server, "sendMessage", ok()).await;
     let ch = channel_for(&server, &["*"]);
 
-    ch.send(
-        &SendMessage::new("[REACTION:🦄|99] Great point", "100:2")
-            .in_thread(Some("5".into())),
-    )
-    .await
-    .expect("a rejected reaction must not prevent sending the reply");
+    ch.send(&SendMessage::new("[REACTION:🦄|99] Great point", "100:2").in_thread(Some("5".into())))
+        .await
+        .expect("a rejected reaction must not prevent sending the reply");
 
     let reactions = json_bodies(&server, "setMessageReaction").await;
     assert_eq!(reactions.len(), 1);
