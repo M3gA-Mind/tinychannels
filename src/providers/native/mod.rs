@@ -401,7 +401,11 @@ macro_rules! native_v2_adapter {
                         tinychannels_bus::controllers::ChannelAccountState::Configured,
                         tinychannels_bus::controllers::ChannelAccountState::Enabled,
                     ],
-                    health_state: Some("unknown".into()),
+                    health_state: Some(
+                        $crate::providers::native::NativeProvider::health_state(self)
+                            .await
+                            .into(),
+                    ),
                     ..Default::default()
                 })
             }
