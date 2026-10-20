@@ -41,6 +41,7 @@ struct Sender {
 struct ProgressiveTarget {
     channel: String,
     media_account_scope: crate::provider::MediaScope,
+    hosted: bool,
 }
 
 impl Sender {
@@ -1149,10 +1150,10 @@ impl Replies {
             ProgressiveTarget {
                 channel,
                 media_account_scope,
+                hosted,
             },
             capabilities,
             context,
-            hosted,
             lifetime,
             terminal_feed.clone(),
             inbox,
@@ -1342,6 +1343,7 @@ async fn run(
     let ProgressiveTarget {
         channel,
         media_account_scope,
+        hosted,
     } = target;
     let mut reply = if let Some(context) = context {
         let sender = Arc::new(Sender {
