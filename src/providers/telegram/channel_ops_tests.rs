@@ -268,7 +268,7 @@ async fn send_reaction_marker_targets_explicit_id_then_sends_reply_text() {
 }
 
 #[tokio::test]
-async fn send_reaction_rejection_does_not_drop_reply_text() {
+async fn rejected_reactions_are_nonfatal_with_or_without_reply_text() {
     let server = mock_api().await;
     mount_post(
         &server,
@@ -279,14 +279,21 @@ async fn send_reaction_rejection_does_not_drop_reply_text() {
     mount_post(&server, "sendMessage", ok()).await;
     let ch = channel_for(&server, &["*"]);
 
+    ch.send(&SendMessage::new("[REACTION:🦄|98]", "100:2"))
+        .await
+        .expect("a rejected reaction-only send must remain nonfatal");
+    assert!(json_bodies(&server, "sendMessage").await.is_empty());
+
     ch.send(&SendMessage::new("[REACTION:🦄|99] Great point", "100:2").in_thread(Some("5".into())))
         .await
         .expect("a rejected reaction must not prevent sending the reply");
 
     let reactions = json_bodies(&server, "setMessageReaction").await;
-    assert_eq!(reactions.len(), 1);
+    assert_eq!(reactions.len(), 2);
     assert_eq!(reactions[0]["chat_id"], "100");
-    assert_eq!(reactions[0]["message_id"], 99);
+    assert_eq!(reactions[0]["message_id"], 98);
+    assert_eq!(reactions[1]["chat_id"], "100");
+    assert_eq!(reactions[1]["message_id"], 99);
 
     let sent = json_bodies(&server, "sendMessage").await;
     assert_eq!(sent.len(), 1);
