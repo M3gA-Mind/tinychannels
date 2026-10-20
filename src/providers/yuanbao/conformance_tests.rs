@@ -461,12 +461,10 @@ impl AdapterFixture for Fixture {
                     request: serde_json::json!({"command":request.cmd,"group_code":group}),
                 });
                 ChannelTyping::stop_typing(self.channel.as_ref(), GROUP).await?;
-                let stop = tokio::time::timeout(
-                    std::time::Duration::from_secs(3),
-                    session.recv_frame(),
-                )
-                .await
-                .expect("typing stop heartbeat should reach the gateway");
+                let stop =
+                    tokio::time::timeout(std::time::Duration::from_secs(3), session.recv_frame())
+                        .await
+                        .expect("typing stop heartbeat should reach the gateway");
                 assert_eq!(
                     stop.cmd,
                     crate::providers::yuanbao::proto_constants::biz_cmd::SEND_GROUP_HEARTBEAT
