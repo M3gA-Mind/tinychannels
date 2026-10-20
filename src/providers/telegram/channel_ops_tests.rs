@@ -69,7 +69,6 @@ impl crate::host::EventSink for TelegramConformanceEvents {
         &self,
         ingress: tinychannels_bus::ChannelIngress,
     ) -> anyhow::Result<bool> {
-        eprintln!("Telegram matrix ingress: {ingress:?}");
         match ingress {
             tinychannels_bus::ChannelIngress::Event(event) => {
                 self.events.lock().unwrap().push(event);
@@ -158,7 +157,6 @@ impl crate::host::VoiceMediaStore for TelegramConformanceVoice {
         &self,
         request: crate::host::VoiceMediaRequest,
     ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
-        eprintln!("Telegram matrix voice store: {:?}", request.direction);
         let opaque_id = match request.direction {
             tinychannels_bus::HostVoiceMediaDirection::Inbound => "telegram-inbound-voice",
             tinychannels_bus::HostVoiceMediaDirection::Outbound => "telegram-synthesized-voice",
@@ -472,30 +470,26 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             return Ok(None);
         }
         if feature == Feature::InboundReactions {
-            if self.events.events.lock().unwrap().is_empty() {
-                let (tx, _rx) = tokio::sync::mpsc::channel(4);
-                let channel = self.channel.clone();
-                let listener = tokio::spawn(async move {
-                    #[allow(deprecated)]
-                    tinychannels_runtime::traits::Channel::listen(channel.as_ref(), tx).await
-                });
-                let capture = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                    loop {
-                        self.events.notified.notified().await;
-                        if !self.events.events.lock().unwrap().is_empty()
-                            && !self.events.inbounds.lock().unwrap().is_empty()
-                        {
-                            break;
-                        }
+            self.events.events.lock().unwrap().clear();
+            self.events.inbounds.lock().unwrap().clear();
+            let (tx, _rx) = tokio::sync::mpsc::channel(4);
+            let channel = self.channel.clone();
+            let listener = tokio::spawn(async move {
+                #[allow(deprecated)]
+                tinychannels_runtime::traits::Channel::listen(channel.as_ref(), tx).await
+            });
+            let capture = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    self.events.notified.notified().await;
+                    if !self.events.events.lock().unwrap().is_empty()
+                        && !self.events.inbounds.lock().unwrap().is_empty()
+                    {
+                        break;
                     }
-                }).await;
-                if listener.is_finished() {
-                    eprintln!("Telegram conformance listener ended: {:?}", listener.await);
-                } else {
-                    listener.abort();
                 }
-                capture.map_err(|_| unsupported_fixture_operation())?;
-            }
+            }).await;
+            listener.abort();
+            capture.map_err(|_| unsupported_fixture_operation())?;
             let captured = self.events.events.lock().unwrap().last().cloned()
                 .ok_or_else(unsupported_fixture_operation)?;
             let requests = self.server.received_requests().await.unwrap_or_default();
@@ -3144,10 +3138,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         .collect::<Vec<_>>();
     assert!(
         failures.is_empty(),
-        "Telegram conformance failures: {failures:#?}; events={:?}; inbounds={:?}; voice={:?}",
-        fixture.events.events.lock().unwrap().len(),
-        fixture.events.inbounds.lock().unwrap().len(),
-        fixture.voice.stored.lock().unwrap().iter().map(|r| (&r.direction, &r.scope)).collect::<Vec<_>>()
+        "Telegram conformance failures: {failures:#?}"
     );
 }
 
