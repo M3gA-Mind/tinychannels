@@ -140,18 +140,19 @@ async fn mattermost_reaction_errors_distinguish_safe_retry_from_unknown_mutation
     use wiremock::matchers::{body_json, header, method, path};
 
     let server = MockServer::start().await;
+    let identity_requests = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let identity_request_count = identity_requests.clone();
     Mock::given(method("GET"))
         .and(path("/api/v4/users/me"))
         .and(header("authorization", "Bearer test-token"))
-        .respond_with(ResponseTemplate::new(500))
-        .expect(1)
-        .mount(&server)
-        .await;
-    Mock::given(method("GET"))
-        .and(path("/api/v4/users/me"))
-        .and(header("authorization", "Bearer test-token"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "id": "bot-user-1" })))
-        .expect(2)
+        .respond_with(move |_request: &wiremock::Request| {
+            if identity_request_count.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(500)
+            } else {
+                ResponseTemplate::new(200).set_body_json(json!({ "id": "bot-user-1" }))
+            }
+        })
+        .expect(3)
         .mount(&server)
         .await;
     Mock::given(method("POST"))
