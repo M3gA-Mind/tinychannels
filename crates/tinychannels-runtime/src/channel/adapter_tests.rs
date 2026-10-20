@@ -67,7 +67,10 @@ async fn default_webhook_operations_are_explicitly_unsupported() {
         .await
         .unwrap_err();
     assert!(error.to_string().contains("no typed webhook ingress"));
-    assert_eq!(adapter.verify_webhook("subscribe", "token", "challenge"), None);
+    assert_eq!(
+        adapter.verify_webhook("subscribe", "token", "challenge"),
+        None
+    );
 }
 
 #[tokio::test]
