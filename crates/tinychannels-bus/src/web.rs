@@ -518,6 +518,18 @@ pub enum WebChannelEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         structured: Option<serde_json::Value>,
     },
+    /// A normalized provider event projected to the web client. The nested
+    /// payload remains the canonical TinyChannels event contract, including
+    /// its version, channel/conversation identity, and typed event kind.
+    ChannelEvent {
+        #[serde(flatten)]
+        context: WebEventContext,
+        /// OpenHuman's persisted row ID for the canonical event's target, when
+        /// the host has an exact durable provider-receipt binding.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        openhuman_message_id: Option<String>,
+        channel_event: crate::channel::ChannelEvent,
+    },
     UserError {
         #[serde(flatten)]
         context: WebEventContext,
@@ -602,6 +614,7 @@ impl WebChannelEvent {
             E::ProactiveMessage { .. } => "proactive_message",
             E::VoiceSpeak { .. } => "voice_speak",
             E::ChannelOutbound { .. } => "channel_outbound",
+            E::ChannelEvent { .. } => "channel_event",
             E::UserError { .. } => "user_error",
             E::ChatMessage { .. } => "chat_message",
             E::ChatSegment { .. } => "chat_segment",
@@ -706,6 +719,7 @@ impl WebChannelEvent {
             | E::ProactiveMessage { context, .. }
             | E::VoiceSpeak { context, .. }
             | E::ChannelOutbound { context, .. }
+            | E::ChannelEvent { context, .. }
             | E::UserError { context, .. }
             | E::ChatMessage { context, .. }
             | E::ChatSegment { context, .. } => context,
@@ -759,6 +773,7 @@ impl WebChannelEvent {
             | E::ProactiveMessage { context, .. }
             | E::VoiceSpeak { context, .. }
             | E::ChannelOutbound { context, .. }
+            | E::ChannelEvent { context, .. }
             | E::UserError { context, .. }
             | E::ChatMessage { context, .. }
             | E::ChatSegment { context, .. } => context,
@@ -954,7 +969,11 @@ pub fn legacy_event_alias(name: &str, enabled: bool) -> Option<String> {
 
 /// Deterministic JSON Schema document consumed by downstream TS generation.
 pub fn web_event_schema_json() -> Result<String, serde_json::Error> {
-    serde_json::to_string_pretty(&schemars::schema_for!(WebChannelEvent))
+    let schema = schemars::generate::SchemaSettings::draft2020_12()
+        .for_serialize()
+        .into_generator()
+        .into_root_schema_for::<WebChannelEvent>();
+    serde_json::to_string_pretty(&schema)
 }
 
 /// Upper bound for subagent tool arguments and results sent to web clients.

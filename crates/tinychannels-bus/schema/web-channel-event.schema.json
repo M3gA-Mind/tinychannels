@@ -2984,6 +2984,64 @@
       ]
     },
     {
+      "description": "A normalized provider event projected to the web client. The nested\npayload remains the canonical TinyChannels event contract, including\nits version, channel/conversation identity, and typed event kind.",
+      "type": "object",
+      "properties": {
+        "channel_event": {
+          "$ref": "#/$defs/ChannelEvent"
+        },
+        "client_id": {
+          "type": "string"
+        },
+        "event": {
+          "type": "string",
+          "const": "channel_event"
+        },
+        "openhuman_message_id": {
+          "description": "OpenHuman's persisted row ID for the canonical event's target, when\nthe host has an exact durable provider-receipt binding.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": "string"
+        },
+        "seq": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "thread_id": {
+          "type": "string"
+        },
+        "ts": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "turn_request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "event",
+        "client_id",
+        "thread_id",
+        "request_id",
+        "channel_event"
+      ]
+    },
+    {
       "description": "Shared addressing and ordering fields present on historical web events.\nTenant/profile stamps belong to the host and must never cross the wire.",
       "type": "object",
       "properties": {
@@ -3223,6 +3281,7 @@
       "required": [
         "id",
         "label",
+        "style",
         "disabled"
       ]
     },
@@ -3233,6 +3292,444 @@
         "primary",
         "secondary",
         "danger"
+      ]
+    },
+    "ChannelEvent": {
+      "description": "One normalized event emitted by a channel provider.",
+      "type": "object",
+      "properties": {
+        "channel": {
+          "description": "Configured provider/account identity.",
+          "$ref": "#/$defs/ChannelRef"
+        },
+        "conversation": {
+          "description": "Full conversation address. Presence events may omit it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationRef"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "eventId": {
+          "description": "Stable adapter event ID, suitable for host-side deduplication.",
+          "type": "string"
+        },
+        "sourceEventId": {
+          "description": "Provider event ID, retained verbatim when supplied.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sourceTimestamp": {
+          "description": "Provider timestamp in Unix milliseconds, when supplied.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "version": {
+          "description": "Event vocabulary version. This DTO currently represents contract v2.",
+          "type": "integer",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0
+        }
+      },
+      "oneOf": [
+        {
+          "description": "A provider reports a user's typing state.",
+          "type": "object",
+          "properties": {
+            "active": {
+              "type": "boolean"
+            },
+            "actor": {
+              "$ref": "#/$defs/SenderRef"
+            },
+            "expiresAt": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "typing"
+            }
+          },
+          "required": [
+            "type",
+            "actor",
+            "active",
+            "expiresAt"
+          ]
+        },
+        {
+          "description": "A provider confirms that a message was delivered or read.",
+          "type": "object",
+          "properties": {
+            "actor": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SenderRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "messageId": {
+              "type": "string"
+            },
+            "timestamp": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "read_receipt"
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "actor",
+            "timestamp"
+          ]
+        },
+        {
+          "description": "A provider confirms delivery of a message.",
+          "type": "object",
+          "properties": {
+            "actor": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/SenderRef"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "messageId": {
+              "type": "string"
+            },
+            "timestamp": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "delivered_receipt"
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "actor",
+            "timestamp"
+          ]
+        },
+        {
+          "description": "A user added a reaction.",
+          "type": "object",
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/SenderRef"
+            },
+            "messageId": {
+              "type": "string"
+            },
+            "providerMessageId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reaction": {
+              "$ref": "#/$defs/ChannelReaction"
+            },
+            "type": {
+              "type": "string",
+              "const": "reaction_added"
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "actor",
+            "reaction"
+          ]
+        },
+        {
+          "description": "A user removed a reaction.",
+          "type": "object",
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/SenderRef"
+            },
+            "messageId": {
+              "type": "string"
+            },
+            "providerMessageId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reaction": {
+              "$ref": "#/$defs/ChannelReaction"
+            },
+            "type": {
+              "type": "string",
+              "const": "reaction_removed"
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "actor",
+            "reaction"
+          ]
+        },
+        {
+          "description": "A sent reaction's provider result.",
+          "type": "object",
+          "properties": {
+            "messageId": {
+              "type": "string"
+            },
+            "providerMessageId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "reaction": {
+              "$ref": "#/$defs/ChannelReaction"
+            },
+            "success": {
+              "type": "boolean"
+            },
+            "type": {
+              "type": "string",
+              "const": "outbound_reaction"
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "reaction",
+            "success"
+          ]
+        },
+        {
+          "description": "A provider edited an existing message.",
+          "type": "object",
+          "properties": {
+            "messageId": {
+              "type": "string"
+            },
+            "parts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/ContentPart"
+              }
+            },
+            "providerMessageId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "message_updated"
+            }
+          },
+          "required": [
+            "type",
+            "messageId",
+            "parts"
+          ]
+        },
+        {
+          "description": "A provider deleted an existing message.",
+          "type": "object",
+          "properties": {
+            "messageId": {
+              "type": "string"
+            },
+            "providerMessageId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "message_deleted"
+            }
+          },
+          "required": [
+            "type",
+            "messageId"
+          ]
+        },
+        {
+          "description": "A user activated an opaque provider button. The host applies any\napproval or business policy after validating this actor and scope.",
+          "type": "object",
+          "properties": {
+            "actionId": {
+              "type": "string"
+            },
+            "actor": {
+              "$ref": "#/$defs/SenderRef"
+            },
+            "providerMessageId": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "queryId": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "button_callback"
+            }
+          },
+          "required": [
+            "type",
+            "queryId",
+            "actionId",
+            "providerMessageId",
+            "actor"
+          ]
+        },
+        {
+          "description": "Account or user presence changed.",
+          "type": "object",
+          "properties": {
+            "actor": {
+              "$ref": "#/$defs/SenderRef"
+            },
+            "expiresAt": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "uint64",
+              "minimum": 0
+            },
+            "state": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "presence"
+            }
+          },
+          "required": [
+            "type",
+            "actor",
+            "state",
+            "expiresAt"
+          ]
+        },
+        {
+          "description": "Provider connection/lifecycle status changed.",
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "state": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "lifecycle"
+            }
+          },
+          "required": [
+            "type",
+            "state",
+            "reason"
+          ]
+        }
+      ],
+      "required": [
+        "version",
+        "eventId",
+        "sourceEventId",
+        "sourceTimestamp",
+        "channel",
+        "conversation"
+      ]
+    },
+    "ChannelReaction": {
+      "description": "Provider reaction identity, including optional custom emoji identity.",
+      "type": "object",
+      "properties": {
+        "customEmojiId": {
+          "description": "Provider-specific stable custom-emoji identity.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "value": {
+          "description": "Displayable reaction text, such as an emoji.",
+          "type": "string",
+          "default": ""
+        }
+      },
+      "required": [
+        "value",
+        "customEmojiId"
+      ]
+    },
+    "ChannelRef": {
+      "description": "Reference to one channel/account surface.",
+      "type": "object",
+      "properties": {
+        "accountId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "id": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "required": [
+        "id",
+        "accountId"
       ]
     },
     "ChatSuggestion": {
@@ -3267,7 +3764,8 @@
         }
       },
       "required": [
-        "value"
+        "value",
+        "label"
       ]
     },
     "ContentPart": {
@@ -3321,7 +3819,9 @@
           },
           "required": [
             "kind",
-            "media"
+            "media",
+            "caption",
+            "altText"
           ]
         },
         {
@@ -3361,7 +3861,10 @@
           },
           "required": [
             "kind",
-            "media"
+            "media",
+            "caption",
+            "durationMs",
+            "thumbnail"
           ]
         },
         {
@@ -3403,7 +3906,11 @@
           },
           "required": [
             "kind",
-            "media"
+            "media",
+            "codec",
+            "durationMs",
+            "title",
+            "transcript"
           ]
         },
         {
@@ -3431,7 +3938,9 @@
           },
           "required": [
             "kind",
-            "media"
+            "media",
+            "fileName",
+            "caption"
           ]
         },
         {
@@ -3487,7 +3996,11 @@
           },
           "required": [
             "kind",
-            "media"
+            "media",
+            "packId",
+            "stickerId",
+            "emoji",
+            "altText"
           ]
         },
         {
@@ -3536,7 +4049,11 @@
           "required": [
             "kind",
             "latitude",
-            "longitude"
+            "longitude",
+            "label",
+            "address",
+            "accuracyMeters",
+            "liveUntilUnixMs"
           ]
         },
         {
@@ -3572,7 +4089,8 @@
             "kind",
             "displayName",
             "phoneNumbers",
-            "emails"
+            "emails",
+            "organization"
           ]
         },
         {
@@ -3635,7 +4153,9 @@
             "kind",
             "question",
             "options",
-            "multipleChoice"
+            "multipleChoice",
+            "closesAtUnixMs",
+            "providerPollId"
           ]
         },
         {
@@ -3670,6 +4190,67 @@
             "data"
           ]
         }
+      ]
+    },
+    "ConversationKind": {
+      "description": "Provider-neutral conversation kind.",
+      "type": "string",
+      "enum": [
+        "dm",
+        "group",
+        "channel",
+        "thread",
+        "unknown"
+      ]
+    },
+    "ConversationRef": {
+      "description": "Reference to an inbound or outbound conversation.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "default": ""
+        },
+        "kind": {
+          "$ref": "#/$defs/ConversationKind",
+          "default": "unknown"
+        },
+        "parentId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "scopeId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "threadId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "topicId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "scopeId",
+        "parentId",
+        "threadId",
+        "topicId"
       ]
     },
     "MediaKind": {
@@ -3787,7 +4368,22 @@
           "default": null,
           "minimum": 0
         }
-      }
+      },
+      "required": [
+        "path",
+        "url",
+        "contentType",
+        "codec",
+        "fileName",
+        "sizeBytes",
+        "durationMs",
+        "width",
+        "height",
+        "kind",
+        "transcribed",
+        "platformMessageId",
+        "localCachePath"
+      ]
     },
     "OutboundContentPart": {
       "description": "Typed outbound parts accepted by migrated provider adapters.",
@@ -3874,7 +4470,9 @@
           },
           "required": [
             "kind",
-            "media"
+            "media",
+            "codec",
+            "durationMs"
           ]
         },
         {
@@ -3896,9 +4494,52 @@
           },
           "required": [
             "kind",
-            "text"
+            "text",
+            "voice"
           ]
         }
+      ]
+    },
+    "SenderRef": {
+      "description": "Reference to the message sender.",
+      "type": "object",
+      "properties": {
+        "altIds": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "id": {
+          "type": "string",
+          "default": ""
+        },
+        "isBot": {
+          "type": "boolean",
+          "default": false
+        },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "roles": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "altIds",
+        "name",
+        "isBot",
+        "roles"
       ]
     },
     "VoiceNote": {
@@ -3965,7 +4606,15 @@
             "format": "float"
           }
         }
-      }
+      },
+      "required": [
+        "media",
+        "codec",
+        "durationMs",
+        "waveform",
+        "pushToTalk",
+        "transcript"
+      ]
     },
     "VoiceTranscript": {
       "description": "Transcript enrichment attached to a voice note without replacing its audio.",
@@ -3989,6 +4638,7 @@
       },
       "required": [
         "text",
+        "language",
         "state",
         "source"
       ]
@@ -4263,7 +4913,8 @@
         "task_id",
         "agent_id",
         "input_tokens",
-        "output_tokens"
+        "output_tokens",
+        "cost_usd"
       ]
     },
     "WebTurnTimingPayload": {
@@ -4353,7 +5004,10 @@
         "input_tokens",
         "output_tokens",
         "cached_input_tokens",
-        "context_window"
+        "cost_usd",
+        "cost_source",
+        "context_window",
+        "context_tokens"
       ]
     }
   }
