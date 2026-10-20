@@ -787,10 +787,11 @@ fn each_canonical_feature_uses_its_contract_capability() {
 
 #[tokio::test]
 async fn managed_features_require_a_host_callback_fixture() {
-    let fixture = Fixture::default();
-    let result = check_feature(&fixture, ConformanceFeature::ManagedReaction)
+    let adapter_fixture = fixture(ConformanceFeature::Text);
+    let observations = adapter_fixture.observations();
+    let result = check_feature(&adapter_fixture, ConformanceFeature::ManagedReaction)
         .await
         .unwrap_err();
     assert!(result.contains("requires a managed host callback fixture"));
-    assert!(fixture.observations().is_empty());
+    assert_eq!(adapter_fixture.observations(), observations);
 }
