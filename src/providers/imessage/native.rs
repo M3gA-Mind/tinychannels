@@ -258,14 +258,6 @@ impl NativeProvider for IMessageChannel {
         vec![("voiceOut", "attachment")]
     }
 
-    async fn health_state(&self) -> &'static str {
-        if self.is_healthy_on(std::env::consts::OS) {
-            "healthy"
-        } else {
-            "unhealthy"
-        }
-    }
-
     async fn start_listener(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
