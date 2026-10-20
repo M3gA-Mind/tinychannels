@@ -761,6 +761,16 @@ impl crate::providers::long_tail::LongTail for QQChannel {
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
         crate::providers::native::NativeProvider::declared_capabilities(self)
     }
+
+    async fn send_typed_message(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        crate::providers::native::outbound::send_typed(self, message).await
+    }
 }
 
 #[path = "qq/native.rs"]
