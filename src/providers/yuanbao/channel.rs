@@ -496,19 +496,11 @@ impl Channel for YuanbaoChannel {
     }
 
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        // Send RUNNING immediately, then spawn a 2s keepalive so the
-        // indicator doesn't expire while we generate.
-        let recipient = self.resolve_recipient(recipient).await;
-        self.outbound.start_heartbeat(&recipient).await?;
-        self.start_heartbeat_task(&recipient).await;
-        Ok(())
+        self.set_typing_native(recipient, true).await
     }
 
     async fn stop_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        let recipient = self.resolve_recipient(recipient).await;
-        self.stop_heartbeat_task(&recipient).await;
-        self.outbound.stop_heartbeat(&recipient).await?;
-        Ok(())
+        self.set_typing_native(recipient, false).await
     }
 
     fn supports_reactions(&self) -> bool {
@@ -517,6 +509,23 @@ impl Channel for YuanbaoChannel {
 }
 
 impl YuanbaoChannel {
+    pub(crate) async fn set_typing_native(
+        &self,
+        recipient: &str,
+        start: bool,
+    ) -> anyhow::Result<()> {
+        let recipient = self.resolve_recipient(recipient).await;
+        if start {
+            // Send RUNNING immediately, then spawn a keepalive so the
+            // indicator does not expire while a response is generated.
+            self.outbound.start_heartbeat(&recipient).await?;
+            self.start_heartbeat_task(&recipient).await;
+        } else {
+            self.stop_heartbeat_task(&recipient).await;
+            self.outbound.stop_heartbeat(&recipient).await?;
+        }
+        Ok(())
+    }
     async fn dispatch_push(&self, frame: types::ConnFrame, tx: &mpsc::Sender<ChannelMessage>) {
         // The Yuanbao gateway pushes inbound messages with `cmd_type=Push`;
         // the actual `cmd` word is decided server-side and varies (mirrors
@@ -924,6 +933,7 @@ impl Drop for YuanbaoChannel {
     }
 }
 
+#[async_trait::async_trait]
 impl crate::providers::long_tail::LongTail for YuanbaoChannel {
     const ID: &'static str = "yuanbao";
     const DISPLAY: &'static str = "Yuanbao";
@@ -944,6 +954,14 @@ impl crate::providers::long_tail::LongTail for YuanbaoChannel {
 
     fn typing_supported(&self) -> bool {
         true
+    }
+
+    async fn set_typing(
+        &self,
+        conversation_id: &str,
+        start: bool,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        crate::providers::native::NativeProvider::set_typing(self, conversation_id, start).await
     }
 }
 

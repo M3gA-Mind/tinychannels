@@ -9,7 +9,9 @@
 //! error instead of pretending to succeed.
 
 use std::collections::BTreeMap;
-use tinychannels_bus::channel::{ChannelDescriptor, ChannelSendError, ChannelSendOutcome, SendErrorKind};
+use tinychannels_bus::channel::{
+    ChannelDescriptor, ChannelSendError, ChannelSendOutcome, SendErrorKind,
+};
 use tinychannels_bus::controllers::{ChannelAccountSnapshot, ChannelAccountState};
 use tinychannels_bus::{
     ActionCapabilities, AddressingCapabilities, ChannelCapabilities, ChannelOutboundIntent,

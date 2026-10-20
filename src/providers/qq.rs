@@ -754,6 +754,7 @@ impl Channel for QQChannel {
     }
 }
 
+#[async_trait::async_trait]
 impl crate::providers::long_tail::LongTail for QQChannel {
     const ID: &'static str = "qq";
     const DISPLAY: &'static str = "QQ";
