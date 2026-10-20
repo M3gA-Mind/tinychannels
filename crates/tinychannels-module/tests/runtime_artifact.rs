@@ -401,6 +401,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         },
         namespace: "tenant".into(),
         session_policy: Default::default(),
+        preparation_mode: Default::default(),
     };
     let ordinary = first_client
         .call::<PreparedChannelInbound>(methods::PREPARE_CHANNEL_INBOUND, inbound.clone())

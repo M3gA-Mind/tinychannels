@@ -2708,6 +2708,7 @@ async fn inbound_preparation_preserves_escaped_persisted_keys_and_provider_threa
             },
             namespace: "openhuman".into(),
             session_policy: Default::default(),
+            preparation_mode: Default::default(),
         })
         .await
         .unwrap();
@@ -2815,6 +2816,7 @@ async fn inbound_voice_transcript_projects_to_legacy_text_and_preserves_typed_sc
             },
             namespace: "openhuman".into(),
             session_policy: Default::default(),
+            preparation_mode: Default::default(),
         })
         .await
         .expect("a completed voice transcript is valid legacy turn text");
@@ -2876,11 +2878,95 @@ async fn inbound_voice_transcript_projects_to_legacy_text_and_preserves_typed_sc
                     },
                     namespace: "openhuman".into(),
                     session_policy: Default::default(),
+                    preparation_mode: Default::default(),
                 })
                 .await
                 .is_err()
         );
     }
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn typed_inbound_preparation_preserves_rich_parts_without_legacy_projection() {
+    use tinychannels_bus::module_inbound::{
+        ChannelInboundPreparationMode, ChannelInboundSource, PrepareChannelInboundRequest,
+    };
+    use tinychannels_bus::{
+        ChannelInboundEnvelope, ChannelRef, ContentPart, ConversationKind, ConversationRef,
+        MediaKind, MediaReference, SenderRef,
+    };
+
+    let service = inbound_preparation_service().await;
+    let envelope = ChannelInboundEnvelope {
+        channel: ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:work".into()),
+        },
+        message_id: "image-only-7".into(),
+        conversation: ConversationRef {
+            kind: ConversationKind::Group,
+            id: "room-4".into(),
+            thread_id: Some("thread-8".into()),
+            topic_id: Some("topic-2".into()),
+            ..Default::default()
+        },
+        sender: SenderRef {
+            id: "alice".into(),
+            ..Default::default()
+        },
+        parts: vec![
+            ContentPart::Image {
+                media: MediaReference {
+                    opaque_id: Some("image-ref-7".into()),
+                    content_type: Some("image/png".into()),
+                    kind: MediaKind::Image,
+                    ..Default::default()
+                },
+                caption: Some("diagram".into()),
+            },
+            ContentPart::File {
+                media: MediaReference {
+                    opaque_id: Some("file-ref-9".into()),
+                    file_name: Some("notes.txt".into()),
+                    content_type: Some("text/plain".into()),
+                    kind: MediaKind::File,
+                    ..Default::default()
+                },
+            },
+        ],
+        ..Default::default()
+    };
+
+    let typed = service
+        .prepare_channel_inbound(PrepareChannelInboundRequest {
+            source: ChannelInboundSource::Envelope {
+                envelope: envelope.clone(),
+                timestamp: 123,
+            },
+            namespace: "openhuman".into(),
+            session_policy: Default::default(),
+            preparation_mode: ChannelInboundPreparationMode::Typed,
+        })
+        .await
+        .expect("typed hosts need the envelope even when legacy text cannot represent it");
+    assert_eq!(typed.envelope, envelope);
+    assert_eq!(typed.message.content, "");
+    assert_eq!(typed.message.channel, "telegram");
+    assert_eq!(typed.thread_id, "channel:telegram/alice/room-4/thread-8");
+
+    let legacy = service
+        .prepare_channel_inbound(PrepareChannelInboundRequest {
+            source: ChannelInboundSource::Envelope {
+                envelope,
+                timestamp: 123,
+            },
+            namespace: "openhuman".into(),
+            session_policy: Default::default(),
+            preparation_mode: ChannelInboundPreparationMode::LegacyText,
+        })
+        .await;
+    assert!(legacy.is_err(), "legacy preparation remains fail closed");
     service.shutdown().await.unwrap();
 }
 
@@ -3064,6 +3150,7 @@ async fn prepared_envelope_preserves_media_account_and_group_isolation_policy() 
         },
         namespace: "tenant".into(),
         session_policy: Default::default(),
+        preparation_mode: Default::default(),
     };
     let prepared = service
         .prepare_channel_inbound(request.clone())
@@ -3111,6 +3198,7 @@ async fn inbound_preparation_refuses_mismatched_identity_oversized_payload_and_s
         },
         namespace: "tenant".into(),
         session_policy: Default::default(),
+        preparation_mode: Default::default(),
     };
     let error = service
         .prepare_channel_inbound(request)
@@ -3127,6 +3215,7 @@ async fn inbound_preparation_refuses_mismatched_identity_oversized_payload_and_s
         },
         namespace: "tenant".into(),
         session_policy: Default::default(),
+        preparation_mode: Default::default(),
     };
     assert!(
         service
