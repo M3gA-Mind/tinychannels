@@ -56,7 +56,7 @@ use tokio::sync::mpsc;
 #[cfg(feature = "email")]
 use tokio::sync::watch;
 #[cfg(feature = "email")]
-use tokio::time::{sleep, timeout};
+use tokio::time::{Instant, sleep, timeout, timeout_at};
 #[cfg(feature = "email")]
 use tokio_rustls::TlsConnector;
 #[cfg(feature = "email")]
@@ -903,11 +903,15 @@ impl EmailChannel {
         connect: impl std::future::Future<Output = Result<Session<S>>>,
         limit: Duration,
     ) -> bool {
-        // Fully async health check - attempt IMAP connection
-        match timeout(limit, connect).await {
+        // One deadline covers connection, authentication, and best-effort
+        // logout. A server that accepts credentials but stalls during logout
+        // must not make typed status hang indefinitely.
+        let deadline = Instant::now() + limit;
+        match timeout_at(deadline, connect).await {
             Ok(Ok(mut session)) => {
-                // Try to logout cleanly
-                let _ = session.logout().await;
+                // A successful login is healthy even if cleanup cannot finish
+                // before the deadline; logout is only resource cleanup.
+                let _ = timeout_at(deadline, session.logout()).await;
                 true
             }
             Ok(Err(e)) => {
