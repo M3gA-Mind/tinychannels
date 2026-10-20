@@ -113,7 +113,7 @@ async fn typed_listener_connects_to_sse_publishes_and_stops() {
             "content-type",
             "text/event-stream",
         ).set_body(format!(
-            "data: {}\\n\\n",
+            "data: {}\n\n",
             json!({"envelope": {
                 "sourceNumber": PEER,
                 "sourceName": "Ada",

@@ -5,8 +5,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tinybus::{Error, Result};
-use tinychannels::host::{LifecycleRegistry, ShutdownHook};
 use tinychannels::channel::ChannelAdapter;
+use tinychannels::host::{LifecycleRegistry, ShutdownHook};
 use tinychannels::{Channel, ChannelHostBuilder, SendMessage};
 use tinychannels_bus::{
     ChannelSupervisionPolicy, ChannelsConfig, HostEventPublication, HostTranscriptionRequest,
@@ -1845,7 +1845,11 @@ impl Running {
             host,
             supervision,
             outbound_only,
-            Some(NativePorts::long_tail(channel, provider, LongTailListenerMode::Legacy)),
+            Some(NativePorts::long_tail(
+                channel,
+                provider,
+                LongTailListenerMode::Legacy,
+            )),
         )
     }
 
@@ -1864,7 +1868,11 @@ impl Running {
             host,
             supervision,
             outbound_only,
-            Some(NativePorts::long_tail(channel, "Signal", LongTailListenerMode::Adapter)),
+            Some(NativePorts::long_tail(
+                channel,
+                "Signal",
+                LongTailListenerMode::Adapter,
+            )),
         )
     }
 
