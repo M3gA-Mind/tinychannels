@@ -112,6 +112,41 @@ fn event_context_access_preserves_every_historical_wire_shape() {
 }
 
 #[test]
+fn channel_event_uses_the_canonical_tinychannels_payload() {
+    let value = serde_json::json!({
+        "event": "channel_event",
+        "client_id": "channel-runtime",
+        "thread_id": "channel:telegram/alice/room-1",
+        "request_id": "telegram:update:7",
+        "openhuman_message_id": "user:row-42",
+        "channel_event": {
+            "version": 2,
+            "eventId": "telegram:update:7:reaction:added:room-1:42:🔥",
+            "sourceEventId": "7",
+            "sourceTimestamp": 1720000000000u64,
+            "channel": {"id": "telegram", "accountId": "bot-1"},
+            "conversation": {
+                "kind": "group",
+                "id": "room-1",
+                "scopeId": null,
+                "parentId": null,
+                "threadId": null,
+                "topicId": null
+            },
+            "type": "reaction_added",
+            "messageId": "42",
+            "providerMessageId": "42",
+            "actor": {"id": "alice", "altIds": [], "name": "Alice", "isBot": false, "roles": []},
+            "reaction": {"value": "🔥", "customEmojiId": null}
+        }
+    });
+    let event: WebChannelEvent = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(event.event_name(), "channel_event");
+    assert_eq!(event.context().thread_id, "channel:telegram/alice/room-1");
+    assert_eq!(serde_json::to_value(event).unwrap(), value);
+}
+
+#[test]
 fn direct_web_events_preserve_null_and_empty_values_until_projection_normalizes() {
     let context = WebEventContext {
         client_id: "client".into(),
@@ -449,6 +484,10 @@ fn schema_export_is_deterministic_and_contains_every_variant() {
             "schema omitted {type_name}"
         );
     }
+    let sender = &schema["$defs"]["SenderRef"];
+    let required = sender["required"].as_array().unwrap();
+    assert!(required.iter().any(|field| field == "id"));
+    assert!(!required.iter().any(|field| field == "name"));
 }
 
 const HISTORICAL_EVENT_NAMES: &[&str] = &[
