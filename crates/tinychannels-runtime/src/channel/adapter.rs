@@ -107,6 +107,54 @@ pub trait ChannelDelete: Send + Sync {
 /// Optional streaming draft extension.
 #[async_trait]
 pub trait ChannelStreamingDraft: Send + Sync {
+    /// Begin a provider-owned draft lifecycle from a typed outbound intent.
+    /// `None` is a valid marker for pipelines that stream internally and only
+    /// publish their final response. Implementations that do not own this
+    /// lifecycle return an explicit unsupported error.
+    async fn start_draft(
+        &self,
+        _intent: ChannelOutboundIntent,
+    ) -> Result<Option<String>, ChannelSendError> {
+        Err(ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
+            message: "provider does not implement typed draft start".into(),
+            unsupported: true,
+            retryable: false,
+            ..Default::default()
+        })
+    }
+
+    /// Update the provider-owned draft identified by `draft_id`.
+    async fn update_draft(
+        &self,
+        _draft_id: &str,
+        _intent: ChannelOutboundIntent,
+    ) -> Result<(), ChannelSendError> {
+        Err(ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
+            message: "provider does not implement typed draft update".into(),
+            unsupported: true,
+            retryable: false,
+            ..Default::default()
+        })
+    }
+
+    /// Finalize the provider-owned draft, preserving provider-specific
+    /// overflow, completion, and send behavior.
+    async fn finalize_draft(
+        &self,
+        _draft_id: &str,
+        _intent: ChannelOutboundIntent,
+    ) -> Result<(), ChannelSendError> {
+        Err(ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
+            message: "provider does not implement typed draft finalization".into(),
+            unsupported: true,
+            retryable: false,
+            ..Default::default()
+        })
+    }
+
     async fn upsert_draft(
         &self,
         previous: Option<&MessageReceipt>,

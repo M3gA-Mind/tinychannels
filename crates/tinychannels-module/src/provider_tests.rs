@@ -1,6 +1,49 @@
 use super::*;
 use tinychannels::SendMessage;
 
+#[derive(Clone, Default)]
+struct RecordingDraftIntents(Arc<std::sync::Mutex<Vec<tinychannels_bus::ChannelOutboundIntent>>>);
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelStreamingDraft for RecordingDraftIntents {
+    async fn start_draft(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<Option<String>, tinychannels::channel::ChannelSendError> {
+        self.0.lock().unwrap().push(intent);
+        Ok(Some("configured-draft".into()))
+    }
+
+    async fn update_draft(
+        &self,
+        _: &str,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.0.lock().unwrap().push(intent);
+        Ok(())
+    }
+
+    async fn finalize_draft(
+        &self,
+        _: &str,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<(), tinychannels::channel::ChannelSendError> {
+        self.0.lock().unwrap().push(intent);
+        Ok(())
+    }
+
+    async fn upsert_draft(
+        &self,
+        _: Option<&tinychannels_bus::channel::MessageReceipt>,
+        _: tinychannels_bus::ChannelOutboundIntent,
+    ) -> std::result::Result<
+        tinychannels_bus::channel::MessageReceipt,
+        tinychannels::channel::ChannelSendError,
+    > {
+        unreachable!("the configured draft actor uses lifecycle methods")
+    }
+}
+
 type ProviderMediaScopeCase = (
     &'static str,
     tinychannels_bus::ChannelsConfig,
@@ -4005,6 +4048,11 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
         tinychannels::SlackChannel::new("test-token".into(), None, vec!["*".into()])
             .with_api_base(format!("{}/api", server.uri())),
     );
+    assert_eq!(
+        tinychannels::channel::ChannelAdapter::descriptor(channel.as_ref()).account_id,
+        None,
+        "the raw provider adapter does not own configured account identity"
+    );
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
@@ -4081,6 +4129,16 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
         })
         .await
         .unwrap();
+    let streamed = running
+        .interact(ChannelInteraction::SendDraft {
+            message: tinychannels::SendMessage::new("streaming", "C1:100.1"),
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        streamed,
+        tinychannels_bus::ChannelInteractionResult::Draft(Some(ref id)) if id == "321.5"
+    ));
     let draft = running
         .interact(ChannelInteraction::UpsertDraft {
             previous: None,
@@ -4129,6 +4187,141 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
         );
     }
     running.stop().await.unwrap();
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn configured_slack_draft_dispatch_stamps_trusted_account_on_all_lifecycle_intents() {
+    let server = wiremock::MockServer::start().await;
+    let raw = Arc::new(
+        tinychannels::SlackChannel::new("test-token".into(), None, vec!["*".into()])
+            .with_api_base(format!("{}/api", server.uri())),
+    );
+    assert_eq!(
+        tinychannels::channel::ChannelAdapter::descriptor(raw.as_ref()).account_id,
+        None,
+        "raw Slack adapter identity is not the configured module account"
+    );
+    let account = "slack:actor-account";
+    let recorder = RecordingDraftIntents::default();
+    let mut native = NativePorts::slack(raw);
+    native.drafts = Arc::new(recorder.clone());
+    let mut typing = TypingRefreshes::default();
+
+    let mut start = SendMessage::new("partial", "C1:100.1");
+    start.thread_ts = Some("parent-9".into());
+    start.reply_to_id = Some("reply-8".into());
+    let started = dispatch_interaction(
+        None,
+        Some(native.clone()),
+        account,
+        tinychannels_bus::ChannelInteraction::SendDraft { message: start },
+        &mut typing,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        started,
+        tinychannels_bus::ChannelInteractionResult::Draft(Some(id)) if id == "configured-draft"
+    ));
+    dispatch_interaction(
+        None,
+        Some(native.clone()),
+        account,
+        tinychannels_bus::ChannelInteraction::UpdateDraft {
+            recipient: "C1:100.1".into(),
+            message_id: "configured-draft".into(),
+            text: "updated".into(),
+        },
+        &mut typing,
+    )
+    .await
+    .unwrap();
+    dispatch_interaction(
+        None,
+        Some(native),
+        account,
+        tinychannels_bus::ChannelInteraction::FinalizeDraft {
+            recipient: "C1:100.1".into(),
+            message_id: "configured-draft".into(),
+            text: "final".into(),
+            thread_ts: Some("topic-2".into()),
+        },
+        &mut typing,
+    )
+    .await
+    .unwrap();
+
+    let intents = recorder.0.lock().unwrap();
+    assert_eq!(intents.len(), 3);
+    for intent in intents.iter() {
+        assert_eq!(
+            intent
+                .channel_ref
+                .as_ref()
+                .and_then(|channel| channel.account_id.as_deref()),
+            Some(account)
+        );
+        assert_eq!(
+            intent
+                .conversation_ref
+                .as_ref()
+                .and_then(|conversation| conversation.scope_id.as_deref()),
+            Some(account)
+        );
+        assert_eq!(intent.conversation_ref.as_ref().unwrap().id, "C1:100.1");
+        assert_eq!(intent.conversation_id, "C1:100.1");
+    }
+    assert_eq!(intents[0].thread_id.as_deref(), Some("parent-9"));
+    assert_eq!(intents[0].reply_to_id.as_deref(), Some("reply-8"));
+    assert_eq!(intents[2].thread_id.as_deref(), Some("topic-2"));
+}
+
+#[tokio::test]
+#[allow(deprecated)]
+async fn configured_telegram_draft_keeps_topic_and_legacy_reply_separate() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {"message_id": 321, "chat": {"id": 100}}
+        })))
+        .mount(&server)
+        .await;
+    let channel = Arc::new(
+        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
+            .with_streaming(tinychannels_bus::config::StreamMode::Partial, 0, true)
+            .with_api_base_for_test(server.uri()),
+    );
+    let native = NativePorts::telegram(channel);
+    let mut message = SendMessage::new("partial", "100:7");
+    message.thread_ts = Some("55".into());
+    let mut typing = TypingRefreshes::default();
+
+    let result = dispatch_interaction(
+        None,
+        Some(native),
+        "telegram:configured-account",
+        tinychannels_bus::ChannelInteraction::SendDraft { message },
+        &mut typing,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        result,
+        tinychannels_bus::ChannelInteractionResult::Draft(Some(id)) if id == "321"
+    ));
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["chat_id"], "100");
+    assert_eq!(body["message_thread_id"], "7");
+    assert_eq!(body["reply_to_message_id"], 55);
 }
 
 #[tokio::test]

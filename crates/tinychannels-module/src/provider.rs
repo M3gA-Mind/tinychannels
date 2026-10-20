@@ -66,11 +66,48 @@ const MAX_TYPING_REFRESH_INTERVAL_SECS: u64 = 60;
 async fn dispatch_interaction(
     channel: Option<Arc<dyn Channel>>,
     native: Option<NativePorts>,
+    configured_instance: &str,
     interaction: tinychannels_bus::ChannelInteraction,
     typing: &mut TypingRefreshes,
 ) -> Result<tinychannels_bus::ChannelInteractionResult> {
+    if let Some(native) = &native {
+        match &interaction {
+            tinychannels_bus::ChannelInteraction::Describe => {
+                return Ok(crate::interaction::describe_adapter(
+                    native.adapter.as_ref(),
+                    true,
+                ));
+            }
+            tinychannels_bus::ChannelInteraction::DescribeV2 => {
+                return Ok(crate::interaction::describe_adapter(
+                    native.adapter.as_ref(),
+                    false,
+                ));
+            }
+            _ => {}
+        }
+        if let Some(result) = crate::interaction::dispatch_native_draft(
+            native.adapter.as_ref(),
+            native.drafts.as_ref(),
+            configured_instance,
+            interaction.clone(),
+        )
+        .await
+        {
+            return result;
+        }
+    }
     use tinychannels_bus::ChannelInteraction as Op;
     match interaction {
+        describe @ (Op::Describe | Op::DescribeV2) => {
+            crate::interaction::dispatch(
+                channel
+                    .as_deref()
+                    .ok_or_else(|| Error::failed("legacy provider port is unavailable"))?,
+                describe,
+            )
+            .await
+        }
         Op::StartTypingRefresh {
             recipient,
             interval_secs,
@@ -2148,6 +2185,7 @@ impl Running {
                             dispatch_interaction(
                                 send_channel.clone(),
                                 worker_native.clone(),
+                                &worker_instance,
                                 interaction,
                                 &mut typing,
                             )

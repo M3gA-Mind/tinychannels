@@ -1528,6 +1528,222 @@ impl TelegramChannel {
     }
 }
 
+impl TelegramChannel {
+    async fn send_draft_provider(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
+        if self.stream_mode == StreamMode::Off {
+            return Ok(None);
+        }
+
+        let (chat_id, thread_id) = Self::parse_reply_target(&message.recipient);
+        let parent_message_id = Self::parse_message_id(message.thread_ts.as_deref());
+        let initial_text = if message.content.is_empty() {
+            "...".to_string()
+        } else {
+            message.content.clone()
+        };
+
+        let mut body = serde_json::json!({
+            "chat_id": chat_id,
+            "text": initial_text,
+        });
+        if let Some(tid) = thread_id {
+            body["message_thread_id"] = serde_json::Value::String(tid.to_string());
+        }
+        if let Some(parent_id) = parent_message_id {
+            body["reply_to_message_id"] = serde_json::Value::from(parent_id);
+        }
+
+        let resp = self
+            .client
+            .post(self.api_url("sendMessage"))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            let err = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Telegram sendMessage (draft) failed: {err}");
+        }
+
+        let resp_json: serde_json::Value = resp.json().await?;
+        let message_id = resp_json
+            .get("result")
+            .and_then(|r| r.get("message_id"))
+            .and_then(|id| id.as_i64())
+            .map(|id| id.to_string());
+
+        self.last_draft_edit
+            .lock()
+            .insert(chat_id.to_string(), std::time::Instant::now());
+
+        Ok(message_id)
+    }
+
+    async fn update_draft_provider(
+        &self,
+        recipient: &str,
+        message_id: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
+        let (chat_id, _) = Self::parse_reply_target(recipient);
+
+        // Rate-limit edits per chat
+        {
+            let last_edits = self.last_draft_edit.lock();
+            if let Some(last_time) = last_edits.get(&chat_id) {
+                let elapsed = u64::try_from(last_time.elapsed().as_millis()).unwrap_or(u64::MAX);
+                if elapsed < self.draft_update_interval_ms {
+                    return Ok(());
+                }
+            }
+        }
+
+        // Truncate to Telegram limit for mid-stream edits (UTF-8 safe)
+        let display_text = if text.len() > TELEGRAM_MAX_MESSAGE_LENGTH {
+            let mut end = 0;
+            for (idx, ch) in text.char_indices() {
+                let next = idx + ch.len_utf8();
+                if next > TELEGRAM_MAX_MESSAGE_LENGTH {
+                    break;
+                }
+                end = next;
+            }
+            &text[..end]
+        } else {
+            text
+        };
+
+        let message_id_parsed = match message_id.parse::<i64>() {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!("Invalid Telegram message_id '{message_id}': {e}");
+                return Ok(());
+            }
+        };
+
+        let body = serde_json::json!({
+            "chat_id": chat_id,
+            "message_id": message_id_parsed,
+            "text": display_text,
+        });
+
+        let resp = self
+            .client
+            .post(self.api_url("editMessageText"))
+            .json(&body)
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            self.last_draft_edit
+                .lock()
+                .insert(chat_id.clone(), std::time::Instant::now());
+        } else {
+            let status = resp.status();
+            let err = resp.text().await.unwrap_or_default();
+            tracing::debug!("Telegram editMessageText failed ({status}): {err}");
+        }
+
+        Ok(())
+    }
+
+    async fn finalize_draft_provider(
+        &self,
+        recipient: &str,
+        message_id: &str,
+        text: &str,
+        thread_ts: Option<&str>,
+    ) -> anyhow::Result<()> {
+        let text = &strip_tool_call_tags(text);
+        let (chat_id, thread_id) = Self::parse_reply_target(recipient);
+        let parent_message_id = Self::parse_message_id(thread_ts);
+
+        // Clean up rate-limit tracking for this chat
+        self.last_draft_edit.lock().remove(&chat_id);
+
+        // If text exceeds limit, delete draft and send as chunked messages
+        if text.len() > TELEGRAM_MAX_MESSAGE_LENGTH {
+            let msg_id = match message_id.parse::<i64>() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::warn!("Invalid Telegram message_id '{message_id}': {e}");
+                    return self
+                        .send_text_chunks(text, &chat_id, thread_id.as_deref(), parent_message_id)
+                        .await;
+                }
+            };
+
+            // Delete the draft
+            let _ = self
+                .client
+                .post(self.api_url("deleteMessage"))
+                .json(&serde_json::json!({
+                    "chat_id": chat_id,
+                    "message_id": msg_id,
+                }))
+                .send()
+                .await;
+
+            // Fall back to chunked send
+            return self
+                .send_text_chunks(text, &chat_id, thread_id.as_deref(), parent_message_id)
+                .await;
+        }
+
+        let msg_id = match message_id.parse::<i64>() {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!("Invalid Telegram message_id '{message_id}': {e}");
+                return self
+                    .send_text_chunks(text, &chat_id, thread_id.as_deref(), parent_message_id)
+                    .await;
+            }
+        };
+
+        // Try editing with Markdown formatting
+        let body = serde_json::json!({
+            "chat_id": chat_id,
+            "message_id": msg_id,
+            "text": markdown_v2_text(text),
+            "parse_mode": "MarkdownV2",
+        });
+
+        let resp = self
+            .client
+            .post(self.api_url("editMessageText"))
+            .json(&body)
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            return Ok(());
+        }
+
+        // MarkdownV2 failed — retry without parse_mode
+        let plain_body = serde_json::json!({
+            "chat_id": chat_id,
+            "message_id": msg_id,
+            "text": text,
+        });
+
+        let resp = self
+            .client
+            .post(self.api_url("editMessageText"))
+            .json(&plain_body)
+            .send()
+            .await?;
+
+        if resp.status().is_success() {
+            return Ok(());
+        }
+
+        // Edit failed entirely — fall back to new message
+        tracing::warn!("Telegram finalize_draft edit failed; falling back to sendMessage");
+        self.send_text_chunks(text, &chat_id, thread_id.as_deref(), parent_message_id)
+            .await
+    }
+}
+
 #[async_trait]
 impl Channel for TelegramChannel {
     fn name(&self) -> &str {
@@ -1779,53 +1995,7 @@ impl Channel for TelegramChannel {
     }
 
     async fn send_draft(&self, message: &SendMessage) -> anyhow::Result<Option<String>> {
-        if self.stream_mode == StreamMode::Off {
-            return Ok(None);
-        }
-
-        let (chat_id, thread_id) = Self::parse_reply_target(&message.recipient);
-        let parent_message_id = Self::parse_message_id(message.thread_ts.as_deref());
-        let initial_text = if message.content.is_empty() {
-            "...".to_string()
-        } else {
-            message.content.clone()
-        };
-
-        let mut body = serde_json::json!({
-            "chat_id": chat_id,
-            "text": initial_text,
-        });
-        if let Some(tid) = thread_id {
-            body["message_thread_id"] = serde_json::Value::String(tid.to_string());
-        }
-        if let Some(parent_id) = parent_message_id {
-            body["reply_to_message_id"] = serde_json::Value::from(parent_id);
-        }
-
-        let resp = self
-            .client
-            .post(self.api_url("sendMessage"))
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let err = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Telegram sendMessage (draft) failed: {err}");
-        }
-
-        let resp_json: serde_json::Value = resp.json().await?;
-        let message_id = resp_json
-            .get("result")
-            .and_then(|r| r.get("message_id"))
-            .and_then(|id| id.as_i64())
-            .map(|id| id.to_string());
-
-        self.last_draft_edit
-            .lock()
-            .insert(chat_id.to_string(), std::time::Instant::now());
-
-        Ok(message_id)
+        self.send_draft_provider(message).await
     }
 
     async fn update_draft(
@@ -1834,66 +2004,8 @@ impl Channel for TelegramChannel {
         message_id: &str,
         text: &str,
     ) -> anyhow::Result<()> {
-        let (chat_id, _) = Self::parse_reply_target(recipient);
-
-        // Rate-limit edits per chat
-        {
-            let last_edits = self.last_draft_edit.lock();
-            if let Some(last_time) = last_edits.get(&chat_id) {
-                let elapsed = u64::try_from(last_time.elapsed().as_millis()).unwrap_or(u64::MAX);
-                if elapsed < self.draft_update_interval_ms {
-                    return Ok(());
-                }
-            }
-        }
-
-        // Truncate to Telegram limit for mid-stream edits (UTF-8 safe)
-        let display_text = if text.len() > TELEGRAM_MAX_MESSAGE_LENGTH {
-            let mut end = 0;
-            for (idx, ch) in text.char_indices() {
-                let next = idx + ch.len_utf8();
-                if next > TELEGRAM_MAX_MESSAGE_LENGTH {
-                    break;
-                }
-                end = next;
-            }
-            &text[..end]
-        } else {
-            text
-        };
-
-        let message_id_parsed = match message_id.parse::<i64>() {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!("Invalid Telegram message_id '{message_id}': {e}");
-                return Ok(());
-            }
-        };
-
-        let body = serde_json::json!({
-            "chat_id": chat_id,
-            "message_id": message_id_parsed,
-            "text": display_text,
-        });
-
-        let resp = self
-            .client
-            .post(self.api_url("editMessageText"))
-            .json(&body)
-            .send()
-            .await?;
-
-        if resp.status().is_success() {
-            self.last_draft_edit
-                .lock()
-                .insert(chat_id.clone(), std::time::Instant::now());
-        } else {
-            let status = resp.status();
-            let err = resp.text().await.unwrap_or_default();
-            tracing::debug!("Telegram editMessageText failed ({status}): {err}");
-        }
-
-        Ok(())
+        self.update_draft_provider(recipient, message_id, text)
+            .await
     }
 
     async fn finalize_draft(
@@ -1903,92 +2015,7 @@ impl Channel for TelegramChannel {
         text: &str,
         thread_ts: Option<&str>,
     ) -> anyhow::Result<()> {
-        let text = &strip_tool_call_tags(text);
-        let (chat_id, thread_id) = Self::parse_reply_target(recipient);
-        let parent_message_id = Self::parse_message_id(thread_ts);
-
-        // Clean up rate-limit tracking for this chat
-        self.last_draft_edit.lock().remove(&chat_id);
-
-        // If text exceeds limit, delete draft and send as chunked messages
-        if text.len() > TELEGRAM_MAX_MESSAGE_LENGTH {
-            let msg_id = match message_id.parse::<i64>() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::warn!("Invalid Telegram message_id '{message_id}': {e}");
-                    return self
-                        .send_text_chunks(text, &chat_id, thread_id.as_deref(), parent_message_id)
-                        .await;
-                }
-            };
-
-            // Delete the draft
-            let _ = self
-                .client
-                .post(self.api_url("deleteMessage"))
-                .json(&serde_json::json!({
-                    "chat_id": chat_id,
-                    "message_id": msg_id,
-                }))
-                .send()
-                .await;
-
-            // Fall back to chunked send
-            return self
-                .send_text_chunks(text, &chat_id, thread_id.as_deref(), parent_message_id)
-                .await;
-        }
-
-        let msg_id = match message_id.parse::<i64>() {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!("Invalid Telegram message_id '{message_id}': {e}");
-                return self
-                    .send_text_chunks(text, &chat_id, thread_id.as_deref(), parent_message_id)
-                    .await;
-            }
-        };
-
-        // Try editing with Markdown formatting
-        let body = serde_json::json!({
-            "chat_id": chat_id,
-            "message_id": msg_id,
-            "text": markdown_v2_text(text),
-            "parse_mode": "MarkdownV2",
-        });
-
-        let resp = self
-            .client
-            .post(self.api_url("editMessageText"))
-            .json(&body)
-            .send()
-            .await?;
-
-        if resp.status().is_success() {
-            return Ok(());
-        }
-
-        // MarkdownV2 failed — retry without parse_mode
-        let plain_body = serde_json::json!({
-            "chat_id": chat_id,
-            "message_id": msg_id,
-            "text": text,
-        });
-
-        let resp = self
-            .client
-            .post(self.api_url("editMessageText"))
-            .json(&plain_body)
-            .send()
-            .await?;
-
-        if resp.status().is_success() {
-            return Ok(());
-        }
-
-        // Edit failed entirely — fall back to new message
-        tracing::warn!("Telegram finalize_draft edit failed; falling back to sendMessage");
-        self.send_text_chunks(text, &chat_id, thread_id.as_deref(), parent_message_id)
+        self.finalize_draft_provider(recipient, message_id, text, thread_ts)
             .await
     }
 
@@ -3082,6 +3109,55 @@ impl crate::channel::ChannelTyping for TelegramChannel {
 
 #[async_trait]
 impl crate::channel::ChannelStreamingDraft for TelegramChannel {
+    async fn start_draft(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<Option<String>, crate::channel::ChannelSendError> {
+        let text = telegram_draft_text(&intent)?;
+        let conversation = telegram_draft_conversation(&intent)?;
+        let mut message = SendMessage::new(text, telegram_draft_recipient(&conversation));
+        // Typed thread scope routes to the topic; only reply_to_id identifies
+        // a parent provider message.
+        message.thread_ts = intent.reply_to_id.clone();
+        let Some(message_id) = self
+            .send_draft_provider(&message)
+            .await
+            .map_err(|error| typed_interaction_error(error, "draft creation"))?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(message_id))
+    }
+
+    async fn update_draft(
+        &self,
+        draft_id: &str,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        let text = telegram_draft_text(&intent)?;
+        let conversation = telegram_draft_conversation(&intent)?;
+        self.update_draft_provider(&telegram_draft_recipient(&conversation), draft_id, &text)
+            .await
+            .map_err(|error| typed_interaction_error(error, "draft update"))
+    }
+
+    async fn finalize_draft(
+        &self,
+        draft_id: &str,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        let text = telegram_draft_text(&intent)?;
+        let conversation = telegram_draft_conversation(&intent)?;
+        self.finalize_draft_provider(
+            &telegram_draft_recipient(&conversation),
+            draft_id,
+            &text,
+            intent.reply_to_id.as_deref(),
+        )
+        .await
+        .map_err(|error| typed_interaction_error(error, "draft finalization"))
+    }
+
     async fn upsert_draft(
         &self,
         previous: Option<&tinychannels_bus::channel::MessageReceipt>,
@@ -3325,6 +3401,63 @@ impl crate::channel::ChannelStreamingDraft for TelegramChannel {
             ..Default::default()
         })
     }
+}
+
+fn telegram_draft_text(
+    intent: &tinychannels_bus::ChannelOutboundIntent,
+) -> Result<String, crate::channel::ChannelSendError> {
+    match &intent.payload {
+        tinychannels_bus::OutboundPayload::Text { text } => Ok(text.clone()),
+        _ => Err(crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::BadFormat,
+            message: "Telegram draft payload must be text".into(),
+            unsupported: true,
+            retryable: false,
+            ..Default::default()
+        }),
+    }
+}
+
+fn telegram_draft_conversation(
+    intent: &tinychannels_bus::ChannelOutboundIntent,
+) -> Result<tinychannels_bus::ConversationRef, crate::channel::ChannelSendError> {
+    let conversation =
+        intent
+            .conversation_ref
+            .clone()
+            .unwrap_or_else(|| tinychannels_bus::ConversationRef {
+                id: intent.conversation_id.clone(),
+                thread_id: intent.thread_id.clone(),
+                ..Default::default()
+            });
+    if conversation.id.trim().is_empty()
+        || conversation.id != intent.conversation_id
+        || intent
+            .channel_ref
+            .as_ref()
+            .is_some_and(|channel| channel.id != "telegram")
+    {
+        return Err(crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::Forbidden,
+            message: "Telegram draft conversation scope mismatch".into(),
+            retryable: false,
+            ..Default::default()
+        });
+    }
+    Ok(conversation)
+}
+
+fn telegram_draft_recipient(conversation: &tinychannels_bus::ConversationRef) -> String {
+    let (chat_id, encoded_thread) = TelegramChannel::parse_reply_target(&conversation.id);
+    conversation
+        .topic_id
+        .as_ref()
+        .or(conversation.thread_id.as_ref())
+        .or(encoded_thread.as_ref())
+        .map_or_else(
+            || conversation.id.clone(),
+            |thread| format!("{chat_id}:{thread}"),
+        )
 }
 
 #[cfg(test)]

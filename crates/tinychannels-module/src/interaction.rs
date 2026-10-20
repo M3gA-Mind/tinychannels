@@ -1,6 +1,144 @@
 //! Module-owned provider interaction execution.
 use tinychannels::Channel;
 
+/// Return Describe information from the exact configured native adapter.
+/// V1 keeps its wire projection until the compatibility window ends; all
+/// capability facts come from the same adapter selected for provider launch.
+pub(crate) fn describe_adapter(
+    adapter: &dyn tinychannels::channel::ChannelAdapter,
+    legacy: bool,
+) -> ChannelInteractionResult {
+    let mut capabilities = adapter.declared_capabilities();
+    capabilities.account.configured = Some(true);
+    capabilities.account.enabled = Some(true);
+    capabilities.account.proactive_target = adapter.proactive_target();
+
+    if legacy {
+        ChannelInteractionResult::Info(Box::new(ChannelInteractionInfo {
+            capabilities: (&capabilities).into(),
+            proactive_target: capabilities.account.proactive_target.clone(),
+            supports_reactions: capabilities.reactions,
+            supports_draft_updates: capabilities.streaming_reply_pipeline,
+        }))
+    } else {
+        ChannelInteractionResult::InfoV2(Box::new(tinychannels_bus::ChannelInteractionInfoV2 {
+            capabilities,
+        }))
+    }
+}
+
+/// Convert the frozen interaction DTO to the typed intent sent to a configured
+/// provider. The configured adapter supplies account scope; the caller's
+/// recipient remains only the conversation address.
+#[allow(deprecated)]
+fn draft_intent(
+    adapter: &dyn tinychannels::channel::ChannelAdapter,
+    configured_instance: &str,
+    message: &tinychannels::SendMessage,
+) -> tinychannels_bus::ChannelOutboundIntent {
+    let descriptor = adapter.descriptor();
+    let is_telegram = descriptor.id == "telegram";
+    let mut intent = tinychannels::outbound_intent_from_send_message(&descriptor.id, message);
+    intent.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: descriptor.id,
+        // Account scope belongs to the configured module instance. Some raw
+        // provider adapters (including SlackChannel) intentionally have no
+        // account identity in their descriptor.
+        account_id: Some(configured_instance.to_owned()),
+    });
+    if let Some(conversation) = intent.conversation_ref.as_mut() {
+        conversation.scope_id = intent
+            .channel_ref
+            .as_ref()
+            .and_then(|channel| channel.account_id.clone());
+    }
+    if message.subject.is_none() {
+        intent.payload = tinychannels_bus::OutboundPayload::Text {
+            text: message.content.clone(),
+        };
+    }
+    if is_telegram {
+        // The frozen Telegram DTO uses `recipient` for chat/topic routing and
+        // `thread_ts` for the parent message. The generic converter cannot
+        // distinguish those provider-specific meanings, so normalize them at
+        // this compatibility boundary before the typed adapter sees them.
+        if intent.reply_to_id.is_none() {
+            intent.reply_to_id = message.thread_ts.clone();
+        }
+        intent.thread_id = None;
+        if let Some(conversation) = intent.conversation_ref.as_mut() {
+            conversation.thread_id = None;
+        }
+    }
+    intent
+}
+
+/// Route draft start/update/finalize through an adapter's typed draft port.
+/// `None` means the provider has not migrated that operation yet, so the
+/// caller may use the temporary legacy-provider compatibility path.
+#[allow(deprecated)]
+pub(crate) async fn dispatch_native_draft(
+    adapter: &dyn tinychannels::channel::ChannelAdapter,
+    drafts: &dyn tinychannels::channel::ChannelStreamingDraft,
+    configured_instance: &str,
+    interaction: ChannelInteraction,
+) -> Option<tinybus::Result<ChannelInteractionResult>> {
+    use ChannelInteraction as Op;
+    let capabilities = adapter.declared_capabilities();
+    match interaction {
+        Op::SendDraft { message } => {
+            if !capabilities.streaming_reply_pipeline {
+                return Some(Ok(ChannelInteractionResult::Draft(None)));
+            }
+            let intent = draft_intent(adapter, configured_instance, &message);
+            match drafts.start_draft(intent).await {
+                Ok(id) => Some(Ok(ChannelInteractionResult::Draft(id))),
+                Err(error) if error.unsupported => None,
+                Err(_) => Some(Err(tinybus::Error::failed(
+                    "provider draft creation failed",
+                ))),
+            }
+        }
+        Op::UpdateDraft {
+            recipient,
+            message_id,
+            text,
+        } => {
+            if !capabilities.streaming_reply_pipeline {
+                return None;
+            }
+            let message = tinychannels::SendMessage::new(text, recipient);
+            let intent = draft_intent(adapter, configured_instance, &message);
+            match drafts.update_draft(&message_id, intent).await {
+                Ok(()) => Some(Ok(ChannelInteractionResult::Completed)),
+                Err(error) if error.unsupported => None,
+                Err(_) => Some(Err(tinybus::Error::failed("provider draft update failed"))),
+            }
+        }
+        Op::FinalizeDraft {
+            recipient,
+            message_id,
+            text,
+            thread_ts,
+        } => {
+            if !capabilities.streaming_reply_pipeline {
+                return None;
+            }
+            let mut message = tinychannels::SendMessage::new(text, recipient);
+            message.thread_ts = thread_ts;
+            let intent = draft_intent(adapter, configured_instance, &message);
+            match drafts.finalize_draft(&message_id, intent).await {
+                Ok(()) => Some(Ok(ChannelInteractionResult::Completed)),
+                Err(error) if error.unsupported => None,
+                Err(_) => Some(Err(tinybus::Error::failed(
+                    "provider draft finalization failed",
+                ))),
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Capability facts bound to the exact adapter handle selected at startup.
 pub(crate) fn configured_adapter_capabilities(
     provider: &std::sync::Arc<crate::provider::Running>,

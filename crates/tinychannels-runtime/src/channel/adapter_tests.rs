@@ -31,6 +31,17 @@ impl ChannelAdapter for DefaultAdapter {
     }
 }
 
+#[async_trait]
+impl ChannelStreamingDraft for DefaultAdapter {
+    async fn upsert_draft(
+        &self,
+        _previous: Option<&MessageReceipt>,
+        _intent: ChannelOutboundIntent,
+    ) -> Result<MessageReceipt, ChannelSendError> {
+        unreachable!("the compatibility default lifecycle must not call upsert_draft")
+    }
+}
+
 #[test]
 fn default_adapter_facts_are_conservative() {
     let adapter = DefaultAdapter;
@@ -43,4 +54,28 @@ fn default_adapter_facts_are_conservative() {
         adapter.receive_ack_policy(),
         ChannelReceiveAckPolicy::AfterReceiveRecord
     );
+}
+
+#[tokio::test]
+async fn typed_draft_lifecycle_defaults_refuse_unimplemented_operations() {
+    let adapter = DefaultAdapter;
+    let start = ChannelStreamingDraft::start_draft(&adapter, ChannelOutboundIntent::default())
+        .await
+        .unwrap_err();
+    let update =
+        ChannelStreamingDraft::update_draft(&adapter, "draft-1", ChannelOutboundIntent::default())
+            .await
+            .unwrap_err();
+    let finalize = ChannelStreamingDraft::finalize_draft(
+        &adapter,
+        "draft-1",
+        ChannelOutboundIntent::default(),
+    )
+    .await
+    .unwrap_err();
+
+    for error in [start, update, finalize] {
+        assert!(error.unsupported);
+        assert!(!error.retryable);
+    }
 }
