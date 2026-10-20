@@ -814,14 +814,14 @@ impl crate::providers::long_tail::LongTail for IrcChannel {
         Self::send_text_connected(writer, recipient, &text)
             .await
             .map_err(|error| {
-            tracing::debug!(%error, "[irc] typed send failed");
-            ChannelSendError {
-                kind: SendErrorKind::Unknown,
-                message: "IRC send failed".into(),
-                sent_before_error: true,
-                ..Default::default()
-            }
-        })?;
+                tracing::debug!(%error, "[irc] typed send failed");
+                ChannelSendError {
+                    kind: SendErrorKind::Unknown,
+                    message: "IRC send failed".into(),
+                    sent_before_error: true,
+                    ..Default::default()
+                }
+            })?;
         Ok(tinychannels_bus::channel::ChannelSendOutcome::default())
     }
 

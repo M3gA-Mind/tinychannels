@@ -427,7 +427,10 @@ async fn typed_send_without_connection_is_retryable_before_dispatch() {
     .await
     .unwrap_err();
 
-    assert_eq!(error.kind, tinychannels_bus::channel::SendErrorKind::Transient);
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Transient
+    );
     assert!(error.retryable);
     assert!(!error.sent_before_error);
     assert_eq!(error.message, "IRC is not connected");
