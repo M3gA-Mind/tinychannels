@@ -268,6 +268,12 @@ fn declare_feature(fixture: &mut Fixture, feature: ConformanceFeature) {
                 error: None,
             }));
         }
+        ConformanceFeature::ManagedReaction
+        | ConformanceFeature::ManagedThreadCreate
+        | ConformanceFeature::ManagedThreadUpdate
+        | ConformanceFeature::ManagedThreadList => {
+            unreachable!("managed features are exercised by the module fixture")
+        }
     }
     if fixture.observations.is_empty() {
         fixture.observations.push(WireObservation {
@@ -749,6 +755,12 @@ fn each_canonical_feature_uses_its_contract_capability() {
             ConformanceFeature::StreamingDraft => {
                 capabilities.progressive_edits = true;
                 capabilities.actions.supported.push("draft-update".into());
+            }
+            ConformanceFeature::ManagedReaction
+            | ConformanceFeature::ManagedThreadCreate
+            | ConformanceFeature::ManagedThreadUpdate
+            | ConformanceFeature::ManagedThreadList => {
+                unreachable!("managed features are not part of the provider matrix")
             }
         }
         assert!(
