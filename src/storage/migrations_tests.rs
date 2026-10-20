@@ -8,6 +8,9 @@ use tinystoragedrivers_types::{
     Version, Versioned, WriteOptions,
 };
 
+// Hand-seeded underscore-collection rows below exercise historical schema
+// transforms. The released v0.1.38 public-writer fixture is tested separately.
+
 async fn storage() -> (MemoryBackend, tinystoragedrivers_api::Storage) {
     let backend = MemoryBackend::new();
     let storage = backend
