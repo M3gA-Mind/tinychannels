@@ -65,7 +65,6 @@ use tracing::info;
 #[cfg(feature = "email")]
 use tracing::{debug, error, warn};
 #[cfg(feature = "email")]
-
 #[cfg(feature = "email")]
 mod capabilities;
 #[cfg(feature = "email")]

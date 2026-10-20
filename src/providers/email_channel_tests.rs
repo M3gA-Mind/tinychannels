@@ -706,7 +706,9 @@ async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Ve
             let _ = write.write_all(&reply).await;
             continue;
         } else if upper.starts_with("SELECT") {
-            reply.extend_from_slice(b"* 2 EXISTS\r\n* FLAGS (\\Seen)\r\n");
+            reply.extend_from_slice(
+                b"* 2 EXISTS\r\n* FLAGS (\\Seen)\r\n* OK [UIDVALIDITY 1234] UIDs valid\r\n",
+            );
         } else if upper.starts_with("UID SEARCH") {
             current = searches.next().unwrap_or_default();
             reply.extend_from_slice(b"* SEARCH");
@@ -906,7 +908,13 @@ async fn an_empty_search_fetches_nothing() {
     let channel = imap_channel(&["*"], 30);
     let mut session = plain_session(&channel, port).await.unwrap();
     session.select("INBOX").await.unwrap();
-    assert!(channel.fetch_unseen(&mut session, 1234).await.unwrap().is_empty());
+    assert!(
+        channel
+            .fetch_unseen(&mut session, 1234)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let _ = session.logout().await;
     let commands = server.await.unwrap().remove(0).join("\n");
     assert!(!commands.contains("UID FETCH"), "{commands}");
@@ -1435,6 +1443,14 @@ async fn accepted_email_without_message_id_is_not_replayed_after_store_retry() {
     let Some(tinychannels_bus::ChannelIngress::Inbound(first)) = rx.try_recv().ok() else {
         panic!("the first ingress should have been accepted");
     };
+    let expected_identity = "127.0.0.1:bot:INBOX:1234:7";
+    assert_eq!(
+        first.message_id,
+        format!(
+            "email:{}",
+            hex::encode(sha2::Sha256::digest(expected_identity))
+        )
+    );
     drop(session);
     let _ = server.await.unwrap();
 
@@ -1455,7 +1471,6 @@ async fn accepted_email_without_message_id_is_not_replayed_after_store_retry() {
     );
     drop(session);
     let _ = server.await.unwrap();
-    assert!(!first.message_id.is_empty());
 }
 
 struct BlockingTypedEmailSink(tokio::sync::Notify);
