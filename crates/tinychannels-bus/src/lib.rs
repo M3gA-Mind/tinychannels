@@ -35,6 +35,8 @@ pub mod module_supervision;
 pub mod module_web_output;
 pub mod names;
 pub mod relay;
+#[cfg(feature = "storage")]
+pub mod storage;
 #[allow(
     deprecated,
     reason = "v21 DTO definitions and adapters remain for one release"

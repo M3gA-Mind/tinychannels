@@ -54,7 +54,7 @@ def main():
         raise SystemExit(f'contract manifest declares runtime dependencies: {sorted(forbidden_direct)}')
 
     features = list(manifest.get('features', {}))
-    for mode in ('default', 'all'):
+    for mode in ('default', 'all', 'storage'):
         probe = ROOT / 'target/bus-purity' / mode
         probe.mkdir(parents=True, exist_ok=True)
         (probe / 'src').mkdir(exist_ok=True)
@@ -62,7 +62,7 @@ def main():
         (probe / 'Cargo.toml').write_text(
             '[package]\nname="contract-purity-probe"\nversion="0.0.0"\nedition="2024"\n'
             '[workspace]\n[dependencies]\ntinychannels-bus = { path = ' + json.dumps(str(BUS_MANIFEST.parent))
-            + (', features = ' + json.dumps(features) if mode == 'all' else '') + ' }\n',
+            + (', features = ' + json.dumps(features) if mode == 'all' else ', features = ["storage"]' if mode == 'storage' else '') + ' }\n',
             encoding='utf-8',
         )
         graph = json.loads(subprocess.check_output([
@@ -80,8 +80,27 @@ def main():
             for edge in nodes[package]['deps']:
                 if any(kind['kind'] != 'dev' for kind in edge['dep_kinds']):
                     pending.append(edge['pkg'])
-        unsafe = sorted({packages[p] for p in seen} - ALLOWED)
-        unsafe_runtime = sorted({packages[p] for p in seen} & FORBIDDEN_DEPS)
+        exempt = set()
+        if mode in {'storage', 'all'} and 'storage' in features:
+            # Only explicitly optional storage-port dependencies and their
+            # closure are exempt from the default contract dependency allowlist.
+            optional_storage = {
+                spec.get('package', name) if isinstance(spec, dict) else name
+                for name, spec in manifest.get('dependencies', {}).items()
+                if isinstance(spec, dict) and spec.get('optional')
+            }
+            pending = [p['id'] for p in graph['packages'] if p['name'] in optional_storage]
+            while pending:
+                package = pending.pop()
+                if package in exempt:
+                    continue
+                exempt.add(package)
+                pending.extend(
+                    edge['pkg'] for edge in nodes[package]['deps']
+                    if any(kind['kind'] != 'dev' for kind in edge['dep_kinds'])
+                )
+        unsafe = sorted({packages[p] for p in seen - exempt} - ALLOWED)
+        unsafe_runtime = sorted({packages[p] for p in seen - exempt} & FORBIDDEN_DEPS)
         if unsafe_runtime:
             raise SystemExit(f'{mode}: runtime dependencies in contract closure: {unsafe_runtime}')
         if unsafe:

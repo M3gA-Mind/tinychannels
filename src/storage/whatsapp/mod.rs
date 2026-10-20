@@ -32,34 +32,28 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, Filter, Precondition, Query, StorageError,
+    CollectionSpec, DocumentStore, DocumentStoreExt, Filter, Key, Precondition, Query,
+    StorageError, WriteOptions,
 };
+
+use super::schema::{self, SCHEMA_VERSION};
 use wacore::store::InMemoryBackend;
 use wacore::store::error::{Result as StoreResult, StoreError};
 use wacore::store::traits::DeviceStore;
 
 const LOG_PREFIX: &str = "[whatsapp-store]";
 
-pub(crate) const DEVICE: &str = "whatsapp_device";
-pub(crate) const IDENTITY: &str = "whatsapp_identity";
-pub(crate) const SESSION: &str = "whatsapp_session";
-pub(crate) const PREKEY: &str = "whatsapp_prekey";
-pub(crate) const SIGNED_PREKEY: &str = "whatsapp_signed_prekey";
-pub(crate) const SENDER_KEY: &str = "whatsapp_sender_key";
-pub(crate) const SYNC_KEY: &str = "whatsapp_sync_key";
-pub(crate) const LID_MAPPING: &str = "whatsapp_lid_mapping";
+pub(crate) const DEVICE: &str = schema::WHATSAPP_DEVICE;
+pub(crate) const IDENTITY: &str = schema::WHATSAPP_IDENTITY;
+pub(crate) const SESSION: &str = schema::WHATSAPP_SESSION;
+pub(crate) const PREKEY: &str = schema::WHATSAPP_PREKEY;
+pub(crate) const SIGNED_PREKEY: &str = schema::WHATSAPP_SIGNED_PREKEY;
+pub(crate) const SENDER_KEY: &str = schema::WHATSAPP_SENDER_KEY;
+pub(crate) const SYNC_KEY: &str = schema::WHATSAPP_SYNC_KEY;
+pub(crate) const LID_MAPPING: &str = schema::WHATSAPP_LID_MAPPING;
 
 /// Every collection the backend writes, for declaration and tests.
-pub const COLLECTIONS: [&str; 8] = [
-    DEVICE,
-    IDENTITY,
-    SESSION,
-    PREKEY,
-    SIGNED_PREKEY,
-    SENDER_KEY,
-    SYNC_KEY,
-    LID_MAPPING,
-];
+pub const COLLECTIONS: [&str; 8] = schema::WHATSAPP_COLLECTIONS;
 
 /// A WhatsApp Web session backend whose pairing state survives a restart.
 pub struct DocumentWhatsAppBackend {
@@ -132,8 +126,12 @@ impl DocumentWhatsAppBackend {
         Ok(backend)
     }
 
+    /// `Key::of([account, key])`, so an address holding `:` or `/` stays unambiguous.
     fn id(&self, key: &str) -> String {
-        format!("{}:{key}", self.account)
+        Key::of([self.account.as_str(), key]).map_or_else(
+            |_| format!("{}/{key}", self.account),
+            |k| k.as_str().to_owned(),
+        )
     }
 
     /// Write one record: the document carries `account` and `key` beside `body`.
@@ -148,7 +146,13 @@ impl DocumentWhatsAppBackend {
             object.insert("key".into(), json!(key));
         }
         self.docs
-            .put(collection, &self.id(key), body, Precondition::None)
+            .put_with(
+                collection,
+                &self.id(key),
+                body,
+                Precondition::None,
+                WriteOptions::new().schema(SCHEMA_VERSION),
+            )
             .await
             .map(|_| ())
             .map_err(store_err)

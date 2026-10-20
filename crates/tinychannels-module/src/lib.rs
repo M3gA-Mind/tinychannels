@@ -63,3 +63,7 @@ pub use tinychannels_bus::{
     BUS_NAME, CONTRACT_VERSION, HOST_BUS_NAME, HOST_OBJECT_PATH, METHODS, OBJECT_PATH,
     is_compatible,
 };
+
+#[cfg(test)]
+#[path = "storage_migrate_tests.rs"]
+mod storage_migrate_tests;
