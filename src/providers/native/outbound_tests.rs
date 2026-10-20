@@ -71,10 +71,12 @@ fn with_voice(audio: Option<&[u8]>) -> FakeProvider {
     let store = Arc::new(StubVoice::default());
     *store.audio_base64.lock().unwrap() =
         audio.map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes));
-    FakeProvider {
+    let mut provider = FakeProvider {
         voice: Some(store),
         ..Default::default()
-    }
+    };
+    provider.caps.voice_out.supported = audio.is_some();
+    provider
 }
 
 async fn plan_of(

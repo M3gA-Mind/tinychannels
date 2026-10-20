@@ -259,6 +259,11 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                         media, duration_ms, ..
                     },
             } => {
+                if !provider.declared_capabilities().voice_out.supported {
+                    return Err(unsupported(&format!(
+                        "{display} does not support outbound voice"
+                    )));
+                }
                 let store = provider.voice_media_store().ok_or_else(|| {
                     unsupported(&format!("{display} voice needs host voice storage"))
                 })?;

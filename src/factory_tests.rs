@@ -118,6 +118,53 @@ async fn configured_proxy_policy_leaves_unselected_channel_direct() {
 }
 
 #[test]
+fn yuanbao_factory_capabilities_include_only_installed_host_services() {
+    use crate::host::ChannelHostBuilder;
+    use crate::providers::native::fixtures::StubVoice;
+    use tinychannels_bus::config::YuanbaoConfig;
+
+    let yuanbao = YuanbaoConfig {
+        app_key: "factory-app".into(),
+        token: "factory-token".into(),
+        bot_id: "factory-bot".into(),
+        ws_domain: "ws://127.0.0.1:1".into(),
+        ..Default::default()
+    };
+    let config = ChannelsConfig {
+        yuanbao: Some(yuanbao),
+        ..Default::default()
+    };
+    let host: Arc<dyn ChannelHost> = ChannelHostBuilder::new()
+        .voice_media_store(Arc::new(StubVoice::default()))
+        .transcriber(Arc::new(
+            crate::providers::native::fixtures::StubTranscriber::default(),
+        ))
+        .build();
+
+    let adapter =
+        build_yuanbao_channel_with_voice_http_for_test(&config, &host, reqwest::Client::new())
+            .expect("the configured Yuanbao stanza builds through the factory");
+    let descriptor = adapter.descriptor();
+    let capabilities = adapter.declared_capabilities();
+
+    assert_eq!(descriptor.id, "yuanbao");
+    assert!(capabilities.content.text.outbound);
+    assert!(capabilities.addressing.reply_to_id);
+    assert!(!capabilities.addressing.thread_id);
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "typing")
+    );
+    assert!(capabilities.voice_in.supported);
+    assert!(!capabilities.content.image.outbound);
+    assert!(!capabilities.content.file.outbound);
+    assert!(!capabilities.voice_out.supported);
+}
+
+#[test]
 fn configured_proxy_client_rejects_invalid_urls_without_echoing_credentials() {
     let secret = "http://user:password@not a valid proxy";
     let error = ConfiguredHttpClients::new(HttpProxyPolicy {

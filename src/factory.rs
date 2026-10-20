@@ -592,30 +592,51 @@ fn build_long_tail_channel_inner(
         }
         "yuanbao" => {
             let yb = config.yuanbao.as_ref()?;
-            match YuanbaoChannel::new(yb.clone()) {
-                Ok(mut channel) => {
-                    if let Some(repository) = host.and_then(|host| host.media_repository()) {
-                        channel = channel.with_media_repository(repository);
-                    }
-                    if let Some(store) = host.and_then(|host| host.voice_media_store()) {
-                        channel = channel.with_voice_media_store(store);
-                    }
-                    if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
-                        channel = channel.with_transcriber(transcriber);
-                    }
-                    if let Some(events) = host.and_then(|host| host.events()) {
-                        channel = channel.with_events(events);
-                    }
-                    Some(Arc::new(channel))
-                }
-                Err(error) => {
-                    tracing::warn!("[channels] yuanbao config invalid: {error}");
-                    None
-                }
-            }
+            build_yuanbao_channel(yb, host, None)
         }
         _ => None,
     }
+}
+
+fn build_yuanbao_channel(
+    config: &tinychannels_bus::config::YuanbaoConfig,
+    host: Option<&Arc<dyn ChannelHost>>,
+    _voice_http: Option<reqwest::Client>,
+) -> Option<Arc<dyn LongTailNative>> {
+    let mut channel = match YuanbaoChannel::new(config.clone()) {
+        Ok(channel) => channel,
+        Err(error) => {
+            tracing::warn!("[channels] yuanbao config invalid: {error}");
+            return None;
+        }
+    };
+    if let Some(repository) = host.and_then(|host| host.media_repository()) {
+        channel = channel.with_media_repository(repository);
+    }
+    if let Some(store) = host.and_then(|host| host.voice_media_store()) {
+        channel = channel.with_voice_media_store(store);
+    }
+    if let Some(transcriber) = host.and_then(|host| host.transcriber()) {
+        channel = channel.with_transcriber(transcriber);
+    }
+    if let Some(events) = host.and_then(|host| host.events()) {
+        channel = channel.with_events(events);
+    }
+    #[cfg(test)]
+    if let Some(client) = _voice_http {
+        channel = channel.with_voice_http_client(client);
+    }
+    Some(Arc::new(channel))
+}
+
+#[cfg(test)]
+pub(crate) fn build_yuanbao_channel_with_voice_http_for_test(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    voice_http: reqwest::Client,
+) -> Option<Arc<dyn LongTailNative>> {
+    let channel = build_yuanbao_channel(config.yuanbao.as_ref()?, Some(host), Some(voice_http))?;
+    Some(channel)
 }
 
 /// Build the Signal provider with the host ports it can use: scoped media and
