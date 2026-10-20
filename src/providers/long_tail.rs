@@ -9,10 +9,7 @@
 //! error instead of pretending to succeed.
 
 use std::collections::BTreeMap;
-use tinychannels_bus::channel::{
-    ChannelDescriptor, ChannelRef, ChannelSendError, ChannelSendOutcome, ConversationRef,
-    SendErrorKind,
-};
+use tinychannels_bus::channel::{ChannelDescriptor, ChannelSendError, ChannelSendOutcome, SendErrorKind};
 use tinychannels_bus::controllers::{ChannelAccountSnapshot, ChannelAccountState};
 use tinychannels_bus::{
     ActionCapabilities, AddressingCapabilities, ChannelCapabilities, ChannelOutboundIntent,
@@ -120,6 +117,15 @@ pub(crate) trait LongTail {
         false
     }
 
+    /// Start or stop a provider-native typing indicator.
+    async fn set_typing(
+        &self,
+        _conversation_id: &str,
+        _start: bool,
+    ) -> Result<(), ChannelSendError> {
+        Err(unsupported::<Self>("typing indicators"))
+    }
+
     /// Run a provider-owned typed listener when this long-tail provider has
     /// migrated away from the module's legacy `Channel::listen` bridge.
     async fn start_listener(
@@ -216,11 +222,7 @@ pub(crate) async fn typing<T: LongTail + ?Sized>(
     if !provider.typing_supported() {
         return Err(unsupported::<T>("typing indicators"));
     }
-    let result = if start {
-        provider.start_typing(conversation_id).await
-    } else {
-        provider.stop_typing(conversation_id).await
-    };
+    let result = provider.set_typing(conversation_id, start).await;
     result.map_err(|error| {
         tracing::debug!(channel = T::ID, %error, "[long-tail] typing failed");
         ChannelSendError {
