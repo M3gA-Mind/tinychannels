@@ -19,8 +19,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Verify every native library depends on ports only
         run: |
+          python3 scripts/check-webpki-roots.py --self-test
+          python3 scripts/check-webpki-roots.py
           scripts/check-storage-engine-trees.sh --self-test
           scripts/check-storage-engine-trees.sh
+          cargo deny check all
   module-ci:
     uses: tinyhumansai/.github/.github/workflows/module-ci.yml@3e87ade76b622844985d0c665a3b075313e4545c
     with:
