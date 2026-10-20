@@ -241,8 +241,8 @@ impl<T: AdapterFixture + ?Sized> ConformanceFixture for T {
 }
 
 /// Run one honesty and wire-behavior check.
-pub async fn check_feature(
-    fixture: &dyn ConformanceFixture,
+pub async fn check_feature<F: ConformanceFixture + ?Sized>(
+    fixture: &F,
     feature: ConformanceFeature,
 ) -> Result<(), String> {
     if matches!(
@@ -482,8 +482,8 @@ impl ConformanceFeature {
 }
 
 /// Run the entire shared feature matrix against a provider fixture.
-pub async fn check_all_features(
-    fixture: &dyn ConformanceFixture,
+pub async fn check_all_features<F: ConformanceFixture + ?Sized>(
+    fixture: &F,
 ) -> Vec<(ConformanceFeature, Result<(), String>)> {
     let mut results = Vec::with_capacity(ConformanceFeature::ALL.len());
     for feature in ConformanceFeature::ALL {
@@ -493,8 +493,8 @@ pub async fn check_all_features(
 }
 
 /// Run a managed-controller matrix against a configured host callback fixture.
-pub async fn check_managed_features(
-    fixture: &dyn ConformanceFixture,
+pub async fn check_managed_features<F: ConformanceFixture + ?Sized>(
+    fixture: &F,
 ) -> Vec<(ConformanceFeature, Result<(), String>)> {
     let mut results = Vec::with_capacity(ConformanceFeature::MANAGED.len());
     for feature in ConformanceFeature::MANAGED {
