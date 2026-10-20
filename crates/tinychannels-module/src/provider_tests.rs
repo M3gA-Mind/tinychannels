@@ -4389,7 +4389,10 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
         descriptor.metadata.get("adapterMode").map(String::as_str),
         Some("native-v2")
     );
-    assert_eq!(handle.status().await.unwrap().health_state.as_deref(), Some("healthy"));
+    assert_eq!(
+        handle.adapter.status().await.unwrap().health_state.as_deref(),
+        Some("healthy")
+    );
 
     let channel_ref = tinychannels_bus::ChannelRef {
         id: "signal".into(),
