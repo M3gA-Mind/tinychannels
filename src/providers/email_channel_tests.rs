@@ -994,8 +994,8 @@ async fn health_check_passes_on_a_successful_login() {
     let channel = imap_channel(&["*"], 30);
     assert!(
         channel
-            .health_check_with(plain_session(&channel, port), HANG_GUARD)
-            .await
+            .typed_health_state(plain_session(&channel, port), HANG_GUARD)
+            .await == "healthy"
     );
     let commands = server.await.unwrap().remove(0).join("\n");
     assert!(commands.contains("LOGIN"), "{commands}");
@@ -1010,10 +1010,11 @@ async fn health_check_fails_on_a_rejected_login() {
     }])
     .await;
     let channel = imap_channel(&["*"], 30);
-    assert!(
-        !channel
-            .health_check_with(plain_session(&channel, port), HANG_GUARD)
-            .await
+    assert_eq!(
+        channel
+            .typed_health_state(plain_session(&channel, port), HANG_GUARD)
+            .await,
+        "unhealthy"
     );
 }
 
@@ -1028,10 +1029,11 @@ async fn health_check_fails_when_the_probe_stalls() {
         drop(sock);
     });
     let channel = imap_channel(&["*"], 30);
-    assert!(
-        !channel
-            .health_check_with(plain_session(&channel, port), Duration::from_millis(50))
-            .await
+    assert_eq!(
+        channel
+            .typed_health_state(plain_session(&channel, port), Duration::from_millis(50))
+            .await,
+        "unhealthy"
     );
     holder.abort();
 }

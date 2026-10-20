@@ -882,6 +882,21 @@ impl Channel for EmailChannel {
 
 #[cfg(feature = "email")]
 impl EmailChannel {
+    /// Translate the bounded IMAP probe into the status vocabulary used by
+    /// native adapters, keeping Email's real health semantics on the typed
+    /// path as well as the legacy compatibility path.
+    async fn typed_health_state<S: ImapStream>(
+        &self,
+        connect: impl std::future::Future<Output = Result<Session<S>>>,
+        limit: Duration,
+    ) -> &'static str {
+        if self.health_check_with(connect, limit).await {
+            "healthy"
+        } else {
+            "unhealthy"
+        }
+    }
+
     /// Bounded IMAP login probe over any session source.
     async fn health_check_with<S: ImapStream>(
         &self,
