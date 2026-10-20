@@ -200,6 +200,10 @@ impl NativeProvider for SignalChannel {
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
     ) -> Result<(), ChannelSendError> {
         let (cancel, cancellation) = tokio::sync::watch::channel(false);
+        let generation = self
+            .listener_generation
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+            .wrapping_add(1);
         {
             let mut active = self
                 .listener_cancel
@@ -213,13 +217,13 @@ impl NativeProvider for SignalChannel {
                     ..Default::default()
                 });
             }
-            *active = Some(cancel);
+            *active = Some((generation, cancel));
         }
+        let _registration = super::ListenerRegistration {
+            slot: self.listener_cancel.clone(),
+            generation,
+        };
         let result = self.listen_typed(sink, cancellation).await;
-        *self
-            .listener_cancel
-            .lock()
-            .unwrap_or_else(|error| error.into_inner()) = None;
         result.map_err(|error| super::native::rpc_error(&error, "listener"))
     }
 
@@ -230,7 +234,7 @@ impl NativeProvider for SignalChannel {
             .unwrap_or_else(|error| error.into_inner())
             .as_ref()
         {
-            let _ = cancel.send(true);
+            let _ = cancel.1.send(true);
         }
         Ok(())
     }

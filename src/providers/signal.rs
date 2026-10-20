@@ -21,7 +21,7 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
@@ -61,7 +61,10 @@ pub(super) struct ListenerRegistration {
 impl Drop for ListenerRegistration {
     fn drop(&mut self) {
         let mut active = self.slot.lock().unwrap_or_else(|error| error.into_inner());
-        if active.as_ref().is_some_and(|(generation, _)| *generation == self.generation) {
+        if active
+            .as_ref()
+            .is_some_and(|(generation, _)| *generation == self.generation)
+        {
             *active = None;
         }
     }
@@ -531,6 +534,27 @@ impl Channel for SignalChannel {
 }
 
 impl SignalChannel {
+    async fn dispatch_sse_envelope(
+        &self,
+        envelope: &Envelope,
+        tx: Option<&mpsc::Sender<ChannelMessage>>,
+        sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+        cancellation: &mut Option<watch::Receiver<bool>>,
+    ) -> anyhow::Result<Option<bool>> {
+        if let Some(sink) = sink {
+            if let Some(cancellation) = cancellation.as_mut() {
+                return self
+                    .dispatch_typed_until_cancel(envelope, sink, cancellation)
+                    .await;
+            }
+            return Ok(Some(self.dispatch_typed_envelope(envelope, sink).await));
+        }
+        Ok(match tx {
+            Some(tx) => Some(self.dispatch_envelope(envelope, tx).await),
+            None => Some(false),
+        })
+    }
+
     async fn listen_typed(
         &self,
         sink: &(dyn ChannelInboundSink + Send + Sync),
@@ -576,7 +600,15 @@ impl SignalChannel {
                 Ok(r) if r.status().is_success() => r,
                 Ok(r) => {
                     let status = r.status();
-                    let body = r.text().await.unwrap_or_default();
+                    let body = if let Some(cancel) = cancellation.as_mut() {
+                        tokio::select! {
+                            biased;
+                            _ = cancel.wait_for(|value| *value) => return Ok(()),
+                            body = r.text() => body.unwrap_or_default(),
+                        }
+                    } else {
+                        r.text().await.unwrap_or_default()
+                    };
                     tracing::warn!("Signal SSE returned {status}: {body}");
                     if !sleep_or_cancel(&mut cancellation, retry_delay_secs).await {
                         return Ok(());
@@ -646,15 +678,17 @@ impl SignalChannel {
                             match serde_json::from_str::<SseEnvelope>(&current_data) {
                                 Ok(sse) => {
                                     if let Some(ref envelope) = sse.envelope {
-                                        let keep_running = if let Some(sink) = sink {
-                                            self.dispatch_typed_envelope(envelope, sink).await
-                                        } else if let Some(tx) = tx.as_ref() {
-                                            self.dispatch_envelope(envelope, tx).await
-                                        } else {
-                                            false
-                                        };
-                                        if !keep_running {
-                                            return Ok(());
+                                        match self
+                                            .dispatch_sse_envelope(
+                                                envelope,
+                                                tx.as_ref(),
+                                                sink,
+                                                &mut cancellation,
+                                            )
+                                            .await?
+                                        {
+                                            Some(true) => {}
+                                            Some(false) | None => return Ok(()),
                                         }
                                     }
                                 }
@@ -678,15 +712,17 @@ impl SignalChannel {
                 match serde_json::from_str::<SseEnvelope>(&current_data) {
                     Ok(sse) => {
                         if let Some(ref envelope) = sse.envelope {
-                            let keep_running = if let Some(sink) = sink {
-                                self.dispatch_typed_envelope(envelope, sink).await
-                            } else if let Some(tx) = tx.as_ref() {
-                                self.dispatch_envelope(envelope, tx).await
-                            } else {
-                                false
-                            };
-                            if !keep_running {
-                                return Ok(());
+                            match self
+                                .dispatch_sse_envelope(
+                                    envelope,
+                                    tx.as_ref(),
+                                    sink,
+                                    &mut cancellation,
+                                )
+                                .await?
+                            {
+                                Some(true) => {}
+                                Some(false) | None => return Ok(()),
                             }
                         }
                     }
