@@ -713,6 +713,11 @@ async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Ve
             }
             reply.extend_from_slice(b"\r\n");
         } else if upper.starts_with("UID FETCH") {
+            if upper.contains("RFC822") || upper.contains("BODY[]") {
+                for (uid, _) in &current {
+                    seen.push(format!("IMPLICIT_SEEN_BY_FETCH {uid}"));
+                }
+            }
             for (seq, (uid, raw)) in current.iter().enumerate() {
                 reply.extend_from_slice(
                     format!(
@@ -926,6 +931,11 @@ async fn fetched_mail_stays_unseen_until_ingress_is_accepted() {
         !commands.contains("UID STORE"),
         "fetch must leave the UID unseen until dispatch succeeds: {commands}"
     );
+    assert!(
+        commands.contains("BODY.PEEK[]"),
+        "fetch must not set Seen: {commands}"
+    );
+    assert!(!commands.contains("IMPLICIT_SEEN_BY_FETCH"), "{commands}");
 }
 
 /// The IDLE budget elapsing ends IDLE with `DONE` and hands back a usable
