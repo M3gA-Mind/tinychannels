@@ -79,6 +79,11 @@ pub trait LongTailNative:
     + crate::channel::ChannelDelete
     + crate::channel::ChannelStreamingDraft
 {
+    /// Expose the configured native instance to provider-specific conformance
+    /// setup. This is only compiled into tests so production adapters do not
+    /// gain a downcast surface.
+    #[cfg(test)]
+    fn conformance_any(&self) -> &dyn std::any::Any;
 }
 
 impl<T> LongTailNative for T where
@@ -90,6 +95,10 @@ impl<T> LongTailNative for T where
         + crate::channel::ChannelDelete
         + crate::channel::ChannelStreamingDraft
 {
+    #[cfg(test)]
+    fn conformance_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 /// A provider that is also a v2 text adapter.
