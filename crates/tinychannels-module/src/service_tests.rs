@@ -48,18 +48,40 @@ fn temporary_route_authority_requires_matching_configured_scope_and_prefers_live
         },
         session_key: "main:telegram:account:bot-a:chat-1".into(),
     };
+    let message = tinychannels::ChannelMessage {
+        id: "msg-1".into(),
+        sender: "sender-1".into(),
+        reply_target: "chat-1".into(),
+        content: "/new".into(),
+        channel: "telegram".into(),
+        timestamp: 1,
+        thread_ts: None,
+        topic_id: None,
+        reply_to_id: None,
+        sender_name: None,
+    };
 
     assert!(
-        configured_route_capabilities("telegram:bot-a", None, Some(&configured), None,)
+        !configured_route_capabilities("telegram", &message, None, Some(&configured), None,)
             .remote_control
-            == false
+    );
+    assert!(
+        configured_route_capabilities(
+            "telegram",
+            &message,
+            Some(&valid_scope),
+            Some(&configured),
+            None,
+        )
+        .remote_control
     );
 
     let mut wrong_account = valid_scope.clone();
     wrong_account.channel.account_id = Some("telegram:bot-b".into());
     assert!(
         !configured_route_capabilities(
-            "telegram:bot-a",
+            "telegram",
+            &message,
             Some(&wrong_account),
             Some(&configured),
             None,
@@ -71,7 +93,8 @@ fn temporary_route_authority_requires_matching_configured_scope_and_prefers_live
     wrong_provider.channel.id = "discord".into();
     assert!(
         !configured_route_capabilities(
-            "telegram:bot-a",
+            "telegram",
+            &message,
             Some(&wrong_provider),
             Some(&configured),
             None,
@@ -79,10 +102,51 @@ fn temporary_route_authority_requires_matching_configured_scope_and_prefers_live
         .remote_control
     );
 
+    let mut wrong_route = configured.clone();
+    wrong_route.name = "discord:bot-a".into();
     assert!(
         !configured_route_capabilities(
-            "telegram:bot-b",
+            "telegram",
+            &message,
             Some(&valid_scope),
+            Some(&wrong_route),
+            None,
+        )
+        .remote_control
+    );
+
+    let mut wrong_conversation = valid_scope.clone();
+    wrong_conversation.conversation.id = "chat-2".into();
+    assert!(
+        !configured_route_capabilities(
+            "telegram",
+            &message,
+            Some(&wrong_conversation),
+            Some(&configured),
+            None,
+        )
+        .remote_control
+    );
+
+    let mut threaded_scope = valid_scope.clone();
+    threaded_scope.conversation.thread_id = Some("thread-1".into());
+    assert!(
+        !configured_route_capabilities(
+            "telegram",
+            &message,
+            Some(&threaded_scope),
+            Some(&configured),
+            None,
+        )
+        .remote_control
+    );
+    let mut topical_scope = valid_scope.clone();
+    topical_scope.conversation.topic_id = Some("topic-1".into());
+    assert!(
+        !configured_route_capabilities(
+            "telegram",
+            &message,
+            Some(&topical_scope),
             Some(&configured),
             None,
         )
@@ -93,10 +157,11 @@ fn temporary_route_authority_requires_matching_configured_scope_and_prefers_live
     live_denied.remote_control = false;
     assert!(
         !configured_route_capabilities(
-            "telegram:bot-a",
+            "telegram",
+            &message,
             Some(&valid_scope),
             Some(&configured),
-            Some(live_denied),
+            Some(live_denied.clone()),
         )
         .remote_control
     );
@@ -109,12 +174,22 @@ fn temporary_route_authority_requires_matching_configured_scope_and_prefers_live
     snapshot_denied.capabilities.remote_control = false;
     assert!(
         configured_route_capabilities(
-            "telegram:bot-a",
+            "telegram",
+            &message,
             Some(&valid_scope),
             Some(&snapshot_denied),
             Some(live_allowed),
         )
         .remote_control
+    );
+    let live_instances = HashMap::from([
+        ("telegram".to_owned(), live_allowed.clone()),
+        ("telegram:bot-a".to_owned(), live_denied),
+    ]);
+    assert!(
+        !live_route_instance(&live_instances, "telegram", Some("telegram:bot-a"))
+            .unwrap()
+            .remote_control
     );
 }
 

@@ -210,8 +210,12 @@ async fn route_capabilities(
 ) -> tinychannels_bus::ChannelCapabilities {
     let live = {
         let running = running.lock().await;
-        live_route_instance(&running, channel_name, configured.map(|channel| channel.name.as_str()))
-            .map(crate::interaction::configured_adapter_capabilities)
+        live_route_instance(
+            &running,
+            channel_name,
+            configured.map(|channel| channel.name.as_str()),
+        )
+        .map(crate::interaction::configured_adapter_capabilities)
     };
     configured_route_capabilities(channel_name, scope, configured, live)
 }
@@ -684,11 +688,12 @@ impl Channels {
         }
         let name = match &request {
             tinychannels_bus::module_control::ChannelControlRequest::Capabilities { channel }
-            | tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 { channel } => channel.as_str(),
-            tinychannels_bus::module_control::ChannelControlRequest::Route {
-                message,
-                ..
-            } => message.channel.as_str(),
+            | tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 { channel } => {
+                channel.as_str()
+            }
+            tinychannels_bus::module_control::ChannelControlRequest::Route { message, .. } => {
+                message.channel.as_str()
+            }
             _ => "",
         };
         let capabilities = match &request {
