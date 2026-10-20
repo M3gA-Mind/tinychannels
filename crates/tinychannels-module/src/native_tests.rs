@@ -111,8 +111,8 @@ fn native_launch_accepts_typed_adapters_without_the_legacy_channel_trait() {
     .expect("DingTalk is a configured typed adapter");
 
     // LongTailNative intentionally does not implement legacy Channel. Passing
-    // its trait object here proves native launch uses only the typed ports.
-    let launch = NativeLaunch::new("DingTalk", channel);
+    // its trait object here proves typed long-tail launches keep their boundary.
+    let launch = NativeLaunch::long_tail("DingTalk", channel, LongTailListenerMode::Adapter);
     assert_eq!(launch.provider_id, "dingtalk");
 }
 
