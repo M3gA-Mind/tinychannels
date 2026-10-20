@@ -31,9 +31,9 @@ use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, Filter, Key, Precondition, Query,
-    StorageError, WriteOptions,
+use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
+use tinystoragedrivers_types::{
+    CollectionSpec, Filter, Key, Precondition, Query, StorageError, WriteOptions,
 };
 
 use super::schema::{self, SCHEMA_VERSION};

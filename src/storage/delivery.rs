@@ -28,9 +28,10 @@ use tinychannels_bus::module_delivery::{
     DELIVERY_PENDING_CAPACITY, DELIVERY_RECORD_BYTES, DELIVERY_RESULT_CAPACITY,
     DELIVERY_RESULT_TTL_SECONDS,
 };
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, EXPIRES_FIELD, ErrorKind, Filter, Key,
-    Precondition, Query, Sort, StorageError, Versioned, WriteOptions,
+use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
+use tinystoragedrivers_types::{
+    CollectionSpec, ErrorKind, EXPIRES_FIELD, Filter, Key, Precondition, Query, Sort,
+    StorageError, Versioned, WriteOptions,
 };
 
 use super::records::{StoredDelivery, StoredResult, to_stored_ms};

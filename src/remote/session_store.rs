@@ -23,9 +23,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde::Deserialize;
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, Key, Precondition, WriteOptions,
-};
+use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
+use tinystoragedrivers_types::{CollectionSpec, ErrorKind, Key, Precondition, Version, WriteOptions};
 
 use crate::storage::schema::{self, SCHEMA_VERSION};
 
@@ -256,8 +255,7 @@ impl RemoteSessionStore {
                 Err(error)
                     if matches!(
                         error.kind(),
-                        tinystoragedrivers_core::ErrorKind::Conflict
-                            | tinystoragedrivers_core::ErrorKind::AlreadyExists
+                        ErrorKind::Conflict | ErrorKind::AlreadyExists
                     ) => {}
                 Err(error) => return Err(anyhow::anyhow!(crate::storage::describe(&error))),
             }
@@ -277,9 +275,8 @@ impl RemoteSessionStore {
         )
         .await
         .or_else(|error| match error.kind() {
-            tinystoragedrivers_core::ErrorKind::Conflict
-            | tinystoragedrivers_core::ErrorKind::AlreadyExists => {
-                Ok(tinystoragedrivers_core::Version(0))
+            ErrorKind::Conflict | ErrorKind::AlreadyExists => {
+                Ok(Version(0))
             }
             _ => Err(anyhow::anyhow!(crate::storage::describe(&error))),
         })?;

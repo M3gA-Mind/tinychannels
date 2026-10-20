@@ -1,7 +1,7 @@
 //! Durable state on the tinystoragedrivers ports.
 //!
 //! Everything TinyChannels must remember across restarts lives here and is
-//! written through [`tinystoragedrivers_core::DocumentStore`],
+//! written through [`tinystoragedrivers_api::DocumentStore`],
 //! the port a host hands to a linked library directly and to a loaded module
 //! over the storage bus. There is no storage backend in this crate: no file
 //! format, no database client, and no host callback per kind of record.
@@ -22,10 +22,11 @@ pub mod whatsapp;
 
 use std::sync::Arc;
 
-use tinystoragedrivers_core::{CollectionSpec, DocumentStore, StorageError};
+use tinystoragedrivers_api::DocumentStore;
+use tinystoragedrivers_types::{CollectionSpec, StorageError};
 
 pub use delivery::DocumentDeliveryStore;
-pub use schema::storage_schema;
+pub use schema::collections;
 
 const LOG_PREFIX: &str = "[channel-storage]";
 

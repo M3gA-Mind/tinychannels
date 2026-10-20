@@ -1,43 +1,22 @@
-//! What TinyChannels stores, declared for the host's schema registry.
-//!
-//! [`storage_schema`] is the one declaration of the `channels` owner: every
-//! collection the delivery queue, the remote-control session store and the
-//! WhatsApp Web session backend write, plus the steps that bring the v1
-//! collections (`channels_delivery_*`, `channel_remote_*`, `whatsapp_*`)
-//! forward onto the v2 names. A host builds
-//! `Registry::compose([tinychannels_bus::storage::storage_schema(), ..])`, prepares
-//! the backend and migrates; a loadable module's storage grant is generated
-//! from the same schema (every item is [`ScopeClass::Module`]).
-//!
-//! The WhatsApp collections are declared whether or not the `whatsapp-web`
-//! feature is compiled in: the grant and the migration must not depend on how
-//! this crate was built.
+//! Pure declarations for collections owned by TinyChannels.
 
-use tinystoragedrivers_core::schema::{Owner, Schema, ScopeClass};
+use tinystoragedrivers_types::CollectionSpec;
 
-use super::migrate;
-
-/// The owner every collection below is prefixed with.
-pub const OWNER: &str = "channels";
-
-/// Body version of every `channels.*` collection. Version 1 is the pre-registry
-/// layout stored under the legacy names; the migration steps write 2.
+/// Body version used by the current TinyChannels record layout.
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// Entries awaiting a terminal outcome.
 pub const DELIVERY_PENDING: &str = "channels.delivery_pending";
 /// Permanently failed entries.
 pub const DELIVERY_FAILED: &str = "channels.delivery_failed";
-/// Idempotent terminal results (they expire through record metadata).
+/// Idempotent terminal results.
 pub const DELIVERY_RESULTS: &str = "channels.delivery_results";
-
 /// Chat to thread bindings for remote control.
 pub const REMOTE_BINDINGS: &str = "channels.remote_bindings";
 /// Chats with a turn in flight.
 pub const REMOTE_BUSY: &str = "channels.remote_busy";
 /// The one-time legacy import marker.
 pub const REMOTE_META: &str = "channels.remote_meta";
-
 /// The linked device record.
 pub const WHATSAPP_DEVICE: &str = "channels.whatsapp_device";
 /// Signal identity keys.
@@ -67,7 +46,7 @@ pub const WHATSAPP_COLLECTIONS: [&str; 8] = [
     WHATSAPP_LID_MAPPING,
 ];
 
-/// Every collection the `channels` owner declares, in declaration order.
+/// Every collection owned by TinyChannels, in declaration order.
 pub const COLLECTIONS: [&str; 14] = [
     DELIVERY_PENDING,
     DELIVERY_FAILED,
@@ -85,19 +64,13 @@ pub const COLLECTIONS: [&str; 14] = [
     WHATSAPP_LID_MAPPING,
 ];
 
-/// The `channels` owner's declaration: its collections and the v1 to v2 steps.
-///
-/// Every item is [`ScopeClass::Module`]: the records belong to the channels
-/// module inside a tenant, never to the tenant as a whole.
+/// Return pure declarations for the collections this implementation owns.
 #[must_use]
-pub fn storage_schema() -> Schema {
-    let owner = Owner::new(OWNER).unwrap_or_else(|_| unreachable!("`{OWNER}` is a valid owner"));
-    let schema = COLLECTIONS.iter().fold(Schema::new(owner), |schema, name| {
-        schema.collection(name, SCHEMA_VERSION, ScopeClass::Module)
-    });
-    migrate::steps()
-        .into_iter()
-        .fold(schema, |schema, step| schema.step(step))
+pub fn collections() -> Vec<CollectionSpec> {
+    COLLECTIONS
+        .iter()
+        .map(|name| CollectionSpec::new(*name))
+        .collect()
 }
 
 #[cfg(test)]
