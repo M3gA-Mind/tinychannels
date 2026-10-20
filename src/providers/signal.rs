@@ -539,12 +539,20 @@ impl SignalChannel {
             if cancellation.as_ref().is_some_and(|cancel| *cancel.borrow()) {
                 return Ok(());
             }
-            let resp = self
+            let request = self
                 .http_client()
                 .get(url.clone())
                 .header("Accept", "text/event-stream")
-                .send()
-                .await;
+                .send();
+            let resp = if let Some(cancel) = cancellation.as_mut() {
+                tokio::select! {
+                    biased;
+                    _ = cancel.wait_for(|value| *value) => return Ok(()),
+                    response = request => response,
+                }
+            } else {
+                request.await
+            };
 
             let resp = match resp {
                 Ok(r) if r.status().is_success() => r,
