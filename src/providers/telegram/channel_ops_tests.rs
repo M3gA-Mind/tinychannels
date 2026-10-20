@@ -36,6 +36,21 @@ struct TelegramWireFixture {
     scope: tinychannels_conformance::ExpectedScope,
 }
 
+fn rich_part(part: tinychannels_bus::ContentPart) -> tinychannels_bus::OutboundPayload {
+    tinychannels_bus::OutboundPayload::Parts {
+        parts: vec![tinychannels_bus::OutboundContentPart::Content { part }],
+    }
+}
+
+fn unsupported_fixture_operation() -> tinychannels_bus::channel::ChannelSendError {
+    tinychannels_bus::channel::ChannelSendError {
+        kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
+        message: "fixture operation is unsupported".into(),
+        unsupported: true,
+        ..Default::default()
+    }
+}
+
 #[async_trait::async_trait]
 impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
     fn adapter(&self) -> &dyn tinychannels_runtime::channel::ChannelAdapter {
@@ -73,6 +88,83 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
         tinychannels_bus::channel::ChannelSendError,
     > {
         use tinychannels_conformance::ConformanceFeature as Feature;
+        if feature == Feature::Typing {
+            tinychannels_runtime::channel::ChannelTyping::start_typing(
+                self.channel.as_ref(),
+                "100",
+            )
+            .await?;
+            self.record_operation(feature, "typing", None).await;
+            return Ok(None);
+        }
+        if feature == Feature::Reactions {
+            tinychannels_runtime::channel::ChannelReaction::send_reaction(
+                self.channel.as_ref(),
+                &self.scope.channel,
+                &self.scope.conversation,
+                "321",
+                &tinychannels_bus::channel::ChannelReaction {
+                    value: "👍".into(),
+                    custom_emoji_id: None,
+                },
+                false,
+            )
+            .await?;
+            self.record_operation(feature, "reaction_send", None).await;
+            return Ok(None);
+        }
+        if feature == Feature::Edit || feature == Feature::Delete {
+            let bootstrap = self
+                .adapter
+                .send(tinychannels_bus::ChannelOutboundIntent {
+                    idempotency_key: "bootstrap-message".into(),
+                    channel_id: "telegram".into(),
+                    conversation_id: "100".into(),
+                    channel_ref: Some(self.scope.channel.clone()),
+                    conversation_ref: Some(self.scope.conversation.clone()),
+                    payload: tinychannels_bus::OutboundPayload::Text {
+                        text: "existing message".into(),
+                    },
+                    ..Default::default()
+                })
+                .await?;
+            let request_count = self.server.received_requests().await.unwrap_or_default().len();
+            *self.request_cursor.lock().unwrap() = request_count;
+            if feature == Feature::Edit {
+                let receipt = tinychannels_runtime::channel::ChannelEdit::edit(
+                    self.channel.as_ref(),
+                    &bootstrap.receipt,
+                    tinychannels_bus::ChannelOutboundIntent {
+                        idempotency_key: "edit-kit".into(),
+                        channel_id: "telegram".into(),
+                        conversation_id: "100".into(),
+                        channel_ref: Some(self.scope.channel.clone()),
+                        conversation_ref: Some(self.scope.conversation.clone()),
+                        payload: tinychannels_bus::OutboundPayload::Text {
+                            text: "edited conformance message".into(),
+                        },
+                        ..Default::default()
+                    },
+                )
+                .await?;
+                self.record_operation(feature, "edit", Some(receipt.clone())).await;
+                return Ok(Some(tinychannels_bus::channel::ChannelSendOutcome {
+                    receipt,
+                    error: None,
+                }));
+            }
+            tinychannels_runtime::channel::ChannelDelete::delete(
+                self.channel.as_ref(),
+                &bootstrap.receipt,
+            )
+            .await?;
+            self.record_operation(feature, "delete", None).await;
+            return Ok(None);
+        }
+        if feature == Feature::InboundReactions {
+            return Err(unsupported_fixture_operation());
+        }
+
         let payload = match feature {
             Feature::Text | Feature::ReplyAddressing | Feature::ThreadAddressing => {
                 tinychannels_bus::OutboundPayload::Text {
@@ -157,6 +249,10 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             } else if path.ends_with("/sendLocation") { ("send", "location") }
             else if path.ends_with("/sendContact") { ("send", "contact") }
             else if path.ends_with("/sendPoll") { ("send", "poll") }
+            else if path.ends_with("/sendChatAction") { ("typing", "text") }
+            else if path.ends_with("/setMessageReaction") { ("reaction_send", "text") }
+            else if path.ends_with("/editMessageText") { ("edit", "text") }
+            else if path.ends_with("/deleteMessage") { ("delete", "text") }
             else { continue };
             let wire_id = |field: &str| {
                 body.get(field).map(|value| {
@@ -1970,7 +2066,7 @@ async fn configured_local_adapter_accepts_and_delivers_typed_telegram_media() {
             ..Default::default()
         },
         channel.capabilities(),
-        Arc::new(TelegramConformanceSink(channel)),
+        Arc::new(TelegramConformanceSink(channel.clone())),
     );
     let outcome = adapter
         .send(tinychannels_bus::ChannelOutboundIntent {
@@ -2488,7 +2584,10 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         .into_iter()
         .filter_map(|(feature, result)| result.err().map(|error| format!("{feature:?}: {error}")))
         .collect::<Vec<_>>();
-    assert!(failures.is_empty(), "Telegram conformance failures: {failures:#?}");
+    assert!(
+        failures.is_empty(),
+        "Telegram conformance failures: {failures:#?}"
+    );
 }
 
 #[tokio::test]
