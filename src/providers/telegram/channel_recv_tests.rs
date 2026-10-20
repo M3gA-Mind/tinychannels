@@ -674,7 +674,7 @@ async fn stored_voice_scope_matches_normalized_ingress_turn_and_conversation() {
 }
 
 #[tokio::test]
-async fn stored_voice_scope_preserves_telegram_forum_topic_thread_identity() {
+async fn stored_voice_scope_preserves_telegram_forum_topic_identity() {
     let server = mock_api().await;
     mount_voice_download(&server, vec![1, 2, 3]).await;
     let store = RecordingVoiceStore::default();
@@ -696,7 +696,7 @@ async fn stored_voice_scope_preserves_telegram_forum_topic_thread_identity() {
     let scopes = store.0.lock().unwrap();
     assert_eq!(scopes.len(), 1);
     assert_eq!(scopes[0].conversation, envelope.conversation);
-    assert_eq!(scopes[0].conversation.thread_id.as_deref(), Some("42"));
+    assert_eq!(scopes[0].conversation.thread_id, None);
     assert_eq!(scopes[0].conversation.topic_id.as_deref(), Some("42"));
 }
 
