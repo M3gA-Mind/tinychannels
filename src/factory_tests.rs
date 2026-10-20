@@ -123,11 +123,13 @@ fn yuanbao_factory_capabilities_include_only_installed_host_services() {
     use crate::providers::native::fixtures::StubVoice;
     use tinychannels_bus::config::YuanbaoConfig;
 
-    let mut yuanbao = YuanbaoConfig::default();
-    yuanbao.app_key = "factory-app".into();
-    yuanbao.token = "factory-token".into();
-    yuanbao.bot_id = "factory-bot".into();
-    yuanbao.ws_domain = "ws://127.0.0.1:1".into();
+    let yuanbao = YuanbaoConfig {
+        app_key: "factory-app".into(),
+        token: "factory-token".into(),
+        bot_id: "factory-bot".into(),
+        ws_domain: "ws://127.0.0.1:1".into(),
+        ..Default::default()
+    };
     let config = ChannelsConfig {
         yuanbao: Some(yuanbao),
         ..Default::default()
