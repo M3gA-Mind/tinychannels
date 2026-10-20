@@ -286,6 +286,14 @@ impl YuanbaoChannel {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_test_cos_endpoint(mut self, endpoint: String) -> Self {
+        Arc::get_mut(&mut self.outbound)
+            .expect("factory-built Yuanbao outbound has a single owner in tests")
+            .set_test_cos_endpoint(endpoint);
+        self
+    }
+
     /// Record a `shortened → original` recipient mapping so the outbound
     /// side can recover the server-recognized id when the agent loop
     /// addresses a reply with the shortened sender / reply_target it

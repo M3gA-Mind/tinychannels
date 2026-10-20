@@ -61,10 +61,12 @@ fn with_media(read: Option<tinychannels_bus::MediaKind>, bytes: &[u8]) -> FakePr
     if let Some(kind) = read {
         *repository.read.lock().unwrap() = Some(stored_media(kind, "image/png", bytes));
     }
-    FakeProvider {
+    let mut provider = FakeProvider {
         media: Some(repository),
         ..Default::default()
-    }
+    };
+    provider.caps.content.image.outbound = true;
+    provider
 }
 
 fn with_voice(audio: Option<&[u8]>) -> FakeProvider {
@@ -160,6 +162,40 @@ async fn unsupported_content_kinds_are_explicit() {
         .await
         .unwrap_err();
     assert!(!error.unsupported && error.message.contains("shared module runtime"));
+}
+
+#[tokio::test]
+async fn undeclared_media_kinds_are_rejected_before_host_storage_reads() {
+    let repository = Arc::new(StubMedia::default());
+    let provider = FakeProvider {
+        media: Some(repository.clone()),
+        ..Default::default()
+    };
+    let unsupported_parts = [
+        OutboundContentPart::Content {
+            part: ContentPart::Video {
+                media: media(MediaKind::Video, Some("video-ref")),
+                caption: None,
+                duration_ms: None,
+                thumbnail: None,
+            },
+        },
+        OutboundContentPart::Content {
+            part: ContentPart::Audio {
+                media: media(MediaKind::Audio, Some("audio-ref")),
+                codec: Some("ogg_opus".into()),
+                duration_ms: None,
+                title: None,
+                transcript: None,
+            },
+        },
+    ];
+
+    for part in unsupported_parts {
+        let error = plan_of(&provider, &message(vec![part])).await.unwrap_err();
+        assert!(error.unsupported, "{}", error.message);
+    }
+    assert!(repository.scopes.lock().unwrap().is_empty());
 }
 
 #[tokio::test]

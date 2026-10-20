@@ -4,8 +4,13 @@ use crate::channel::{
     ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
     ChannelTyping,
 };
-use crate::factory::build_yuanbao_channel_with_voice_http_for_test;
-use crate::host::{ChannelHostBuilder, VoiceMediaRequest, VoiceMediaStore};
+use crate::factory::{
+    build_yuanbao_channel_with_media_http_for_test, build_yuanbao_channel_with_voice_http_for_test,
+};
+use crate::host::{
+    ChannelHostBuilder, MediaRepository, MediaScope, MediaStoreRequest, StoredMedia,
+    VoiceMediaRequest, VoiceMediaStore,
+};
 use crate::providers::http_test_support::HttpsServer;
 use crate::providers::native::fixtures::{StubTranscriber, StubVoice};
 use crate::providers::yuanbao::connection::test_support::{
@@ -35,17 +40,27 @@ struct Fixture {
     channel: Arc<dyn crate::providers::long_tail::LongTailNative>,
     _media_server: HttpsServer,
     _gateway: MockGateway,
+    cos_server: Option<wiremock::MockServer>,
     session: tokio::sync::Mutex<GatewaySession>,
     listener: tokio::sync::Mutex<Option<tokio::task::JoinHandle<Result<(), ChannelSendError>>>>,
     inbound:
         tokio::sync::Mutex<tokio::sync::mpsc::UnboundedReceiver<tinychannels_bus::ChannelIngress>>,
     voice_store: Arc<MatrixVoiceStore>,
+    media_repository: Option<Arc<MatrixMediaRepository>>,
     observations: Mutex<Vec<WireObservation>>,
     active_feature: Mutex<Feature>,
 }
 
 impl Fixture {
     async fn start() -> Self {
+        Self::start_with_media(false).await
+    }
+
+    async fn start_with_media_repository() -> Self {
+        Self::start_with_media(true).await
+    }
+
+    async fn start_with_media(enable_media: bool) -> Self {
         let audio = include_bytes!("../telegram/fixtures/sine-ogg-opus.ogg").to_vec();
         let response_audio = audio.clone();
         let media_server = HttpsServer::start_with_bytes(
@@ -61,19 +76,72 @@ impl Fixture {
         let voice_store = Arc::new(MatrixVoiceStore::default());
         *voice_store.inner.audio_base64.lock().unwrap() =
             Some(base64::engine::general_purpose::STANDARD.encode(b"voice fixture"));
+        let cos_server = if enable_media {
+            Some(wiremock::MockServer::start().await)
+        } else {
+            None
+        };
+        let media_repository = enable_media.then(|| Arc::new(MatrixMediaRepository::default()));
+        if let Some(server) = &cos_server {
+            use wiremock::matchers::{method, path};
+            use wiremock::{Mock, ResponseTemplate};
+            Mock::given(method("POST"))
+                .and(path("/api/resource/genUploadInfo"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "code": 0,
+                    "data": {
+                        "bucketName": "fixture-bucket",
+                        "region": "fixture-region",
+                        "location": "up/yuanbao-media",
+                        "encryptTmpSecretId": "fixture-key-id",
+                        "encryptTmpSecretKey": "fixture-key-secret",
+                        "encryptToken": "fixture-upload-token",
+                        "resourceUrl": "https://cdn.example/yuanbao-uploaded",
+                    }
+                })))
+                .expect(2)
+                .mount(server)
+                .await;
+            let uploaded = media_repository.as_ref().unwrap().uploaded.clone();
+            Mock::given(method("PUT"))
+                .and(path("/up/yuanbao-media"))
+                .respond_with(move |request: &wiremock::Request| {
+                    uploaded.lock().push(request.body.clone());
+                    ResponseTemplate::new(200)
+                })
+                .expect(2)
+                .mount(server)
+                .await;
+        }
+        let mut yuanbao_config = gateway_config(&gateway.url);
+        if let Some(server) = &cos_server {
+            yuanbao_config.api_domain = server.uri();
+        }
         let config = tinychannels_bus::ChannelsConfig {
-            yuanbao: Some(gateway_config(&gateway.url)),
+            yuanbao: Some(yuanbao_config),
             ..Default::default()
         };
-        let host: Arc<dyn crate::host::ChannelHost> = ChannelHostBuilder::new()
+        let mut host_builder = ChannelHostBuilder::new()
             .voice_media_store(voice_store.clone())
-            .transcriber(Arc::new(StubTranscriber::default()))
-            .build();
-        let channel = build_yuanbao_channel_with_voice_http_for_test(
-            &config,
-            &host,
-            media_server.client.clone(),
-        )
+            .transcriber(Arc::new(StubTranscriber::default()));
+        if let Some(repository) = &media_repository {
+            host_builder = host_builder.media_repository(repository.clone());
+        }
+        let host: Arc<dyn crate::host::ChannelHost> = host_builder.build();
+        let channel = if let Some(server) = &cos_server {
+            build_yuanbao_channel_with_media_http_for_test(
+                &config,
+                &host,
+                media_server.client.clone(),
+                server.uri(),
+            )
+        } else {
+            build_yuanbao_channel_with_voice_http_for_test(
+                &config,
+                &host,
+                media_server.client.clone(),
+            )
+        }
         .expect("factory should build configured Yuanbao adapter");
         let (ingress_tx, ingress_rx) = tokio::sync::mpsc::unbounded_channel();
         let sink = IngressSink(ingress_tx);
@@ -92,10 +160,12 @@ impl Fixture {
             channel,
             _media_server: media_server,
             _gateway: gateway,
+            cos_server,
             session: tokio::sync::Mutex::new(session),
             listener: tokio::sync::Mutex::new(Some(listener)),
             inbound: tokio::sync::Mutex::new(ingress_rx),
             voice_store,
+            media_repository,
             observations: Mutex::new(Vec::new()),
             active_feature: Mutex::new(Feature::Text),
         }
@@ -141,9 +211,11 @@ impl Fixture {
         let reply_to_id = crate::providers::yuanbao::wire::get_string(&fields, 7);
         let elements = crate::providers::yuanbao::wire::get_repeated_bytes(&fields, 6);
         let expected_text = match feature {
-            Feature::Text => "conformance",
-            Feature::ReplyAddressing => "reply",
-            _ => panic!("send recorder only accepts text features"),
+            Feature::Text => Some("conformance"),
+            Feature::ReplyAddressing => Some("reply"),
+            Feature::Image => Some("image caption"),
+            Feature::File => Some("file caption"),
+            _ => None,
         };
         let payload_kinds = elements
             .iter()
@@ -156,10 +228,61 @@ impl Fixture {
                             crate::providers::yuanbao::wire::parse_fields(&content).unwrap();
                         assert_eq!(
                             crate::providers::yuanbao::wire::get_string(&content_fields, 1),
-                            expected_text,
+                            expected_text.expect("text element requires the expected caption"),
                             "captured Yuanbao text must match the outgoing intent"
                         );
                         "text".to_owned()
+                    }
+                    "TIMImageElem" => {
+                        assert_eq!(feature, Feature::Image);
+                        let content = crate::providers::yuanbao::wire::get_bytes(&fields, 2);
+                        let content_fields =
+                            crate::providers::yuanbao::wire::parse_fields(&content).unwrap();
+                        let image =
+                            crate::providers::yuanbao::wire::get_repeated_bytes(&content_fields, 8);
+                        assert_eq!(image.len(), 1);
+                        let image_fields =
+                            crate::providers::yuanbao::wire::parse_fields(&image[0]).unwrap();
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_string(&image_fields, 5),
+                            "https://cdn.example/yuanbao-uploaded"
+                        );
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_varint(&image_fields, 2),
+                            matrix_png(320, 200).len() as u64
+                        );
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_varint(&image_fields, 3),
+                            320
+                        );
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_varint(&image_fields, 4),
+                            200
+                        );
+                        assert!(
+                            !crate::providers::yuanbao::wire::get_string(&content_fields, 2)
+                                .is_empty()
+                        );
+                        "image".to_owned()
+                    }
+                    "TIMFileElem" => {
+                        assert_eq!(feature, Feature::File);
+                        let content = crate::providers::yuanbao::wire::get_bytes(&fields, 2);
+                        let content_fields =
+                            crate::providers::yuanbao::wire::parse_fields(&content).unwrap();
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_string(&content_fields, 10),
+                            "https://cdn.example/yuanbao-uploaded"
+                        );
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_string(&content_fields, 12),
+                            "conformance.pdf"
+                        );
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_varint(&content_fields, 11),
+                            b"%PDF-1.7 yuanbao conformance".len() as u64
+                        );
+                        "file".to_owned()
                     }
                     other => other.to_owned(),
                 }
@@ -299,6 +422,60 @@ impl Fixture {
 struct MatrixVoiceStore {
     inner: StubVoice,
     read_calls: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Default)]
+struct MatrixMediaRepository {
+    scopes: Mutex<Vec<MediaScope>>,
+    uploaded: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+#[async_trait]
+impl MediaRepository for MatrixMediaRepository {
+    async fn store_media(&self, _request: MediaStoreRequest) -> anyhow::Result<MediaReference> {
+        anyhow::bail!("conformance only reads pre-existing scoped media")
+    }
+
+    async fn read_media(
+        &self,
+        scope: MediaScope,
+        opaque_id: String,
+        _max_bytes: u64,
+    ) -> anyhow::Result<StoredMedia> {
+        self.scopes.lock().push(scope);
+        let (kind, content_type, file_name, bytes) = match opaque_id.as_str() {
+            "fixture-Image" => (
+                MediaKind::Image,
+                "image/png",
+                "conformance.png",
+                matrix_png(320, 200),
+            ),
+            "fixture-Document" => (
+                MediaKind::Document,
+                "application/pdf",
+                "conformance.pdf",
+                b"%PDF-1.7 yuanbao conformance".to_vec(),
+            ),
+            _ => anyhow::bail!("unknown scoped Yuanbao media reference"),
+        };
+        Ok(StoredMedia {
+            media: MediaReference {
+                opaque_id: Some(opaque_id),
+                kind,
+                ..Default::default()
+            },
+            content_type: content_type.into(),
+            file_name: Some(file_name.into()),
+            bytes,
+        })
+    }
+}
+
+fn matrix_png(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    bytes.extend_from_slice(&width.to_be_bytes());
+    bytes.extend_from_slice(&height.to_be_bytes());
+    bytes
 }
 
 #[async_trait]
@@ -483,15 +660,16 @@ impl AdapterFixture for Fixture {
             }
             Feature::VoiceIn => self.voice_in().await,
             Feature::Image => {
-                self.refuse_send(
-                    feature,
-                    content(ContentPart::Image {
-                        media: media(MediaKind::Image),
-                        caption: None,
-                        alt_text: None,
-                    }),
-                )
-                .await
+                let payload = content(ContentPart::Image {
+                    media: media(MediaKind::Image),
+                    caption: Some("image caption".into()),
+                    alt_text: None,
+                });
+                if self.media_repository.is_some() {
+                    self.send_and_record(feature, payload).await
+                } else {
+                    self.refuse_send(feature, payload).await
+                }
             }
             Feature::Video => {
                 self.refuse_send(
@@ -519,15 +697,16 @@ impl AdapterFixture for Fixture {
                 .await
             }
             Feature::File => {
-                self.refuse_send(
-                    feature,
-                    content(ContentPart::File {
-                        media: media(MediaKind::Document),
-                        file_name: Some("fixture.pdf".into()),
-                        caption: None,
-                    }),
-                )
-                .await
+                let payload = content(ContentPart::File {
+                    media: media(MediaKind::Document),
+                    file_name: Some("fixture.pdf".into()),
+                    caption: Some("file caption".into()),
+                });
+                if self.media_repository.is_some() {
+                    self.send_and_record(feature, payload).await
+                } else {
+                    self.refuse_send(feature, payload).await
+                }
             }
             Feature::Sticker => {
                 self.refuse_send(
@@ -731,6 +910,98 @@ async fn factory_built_yuanbao_passes_the_full_configured_conformance_matrix() {
         failed.is_empty(),
         "Yuanbao conformance failures: {failed:#?}"
     );
+    ChannelAdapter::stop(fixture.channel.as_ref())
+        .await
+        .expect("listener should stop cleanly");
+    if let Some(listener) = fixture.listener.lock().await.take() {
+        tokio::time::timeout(std::time::Duration::from_secs(3), listener)
+            .await
+            .expect("listener should exit after stop")
+            .expect("listener task should not panic")
+            .expect("listener should stop cleanly");
+    }
+}
+
+#[tokio::test]
+async fn factory_built_yuanbao_with_media_repository_passes_declared_media_matrix() {
+    let fixture = Fixture::start_with_media_repository().await;
+    let results = check_all_features(&fixture).await;
+    let failed = results
+        .iter()
+        .filter_map(|(feature, result)| {
+            result
+                .as_ref()
+                .err()
+                .map(|error| format!("{feature:?}: {error}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        failed.is_empty(),
+        "Yuanbao media-enabled conformance failures: {failed:#?}"
+    );
+
+    let repository = fixture
+        .media_repository
+        .as_ref()
+        .expect("media-enabled fixture installs its repository");
+    {
+        let scopes = repository.scopes.lock();
+        assert_eq!(
+            scopes.len(),
+            2,
+            "image and file each read scoped media once"
+        );
+        for scope in scopes.iter() {
+            assert_eq!(scope.channel, channel_ref());
+            assert_eq!(scope.conversation, group_ref());
+            assert_eq!(scope.turn_id, "yuanbao-conformance-turn");
+        }
+    }
+    assert_eq!(
+        *repository.uploaded.lock(),
+        vec![
+            matrix_png(320, 200),
+            b"%PDF-1.7 yuanbao conformance".to_vec()
+        ],
+        "actual COS PUT bodies must be the host-scoped stored bytes"
+    );
+
+    let cos_server = fixture
+        .cos_server
+        .as_ref()
+        .expect("media-enabled fixture starts a local COS server");
+    let requests = cos_server
+        .received_requests()
+        .await
+        .expect("local COS server should return captured requests");
+    assert_eq!(requests.len(), 4, "two credential and two upload requests");
+    let credential_requests = requests
+        .iter()
+        .filter(|request| request.method == wiremock::http::Method::POST)
+        .collect::<Vec<_>>();
+    assert_eq!(credential_requests.len(), 2);
+    for request in &credential_requests {
+        assert_eq!(request.url.path(), "/api/resource/genUploadInfo");
+        assert_eq!(request.headers["x-token"], "tok");
+        assert_eq!(request.headers["x-id"], BOT);
+        assert_eq!(request.headers["x-source"], "web");
+    }
+    let upload_requests = requests
+        .iter()
+        .filter(|request| request.method == wiremock::http::Method::PUT)
+        .collect::<Vec<_>>();
+    assert_eq!(upload_requests.len(), 2);
+    assert!(
+        upload_requests
+            .iter()
+            .all(|request| request.url.path() == "/up/yuanbao-media")
+    );
+    assert_eq!(upload_requests[0].headers["content-type"], "image/png");
+    assert_eq!(
+        upload_requests[1].headers["content-type"],
+        "application/pdf"
+    );
+
     ChannelAdapter::stop(fixture.channel.as_ref())
         .await
         .expect("listener should stop cleanly");
