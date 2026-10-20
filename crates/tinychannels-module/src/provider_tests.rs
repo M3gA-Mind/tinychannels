@@ -725,17 +725,6 @@ impl tinychannels_conformance::AdapterFixture for RunningTelegramConformance {
                     ..Default::default()
                 });
             }
-            Feature::ManagedReaction
-            | Feature::ManagedThreadCreate
-            | Feature::ManagedThreadUpdate
-            | Feature::ManagedThreadList => {
-                return Err(tinychannels_bus::channel::ChannelSendError {
-                    kind: tinychannels_bus::channel::SendErrorKind::Forbidden,
-                    message: "managed host callbacks are not provider adapter operations".into(),
-                    unsupported: true,
-                    ..Default::default()
-                });
-            }
         };
         let intent = tinychannels_bus::ChannelOutboundIntent {
             idempotency_key: "module-kit-send".into(),

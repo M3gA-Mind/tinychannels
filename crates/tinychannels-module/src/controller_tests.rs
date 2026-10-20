@@ -638,7 +638,7 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                     channel_ref,
                     conversation,
                     message_id,
-                    text,
+                    text: _,
                     ..
                 } = request.as_ref()
                 else {
