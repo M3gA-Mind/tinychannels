@@ -28,6 +28,17 @@ impl super::LongTail for TypedTextFixture {
         super::text_capabilities(super::TextSpec::default())
     }
 
+    async fn start_listener(
+        &self,
+        _sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        Ok(())
+    }
+
+    async fn stop_listener(&self) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        Ok(())
+    }
+
     async fn send_typed_message(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
