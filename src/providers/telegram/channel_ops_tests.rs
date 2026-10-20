@@ -264,6 +264,41 @@ fn unsupported_fixture_operation() -> tinychannels_bus::channel::ChannelSendErro
     }
 }
 
+fn telegram_voice_update() -> serde_json::Value {
+    serde_json::json!({
+        "update_id": 902,
+        "message": {
+            "message_id": 322,
+            "chat": {"id": 100, "type": "private"},
+            "from": {"id": 9, "username": "conformance", "first_name": "Conformance"},
+            "voice": {
+                "file_id": "voice-file",
+                "file_unique_id": "voice-file-unique",
+                "file_size": 4,
+                "mime_type": "audio/ogg",
+                "duration": 2
+            }
+        }
+    })
+}
+
+fn telegram_conformance_updates() -> Vec<serde_json::Value> {
+    vec![
+        serde_json::json!({
+            "update_id": 901,
+            "message_reaction": {
+                "chat": {"id": 100, "type": "private"},
+                "message_id": 321,
+                "user": {"id": 9, "username": "conformance"},
+                "date": 1_700_000_000,
+                "old_reaction": [],
+                "new_reaction": [{"type": "emoji", "emoji": "👍"}]
+            }
+        }),
+        telegram_voice_update(),
+    ]
+}
+
 impl TelegramWireFixture {
     async fn record_operation(
         &self,
@@ -436,48 +471,13 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             return Ok(None);
         }
         if feature == Feature::InboundReactions {
-            self.events.events.lock().unwrap().clear();
-            let update = serde_json::json!({
-                "update_id": 901,
-                "message_reaction": {
-                    "chat": {"id": 100, "type": "private"},
-                    "message_id": 321,
-                    "user": {"id": 9, "username": "conformance"},
-                    "date": 1_700_000_000,
-                    "old_reaction": [],
-                    "new_reaction": [{"type": "emoji", "emoji": "👍"}]
-                }
-            });
-            let (tx, _rx) = tokio::sync::mpsc::channel(4);
-            let channel = self.channel.clone();
-            let listener = tokio::spawn(async move {
-                #[allow(deprecated)]
-                tinychannels_runtime::traits::Channel::listen(channel.as_ref(), tx).await
-            });
-            tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                loop {
-                    self.events.notified.notified().await;
-                    if !self.events.events.lock().unwrap().is_empty() {
-                        break;
-                    }
-                }
-            })
-            .await
-            .map_err(|_| unsupported_fixture_operation())?;
-            listener.abort();
+            let captured = self.events.events.lock().unwrap().last().cloned()
+                .ok_or_else(unsupported_fixture_operation)?;
             let requests = self.server.received_requests().await.unwrap_or_default();
             let request = requests
                 .iter()
                 .find(|request| request.url.path().ends_with("/getUpdates"))
-                .ok_or_else(|| {
-                    eprintln!("no getUpdates request; paths={:?}", requests.iter().map(|r| r.url.path()).collect::<Vec<_>>());
-                    unsupported_fixture_operation()
-                })?;
-            let captured = self.events.events.lock().unwrap().last().cloned();
-            let Some(captured) = captured else {
-                eprintln!("no event captured, requests={:?}", requests.iter().map(|r| r.url.path()).collect::<Vec<_>>());
-                return Err(unsupported_fixture_operation());
-            };
+                .ok_or_else(unsupported_fixture_operation)?;
             let conversation = captured.conversation.clone().unwrap_or_default();
             let (operation, payload) = match &captured.event {
                 tinychannels_bus::ChannelEventKind::ReactionAdded { reaction, .. } => {
@@ -486,7 +486,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 tinychannels_bus::ChannelEventKind::ReactionRemoved { reaction, .. } => {
                     ("reaction_receive", reaction.value.clone())
                 }
-                _ => { eprintln!("unexpected event {:?}", captured.event); return Err(unsupported_fixture_operation()) },
+                _ => return Err(unsupported_fixture_operation()),
             };
             self.observations.lock().unwrap().push(
                 tinychannels_conformance::WireObservation {
@@ -498,9 +498,76 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                     thread_id: None,
                     payload_kinds: vec![payload],
                     platform_message_ids: vec![],
-                    request: serde_json::json!({"update": update, "path": request.url.path()}),
+                    request: serde_json::json!({"updates": telegram_conformance_updates(), "path": request.url.path()}),
                 },
             );
+            return Ok(None);
+        }
+        if feature == Feature::VoiceIn {
+            self.events.events.lock().unwrap().clear();
+            self.events.inbounds.lock().unwrap().clear();
+            let (tx, _rx) = tokio::sync::mpsc::channel(4);
+            let channel = self.channel.clone();
+            let listener = tokio::spawn(async move {
+                #[allow(deprecated)]
+                tinychannels_runtime::traits::Channel::listen(channel.as_ref(), tx).await
+            });
+            let capture = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    self.events.notified.notified().await;
+                    if !self.events.inbounds.lock().unwrap().is_empty() { break; }
+                }
+            }).await;
+            listener.abort();
+            capture.map_err(|_| unsupported_fixture_operation())?;
+            let envelope = self.events.inbounds.lock().unwrap().last().cloned()
+                .ok_or_else(unsupported_fixture_operation)?;
+            let mut note = envelope.parts.iter().find_map(|part| match part {
+                tinychannels_bus::ContentPart::VoiceNote { voice_note } => Some(voice_note.clone()),
+                _ => None,
+            }).ok_or_else(unsupported_fixture_operation)?;
+            let stored = self.voice.stored.lock().unwrap().iter().rev()
+                .find(|request| request.direction == tinychannels_bus::HostVoiceMediaDirection::Inbound)
+                .cloned().ok_or_else(unsupported_fixture_operation)?;
+            let status = crate::host::enrich_voice_note(
+                &mut note,
+                stored.scope.clone(),
+                Some(crate::host::TranscriptionRequest {
+                    audio_base64: stored.audio_base64.clone(),
+                    mime_type: Some(stored.mime_type.clone()),
+                    file_name: stored.file_name.clone(),
+                    language: None,
+                }),
+                Some(self.transcriber.clone()),
+            ).await;
+            if status != crate::host::VoiceEnrichmentStatus::HostTranscription {
+                return Err(unsupported_fixture_operation());
+            }
+            let Some(transcript) = note.transcript.as_ref() else {
+                return Err(unsupported_fixture_operation());
+            };
+            if transcript.text != "telegram conformance transcript"
+                || note.media.opaque_id.as_deref() != Some("telegram-inbound-voice")
+                || note.media.url.is_some()
+                || note.media.path.is_some()
+                || note.media.local_cache_path.is_some()
+            {
+                return Err(unsupported_fixture_operation());
+            }
+            let requests = self.server.received_requests().await.unwrap_or_default();
+            let request = requests.iter().find(|r| r.url.path().ends_with("/getUpdates"))
+                .ok_or_else(unsupported_fixture_operation)?;
+            self.observations.lock().unwrap().push(tinychannels_conformance::WireObservation {
+                feature,
+                operation: "voice_in".into(),
+                channel: envelope.channel,
+                conversation: envelope.conversation,
+                reply_to_id: envelope.reply_to_id,
+                thread_id: None,
+                payload_kinds: vec!["audio".into(), "transcript".into()],
+                platform_message_ids: vec![],
+                request: serde_json::json!({"updates": telegram_conformance_updates(), "path": request.url.path()}),
+            });
             return Ok(None);
         }
 
