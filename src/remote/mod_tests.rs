@@ -131,7 +131,7 @@ async fn new_then_status_on_any_chat_provider() {
 
         let before = execute_remote_command(&host, &c, RemoteCommand::Status).await;
         assert!(before.contains("none — send `/new`"), "{channel}: {before}");
-        assert!(before.contains("In-memory turns: 4"));
+        assert!(before.contains("Session turns: 4"));
 
         let reply = execute_remote_command(&host, &c, RemoteCommand::New).await;
         let created = host.created.lock().unwrap().clone();

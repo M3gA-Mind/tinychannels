@@ -20,7 +20,7 @@ pub enum ChannelControlRequest {
         message: Box<ChannelMessage>,
         route: RemoteRoute,
         history_len: usize,
-        session_scope: Option<RemoteSessionScope>,
+        session_scope: Option<Box<RemoteSessionScope>>,
         providers: Vec<ProviderDescriptor>,
     },
     RuntimeLimits {

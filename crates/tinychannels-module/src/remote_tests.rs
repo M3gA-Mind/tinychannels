@@ -170,7 +170,7 @@ async fn new_command_awaits_host_history_clear_before_persisting_binding() {
     let text = result.reply.unwrap();
     assert!(text.contains("thread-"));
     assert!(text.contains("fixture-provider"));
-    assert!(text.contains("In-memory turns: 7"));
+    assert!(text.contains("Session turns: 7"));
     host.shutdown().await.unwrap();
 }
 

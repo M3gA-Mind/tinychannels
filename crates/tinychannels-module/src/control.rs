@@ -67,7 +67,7 @@ pub(crate) async fn prepare(
                     message: (*message).clone(),
                     route: route.clone(),
                     history_len,
-                    session_scope,
+                    session_scope: session_scope.map(|scope| *scope),
                 },
                 instance_capabilities.clone(),
             )

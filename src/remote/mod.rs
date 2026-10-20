@@ -10,7 +10,7 @@
 //!
 //! Parsing, rendering, the chat → thread bindings ([`session_store`]) and the
 //! command flow live here. The conversation threads, model routes and
-//! in-memory history belong to the host, which exposes them through
+//! durable session history belongs to the host, which exposes it through
 //! [`RemoteControlHost`].
 
 pub mod session_store;
@@ -71,7 +71,7 @@ pub fn format_session_line(title: &str, id: &str, message_count: usize, active: 
 /// Render the `/new` confirmation.
 pub fn build_new_session_response(title: &str, thread_id: &str) -> String {
     format!(
-        "Started new session **{title}**.\nThread id: `{thread_id}`\nIn-memory channel history cleared for this chat."
+        "Started new session **{title}**.\nThread id: `{thread_id}`\nDurable conversation history reset for this chat."
     )
 }
 
@@ -85,7 +85,7 @@ pub fn build_status_response(
 ) -> String {
     let turn_state = if busy { "in progress ⏳" } else { "idle" };
     format!(
-        "**Status**\n{thread_line}\nProvider: `{provider}`\nModel: `{model}`\nIn-memory turns: {history_len}\nTurn: {turn_state}"
+        "**Status**\n{thread_line}\nProvider: `{provider}`\nModel: `{model}`\nSession turns: {history_len}\nTurn: {turn_state}"
     )
 }
 
@@ -99,7 +99,7 @@ pub use tinychannels_bus::module_remote::{
 pub trait RemoteControlHost: Send + Sync {
     /// The model route for `sender_key` (a conversation history key).
     fn route(&self, sender_key: &str) -> RemoteRoute;
-    /// How many turns of in-memory history the host holds for `sender_key`.
+    /// How many turns belong to the durable session for `sender_key`.
     fn history_len(&self, sender_key: &str) -> usize;
     /// Reset the durable session identified by trusted prepared channel scope.
     async fn clear_history_async(&self, scope: &RemoteSessionScope) -> anyhow::Result<()>;
