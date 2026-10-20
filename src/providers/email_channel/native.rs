@@ -3,6 +3,7 @@
 //! and thread targets become `In-Reply-To` and `References`.
 
 use super::EmailChannel;
+use crate::channel::ChannelInboundSink;
 use crate::host::{MediaRepository, VoiceMediaStore};
 use crate::providers::mail::{
     LettreMailSender, MailAttachment, MailCredentials, MailError, MailHeaders, MailSender,
@@ -170,6 +171,25 @@ impl NativeProvider for EmailChannel {
 
     fn bundles_steps(&self) -> bool {
         true
+    }
+
+    async fn start_listener(
+        &self,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        self.listen_typed_with(sink, || self.connect_imap()).await
+    }
+
+    async fn stop_listener(&self) -> Result<(), ChannelSendError> {
+        if let Some((_, cancel)) = self
+            .listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            let _ = cancel.send(true);
+        }
+        Ok(())
     }
 
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
