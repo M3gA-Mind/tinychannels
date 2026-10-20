@@ -30,6 +30,7 @@ pub(crate) fn describe_adapter(
 /// Convert the frozen interaction DTO to the typed intent sent to a configured
 /// provider. The configured adapter supplies account scope; the caller's
 /// recipient remains only the conversation address.
+#[allow(deprecated)]
 fn draft_intent(
     adapter: &dyn tinychannels::channel::ChannelAdapter,
     message: &tinychannels::SendMessage,
@@ -57,6 +58,7 @@ fn draft_intent(
 /// Route draft start/update/finalize through an adapter's typed draft port.
 /// `None` means the provider has not migrated that operation yet, so the
 /// caller may use the temporary legacy-provider compatibility path.
+#[allow(deprecated)]
 pub(crate) async fn dispatch_native_draft(
     adapter: &dyn tinychannels::channel::ChannelAdapter,
     drafts: &dyn tinychannels::channel::ChannelStreamingDraft,

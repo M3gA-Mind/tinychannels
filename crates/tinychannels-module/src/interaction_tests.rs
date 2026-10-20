@@ -133,6 +133,7 @@ async fn native_describe_uses_configured_adapter_facts_and_keeps_v1_projection()
 }
 
 #[tokio::test]
+#[allow(deprecated)]
 async fn native_draft_lifecycle_converts_v1_interactions_to_scoped_typed_intents() {
     let adapter = NativeDescribeAdapter;
     let drafts = NativeDraftLifecyclePort::default();

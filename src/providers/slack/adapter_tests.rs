@@ -681,7 +681,11 @@ async fn legacy_drafts_post_then_edit_in_place() {
             .await
             .is_err()
     );
-    assert!(Channel::update_draft(&channel, "C1", "3.3", " ").await.is_err());
+    assert!(
+        Channel::update_draft(&channel, "C1", "3.3", " ")
+            .await
+            .is_err()
+    );
 }
 
 #[tokio::test]
