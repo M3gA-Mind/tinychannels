@@ -4,6 +4,7 @@
 
 use super::native::{SIGNAL_MAX_FILE_BYTES, SIGNAL_MAX_VOICE_BYTES};
 use super::{DataMessage, Envelope, SignalChannel};
+use crate::channel::ChannelInboundSink;
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, channel_event, media_of, publish, publish_event,
 };
@@ -15,7 +16,7 @@ use tinychannels_bus::{
     ChannelEventKind, ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef,
     SenderRef,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 fn signal_ref() -> ChannelRef {
     ChannelRef {
@@ -164,7 +165,8 @@ impl SignalChannel {
         envelope: &Envelope,
         accepted: &Accepted<'_>,
         reaction: &Value,
-    ) {
+        sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+    ) -> bool {
         let emoji = reaction
             .get("emoji")
             .and_then(Value::as_str)
@@ -178,7 +180,7 @@ impl SignalChannel {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let Some(target_ts) = target_ts.filter(|_| !emoji.is_empty()) else {
-            return;
+            return true;
         };
         let direction = if removed { "removed" } else { "added" };
         let event_id = format!(
@@ -186,7 +188,7 @@ impl SignalChannel {
             accepted.sender, accepted.timestamp
         );
         if !self.mark_seen(event_id.clone()) {
-            return;
+            return true;
         }
         let message_id = format!("sig_{target_ts}");
         let provider_message_id = Some(target_ts.to_string());
@@ -210,28 +212,30 @@ impl SignalChannel {
                 reaction,
             }
         };
-        publish_event(
+        let event = channel_event(
             "signal",
-            self.native.events.as_ref(),
-            channel_event(
-                "signal",
-                event_id,
-                Some(accepted.timestamp),
-                Some(Self::conversation_of(&accepted.target)),
-                kind,
-            ),
-        )
-        .await;
+            event_id,
+            Some(accepted.timestamp),
+            Some(Self::conversation_of(&accepted.target)),
+            kind,
+        );
+        self.publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
+            .await
     }
 
-    async fn dispatch_receipt(&self, envelope: &Envelope, receipt: &Value) {
+    async fn dispatch_receipt(
+        &self,
+        envelope: &Envelope,
+        receipt: &Value,
+        sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+    ) -> bool {
         let Some(sender) = Self::sender(envelope).filter(|s| self.is_sender_allowed(s)) else {
-            return;
+            return true;
         };
         let read = receipt.get("isRead").and_then(Value::as_bool) == Some(true);
         let delivered = receipt.get("isDelivery").and_then(Value::as_bool) == Some(true);
         if !(read || delivered) {
-            return;
+            return true;
         }
         let when = receipt.get("when").and_then(Value::as_u64);
         let actor = Some(Self::sender_of(envelope, &sender));
@@ -262,45 +266,69 @@ impl SignalChannel {
                     },
                 )
             };
-            publish_event(
+            let event = channel_event(
                 "signal",
-                self.native.events.as_ref(),
-                channel_event(
-                    "signal",
-                    format!("signal:{label}:{stamp}:{sender}"),
-                    when,
-                    Some(Self::conversation_of(&sender)),
-                    kind,
-                ),
-            )
-            .await;
+                format!("signal:{label}:{stamp}:{sender}"),
+                when,
+                Some(Self::conversation_of(&sender)),
+                kind,
+            );
+            if !self
+                .publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
+                .await
+            {
+                return false;
+            }
         }
+        true
     }
 
-    async fn dispatch_delete(&self, envelope: &Envelope, accepted: &Accepted<'_>, deleted: &Value) {
+    async fn dispatch_delete(
+        &self,
+        envelope: &Envelope,
+        accepted: &Accepted<'_>,
+        deleted: &Value,
+        sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+    ) -> bool {
         let Some(stamp) = deleted.get("timestamp").and_then(Value::as_u64) else {
-            return;
+            return true;
         };
         let event_id = format!("signal:delete:{stamp}:{}", accepted.sender);
         if !self.mark_seen(event_id.clone()) {
-            return;
+            return true;
         }
         let _ = envelope;
-        publish_event(
+        let event = channel_event(
             "signal",
-            self.native.events.as_ref(),
-            channel_event(
-                "signal",
-                event_id,
-                Some(accepted.timestamp),
-                Some(Self::conversation_of(&accepted.target)),
-                ChannelEventKind::MessageDeleted {
-                    message_id: format!("sig_{stamp}"),
-                    provider_message_id: Some(stamp.to_string()),
-                },
-            ),
-        )
-        .await;
+            event_id,
+            Some(accepted.timestamp),
+            Some(Self::conversation_of(&accepted.target)),
+            ChannelEventKind::MessageDeleted {
+                message_id: format!("sig_{stamp}"),
+                provider_message_id: Some(stamp.to_string()),
+            },
+        );
+        self.publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
+            .await
+    }
+
+    async fn publish_typed(
+        &self,
+        sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> bool {
+        if let Some(sink) = sink {
+            return sink.push(ingress).await.is_ok();
+        }
+        match ingress {
+            tinychannels_bus::ChannelIngress::Inbound(envelope) => {
+                publish("signal", self.native.events.as_ref(), envelope).await
+            }
+            tinychannels_bus::ChannelIngress::Event(event) => {
+                publish_event("signal", self.native.events.as_ref(), event).await;
+                true
+            }
+        }
     }
 
     /// Handle one SSE envelope. False when the legacy receiver is gone and the
@@ -310,21 +338,58 @@ impl SignalChannel {
         envelope: &Envelope,
         tx: &mpsc::Sender<ChannelMessage>,
     ) -> bool {
+        self.dispatch_envelope_to(envelope, None, Some(tx)).await
+    }
+
+    pub(super) async fn dispatch_typed_envelope(
+        &self,
+        envelope: &Envelope,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+    ) -> bool {
+        self.dispatch_envelope_to(envelope, Some(sink), None).await
+    }
+
+    pub(super) async fn dispatch_typed_until_cancel(
+        &self,
+        envelope: &Envelope,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+        cancellation: &mut watch::Receiver<bool>,
+    ) -> anyhow::Result<Option<bool>> {
+        tokio::select! {
+            biased;
+            _ = cancellation.wait_for(|value| *value) => Ok(None),
+            delivered = self.dispatch_typed_envelope(envelope, sink) => {
+                if delivered {
+                    Ok(Some(true))
+                } else {
+                    anyhow::bail!("Signal inbound sink rejected an event")
+                }
+            }
+        }
+    }
+
+    async fn dispatch_envelope_to(
+        &self,
+        envelope: &Envelope,
+        sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+        tx: Option<&mpsc::Sender<ChannelMessage>>,
+    ) -> bool {
         if let Some(receipt) = &envelope.receipt_message {
-            self.dispatch_receipt(envelope, receipt).await;
-            return true;
+            return self.dispatch_receipt(envelope, receipt, sink).await;
         }
         let Some(accepted) = self.accept(envelope) else {
             return true;
         };
         let data = accepted.data;
         if let Some(reaction) = &data.reaction {
-            self.dispatch_reaction(envelope, &accepted, reaction).await;
-            return true;
+            return self
+                .dispatch_reaction(envelope, &accepted, reaction, sink)
+                .await;
         }
         if let Some(deleted) = &data.remote_delete {
-            self.dispatch_delete(envelope, &accepted, deleted).await;
-            return true;
+            return self
+                .dispatch_delete(envelope, &accepted, deleted, sink)
+                .await;
         }
         let has_attachments = data.attachments.as_ref().is_some_and(|a| !a.is_empty());
         if has_attachments && self.ignore_attachments && data.message.is_none() {
@@ -359,9 +424,18 @@ impl SignalChannel {
             raw: Some(json!({"providerMessageId": accepted.timestamp.to_string()})),
             ..Default::default()
         };
-        if publish("signal", self.native.events.as_ref(), envelope_out).await {
+        if self
+            .publish_typed(
+                sink,
+                tinychannels_bus::ChannelIngress::Inbound(envelope_out),
+            )
+            .await
+        {
             return true;
         }
+        let Some(tx) = tx else {
+            return false;
+        };
         match self.process_envelope(envelope) {
             Some(message) => tx.send(message).await.is_ok(),
             None => true,

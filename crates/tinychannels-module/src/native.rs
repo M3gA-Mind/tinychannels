@@ -27,20 +27,13 @@ pub(crate) struct NativeLaunch {
 }
 
 impl NativeLaunch {
-    pub(crate) fn new<T>(provider: &'static str, channel: Arc<T>) -> Self
+    pub(crate) fn with_legacy<T>(provider: &'static str, channel: Arc<T>) -> Self
     where
-        T: tinychannels::Channel
-            + tinychannels::channel::ChannelAdapter
-            + tinychannels::channel::ChannelTypedSend
-            + tinychannels::channel::ChannelTyping
-            + tinychannels::channel::ChannelReaction
-            + tinychannels::channel::ChannelEdit
-            + tinychannels::channel::ChannelDelete
-            + tinychannels::channel::ChannelStreamingDraft
-            + 'static,
+        T: tinychannels::LongTailNative + tinychannels::traits::Channel + 'static,
     {
+        let provider_id = channel.descriptor().id;
         Self {
-            provider_id: channel.descriptor().id,
+            provider_id,
             start: Box::new(move |hooks, host, supervision, outbound_only| {
                 Running::start_native(provider, channel, hooks, host, supervision, outbound_only)
             }),
@@ -103,15 +96,15 @@ pub(crate) fn build_native_v2(
 ) -> Option<NativeLaunch> {
     match tinychannels_bus::provider_id(name) {
         "discord" => tinychannels::factory::build_discord_channel(config, host, http)
-            .map(|channel| NativeLaunch::new("Discord", channel)),
+            .map(|channel| NativeLaunch::with_legacy("Discord", channel)),
         "signal" => tinychannels::factory::build_signal_channel(config, host, http)
-            .map(|channel| NativeLaunch::new("Signal", channel)),
+            .map(|channel| NativeLaunch::with_legacy("Signal", channel)),
         "imessage" => tinychannels::factory::build_imessage_channel(config, host)
-            .map(|channel| NativeLaunch::new("iMessage", channel)),
+            .map(|channel| NativeLaunch::with_legacy("iMessage", channel)),
         "linq" => tinychannels::factory::build_linq_channel(config, host, http)
-            .map(|channel| NativeLaunch::new("Linq", channel)),
+            .map(|channel| NativeLaunch::with_legacy("Linq", channel)),
         "email" => tinychannels::factory::build_email_channel(config, host)
-            .map(|channel| NativeLaunch::new("Email", channel)),
+            .map(|channel| NativeLaunch::with_legacy("Email", channel)),
         id => {
             let display = long_tail_display(id)?;
             let listener_mode = match id {

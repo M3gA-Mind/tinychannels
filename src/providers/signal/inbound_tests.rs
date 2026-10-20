@@ -1,9 +1,22 @@
 use super::*;
 use crate::providers::native::fixtures::RecordingEvents;
 use crate::providers::signal::fixtures::*;
+use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
-use tinychannels_bus::{ChannelEventKind, ContentPart, ConversationKind};
+use tinychannels_bus::{ChannelEventKind, ChannelIngress, ContentPart, ConversationKind};
+
+struct RejectingTypedSink;
+
+#[async_trait]
+impl crate::channel::ChannelInboundSink for RejectingTypedSink {
+    async fn push(&self, _ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
+        Err(crate::channel::ChannelSendError {
+            message: "test event rejection".into(),
+            ..Default::default()
+        })
+    }
+}
 
 fn channel_pair() -> (mpsc::Sender<ChannelMessage>, mpsc::Receiver<ChannelMessage>) {
     mpsc::channel(8)
@@ -326,4 +339,47 @@ async fn receipts_become_read_and_delivered_events() {
         &events[1].event,
         ChannelEventKind::DeliveredReceipt { .. }
     ));
+}
+
+#[tokio::test]
+async fn rejected_typed_events_stop_reaction_receipt_and_delete_dispatch() {
+    let server = mock_daemon(b"").await;
+    let rejecting = RejectingTypedSink;
+    let reaction = data_envelope(json!({
+        "timestamp": 1_700_000_000_900u64,
+        "reaction": {"emoji": "👍", "targetSentTimestamp": 1_700_000_000_123u64},
+    }));
+    assert!(
+        !channel_for(&server)
+            .dispatch_typed_envelope(&reaction, &rejecting)
+            .await,
+        "a rejected reaction must propagate to listener supervision"
+    );
+
+    let receipt: Envelope = serde_json::from_value(json!({
+        "sourceNumber": PEER,
+        "receiptMessage": {
+            "when": 1_700_000_000_901u64,
+            "timestamps": [1_700_000_000_123u64],
+            "isRead": true,
+        },
+    }))
+    .unwrap();
+    assert!(
+        !channel_for(&server)
+            .dispatch_typed_envelope(&receipt, &rejecting)
+            .await,
+        "a rejected receipt must propagate to listener supervision"
+    );
+
+    let deleted = data_envelope(json!({
+        "timestamp": 1_700_000_000_902u64,
+        "remoteDelete": {"timestamp": 1_700_000_000_123u64},
+    }));
+    assert!(
+        !channel_for(&server)
+            .dispatch_typed_envelope(&deleted, &rejecting)
+            .await,
+        "a rejected delete must propagate to listener supervision"
+    );
 }

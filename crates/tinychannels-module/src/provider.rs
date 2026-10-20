@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tinybus::{Error, Result};
+use tinychannels::channel::ChannelAdapter;
 use tinychannels::host::{LifecycleRegistry, ShutdownHook};
 use tinychannels::{Channel, ChannelHostBuilder, SendMessage};
 use tinychannels_bus::{
@@ -1279,17 +1280,10 @@ pub(crate) enum LongTailListenerMode {
 }
 
 impl NativePorts {
-    pub(crate) fn native<T>(channel: Arc<T>, provider: &'static str) -> Self
-    where
-        T: tinychannels::channel::ChannelAdapter
-            + tinychannels::channel::ChannelTypedSend
-            + tinychannels::channel::ChannelTyping
-            + tinychannels::channel::ChannelReaction
-            + tinychannels::channel::ChannelEdit
-            + tinychannels::channel::ChannelDelete
-            + tinychannels::channel::ChannelStreamingDraft
-            + 'static,
-    {
+    pub(crate) fn native(
+        channel: Arc<dyn tinychannels::LongTailNative>,
+        provider: &'static str,
+    ) -> Self {
         Self {
             provider,
             adapter: channel.clone(),
@@ -1324,11 +1318,15 @@ impl NativePorts {
     }
 
     fn telegram(channel: Arc<tinychannels::TelegramChannel>) -> Self {
-        Self::native(channel, "Telegram")
+        let mut ports = Self::native(channel, "Telegram");
+        ports.listener_mode = LongTailListenerMode::Legacy;
+        ports
     }
 
     fn slack(channel: Arc<tinychannels::SlackChannel>) -> Self {
-        Self::native(channel, "Slack")
+        let mut ports = Self::native(channel, "Slack");
+        ports.listener_mode = LongTailListenerMode::Legacy;
+        ports
     }
 }
 
@@ -1820,10 +1818,10 @@ impl Running {
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
     ) -> Arc<Self> {
-        let channel_dyn: Arc<dyn Channel> = channel.clone();
+        let provider_name = channel.descriptor().id;
         Self::start_inner(
-            Some(channel_dyn),
-            channel.name().to_owned(),
+            Some(channel.clone()),
+            provider_name,
             hooks,
             host,
             supervision,
@@ -1831,8 +1829,9 @@ impl Running {
             Some(NativePorts::telegram(channel)),
         )
     }
-    /// Start a provider whose concrete object is both the listener and the
-    /// native v2 executor (the WhatsApp Cloud and Web adapters).
+    /// Start a configured provider with typed operations and its provider-owned
+    /// legacy listener. Signal opts into its typed SSE listener explicitly;
+    /// providers with webhook, polling or session lifecycles retain theirs.
     pub(crate) fn start_native<T>(
         provider: &'static str,
         channel: Arc<T>,
@@ -1842,25 +1841,24 @@ impl Running {
         outbound_only: bool,
     ) -> Arc<Self>
     where
-        T: Channel
-            + tinychannels::channel::ChannelAdapter
-            + tinychannels::channel::ChannelTypedSend
-            + tinychannels::channel::ChannelTyping
-            + tinychannels::channel::ChannelReaction
-            + tinychannels::channel::ChannelEdit
-            + tinychannels::channel::ChannelDelete
-            + tinychannels::channel::ChannelStreamingDraft
-            + 'static,
+        T: tinychannels::LongTailNative + Channel + 'static,
     {
-        let channel_dyn: Arc<dyn Channel> = channel.clone();
+        let provider_name = channel.descriptor().id;
+        let legacy: Arc<dyn Channel> = channel.clone();
+        let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
+        let listener_mode = if provider_name == "signal" {
+            LongTailListenerMode::Adapter
+        } else {
+            LongTailListenerMode::Legacy
+        };
         Self::start_inner(
-            Some(channel_dyn),
-            channel.name().to_owned(),
+            Some(legacy),
+            provider_name,
             hooks,
             host,
             supervision,
             outbound_only,
-            Some(NativePorts::native(channel, provider)),
+            Some(NativePorts::long_tail(adapter, provider, listener_mode)),
         )
     }
 
@@ -1893,10 +1891,10 @@ impl Running {
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
     ) -> Arc<Self> {
-        let channel_dyn: Arc<dyn Channel> = channel.clone();
+        let provider_name = channel.descriptor().id;
         Self::start_inner(
-            Some(channel_dyn),
-            channel.name().to_owned(),
+            Some(channel.clone()),
+            provider_name,
             hooks,
             host,
             supervision,
