@@ -14,12 +14,14 @@ crate-type = ["rlib", "cdylib"]
 [dependencies]
 # The provider stack. This is the whole point of the module: these dependencies
 # live in the loaded `cdylib` instead of in every host binary.
-# `whatsapp-web` is here because `StartChannel` deliberately *permits* the
-# WhatsApp Web configuration — it is the one WhatsApp variant with a real listen
-# loop. Without the feature the factory compiles its gate-off branch, returns no
-# provider, and the request fails as `NotConfigured`: a guard that allows a
-# configuration the build cannot serve.
-tinychannels = { path = "../..", features = ["email", "lark", "whatsapp-web", "relay-websocket"] }
+# The WhatsApp Web stack (whatsapp-rust, wacore, waproto) is optional: it is
+# pulled in by this crate's own `whatsapp-web` feature, which is on by default
+# so the released cdylib carries it. Without the feature `StartChannel`'s
+# factory compiles its gate-off branch, returns no provider and the request
+# fails as `NotConfigured`. Hosts that link the module only to exercise the
+# other providers (for example a test fixture) can opt out with
+# `default-features = false`.
+tinychannels = { path = "../..", features = ["email", "lark", "relay-websocket"] }
 # The transport-free vocabulary shared with the host.
 tinychannels-bus = { path = "../tinychannels-bus" }
 # TinyBus provides the typed service interface and dynamic module host ABI.
@@ -55,6 +57,8 @@ tokio-tungstenite = { version = "0.30", default-features = false, features = ["h
 base64 = "0.23"
 
 [features]
-default = []
+default = ["whatsapp-web"]
+# Builds the WhatsApp Web provider into the module (on by default).
+whatsapp-web = ["tinychannels/whatsapp-web"]
 linked = ["static-link"]
 static-link = []
