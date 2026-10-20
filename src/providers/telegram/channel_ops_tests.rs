@@ -198,6 +198,11 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             scope.thread_id = Some("77".into());
             scope.conversation.thread_id = Some("77".into());
         }
+        if feature == tinychannels_conformance::ConformanceFeature::InboundReactions {
+            // Telegram supplies no configured-account identifier in its
+            // inbound reaction update; the event scope reflects that wire DTO.
+            scope.channel.account_id = None;
+        }
         scope
     }
 
