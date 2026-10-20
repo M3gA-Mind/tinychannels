@@ -55,6 +55,60 @@ impl tinychannels::channel::ChannelAdapter for NativeDescribeAdapter {
     }
 }
 
+#[derive(Default)]
+struct NativeDraftLifecyclePort(Mutex<Vec<String>>);
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelStreamingDraft for NativeDraftLifecyclePort {
+    async fn start_draft(
+        &self,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<Option<String>, tinychannels::channel::ChannelSendError> {
+        let tinychannels_bus::OutboundPayload::Text { text } = intent.payload else {
+            panic!("draft start must use a typed text payload")
+        };
+        self.0.lock().unwrap().push(format!(
+            "start:{}:{}:{text}",
+            intent.channel_ref.unwrap().account_id.unwrap(),
+            intent.conversation_id
+        ));
+        Ok(Some("draft-id".into()))
+    }
+
+    async fn update_draft(
+        &self,
+        id: &str,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<(), tinychannels::channel::ChannelSendError> {
+        let tinychannels_bus::OutboundPayload::Text { text } = intent.payload else {
+            panic!("draft update must use a typed text payload")
+        };
+        self.0.lock().unwrap().push(format!("update:{id}:{text}"));
+        Ok(())
+    }
+
+    async fn finalize_draft(
+        &self,
+        id: &str,
+        intent: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<(), tinychannels::channel::ChannelSendError> {
+        let tinychannels_bus::OutboundPayload::Text { text } = intent.payload else {
+            panic!("draft finalization must use a typed text payload")
+        };
+        self.0.lock().unwrap().push(format!("finalize:{id}:{text}"));
+        Ok(())
+    }
+
+    async fn upsert_draft(
+        &self,
+        _: Option<&tinychannels_bus::channel::MessageReceipt>,
+        _: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<tinychannels_bus::channel::MessageReceipt, tinychannels::channel::ChannelSendError>
+    {
+        unreachable!("legacy upsert is not used by the lifecycle shim")
+    }
+}
+
 #[tokio::test]
 async fn native_describe_uses_configured_adapter_facts_and_keeps_v1_projection() {
     let adapter = NativeDescribeAdapter;
@@ -76,6 +130,60 @@ async fn native_describe_uses_configured_adapter_facts_and_keeps_v1_projection()
     assert_eq!(wire["value"]["proactive_target"], "configured-native-room");
     assert_eq!(wire["value"]["supports_reactions"], true);
     assert_eq!(wire["value"]["supports_draft_updates"], true);
+}
+
+#[tokio::test]
+async fn native_draft_lifecycle_converts_v1_interactions_to_scoped_typed_intents() {
+    let adapter = NativeDescribeAdapter;
+    let drafts = NativeDraftLifecyclePort::default();
+    let started = dispatch_native_draft(
+        &adapter,
+        &drafts,
+        ChannelInteraction::SendDraft {
+            message: SendMessage::new("partial", "room"),
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(started, ChannelInteractionResult::Draft(Some(id)) if id == "draft-id"));
+
+    let updated = dispatch_native_draft(
+        &adapter,
+        &drafts,
+        ChannelInteraction::UpdateDraft {
+            recipient: "room".into(),
+            message_id: "draft-id".into(),
+            text: "more".into(),
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(updated, ChannelInteractionResult::Completed));
+
+    let finalized = dispatch_native_draft(
+        &adapter,
+        &drafts,
+        ChannelInteraction::FinalizeDraft {
+            recipient: "room".into(),
+            message_id: "draft-id".into(),
+            text: "final".into(),
+            thread_ts: Some("topic-1".into()),
+        },
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(matches!(finalized, ChannelInteractionResult::Completed));
+    assert_eq!(
+        *drafts.0.lock().unwrap(),
+        [
+            "start:fixture:one:room:partial",
+            "update:draft-id:more",
+            "finalize:draft-id:final"
+        ]
+    );
 }
 
 #[derive(Default)]

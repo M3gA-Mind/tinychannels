@@ -687,6 +687,33 @@ async fn legacy_drafts_post_then_edit_in_place() {
 }
 
 #[tokio::test]
+async fn typed_draft_lifecycle_preserves_slack_create_update_and_finalize() {
+    let server = mock_api().await;
+    mount(&server, "chat.postMessage", ok(json!({"ts": "4.4"}))).await;
+    mount(&server, "chat.update", ok(json!({}))).await;
+    let channel = channel_for(&server, &[]);
+
+    let id = ChannelStreamingDraft::start_draft(&channel, text_intent("draft"))
+        .await
+        .unwrap();
+    assert_eq!(id.as_deref(), Some("4.4"));
+    ChannelStreamingDraft::update_draft(&channel, "4.4", text_intent("draft more"))
+        .await
+        .unwrap();
+    ChannelStreamingDraft::finalize_draft(&channel, "4.4", text_intent("final"))
+        .await
+        .unwrap();
+
+    let posted = bodies(&server, "chat.postMessage").await;
+    let updates = bodies(&server, "chat.update").await;
+    assert_eq!(posted.len(), 1);
+    assert_eq!(posted[0]["text"], "draft");
+    assert_eq!(updates.len(), 2);
+    assert_eq!(updates[0]["text"], "draft more");
+    assert_eq!(updates[1]["text"], "final");
+}
+
+#[tokio::test]
 async fn legacy_interactions_delegate_to_the_typed_operations() {
     let server = mock_api().await;
     for method in [

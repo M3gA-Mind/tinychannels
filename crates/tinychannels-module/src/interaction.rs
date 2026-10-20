@@ -21,9 +21,9 @@ pub(crate) fn describe_adapter(
             supports_draft_updates: capabilities.streaming_reply_pipeline,
         }))
     } else {
-        ChannelInteractionResult::InfoV2(Box::new(
-            tinychannels_bus::ChannelInteractionInfoV2 { capabilities },
-        ))
+        ChannelInteractionResult::InfoV2(Box::new(tinychannels_bus::ChannelInteractionInfoV2 {
+            capabilities,
+        }))
     }
 }
 
@@ -91,9 +91,7 @@ pub(crate) async fn dispatch_native_draft(
             match drafts.update_draft(&message_id, intent).await {
                 Ok(()) => Some(Ok(ChannelInteractionResult::Completed)),
                 Err(error) if error.unsupported => None,
-                Err(_) => Some(Err(tinybus::Error::failed(
-                    "provider draft update failed",
-                ))),
+                Err(_) => Some(Err(tinybus::Error::failed("provider draft update failed"))),
             }
         }
         Op::FinalizeDraft {
