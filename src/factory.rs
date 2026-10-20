@@ -602,7 +602,7 @@ fn build_yuanbao_channel(
     config: &tinychannels_bus::config::YuanbaoConfig,
     host: Option<&Arc<dyn ChannelHost>>,
     voice_http: Option<reqwest::Client>,
-) -> Option<Arc<YuanbaoChannel>> {
+) -> Option<Arc<dyn LongTailNative>> {
     let mut channel = match YuanbaoChannel::new(config.clone()) {
         Ok(channel) => channel,
         Err(error) => {
