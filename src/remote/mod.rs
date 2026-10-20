@@ -90,7 +90,9 @@ pub fn build_status_response(
 }
 
 /// Shared remote conversation vocabulary, re-exported for existing library clients.
-pub use tinychannels_bus::module_remote::{NewRemoteThread, RemoteRoute, RemoteThreadSummary};
+pub use tinychannels_bus::module_remote::{
+    NewRemoteThread, RemoteRoute, RemoteSessionScope, RemoteThreadSummary,
+};
 
 /// Host side of remote control: the parts only the host owns.
 #[async_trait]
@@ -99,14 +101,8 @@ pub trait RemoteControlHost: Send + Sync {
     fn route(&self, sender_key: &str) -> RemoteRoute;
     /// How many turns of in-memory history the host holds for `sender_key`.
     fn history_len(&self, sender_key: &str) -> usize;
-    /// Drop the in-memory history for `sender_key`.
-    fn clear_history(&self, sender_key: &str);
-    /// Async bridge used by modules whose host history lives across TinyBus.
-    /// Existing synchronous hosts retain their original behavior.
-    async fn clear_history_async(&self, sender_key: &str) -> anyhow::Result<()> {
-        self.clear_history(sender_key);
-        Ok(())
-    }
+    /// Reset the durable session identified by trusted prepared channel scope.
+    async fn clear_history_async(&self, scope: &RemoteSessionScope) -> anyhow::Result<()>;
     /// List the host's conversation threads.
     async fn list_threads(&self) -> anyhow::Result<Vec<RemoteThreadSummary>>;
     /// Create a conversation thread.
@@ -125,6 +121,9 @@ pub struct RemoteCommandContext {
     pub reply_target: String,
     /// Conversation history key of the sender.
     pub sender_key: String,
+    /// Scope prepared by the host for this exact inbound turn. `/new` fails
+    /// closed when this is absent; the sender key is never parsed as identity.
+    pub session_scope: Option<RemoteSessionScope>,
     /// Chat → thread bindings and busy state.
     pub sessions: RemoteSessionStore,
 }
@@ -240,6 +239,10 @@ async fn new_session(
     ctx: &RemoteCommandContext,
     now: chrono::DateTime<chrono::Utc>,
 ) -> String {
+    let Some(session_scope) = ctx.session_scope.as_ref() else {
+        return "Cannot reset this conversation because its trusted channel scope is unavailable."
+            .to_string();
+    };
     let thread_id = format!("thread-{}", uuid::Uuid::new_v4());
     let title = format!(
         "{} {} {}",
@@ -258,7 +261,7 @@ async fn new_session(
         return format!("Failed to create session: {error}");
     }
 
-    if let Err(error) = host.clear_history_async(&ctx.sender_key).await {
+    if let Err(error) = host.clear_history_async(session_scope).await {
         return format!(
             "Created thread `{thread_id}` but failed to clear channel history: {error}"
         );

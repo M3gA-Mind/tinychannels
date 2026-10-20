@@ -43,8 +43,8 @@ impl Callback {
                 calls.push("create".into());
                 RemoteHostResult::Completed
             }
-            RemoteHostRequest::ClearHistory { sender_key } => {
-                assert_eq!(sender_key, "telegram_sender_chat");
+            RemoteHostRequest::ClearHistory { session_scope } => {
+                assert_eq!(session_scope, scope());
                 assert!(
                     self.sessions
                         .binding("telegram", "chat")
@@ -135,6 +135,21 @@ fn command(workspace: &std::path::Path, content: &str, channel: &str) -> RemoteO
             model: "fixture-model".into(),
         },
         history_len: 7,
+        session_scope: Some(scope()),
+    }
+}
+fn scope() -> tinychannels_bus::module_remote::RemoteSessionScope {
+    tinychannels_bus::module_remote::RemoteSessionScope {
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:fixture".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "chat".into(),
+            ..Default::default()
+        },
+        session_key: "canonical-telegram-session".into(),
     }
 }
 #[tokio::test]
@@ -157,6 +172,27 @@ async fn new_command_awaits_host_history_clear_before_persisting_binding() {
     assert!(text.contains("fixture-provider"));
     assert!(text.contains("In-memory turns: 7"));
     host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn new_without_prepared_session_scope_never_calls_host_clear() {
+    let workspace = tempfile::tempdir().unwrap();
+    let (host, callback) = fixture(workspace.path()).await;
+    let mut request = command(workspace.path(), "/new", "telegram");
+    let RemoteOperation::Execute { session_scope, .. } = &mut request else {
+        unreachable!()
+    };
+    *session_scope = None;
+
+    let result = execute(&host, request).await.unwrap();
+
+    assert!(
+        result
+            .reply
+            .unwrap()
+            .contains("trusted channel scope is unavailable")
+    );
+    assert!(callback.calls.lock().await.is_empty());
 }
 #[tokio::test]
 async fn sessions_are_sorted_and_turn_state_is_owned_by_the_module() {

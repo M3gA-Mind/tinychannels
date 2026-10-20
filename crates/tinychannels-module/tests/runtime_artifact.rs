@@ -340,6 +340,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             model: "fixture".into(),
         },
         history_len: 0,
+        session_scope: None,
     };
     assert!(
         first_client

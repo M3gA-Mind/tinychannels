@@ -2832,6 +2832,7 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
                 model: "fixture".into(),
             },
             history_len: 0,
+            session_scope: None,
         })
         .await
         .unwrap();
@@ -2853,6 +2854,7 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
                     model: "fixture".into(),
                 },
                 history_len: 0,
+                session_scope: None,
                 providers: vec![],
             },
         )
@@ -2970,6 +2972,7 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
         workspace_dir: ".".into(),
         message: serde_json::from_value(serde_json::json!({"id":"fixture","sender":"sender","reply_target":"chat","content":content,"channel":channel,"timestamp":1})).unwrap(),
         route: RemoteRoute { provider: "old".into(), model: "model".into() }, history_len: 3,
+        session_scope: None,
         providers: vec![ProviderDescriptor { name: "approved".into(), aliases: vec!["alias".into()] }],
     }
     };
