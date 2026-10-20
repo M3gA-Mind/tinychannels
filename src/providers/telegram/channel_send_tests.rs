@@ -413,6 +413,14 @@ async fn send_by_url_includes_caption_and_surfaces_rejections() {
         .unwrap();
     ch.send_voice_by_url("1", None, url, None).await.unwrap();
 
+    for (_, api_method, _) in ALL_KINDS {
+        assert_eq!(
+            json_bodies(&server, api_method).await.len(),
+            1,
+            "{api_method}"
+        );
+    }
+
     assert_eq!(
         json_bodies(&server, "sendDocument").await[0],
         serde_json::json!({
@@ -451,6 +459,51 @@ async fn send_by_url_includes_caption_and_surfaces_rejections() {
         assert!(err.contains(label), "{err}");
         assert!(err.contains("wrong file identifier"), "{err}");
     }
+}
+
+#[tokio::test]
+async fn byte_uploads_preserve_configured_filenames_and_optional_thread() {
+    let server = mock_api().await;
+    mount_post(&server, "sendDocument", ok()).await;
+    mount_post(&server, "sendPhoto", ok()).await;
+    let ch = channel_for(&server, &["*"]);
+
+    ch.send_document_bytes(
+        "100",
+        Some("3"),
+        b"document-payload".to_vec(),
+        "document.txt",
+        Some("document caption"),
+    )
+    .await
+    .unwrap();
+    ch.send_photo_bytes(
+        "100",
+        None,
+        b"photo-payload".to_vec(),
+        "photo.png",
+        Some("photo caption"),
+    )
+    .await
+    .unwrap();
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+
+    let documents = raw_bodies(&server, "sendDocument").await;
+    assert_eq!(documents.len(), 1);
+    assert!(documents[0].contains("filename=\"document.txt\""));
+    assert!(documents[0].contains("document-payload"));
+    assert!(documents[0].contains("document caption"));
+    assert!(documents[0].contains("name=\"message_thread_id\""));
+    assert!(documents[0].contains("\r\n3\r\n"));
+
+    let photos = raw_bodies(&server, "sendPhoto").await;
+    assert_eq!(photos.len(), 1);
+    assert!(photos[0].contains("filename=\"photo.png\""));
+    assert!(photos[0].contains("photo-payload"));
+    assert!(photos[0].contains("photo caption"));
+    assert!(!photos[0].contains("name=\"message_thread_id\""));
 }
 
 #[test]
