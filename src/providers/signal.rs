@@ -563,11 +563,7 @@ impl SignalChannel {
                     Ok(sse) => {
                         if let Some(ref envelope) = sse.envelope {
                             match self
-                                .dispatch_sse_envelope(
-                                    envelope,
-                                    sink,
-                                    &mut cancellation,
-                                )
+                                .dispatch_sse_envelope(envelope, sink, &mut cancellation)
                                 .await?
                             {
                                 Some(true) => {}
