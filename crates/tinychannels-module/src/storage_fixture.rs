@@ -31,22 +31,16 @@ pub(crate) struct Faults {
 
 #[derive(Debug)]
 pub(crate) struct FaultSwitch {
-    active: AtomicBool,
     plan: FaultPlan,
     operation: &'static str,
 }
 
 impl FaultSwitch {
     fn new(plan: FaultPlan, operation: &'static str) -> Self {
-        Self {
-            active: AtomicBool::new(false),
-            plan,
-            operation,
-        }
+        Self { plan, operation }
     }
 
     pub(crate) fn store(&self, value: bool, _ordering: Ordering) {
-        self.active.store(value, Ordering::SeqCst);
         if value {
             self.plan.fail_operation_nth(
                 self.operation,
@@ -56,10 +50,6 @@ impl FaultSwitch {
         } else {
             self.plan.clear();
         }
-    }
-
-    pub(crate) fn load(&self, _ordering: Ordering) -> bool {
-        self.active.load(Ordering::SeqCst)
     }
 }
 
@@ -246,7 +236,7 @@ impl StorageHost {
 /// The documents of whichever scope the host currently binds, with faults.
 #[derive(Debug)]
 struct ScopeSwitchDocs {
-    backend: MemoryBackend,
+    backend: Arc<MemoryBackend>,
     faults: Arc<Faults>,
     current: Arc<Mutex<String>>,
 }
