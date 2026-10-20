@@ -368,6 +368,7 @@ async fn mattermost_native_edit_and_delete_report_ambiguous_server_failures() {
 #[tokio::test]
 async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_semantics() {
     use crate::channel::{ChannelDelete, ChannelEdit, ChannelReaction, ChannelTypedSend};
+    use crate::providers::native::NativeProvider;
     use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef, MessageReceipt};
     use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
 
@@ -383,6 +384,12 @@ async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_se
         false,
         reqwest::Client::builder().no_proxy().build().unwrap(),
     );
+    NativeProvider::set_typing(&channel, "channel-1", true)
+        .await
+        .unwrap();
+    NativeProvider::set_typing(&channel, "channel-1", false)
+        .await
+        .unwrap();
 
     let send_error = ChannelTypedSend::send_typed(
         &channel,
