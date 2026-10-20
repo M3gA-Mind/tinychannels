@@ -19,5 +19,16 @@ on generation time) vary between regenerations; tests validate application
 payloads and schema/expiry behavior without pinning those clock-dependent
 metadata values.
 
+For example, from the TinyChannels checkout containing this fixture:
+
+```sh
+archive="$(mktemp -d)/tinychannels-v0.1.38"
+git clone --branch v0.1.38 --recurse-submodules https://github.com/tinyhumansai/tinychannels.git "$archive"
+git -C "$archive" checkout --detach 9e1a340bf8f2cf89d5dd713a557b2c1a6c2406d6
+cp tests/fixtures/legacy-v0.1.38/generate.rs "$archive/examples/generate_v1_fixture.rs"
+(cd "$archive" && cargo run --locked --example generate_v1_fixture > records.json)
+sha256sum "$archive/records.json"
+```
+
 The checked-in fixture SHA-256 is
 `e18541965b15efbf667da89e0a9106fb8b4e2b8cf5e6fac01af5a3d7511732f8`.
