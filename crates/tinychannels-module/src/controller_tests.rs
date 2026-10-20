@@ -727,11 +727,12 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
 async fn managed_controller_and_progressive_paths_pass_shared_conformance_features() {
     let (fixture, server) = ManagedConformanceFixture::new().await;
     let results = tinychannels_conformance::check_managed_features(&fixture).await;
+    let callbacks = fixture.backend.0.lock().await.clone();
     for (feature, result) in &results {
         assert!(
             result.is_ok(),
-            "{feature:?}: {}",
-            result.as_ref().unwrap_err()
+            "{feature:?}: {}; callbacks: {callbacks:?}",
+            result.as_ref().unwrap_err(),
         );
     }
     assert_eq!(
