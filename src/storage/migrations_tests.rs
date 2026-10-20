@@ -242,6 +242,44 @@ async fn conflicting_migration_target_preserves_the_legacy_source() {
 }
 
 #[tokio::test]
+async fn retry_accepts_an_exact_target_written_before_source_deletion() {
+    let (_backend, storage) = storage().await;
+    let docs = storage.documents().clone();
+    let legacy = legacy_delivery("op");
+    seed(
+        docs.as_ref(),
+        "channels_delivery_pending",
+        "op",
+        legacy.clone(),
+    )
+    .await;
+    let queued: QueuedDelivery = serde_json::from_value(legacy).unwrap();
+    docs.ensure_collection(&CollectionSpec::new(DELIVERY_PENDING))
+        .await
+        .unwrap();
+    docs.put_with(
+        DELIVERY_PENDING,
+        "op",
+        serde_json::to_value(StoredDelivery::from(&queued)).unwrap(),
+        Precondition::Absent,
+        WriteOptions::new().schema(SCHEMA_VERSION),
+    )
+    .await
+    .unwrap();
+
+    crate::storage::prepare(&docs).await.unwrap();
+
+    assert!(docs.get(DELIVERY_PENDING, "op").await.unwrap().is_some());
+    assert!(
+        docs.get("channels_delivery_pending", "op")
+            .await
+            .unwrap()
+            .is_none(),
+        "an exact durable target makes retry safe to finish source cleanup"
+    );
+}
+
+#[tokio::test]
 async fn target_readback_failure_keeps_source_for_safe_retry() {
     let (_backend, storage) = storage().await;
     let docs = storage.documents().clone();
