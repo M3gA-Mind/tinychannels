@@ -4,11 +4,11 @@ use std::sync::Mutex as StdMutex;
 
 use async_trait::async_trait;
 use tinychannels_bus::channel::{
-    ChannelDescriptor, ChannelInboundSink, ChannelOutboundIntent, ChannelSendError,
-    ChannelSendOutcome, SendErrorKind,
+    ChannelDescriptor, ChannelOutboundIntent, ChannelSendError, ChannelSendOutcome, SendErrorKind,
 };
 
 use super::*;
+use crate::channel::ChannelInboundSink;
 
 struct RecordingAdapter {
     name: String,
