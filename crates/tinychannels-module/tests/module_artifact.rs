@@ -191,8 +191,8 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
 
     // Delivery records live in the host's storage, which the module reaches over
     // the storage bus; serve an in-memory backend for it.
-    let storage = MemoryBackend::new();
-    let served_backend = storage.clone();
+    let storage = Arc::new(MemoryBackend::new());
+    let served_backend = Arc::clone(&storage);
     let endpoint = PerCallerEndpoint::new(move |_sender| {
         let scoped = served_backend
             .for_scope(&Scope::new("tenant:module-artifact").ok()?)

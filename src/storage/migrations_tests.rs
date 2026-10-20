@@ -107,12 +107,18 @@ async fn released_v0138_public_writer_records_open_and_read_through_current_stor
     use crate::remote::session_store::RemoteSessionStore;
     use tinystoragedrivers_types::WriteOptions;
 
-    let (_backend, storage) = storage().await;
-    let docs = storage.documents().clone();
     let fixture: serde_json::Value = serde_json::from_str(include_str!(
         "../../tests/fixtures/legacy-v0.1.38/records.json"
     ))
     .expect("archived public writer fixture is valid JSON");
+    let result_expiry_ms = fixture["channels.delivery_results"][0]["expires_ms"]
+        .as_i64()
+        .expect("fixture result expiry");
+    let connection = tinystoragedrivers_document::memory::MemoryConnection::with_clock(
+        Arc::new(move || u64::try_from(result_expiry_ms - 1).unwrap()),
+    );
+    let storage = connection.for_scope(Scope::new("tenant:released-writer-fixture").unwrap());
+    let docs = storage.documents();
 
     for (collection, records) in fixture.as_object().expect("fixture has collections") {
         let collection = collection.as_str();

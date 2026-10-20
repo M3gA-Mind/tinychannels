@@ -159,3 +159,4 @@ toml = "1"
 wiremock = "0.6"
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
 tinystoragedrivers-testkit = { git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
+tinystoragedrivers-document = { git = "https://github.com/senamakel/tinystoragedrivers", tag = "v2.0.1" }
