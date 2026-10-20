@@ -110,21 +110,18 @@ async fn typed_listener_connects_to_sse_publishes_and_stops() {
     wiremock::Mock::given(wiremock::matchers::method("GET"))
         .and(wiremock::matchers::path("/api/v1/events"))
         .and(wiremock::matchers::query_param("account", ACCOUNT))
-        .respond_with(
-            wiremock::ResponseTemplate::new(200)
-                .set_body_raw(
-                    format!(
-                        "data: {}\n\n",
-                        json!({"envelope": {
-                            "sourceNumber": PEER,
-                            "sourceName": "Ada",
-                            "timestamp": 1_700_000_000_500u64,
-                            "dataMessage": {"message": "typed hello", "timestamp": 1_700_000_000_500u64}
-                        }})
-                    ),
-                    "text/event-stream",
-                ),
-        )
+        .respond_with(wiremock::ResponseTemplate::new(200).set_body_raw(
+            format!(
+                "data: {}\n\n",
+                json!({"envelope": {
+                    "sourceNumber": PEER,
+                    "sourceName": "Ada",
+                    "timestamp": 1_700_000_000_500u64,
+                    "dataMessage": {"message": "typed hello", "timestamp": 1_700_000_000_500u64}
+                }})
+            ),
+            "text/event-stream",
+        ))
         .mount(&server)
         .await;
     let channel = Arc::new(channel_for(&server));
