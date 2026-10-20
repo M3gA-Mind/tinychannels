@@ -168,7 +168,7 @@ async fn mattermost_reaction_removal_uses_the_post_reaction_route() {
         },
         "post-42",
         &tinychannels_bus::channel::ChannelReaction {
-            value: "+1".into(),
+            value: "thumbsup".into(),
             custom_emoji_id: None,
         },
         true,
