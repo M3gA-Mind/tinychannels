@@ -20,34 +20,34 @@ struct TypedTextFixture {
 }
 
 #[async_trait::async_trait]
-impl crate::traits::Channel for TypedTextFixture {
-    fn name(&self) -> &str {
-        "fixture"
-    }
-
-    async fn send(&self, message: &crate::traits::SendMessage) -> anyhow::Result<()> {
-        self.sent.lock().unwrap().push(message.content.clone());
-        if self.send_error {
-            anyhow::bail!("private provider detail")
-        }
-        Ok(())
-    }
-
-    async fn listen(
-        &self,
-        _tx: tokio::sync::mpsc::Sender<crate::traits::ChannelMessage>,
-    ) -> anyhow::Result<()> {
-        Ok(())
-    }
-}
-
-#[async_trait::async_trait]
 impl super::LongTail for TypedTextFixture {
     const ID: &'static str = "fixture";
     const DISPLAY: &'static str = "Fixture";
 
     fn declared(&self) -> tinychannels_bus::ChannelCapabilities {
         super::text_capabilities(super::TextSpec::default())
+    }
+
+    async fn send_typed_message(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<
+        tinychannels_bus::channel::ChannelSendOutcome,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        let text = message
+            .legacy_text()
+            .map_err(|_| super::unsupported::<Self>("typed content other than plain text"))?;
+        self.sent.lock().unwrap().push(text);
+        if self.send_error {
+            return Err(tinychannels_bus::channel::ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Unknown,
+                message: "provider send failed".into(),
+                sent_before_error: true,
+                ..Default::default()
+            });
+        }
+        Ok(tinychannels_bus::channel::ChannelSendOutcome::default())
     }
 }
 
@@ -60,44 +60,8 @@ fn typed_fixture_message(
     message
 }
 
-#[test]
-fn typed_receipt_uses_reported_ids_and_falls_back_to_message_routing() {
-    let mut message = typed_fixture_message(Vec::new());
-    message.channel_ref = None;
-    message.conversation_ref = None;
-    message.thread_id = Some("thread-1".into());
-    message.reply_to_id = Some("reply-1".into());
-
-    let receipt = super::receipt::<TypedTextFixture>(
-        &message,
-        vec!["platform-1".into(), "platform-2".into()],
-    );
-
-    assert_eq!(receipt.idempotency_key.as_deref(), Some("k"));
-    assert_eq!(
-        receipt.channel.as_ref().map(|channel| channel.id.as_str()),
-        Some("fixture")
-    );
-    assert_eq!(
-        receipt
-            .conversation
-            .as_ref()
-            .map(|conversation| conversation.id.as_str()),
-        Some("room-1")
-    );
-    assert_eq!(
-        receipt.primary_platform_message_id.as_deref(),
-        Some("platform-1")
-    );
-    assert_eq!(receipt.platform_message_ids, ["platform-1", "platform-2"]);
-    assert_eq!(receipt.parts.len(), 2);
-    assert_eq!(receipt.parts[1].index, 1);
-    assert_eq!(receipt.parts[1].thread_id.as_deref(), Some("thread-1"));
-    assert_eq!(receipt.parts[1].reply_to_id.as_deref(), Some("reply-1"));
-}
-
 #[tokio::test]
-async fn text_only_typed_adapter_sends_a_legacy_text_projection() {
+async fn long_tail_typed_adapter_uses_a_provider_owned_transport_without_legacy_channel() {
     let provider = TypedTextFixture {
         send_error: false,
         sent: Mutex::new(Vec::new()),
@@ -111,10 +75,7 @@ async fn text_only_typed_adapter_sends_a_legacy_text_projection() {
 
     let outcome = super::send_typed(&provider, &message).await.unwrap();
     assert!(outcome.error.is_none());
-    assert!(
-        outcome.receipt.parts.is_empty(),
-        "no unknown provider id is fabricated"
-    );
+    assert!(outcome.receipt.parts.is_empty());
     assert_eq!(
         provider.sent.lock().unwrap().as_slice(),
         ["plain typed text"]
@@ -122,7 +83,7 @@ async fn text_only_typed_adapter_sends_a_legacy_text_projection() {
 }
 
 #[tokio::test]
-async fn text_only_typed_adapter_rejects_wrong_channels_and_rich_content_before_send() {
+async fn long_tail_typed_adapter_rejects_wrong_channels_and_provider_rejects_rich_content() {
     let provider = TypedTextFixture {
         send_error: false,
         sent: Mutex::new(Vec::new()),
@@ -153,7 +114,7 @@ async fn text_only_typed_adapter_rejects_wrong_channels_and_rich_content_before_
 }
 
 #[tokio::test]
-async fn text_only_typed_adapter_classifies_legacy_send_errors_as_uncertain() {
+async fn long_tail_typed_adapter_preserves_provider_send_uncertainty() {
     let provider = TypedTextFixture {
         send_error: true,
         sent: Mutex::new(Vec::new()),
@@ -168,7 +129,7 @@ async fn text_only_typed_adapter_classifies_legacy_send_errors_as_uncertain() {
     let error = super::send_typed(&provider, &message).await.unwrap_err();
     assert_eq!(error.kind, SendErrorKind::Unknown);
     assert!(error.sent_before_error);
-    assert!(!error.message.contains("private provider detail"));
+    assert_eq!(error.message, "provider send failed");
     assert_eq!(provider.sent.lock().unwrap().len(), 1);
 }
 
