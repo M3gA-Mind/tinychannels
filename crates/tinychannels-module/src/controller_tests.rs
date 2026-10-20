@@ -632,42 +632,28 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                     for _ in 0..5 {
                         tokio::task::yield_now().await;
                     }
-                    if self.backend.0.lock().await.iter().any(|request| matches!(request,
-                        ChannelBackendRequest::ProgressiveTransport(request)
-                            if matches!(request.as_ref(), ProgressiveTransportRequest::SendTyped { .. })))
-                    {
-                        break;
-                    }
-                }
-                if !self.backend.0.lock().await.iter().any(|request| matches!(request,
-                    ChannelBackendRequest::ProgressiveTransport(request)
-                        if matches!(request.as_ref(), ProgressiveTransportRequest::SendTyped { .. })))
-                {
-                    return Err(tinychannels_bus::channel::ChannelSendError::default());
-                }
-                self.replies
-                    .execute(ProgressiveCommand::FeedOutput {
-                        handle: handle.clone(),
-                        events: vec![ChannelOutputEvent::TextDelta {
-                            text: " managed edit".into(),
-                            iteration: Some(2),
-                        }],
-                    })
-                    .await
-                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
-                for _ in 0..8 {
-                    tokio::time::advance(std::time::Duration::from_secs(1)).await;
-                    for _ in 0..5 {
-                        tokio::task::yield_now().await;
-                    }
                     if self.backend.0.lock().await.iter().any(|request| {
                         matches!(request,
                         ChannelBackendRequest::ProgressiveTransport(request)
-                            if matches!(request.as_ref(), ProgressiveTransportRequest::Edit { .. }))
+                            if matches!(request.as_ref(), ProgressiveTransportRequest::Send { .. }))
                     }) {
                         break;
                     }
                 }
+                if !self.backend.0.lock().await.iter().any(|request| {
+                    matches!(request,
+                    ChannelBackendRequest::ProgressiveTransport(request)
+                        if matches!(request.as_ref(), ProgressiveTransportRequest::Send { .. }))
+                }) {
+                    return Err(tinychannels_bus::channel::ChannelSendError::default());
+                }
+                self.replies
+                    .execute(ProgressiveCommand::Finish {
+                        handle: handle.clone(),
+                        text: "managed draft finalized".into(),
+                    })
+                    .await
+                    .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
                 let requests = self.backend.0.lock().await.clone();
                 let responses = self.backend.1.lock().await.clone();
                 let index = requests
