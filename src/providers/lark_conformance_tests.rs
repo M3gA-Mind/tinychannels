@@ -328,7 +328,10 @@ impl LarkFixture {
                 account_id: None,
             }
         );
-        assert_eq!(envelope.conversation.kind, tinychannels_bus::ConversationKind::Dm);
+        assert_eq!(
+            envelope.conversation.kind,
+            tinychannels_bus::ConversationKind::Dm
+        );
         assert_eq!(envelope.conversation.id, CHANNEL);
         assert!(envelope.conversation.thread_id.is_none());
         assert_eq!(envelope.message_id, "om-voice-in-1");
