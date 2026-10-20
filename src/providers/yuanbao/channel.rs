@@ -940,3 +940,7 @@ crate::providers::native::native_v2_adapter!(YuanbaoChannel);
 #[cfg(test)]
 #[path = "channel_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "conformance_tests.rs"]
+mod conformance_tests;
