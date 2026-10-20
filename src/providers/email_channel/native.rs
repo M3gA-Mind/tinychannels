@@ -165,6 +165,11 @@ impl NativeProvider for EmailChannel {
         self.declared()
     }
 
+    async fn health_state(&self) -> &'static str {
+        self.typed_health_state(self.connect_imap(), super::HEALTH_CHECK_TIMEOUT)
+            .await
+    }
+
     fn descriptor_extra(&self) -> Vec<(&'static str, &'static str)> {
         vec![("voiceOut", "attachment")]
     }

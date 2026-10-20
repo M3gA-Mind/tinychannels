@@ -1,4 +1,5 @@
 use super::*;
+use tokio::sync::Notify;
 
 #[test]
 fn default_smtp_port_uses_tls_port() {
@@ -657,6 +658,7 @@ enum IdleStep {
 struct ConnScript {
     reject_login: bool,
     reject_store: bool,
+    stall_logout: Option<(Arc<Notify>, Arc<Notify>)>,
     /// The i-th `UID SEARCH` answers with the i-th entry; later ones are empty.
     searches: Vec<Vec<(u32, &'static [u8])>>,
     idles: Vec<IdleStep>,
@@ -759,6 +761,10 @@ async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Ve
             }
             continue;
         } else if upper.starts_with("LOGOUT") {
+            if let Some((observed, release)) = &script.stall_logout {
+                observed.notify_one();
+                release.notified().await;
+            }
             reply.extend_from_slice(b"* BYE\r\n");
         }
         reply.extend_from_slice(format!("{tag} OK done\r\n").as_bytes());
@@ -994,8 +1000,9 @@ async fn health_check_passes_on_a_successful_login() {
     let channel = imap_channel(&["*"], 30);
     assert!(
         channel
-            .health_check_with(plain_session(&channel, port), HANG_GUARD)
+            .typed_health_state(plain_session(&channel, port), HANG_GUARD)
             .await
+            == "healthy"
     );
     let commands = server.await.unwrap().remove(0).join("\n");
     assert!(commands.contains("LOGIN"), "{commands}");
@@ -1010,10 +1017,11 @@ async fn health_check_fails_on_a_rejected_login() {
     }])
     .await;
     let channel = imap_channel(&["*"], 30);
-    assert!(
-        !channel
-            .health_check_with(plain_session(&channel, port), HANG_GUARD)
-            .await
+    assert_eq!(
+        channel
+            .typed_health_state(plain_session(&channel, port), HANG_GUARD)
+            .await,
+        "unhealthy"
     );
 }
 
@@ -1028,12 +1036,65 @@ async fn health_check_fails_when_the_probe_stalls() {
         drop(sock);
     });
     let channel = imap_channel(&["*"], 30);
-    assert!(
-        !channel
-            .health_check_with(plain_session(&channel, port), Duration::from_millis(50))
-            .await
+    assert_eq!(
+        channel
+            .typed_health_state(plain_session(&channel, port), Duration::from_millis(50))
+            .await,
+        "unhealthy"
     );
     holder.abort();
+}
+
+/// A successful login remains healthy if LOGOUT stalls, but that best-effort
+/// cleanup must still finish within the same total health-probe deadline.
+#[tokio::test]
+async fn health_check_bounds_a_stalled_logout_after_successful_login() {
+    let logout_seen = Arc::new(Notify::new());
+    let allow_logout = Arc::new(Notify::new());
+    let (port, server) = fake_imap(vec![ConnScript {
+        stall_logout: Some((logout_seen.clone(), allow_logout.clone())),
+        ..Default::default()
+    }])
+    .await;
+    let channel = imap_channel(&["*"], 30);
+    let mut probe = tokio::spawn(async move {
+        channel
+            .typed_health_state(plain_session(&channel, port), Duration::from_secs(2))
+            .await
+    });
+
+    if tokio::time::timeout(HANG_GUARD, logout_seen.notified())
+        .await
+        .is_err()
+    {
+        allow_logout.notify_one();
+        let _ = server.await;
+        panic!("the fake server observed the logout request");
+    }
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(2)).await;
+    let completion_before_logout_release =
+        tokio::time::timeout(Duration::from_secs(1), &mut probe).await;
+    allow_logout.notify_one();
+    let (completed_before_logout_release, state) = match completion_before_logout_release {
+        Ok(Ok(state)) => (true, Some(state)),
+        Ok(Err(_)) => (true, None),
+        Err(_) => match probe.await {
+            Ok(state) => (false, Some(state)),
+            Err(_) => (false, None),
+        },
+    };
+    let _ = server.await.unwrap();
+
+    assert!(
+        completed_before_logout_release,
+        "health status must finish at its total deadline even when LOGOUT never replies"
+    );
+    assert_eq!(
+        state,
+        Some("healthy"),
+        "login succeeded before cleanup stalled"
+    );
 }
 
 /// After the IDLE budget elapses the session re-checks the mailbox and
