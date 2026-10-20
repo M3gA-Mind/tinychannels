@@ -125,7 +125,7 @@ impl VoiceMediaStore for ConformanceVoice {
         Ok(tinychannels_bus::HostReadVoiceMediaResult {
             audio_base64: base64::engine::general_purpose::STANDARD.encode(b"conformance-audio"),
             mime_type: "audio/ogg".into(),
-            file_name: Some("voice.m4a".into()),
+            file_name: Some("voice.ogg".into()),
         })
     }
 }
@@ -440,7 +440,7 @@ impl LongTailFixture {
                 feature,
                 operation: "send".into(),
                 channel: account(self.id),
-                conversation: self.expected_scope(feature).conversation,
+                conversation: qq_conversation_from_request(request),
                 reply_to_id: None,
                 thread_id: None,
                 payload_kinds,
@@ -468,6 +468,31 @@ impl LongTailFixture {
         let outcome = ChannelAdapter::send(self.channel.as_ref(), intent).await?;
         self.record(feature, before).await;
         Ok(Some(outcome))
+    }
+}
+
+fn qq_conversation_from_request(
+    request: &crate::providers::http_test_support::Request,
+) -> ConversationRef {
+    let mut segments = request.target.split('/');
+    match (
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+        segments.next(),
+    ) {
+        (Some(""), Some("v2"), Some("users"), Some(id), Some("messages")) => ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: id.into(),
+            ..Default::default()
+        },
+        (Some(""), Some("v2"), Some("groups"), Some(id), Some("messages")) => ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Group,
+            id: id.into(),
+            ..Default::default()
+        },
+        _ => panic!("unexpected QQ message path: {}", request.target),
     }
 }
 
@@ -830,11 +855,62 @@ async fn the_factory_built_qq_adapter_passes_the_full_conformance_matrix() {
         5,
         "declared features must send once each"
     );
+    assert!(
+        requests.iter().any(|request| {
+            request.target == "/app/getAppAccessToken"
+                && request.body == json!({"appId": "fixture-app", "clientSecret": "fixture-secret"})
+        }),
+        "configured credentials must be used in the actual OAuth request: {requests:#?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .filter(|request| request.target.starts_with("/v2/"))
+            .all(|request| request
+                .headers
+                .to_ascii_lowercase()
+                .contains("authorization: qqbot fixture-token")),
+        "every QQ upload and send must carry the issued token: {requests:#?}"
+    );
+    assert!(
+        message_sends
+            .iter()
+            .all(|request| request.target == "/v2/users/chan1/messages"),
+        "the actual wire recipient must match the configured DM: {message_sends:#?}"
+    );
     assert_eq!(message_sends[0].body["msg_type"], 0);
     assert!(
         message_sends[1..]
             .iter()
             .all(|request| request.body["msg_type"] == 7)
+    );
+    let uploads = requests
+        .iter()
+        .filter(|request| request.target.ends_with("/files"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        uploads.len(),
+        4,
+        "image, video, file, and voice each upload"
+    );
+    assert_eq!(
+        uploads
+            .iter()
+            .map(|request| request.body["file_type"].as_u64().unwrap())
+            .collect::<Vec<_>>(),
+        [1, 2, 4, 3],
+        "each declared media feature must use its matching QQ upload type"
+    );
+    assert!(
+        uploads
+            .iter()
+            .all(|request| request.target == "/v2/users/chan1/files")
+    );
+    assert!(
+        message_sends[1..]
+            .iter()
+            .all(|request| request.body["media"]["file_info"] == "fixture-file"),
+        "messages must use the file_info returned by the upload endpoint"
     );
 }
 
