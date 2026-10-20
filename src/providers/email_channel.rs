@@ -911,7 +911,7 @@ impl EmailChannel {
             Ok(Ok(mut session)) => {
                 // A successful login is healthy even if cleanup cannot finish
                 // before the deadline; logout is only resource cleanup.
-                let _ = session.logout().await;
+                let _ = timeout_at(deadline, session.logout()).await;
                 true
             }
             Ok(Err(e)) => {
