@@ -717,6 +717,11 @@ async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Ve
             }
             reply.extend_from_slice(b"\r\n");
         } else if upper.starts_with("UID FETCH") {
+            if upper.contains("UID BODY.PEEK[]") && !upper.contains("(UID BODY.PEEK[])") {
+                reply.extend_from_slice(format!("{tag} BAD invalid attribute list\r\n").as_bytes());
+                let _ = write.write_all(&reply).await;
+                continue;
+            }
             if upper.contains("RFC822") || upper.contains("BODY[]") {
                 for (uid, _) in &current {
                     seen.push(format!("IMPLICIT_SEEN_BY_FETCH {uid}"));
@@ -944,6 +949,10 @@ async fn fetched_mail_stays_unseen_until_ingress_is_accepted() {
     assert!(
         commands.contains("BODY.PEEK[]"),
         "fetch must not set Seen: {commands}"
+    );
+    assert!(
+        commands.contains("(UID BODY.PEEK[])") || !commands.contains("UID BODY.PEEK[]"),
+        "multiple fetch attributes require the IMAP parenthesized list: {commands}"
     );
     assert!(!commands.contains("IMPLICIT_SEEN_BY_FETCH"), "{commands}");
 }
