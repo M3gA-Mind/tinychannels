@@ -76,3 +76,14 @@ fn scoped_channel_media_collection_is_declared_for_module_storage() {
         } if spec == &media_metadata_spec()
     ));
 }
+
+#[test]
+fn scoped_channel_media_blob_prefix_is_declared_for_module_storage() {
+    let schema = storage_schema();
+    let media_blobs = schema
+        .items
+        .iter()
+        .find(|item| matches!(item, Item::Blobs { prefix, .. } if prefix == "channels/media/"))
+        .expect("the channel media blob prefix is declared");
+    assert_eq!(media_blobs.scope(), ScopeClass::Module);
+}
