@@ -205,6 +205,7 @@ fn live_route_instance<'a, T>(
 async fn route_capabilities(
     running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
     channel_name: &str,
+    message: &tinychannels::ChannelMessage,
     scope: Option<&tinychannels_bus::module_remote::RemoteSessionScope>,
     configured: Option<&tinychannels_bus::module_control::ConfiguredControlChannel>,
 ) -> tinychannels_bus::ChannelCapabilities {
@@ -217,7 +218,7 @@ async fn route_capabilities(
         )
         .map(crate::interaction::configured_adapter_capabilities)
     };
-    configured_route_capabilities(channel_name, scope, configured, live)
+    configured_route_capabilities(channel_name, message, scope, configured, live)
 }
 
 /// The served object.
