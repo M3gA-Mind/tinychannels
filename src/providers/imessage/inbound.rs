@@ -422,6 +422,9 @@ impl IMessageChannel {
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
         cancellation: &mut watch::Receiver<bool>,
     ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        if !self.is_contact_allowed(&row.recipient) {
+            return Ok(());
+        }
         let event_id = format!("imessage:read:{}", row.guid);
         let event = channel_event(
             "imessage",

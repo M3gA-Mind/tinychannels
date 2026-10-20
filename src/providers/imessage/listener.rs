@@ -88,12 +88,13 @@ impl IMessageChannel {
             .map_err(|_| listener_error("iMessage database could not be opened"))?;
         let (mut conn, mut cursor) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let rowid = super::max_inbound_rowid(&conn)?;
-            let read_date = super::db::max_date_read(&conn).unwrap_or(0);
+            let (read_date, read_rowid) = super::db::max_read_cursor(&conn)?;
             Ok::<(Connection, ListenerCursor), anyhow::Error>((
                 conn,
                 ListenerCursor {
                     inbound_rowid: rowid,
                     read_date,
+                    read_rowid,
                 },
             ))
         })
@@ -128,9 +129,10 @@ impl IMessageChannel {
 
             let since_rowid = cursor.inbound_rowid;
             let since_read = cursor.read_date;
+            let since_read_rowid = cursor.read_rowid;
             let (returned_conn, rows, reads) = tokio::task::spawn_blocking(move || {
                 let rows = super::db::inbound_since(&conn, since_rowid);
-                let reads = super::db::read_since(&conn, since_read);
+                let reads = super::db::read_since_cursor(&conn, since_read, since_read_rowid);
                 (conn, rows, reads)
             })
             .await
@@ -139,9 +141,10 @@ impl IMessageChannel {
 
             if let Ok(reads) = reads {
                 for read in reads {
-                    let date_read = read.date_read;
+                    let (date_read, rowid) = (read.date_read, read.rowid);
                     self.dispatch_read_typed(read, sink, cancellation).await?;
-                    cursor.read_date = cursor.read_date.max(date_read);
+                    cursor.read_date = date_read;
+                    cursor.read_rowid = rowid;
                     self.save_listener_cursor(cursor);
                 }
             }

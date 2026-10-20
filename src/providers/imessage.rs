@@ -49,6 +49,7 @@ impl Drop for ListenerRegistration {
 struct ListenerCursor {
     inbound_rowid: i64,
     read_date: i64,
+    read_rowid: i64,
 }
 
 /// The newest-first poll: inbound messages with text, newer than `?1`.

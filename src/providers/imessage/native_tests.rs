@@ -504,6 +504,7 @@ async fn typed_read_receipts_respect_the_configured_recipient_allowlist() {
     let sink = RecordingIngress::default();
     let (_stop, mut cancellation) = watch::channel(false);
     let row = crate::providers::imessage::db::ReadRow {
+        rowid: 1,
         guid: "SENT-DENIED".into(),
         recipient: PEER.into(),
         date_read: 700_000_000_000_000_000,
