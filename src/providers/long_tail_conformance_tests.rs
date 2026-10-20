@@ -690,7 +690,10 @@ impl LongTailFixture {
                         .as_str()
                         .unwrap_or(CHANNEL)
                         .to_owned(),
-                    request_body["root_id"].as_str().map(str::to_owned),
+                    request_body["root_id"]
+                        .as_str()
+                        .or_else(|| request_body["parent_id"].as_str())
+                        .map(str::to_owned),
                 ),
                 None => (String::new(), None),
             };
