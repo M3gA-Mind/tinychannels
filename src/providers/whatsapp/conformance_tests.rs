@@ -413,6 +413,12 @@ impl AdapterFixture for CloudKit {
             | Feature::Edit
             | Feature::Delete
             | Feature::StreamingDraft => OutboundPayload::Text { text: "op".into() },
+            Feature::ManagedReaction
+            | Feature::ManagedThreadCreate
+            | Feature::ManagedThreadUpdate
+            | Feature::ManagedThreadList => OutboundPayload::Text {
+                text: String::new(),
+            },
         };
         let intent = self.intent(feature, payload);
         let result = match feature {
@@ -638,6 +644,10 @@ async fn the_cloud_adapter_declares_exactly_what_the_protocol_and_its_ports_allo
         Feature::Delete => facts.actions.supported.iter().any(|a| a == "delete"),
         Feature::ReadReceipts => facts.events.supported.iter().any(|e| e == "read_receipt"),
         Feature::StreamingDraft => facts.progressive_edits,
+        Feature::ManagedReaction
+        | Feature::ManagedThreadCreate
+        | Feature::ManagedThreadUpdate
+        | Feature::ManagedThreadList => false,
     };
     let supported = [
         Feature::Text,

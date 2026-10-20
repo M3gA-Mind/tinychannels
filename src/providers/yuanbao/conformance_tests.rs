@@ -889,6 +889,10 @@ impl AdapterFixture for Fixture {
                 assert_no_wire_request(&self.session).await;
                 result.map(|_| None)
             }
+            Feature::ManagedReaction
+            | Feature::ManagedThreadCreate
+            | Feature::ManagedThreadUpdate
+            | Feature::ManagedThreadList => Err(ChannelSendError::default()),
         }
     }
 }

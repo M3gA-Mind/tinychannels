@@ -1101,6 +1101,10 @@ impl AdapterFixture for LongTailFixture {
             Feature::VoiceIn | Feature::InboundReactions | Feature::ReadReceipts => {
                 unsupported_result()
             }
+            Feature::ManagedReaction
+            | Feature::ManagedThreadCreate
+            | Feature::ManagedThreadUpdate
+            | Feature::ManagedThreadList => Err(ChannelSendError::default()),
         }
     }
 }
