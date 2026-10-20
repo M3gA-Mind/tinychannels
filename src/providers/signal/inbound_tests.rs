@@ -4,6 +4,7 @@ use crate::providers::signal::fixtures::*;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tinychannels_bus::{ChannelEventKind, ChannelIngress, ContentPart, ConversationKind};
 
 struct RejectingTypedSink;
@@ -15,6 +16,39 @@ impl crate::channel::ChannelInboundSink for RejectingTypedSink {
             message: "test event rejection".into(),
             ..Default::default()
         })
+    }
+}
+
+#[derive(Default)]
+struct RejectOnceTypedSink {
+    calls: AtomicUsize,
+    accepted: std::sync::Mutex<Vec<ChannelIngress>>,
+}
+
+#[async_trait]
+impl crate::channel::ChannelInboundSink for RejectOnceTypedSink {
+    async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Err(crate::channel::ChannelSendError {
+                message: "reject first delivery".into(),
+                ..Default::default()
+            });
+        }
+        self.accepted.lock().unwrap().push(ingress);
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct BlockingTypedSink {
+    started: tokio::sync::Notify,
+}
+
+#[async_trait]
+impl crate::channel::ChannelInboundSink for BlockingTypedSink {
+    async fn push(&self, _ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
+        self.started.notify_one();
+        std::future::pending().await
     }
 }
 
@@ -382,4 +416,71 @@ async fn rejected_typed_events_stop_reaction_receipt_and_delete_dispatch() {
             .await,
         "a rejected delete must propagate to listener supervision"
     );
+}
+
+#[tokio::test]
+async fn rejected_events_are_delivered_on_retry_before_dedup_commits() {
+    let server = mock_daemon(b"").await;
+    let channel = channel_for(&server);
+    let rejecting = RejectingTypedSink;
+    let accepting = RejectOnceTypedSink::default();
+    let cases = [
+        data_envelope(json!({"message": "retry", "timestamp": 1_700_000_001_001u64})),
+        data_envelope(json!({
+            "timestamp": 1_700_000_001_002u64,
+            "reaction": {"emoji": "👍", "targetSentTimestamp": 1_700_000_000_123u64},
+        })),
+        data_envelope(json!({
+            "timestamp": 1_700_000_001_003u64,
+            "remoteDelete": {"timestamp": 1_700_000_000_123u64},
+        })),
+        serde_json::from_value(json!({
+            "sourceNumber": PEER,
+            "receiptMessage": {
+                "when": 1_700_000_001_004u64,
+                "timestamps": [1_700_000_000_123u64],
+                "isRead": true,
+            },
+        }))
+        .unwrap(),
+    ];
+
+    for envelope in cases {
+        assert!(!channel.dispatch_typed_envelope(&envelope, &rejecting).await);
+        assert!(channel.dispatch_typed_envelope(&envelope, &accepting).await);
+        assert!(channel.dispatch_typed_envelope(&envelope, &accepting).await);
+    }
+
+    assert_eq!(accepting.accepted.lock().unwrap().len(), 4);
+}
+
+#[tokio::test]
+async fn cancelled_blocked_delivery_can_be_retried() {
+    let server = mock_daemon(b"").await;
+    let channel = channel_for(&server);
+    let blocked = Arc::new(BlockingTypedSink::default());
+    let (cancel_tx, mut cancel_rx) = watch::channel(false);
+    let envelope = data_envelope(json!({
+        "message": "retry after cancellation",
+        "timestamp": 1_700_000_001_101u64,
+    }));
+    let dispatch_channel = channel.clone();
+    let dispatch_envelope = envelope;
+    let retry_envelope = dispatch_envelope.clone();
+    let dispatch_sink = blocked.clone();
+    let dispatch = tokio::spawn(async move {
+        dispatch_channel
+            .dispatch_typed_until_cancel(&dispatch_envelope, dispatch_sink.as_ref(), &mut cancel_rx)
+            .await
+    });
+
+    tokio::time::timeout(std::time::Duration::from_secs(2), blocked.started.notified())
+        .await
+        .expect("listener must reach the blocked sink");
+    cancel_tx.send(true).unwrap();
+    assert_eq!(dispatch.await.unwrap().unwrap(), None);
+
+    let accepting = RejectOnceTypedSink::default();
+    assert!(channel.dispatch_typed_envelope(&retry_envelope, &accepting).await);
+    assert_eq!(accepting.accepted.lock().unwrap().len(), 1);
 }
