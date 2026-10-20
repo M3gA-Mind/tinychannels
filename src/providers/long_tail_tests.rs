@@ -231,7 +231,7 @@ fn text_intent(id: &str, conversation: &str, thread: Option<&str>) -> ChannelOut
 }
 
 #[test]
-fn every_provider_describes_itself_and_matches_its_legacy_capabilities() {
+fn every_provider_describes_its_native_capability_facts() {
     let config = config("http://mm.invalid");
     for (id, display) in PROVIDERS {
         let channel = build(&config, id);
@@ -240,7 +240,6 @@ fn every_provider_describes_itself_and_matches_its_legacy_capabilities() {
         assert_eq!(descriptor.display_name, display);
         assert_eq!(descriptor.metadata["adapterMode"], "native-v2");
         let declared = channel.declared_capabilities();
-        assert_eq!(declared, channel.declared_capabilities(), "{id}");
         assert!(declared.remote_control && declared.chat_approvals, "{id}");
         assert_eq!(declared.content.parts, ["text"], "{id}");
         assert!(declared.content.text.outbound && declared.content.text.inbound);
