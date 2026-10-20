@@ -291,6 +291,10 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
         self.running.declared_capabilities()
     }
 
+    fn uses_managed_host_callbacks(&self) -> bool {
+        true
+    }
+
     fn expected_scope(
         &self,
         feature: tinychannels_conformance::ConformanceFeature,

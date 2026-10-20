@@ -268,11 +268,15 @@ fn declare_feature(fixture: &mut Fixture, feature: ConformanceFeature) {
                 error: None,
             }));
         }
-        ConformanceFeature::ManagedReaction
-        | ConformanceFeature::ManagedThreadCreate
-        | ConformanceFeature::ManagedThreadUpdate
-        | ConformanceFeature::ManagedThreadList => {
-            unreachable!("managed features are exercised by the module fixture")
+        ConformanceFeature::ManagedReaction => capabilities.reactions = true,
+        ConformanceFeature::ManagedThreadCreate => {
+            capabilities.actions.supported.push("thread-create".into())
+        }
+        ConformanceFeature::ManagedThreadUpdate => {
+            capabilities.actions.supported.push("thread-update".into())
+        }
+        ConformanceFeature::ManagedThreadList => {
+            capabilities.actions.supported.push("thread-list".into())
         }
     }
     if fixture.observations.is_empty() {
@@ -779,4 +783,14 @@ fn each_canonical_feature_uses_its_contract_capability() {
         .supported
         .push("draft-update".into());
     assert!(!ConformanceFeature::StreamingDraft.declared(&incomplete_draft));
+}
+
+#[tokio::test]
+async fn managed_features_require_a_host_callback_fixture() {
+    let fixture = Fixture::default();
+    let result = check_feature(&fixture, ConformanceFeature::ManagedReaction)
+        .await
+        .unwrap_err();
+    assert!(result.contains("requires a managed host callback fixture"));
+    assert!(fixture.observations().is_empty());
 }

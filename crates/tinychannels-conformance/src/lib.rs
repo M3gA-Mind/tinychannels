@@ -192,6 +192,12 @@ pub trait AdapterFixture: Send + Sync {
 #[async_trait]
 pub trait ConformanceFixture: Send + Sync {
     fn capabilities(&self) -> ChannelCapabilities;
+    /// Managed controller features can only be exercised by a fixture wired
+    /// to the production host callback; provider adapter fixtures must leave
+    /// this false.
+    fn uses_managed_host_callbacks(&self) -> bool {
+        false
+    }
     fn expected_scope(&self, feature: ConformanceFeature) -> ExpectedScope;
     fn receipt_required(&self, _feature: ConformanceFeature) -> bool {
         true
@@ -239,6 +245,18 @@ pub async fn check_feature(
     fixture: &dyn ConformanceFixture,
     feature: ConformanceFeature,
 ) -> Result<(), String> {
+    if matches!(
+        feature,
+        ConformanceFeature::ManagedReaction
+            | ConformanceFeature::ManagedThreadCreate
+            | ConformanceFeature::ManagedThreadUpdate
+            | ConformanceFeature::ManagedThreadList
+    ) && !fixture.uses_managed_host_callbacks()
+    {
+        return Err(format!(
+            "{feature:?} requires a managed host callback fixture"
+        ));
+    }
     fixture.clear_observations();
     let declared = feature.declared(&fixture.capabilities());
     let result = fixture.exercise(feature).await;
