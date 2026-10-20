@@ -5182,6 +5182,12 @@ async fn configured_linq_webhook_uses_typed_port_and_stamps_module_account() {
         result,
         ChannelInteractionResult::WebhookAccepted(ref outcome) if outcome.messages == 1
     ));
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        callbacks.ingress_changed.notified(),
+    )
+    .await
+    .expect("module callback receives accepted ingress");
     let delivered = callbacks.inbound.lock().await;
     assert_eq!(delivered.len(), 1);
     let envelope = &delivered[0].1;
