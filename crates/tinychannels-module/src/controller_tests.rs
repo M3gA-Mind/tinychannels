@@ -79,7 +79,7 @@ impl BackendFixture {
                         ..
                     } => Ok(ChannelBackendResult::ProgressiveTransport(Box::new(
                         Response::Success(serde_json::json!({
-                            "message_id": "managed-message-1",
+                            "id": "managed-message-1",
                             "channel": channel_ref,
                             "conversation": conversation,
                             "message": message,
