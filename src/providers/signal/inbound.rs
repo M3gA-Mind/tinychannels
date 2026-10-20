@@ -10,7 +10,6 @@ use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, channel_event, media_of, publish, publish_event,
 };
 use crate::traits::ChannelMessage;
-use tokio::sync::mpsc;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde_json::{Value, json};
@@ -18,6 +17,7 @@ use tinychannels_bus::{
     ChannelEventKind, ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef,
     SenderRef,
 };
+use tokio::sync::mpsc;
 use tokio::sync::{mpsc, watch};
 
 fn signal_ref() -> ChannelRef {
