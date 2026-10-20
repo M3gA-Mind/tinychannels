@@ -368,16 +368,12 @@ impl TelegramWireFixture {
         *cursor = request_end;
         for request in requests {
             let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
-            let Some(chat) = body
-                .get("chat_id")
-                .map(|value| {
-                    value
-                        .as_i64()
-                        .map(|id| id.to_string())
-                        .or_else(|| value.as_str().map(str::to_owned))
-                })
-                .flatten()
-            else {
+            let Some(chat) = body.get("chat_id").and_then(|value| {
+                value
+                    .as_i64()
+                    .map(|id| id.to_string())
+                    .or_else(|| value.as_str().map(str::to_owned))
+            }) else {
                 continue;
             };
             let id = receipt
