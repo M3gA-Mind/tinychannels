@@ -285,7 +285,7 @@ impl NativeProvider for SignalChannel {
             // Signal indicators expire remotely; signal-cli has no stop RPC.
             return Ok(());
         }
-        let mut params = self.addressed(conversation);
+        let params = self.addressed(conversation);
         self.call("sendTyping", params, "typing").await.map(|_| ())
     }
 
