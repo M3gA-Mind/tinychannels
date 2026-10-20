@@ -9,15 +9,15 @@ use std::sync::Arc;
 use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::delivery::progressive::{
-    ProgressiveOutputContext, ProgressiveOutputDispatch, ProgressiveReply, ProgressiveSendError,
-    ProgressiveSender, EDIT_FLUSH_INTERVAL, FILLER_INTERVAL, TYPING_REFRESH_INTERVAL,
+    EDIT_FLUSH_INTERVAL, FILLER_INTERVAL, ProgressiveOutputContext, ProgressiveOutputDispatch,
+    ProgressiveReply, ProgressiveSendError, ProgressiveSender, TYPING_REFRESH_INTERVAL,
 };
 use tinychannels_bus::module_progressive::{
     ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
     ProgressiveTransportResult,
 };
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
-use tokio::sync::{mpsc, oneshot, watch, Mutex};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 const MAX_ACTIVE: usize = 16;

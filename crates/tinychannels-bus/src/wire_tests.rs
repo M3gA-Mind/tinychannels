@@ -237,11 +237,13 @@ fn channel_controller_operations_have_closed_typed_wire_tags() {
         round_trip,
         ChannelControllerRequest::TestChannel { .. }
     ));
-    assert!(serde_json::from_value::<ChannelControllerRequest>(json!({
-        "operation":"execute_arbitrary",
-        "request":{}
-    }))
-    .is_err());
+    assert!(
+        serde_json::from_value::<ChannelControllerRequest>(json!({
+            "operation":"execute_arbitrary",
+            "request":{}
+        }))
+        .is_err()
+    );
 }
 
 #[test]
