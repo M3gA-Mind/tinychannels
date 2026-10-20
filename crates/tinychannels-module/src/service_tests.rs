@@ -3988,3 +3988,17 @@ async fn a_long_tail_provider_starts_as_a_native_adapter_and_is_listed() {
     );
     service.shutdown().await.unwrap();
 }
+
+#[tokio::test]
+async fn starting_an_unconfigured_provider_reports_not_configured() {
+    let service = inbound_preparation_service().await;
+    let error = service
+        .start_channel("mattermost".into(), ChannelsConfig::default())
+        .await
+        .expect_err("an absent provider is not started");
+    assert!(matches!(
+        error,
+        BusError::MethodFailed { name, .. } if name == NOT_CONFIGURED_ERROR
+    ));
+    service.shutdown().await.unwrap();
+}
