@@ -11,11 +11,11 @@ use tinybus::Connection;
 use tinychannels::storage::delivery::{PENDING_COLLECTION, RESULTS_COLLECTION};
 use tinychannels::storage::records::{StoredDelivery, StoredResult};
 use tinychannels_bus::{DeliveryQueueEntry, DeliveryTerminalResult};
-use tinystoragedrivers_busproxy::{PerCallerEndpoint, ServedStorage, serve};
-use tinystoragedrivers_client::StorageServer;
-use tinystoragedrivers_core::{
-    Capabilities, CollectionSpec, DocumentStore, DocumentStoreExt, Filter, MemoryStorage,
-    Precondition, Query, ReadCheck, Result, Scope, ScopedStorage, SearchHit, StorageBackend,
+use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt, Storage, StorageBackend};
+use tinystoragedrivers_busproxy::{PerCallerEndpoint, ServedStorage, StorageServer, serve};
+use tinystoragedrivers_testkit::{Failing, FaultPlan, MemoryBackend};
+use tinystoragedrivers_types::{
+    Capabilities, CollectionSpec, Filter, Precondition, Query, ReadCheck, Result, Scope, SearchHit,
     StorageError, Version, Versioned, WriteOp, WriteOptions, WriteResult,
 };
 
@@ -30,7 +30,7 @@ pub(crate) struct Faults {
 
 /// A storage host on a bus connection.
 pub(crate) struct StorageHost {
-    pub(crate) backend: MemoryStorage,
+    pub(crate) backend: MemoryBackend,
     pub(crate) faults: Arc<Faults>,
     /// The scope the host binds callers to; changing it re-binds live callers.
     pub(crate) scope: Arc<Mutex<String>>,
@@ -59,24 +59,27 @@ impl std::ops::Deref for Snapshot {
 impl StorageHost {
     /// Serve storage on `connection`, bound to `scope`.
     pub(crate) async fn serve(connection: &Connection, scope: &str) -> Self {
-        let backend = MemoryStorage::new();
+        let backend = MemoryBackend::new();
         let faults = Arc::new(Faults::default());
         let current = Arc::new(Mutex::new(scope.to_owned()));
         let bound = (backend.clone(), faults.clone(), current.clone());
         let endpoint = PerCallerEndpoint::new(move |_sender| {
             let (backend, faults, current) = bound.clone();
-            let local = backend.for_scope(&Scope::local()).ok()?;
+            let local = backend
+                .for_scope(&Scope::new("tenant:fixture").ok()?)
+                .ok()?;
             let docs = Arc::new(ScopeSwitchDocs {
                 backend,
                 faults,
                 current,
             });
-            Some(StorageServer::new(ScopedStorage::new(
-                Scope::local(),
-                "fixture",
+            Some(StorageServer::new(Storage::new(
                 docs,
                 Arc::clone(local.streams()),
+                Arc::clone(local.kv()),
                 Arc::clone(local.blobs()),
+                Arc::clone(local.queues()),
+                Arc::clone(local.secrets()),
             )))
         });
         let served = serve(connection, Arc::new(endpoint)).await.unwrap();
@@ -115,7 +118,7 @@ impl StorageHost {
     pub(crate) fn docs(&self, scope: &str) -> Arc<dyn DocumentStore> {
         Arc::clone(
             self.backend
-                .for_scope(&Scope::new(scope).unwrap())
+                .for_scope(&Scope::new(format!("tenant:{scope}")).unwrap())
                 .unwrap()
                 .documents(),
         )
@@ -199,7 +202,7 @@ struct ScopeSwitchDocs {
 
 impl ScopeSwitchDocs {
     fn inner(&self) -> Arc<dyn DocumentStore> {
-        let scope = Scope::new(self.current.lock().unwrap().as_str()).unwrap();
+        let scope = Scope::new(format!("tenant:{}", self.current.lock().unwrap())).unwrap();
         Arc::clone(self.backend.for_scope(&scope).unwrap().documents())
     }
 }
@@ -262,7 +265,7 @@ impl DocumentStore for ScopeSwitchDocs {
         &self,
         collection: &str,
         query: &Query,
-    ) -> Result<tinystoragedrivers_core::Page<Versioned<Value>>> {
+    ) -> Result<tinystoragedrivers_types::Page<Versioned<Value>>> {
         if collection == PENDING_COLLECTION {
             self.faults.pending_reads.fetch_add(1, Ordering::SeqCst);
             if self.faults.fail_queue_read.load(Ordering::SeqCst) {
@@ -287,7 +290,7 @@ impl DocumentStore for ScopeSwitchDocs {
         &self,
         collection: &str,
         filter: &Filter,
-        sort: &[tinystoragedrivers_core::Sort],
+        sort: &[tinystoragedrivers_types::Sort],
         patch: &Value,
     ) -> Result<Option<Versioned<Value>>> {
         self.inner().claim(collection, filter, sort, patch).await

@@ -32,15 +32,14 @@
 use std::sync::Arc;
 use tinychannels_runtime::config::WhatsAppConfigExt as _;
 
+#[cfg(feature = "imessage")]
+use crate::IMessageChannel;
 use crate::host::ChannelHost;
 use crate::providers::irc;
 use crate::{
-    Channel, DingTalkChannel, DiscordChannel, IrcChannel, LinqChannel,
-    MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
-    YuanbaoChannel,
+    Channel, DingTalkChannel, DiscordChannel, IrcChannel, LinqChannel, MattermostChannel,
+    QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel, YuanbaoChannel,
 };
-#[cfg(feature = "imessage")]
-use crate::IMessageChannel;
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::HttpProxyPolicy;
 
@@ -299,7 +298,9 @@ pub fn build_channels(
     }
     #[cfg(not(feature = "imessage"))]
     if config.imessage.is_some() {
-        tracing::warn!("[channels] imessage is configured but iMessage support is disabled in this build; skipping");
+        tracing::warn!(
+            "[channels] imessage is configured but iMessage support is disabled in this build; skipping"
+        );
     }
 
     if config.matrix.is_some() {

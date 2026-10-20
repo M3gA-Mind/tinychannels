@@ -6,7 +6,9 @@ use tinystoragedrivers_types::Scope;
 
 fn docs() -> Arc<dyn DocumentStore> {
     let backend = MemoryBackend::new();
-    let storage = backend.for_scope(&Scope::new("tenant:delivery-tests").unwrap()).unwrap();
+    let storage = backend
+        .for_scope(&Scope::new("tenant:delivery-tests").unwrap())
+        .unwrap();
     Arc::clone(storage.documents())
 }
 

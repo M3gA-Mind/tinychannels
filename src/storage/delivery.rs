@@ -30,8 +30,8 @@ use tinychannels_bus::module_delivery::{
 };
 use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
 use tinystoragedrivers_types::{
-    CollectionSpec, ErrorKind, EXPIRES_FIELD, Filter, Key, Precondition, Query, Sort,
-    StorageError, Versioned, WriteOptions,
+    EXPIRES_FIELD, ErrorKind, Filter, Key, Precondition, Query, Sort, StorageError, Versioned,
+    WriteOptions,
 };
 
 use super::records::{StoredDelivery, StoredResult, to_stored_ms};
@@ -76,15 +76,15 @@ impl DocumentDeliveryStore {
         }
     }
 
-    async fn docs(&self) -> &Arc<dyn DocumentStore> {
+    async fn docs(&self) -> Result<&Arc<dyn DocumentStore>, DeliveryQueueError> {
         self.ready
-            .get_or_init(|| async {
-                for name in [PENDING_COLLECTION, FAILED_COLLECTION, RESULTS_COLLECTION] {
-                    super::ensure_collection(&self.docs, CollectionSpec::new(name)).await;
-                }
+            .get_or_try_init(|| async {
+                crate::storage::prepare(&self.docs)
+                    .await
+                    .map_err(store_error)
             })
-            .await;
-        &self.docs
+            .await?;
+        Ok(&self.docs)
     }
 }
 
@@ -158,7 +158,7 @@ fn encode_entry(entry: &QueuedDelivery) -> Result<Value, DeliveryQueueError> {
 impl DeliveryQueueStore for DocumentDeliveryStore {
     async fn save_pending(&self, entry: QueuedDelivery) -> Result<(), DeliveryQueueError> {
         validate_entry(&entry)?;
-        let docs = self.docs().await;
+        let docs = self.docs().await?;
         let doc = encode_entry(&entry)?;
         let id = doc_id(&entry.id)?;
         let _reservation = PENDING_INSERT.lock().await;
@@ -304,7 +304,7 @@ impl DeliveryResultStore for DocumentDeliveryStore {
         if serde_json::to_vec(&result).map_or(true, |bytes| bytes.len() > DELIVERY_RECORD_BYTES) {
             return Err(invalid("delivery result exceeds the record limit"));
         }
-        let docs = self.docs().await;
+        let docs = self.docs().await?;
         let expires_ms = to_stored_ms(
             result
                 .completed_at_unix_ms
@@ -330,7 +330,7 @@ impl DocumentDeliveryStore {
     /// Drop expired results, then the oldest beyond the capacity. The record
     /// just written is never the one evicted.
     async fn trim_results(&self, keep: &str) -> Result<(), DeliveryQueueError> {
-        let docs = self.docs().await;
+        let docs = self.docs().await?;
         docs.delete_where(
             RESULTS_COLLECTION,
             &Filter::lte(EXPIRES_FIELD, to_stored_ms(now_unix_ms())),

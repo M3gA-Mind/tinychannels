@@ -32,9 +32,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
-use tinystoragedrivers_types::{
-    CollectionSpec, Filter, Key, Precondition, Query, StorageError, WriteOptions,
-};
+use tinystoragedrivers_types::{Filter, Key, Precondition, Query, StorageError, WriteOptions};
 
 use super::schema::{self, SCHEMA_VERSION};
 use wacore::store::InMemoryBackend;
@@ -108,14 +106,7 @@ impl DocumentWhatsAppBackend {
     /// # Errors
     /// The store cannot be read, or a persisted record is unreadable.
     pub async fn open(docs: Arc<dyn DocumentStore>, session_path: &str) -> StoreResult<Self> {
-        for name in COLLECTIONS {
-            if let Err(error) = docs.ensure_collection(&CollectionSpec::new(name)).await {
-                tracing::debug!(
-                    "{LOG_PREFIX} ensure_collection {name} not applied: {:?}",
-                    error.kind()
-                );
-            }
-        }
+        crate::storage::prepare(&docs).await.map_err(store_err)?;
         let backend = Self {
             inner: InMemoryBackend::new(),
             docs,

@@ -54,13 +54,13 @@ pub mod storage;
 pub use backend::{ChannelBackend, ChannelManager};
 pub use factory::{ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels};
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
-pub use providers::{
-    CliChannel, DingTalkChannel, DiscordChannel, IrcChannel, IrcChannelConfig,
-    LinqChannel, MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel,
-    WhatsAppChannel, WhatsAppWebChannel, YuanbaoChannel,
-};
 #[cfg(feature = "imessage")]
 pub use providers::IMessageChannel;
+pub use providers::{
+    CliChannel, DingTalkChannel, DiscordChannel, IrcChannel, IrcChannelConfig, LinqChannel,
+    MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
+    WhatsAppWebChannel, YuanbaoChannel,
+};
 pub use tinychannels_bus::{
     BUS_NAME, CONTRACT_VERSION, ChannelAuthMode, ChannelBackendRequest, ChannelBackendResult,
     ChannelCapabilities, ChannelControllerRequest, ChannelControllerResult, ChannelDefinition,

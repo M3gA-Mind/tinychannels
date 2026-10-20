@@ -23,27 +23,20 @@ pub mod whatsapp;
 use std::sync::Arc;
 
 use tinystoragedrivers_api::DocumentStore;
-use tinystoragedrivers_types::{CollectionSpec, StorageError};
+use tinystoragedrivers_types::StorageError;
 
 pub use delivery::DocumentDeliveryStore;
 pub use schema::collections;
 
-const LOG_PREFIX: &str = "[channel-storage]";
-
-/// Declare `collection` on `docs`, best effort.
+/// Prepare the collections owned by TinyChannels on an already-bound handle.
 ///
-/// A module-side handle may be refused schema rights (only the host runs
-/// migrations from declared specs); the collection is then expected to be
-/// provisioned already, and a genuine fault surfaces on the first read or
-/// write instead. Either way the failure is logged, never fatal here.
-pub(crate) async fn ensure_collection(docs: &Arc<dyn DocumentStore>, spec: CollectionSpec) {
-    let name = spec.name.clone();
-    if let Err(error) = docs.ensure_collection(&spec).await {
-        tracing::debug!(
-            "{LOG_PREFIX} ensure_collection collection={name} not applied: {:?}",
-            error.kind()
-        );
+/// This is owner-local setup: it neither chooses a scope nor composes another
+/// owner's declarations. Storage errors are returned to the opener.
+pub async fn prepare(docs: &Arc<dyn DocumentStore>) -> Result<(), StorageError> {
+    for spec in collections() {
+        docs.ensure_collection(&spec).await?;
     }
+    Ok(())
 }
 
 /// Flatten a storage failure into a message that carries the category only.

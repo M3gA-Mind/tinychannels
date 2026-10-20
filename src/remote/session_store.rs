@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
-use tinystoragedrivers_types::{CollectionSpec, ErrorKind, Key, Precondition, Version, WriteOptions};
+use tinystoragedrivers_types::{ErrorKind, Key, Precondition, Version, WriteOptions};
 
 use crate::storage::schema::{self, SCHEMA_VERSION};
 
@@ -98,12 +98,12 @@ impl RemoteSessionStore {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("host storage is unavailable"))?;
         self.ready
-            .get_or_init(|| async {
-                for name in [BINDINGS_COLLECTION, BUSY_COLLECTION, META_COLLECTION] {
-                    crate::storage::ensure_collection(docs, CollectionSpec::new(name)).await;
-                }
+            .get_or_try_init(|| async {
+                crate::storage::prepare(docs)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(crate::storage::describe(&error)))
             })
-            .await;
+            .await?;
         Ok(docs)
     }
 
@@ -253,10 +253,7 @@ impl RemoteSessionStore {
             {
                 Ok(_) => imported += 1,
                 Err(error)
-                    if matches!(
-                        error.kind(),
-                        ErrorKind::Conflict | ErrorKind::AlreadyExists
-                    ) => {}
+                    if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) => {}
                 Err(error) => return Err(anyhow::anyhow!(crate::storage::describe(&error))),
             }
         }
@@ -275,9 +272,7 @@ impl RemoteSessionStore {
         )
         .await
         .or_else(|error| match error.kind() {
-            ErrorKind::Conflict | ErrorKind::AlreadyExists => {
-                Ok(Version(0))
-            }
+            ErrorKind::Conflict | ErrorKind::AlreadyExists => Ok(Version(0)),
             _ => Err(anyhow::anyhow!(crate::storage::describe(&error))),
         })?;
         tracing::info!(
