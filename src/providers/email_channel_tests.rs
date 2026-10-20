@@ -1393,7 +1393,10 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
         .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
         .await
         .unwrap();
-    assert!(rx.try_recv().is_err(), "accepted ingress must not be replayed");
+    assert!(
+        rx.try_recv().is_err(),
+        "accepted ingress must not be replayed"
+    );
     let _ = session.logout().await;
     let retry_commands = server.await.unwrap().remove(0).join("\n");
     assert!(retry_commands.contains("UID STORE 7 +FLAGS (\\Seen)"));
