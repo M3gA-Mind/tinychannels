@@ -920,7 +920,6 @@ async fn aborted_auth_start_keeps_listener_owned_until_connection_shutdown_joins
 
 #[tokio::test]
 async fn public_adapter_stores_url_backed_voice_and_publishes_typed_media() {
-    use crate::channel::ChannelAdapter;
     use crate::factory::build_yuanbao_channel_with_voice_http_for_test;
     use crate::host::ChannelHostBuilder;
     use crate::providers::http_test_support::HttpsServer;
@@ -994,10 +993,28 @@ async fn public_adapter_stores_url_backed_voice_and_publishes_typed_media() {
         envelope.text.is_empty(),
         "signed voice URL must not become model text"
     );
-    assert!(matches!(
-        envelope.parts.as_slice(),
-        [ContentPart::VoiceNote { .. }]
-    ));
+    let [ContentPart::VoiceNote { voice_note }] = envelope.parts.as_slice() else {
+        panic!("configured VoiceIn should publish one typed voice note");
+    };
+    assert_eq!(voice_note.media.opaque_id.as_deref(), Some("voice-1"));
+    assert_eq!(voice_note.media.kind, tinychannels_bus::MediaKind::Audio);
+    assert!(voice_note.media.path.is_none());
+    assert!(voice_note.media.url.is_none());
+    assert!(voice_note.media.local_cache_path.is_none());
+    let transcript = voice_note
+        .transcript
+        .as_ref()
+        .expect("the configured host transcriber should enrich the voice note");
+    assert_eq!(transcript.text, "hello");
+    assert_eq!(transcript.language.as_deref(), Some("en"));
+    assert_eq!(
+        transcript.state,
+        tinychannels_bus::channel::VoiceTranscriptState::Complete
+    );
+    assert_eq!(
+        transcript.source,
+        tinychannels_bus::channel::VoiceTranscriptSource::HostStt
+    );
     {
         let stored = voice_store.stored.lock().unwrap();
         assert_eq!(stored.len(), 1);
