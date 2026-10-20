@@ -4,7 +4,6 @@ use crate::providers::signal::fixtures::*;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use tinychannels_bus::{ChannelEventKind, ChannelIngress, ContentPart, ConversationKind};
 
 struct RejectingTypedSink;
@@ -20,32 +19,12 @@ impl crate::channel::ChannelInboundSink for RejectingTypedSink {
 }
 
 #[derive(Default)]
-struct RejectOnceTypedSink {
-    calls: AtomicUsize,
-    accepted: std::sync::Mutex<Vec<ChannelIngress>>,
-}
-
-#[derive(Default)]
 struct RecordingTypedSink(std::sync::Mutex<Vec<ChannelIngress>>);
 
 #[async_trait]
 impl crate::channel::ChannelInboundSink for RecordingTypedSink {
     async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
         self.0.lock().unwrap().push(ingress);
-        Ok(())
-    }
-}
-
-#[async_trait]
-impl crate::channel::ChannelInboundSink for RejectOnceTypedSink {
-    async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
-        if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
-            return Err(crate::channel::ChannelSendError {
-                message: "reject first delivery".into(),
-                ..Default::default()
-            });
-        }
-        self.accepted.lock().unwrap().push(ingress);
         Ok(())
     }
 }
@@ -456,10 +435,35 @@ async fn rejected_events_are_delivered_on_retry_before_dedup_commits() {
         .unwrap(),
     ];
 
-    for envelope in cases {
+    for (index, envelope) in cases.into_iter().enumerate() {
         assert!(!channel.dispatch_typed_envelope(&envelope, &rejecting).await);
+        let before_retry = accepting.0.lock().unwrap().len();
         assert!(channel.dispatch_typed_envelope(&envelope, &accepting).await);
+        let delivered = accepting.0.lock().unwrap();
+        assert_eq!(delivered.len(), before_retry + 1, "case {index} retry delivery");
+        let ingress = delivered.last().unwrap();
+        match (index, ingress) {
+            (0, ChannelIngress::Inbound(message)) => {
+                assert_eq!(message.message_id, "sig_1700000001001");
+                assert_eq!(message.text, "retry");
+            }
+            (1, ChannelIngress::Event(event)) => {
+                assert_eq!(event.event_id, "signal:reaction:added:1700000000123:+123456789:1700000001002");
+                assert!(matches!(event.event, ChannelEventKind::ReactionAdded { .. }));
+            }
+            (2, ChannelIngress::Event(event)) => {
+                assert_eq!(event.event_id, "signal:delete:1700000000123:+123456789");
+                assert!(matches!(event.event, ChannelEventKind::MessageDeleted { .. }));
+            }
+            (3, ChannelIngress::Event(event)) => {
+                assert_eq!(event.event_id, "signal:read:1700000000123:+123456789");
+                assert!(matches!(event.event, ChannelEventKind::ReadReceipt { .. }));
+            }
+            _ => panic!("retry delivered the wrong ingress for case {index}: {ingress:?}"),
+        }
+        drop(delivered);
         assert!(channel.dispatch_typed_envelope(&envelope, &accepting).await);
+        assert_eq!(accepting.0.lock().unwrap().len(), before_retry + 1, "case {index} duplicate suppression");
     }
 
     assert_eq!(accepting.0.lock().unwrap().len(), 4);
