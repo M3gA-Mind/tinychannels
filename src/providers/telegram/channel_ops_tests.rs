@@ -465,10 +465,13 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
         *cursor = request_end;
         for request in requests {
             let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
+            let multipart = String::from_utf8_lossy(&request.body).into_owned();
             let chat = body
                 .get("chat_id")
                 .and_then(|v| v.as_str())
+                .or_else(|| multipart.split("name=\"chat_id\"\r\n\r\n").nth(1).and_then(|value| value.split("\r\n").next()))
                 .unwrap_or_default();
+            assert_eq!(chat, "100", "actual Telegram request must target the configured DM");
             let conversation = tinychannels_bus::ConversationRef {
                 kind: tinychannels_bus::ConversationKind::Dm,
                 id: chat.to_owned(),
@@ -488,6 +491,11 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             } else if path.ends_with("/sendLocation") || path.ends_with("/sendVenue") { ("send", "location") }
             else if path.ends_with("/sendContact") { ("send", "contact") }
             else if path.ends_with("/sendPoll") { ("send", "poll") }
+            else if path.ends_with("/sendPhoto") { ("send", "image") }
+            else if path.ends_with("/sendVideo") { ("send", "video") }
+            else if path.ends_with("/sendAudio") { ("send", "audio") }
+            else if path.ends_with("/sendDocument") { ("send", "file") }
+            else if path.ends_with("/sendSticker") { ("send", "sticker") }
             else if path.ends_with("/sendChatAction") { ("typing", "text") }
             else if path.ends_with("/setMessageReaction") { ("reaction_send", "text") }
             else if path.ends_with("/editMessageText") { ("edit", "text") }
@@ -517,7 +525,11 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                         .ok()
                         .map(|outcome| outcome.receipt.platform_message_ids.clone())
                         .unwrap_or_default(),
-                    request: body,
+                    request: if multipart.contains("Content-Disposition: form-data") {
+                        serde_json::json!({"multipart": multipart})
+                    } else {
+                        body
+                    },
                 });
         }
         result.map(Some)
