@@ -27,6 +27,7 @@ use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 const GROUP_TARGET_PREFIX: &str = "group:";
+type ListenerCancellationSlot = Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RecipientTarget {
@@ -49,12 +50,12 @@ pub struct SignalChannel {
     ignore_stories: bool,
     http_client: Client,
     native: NativeState,
-    listener_cancel: Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>,
+    listener_cancel: ListenerCancellationSlot,
     listener_generation: Arc<AtomicU64>,
 }
 
 pub(super) struct ListenerRegistration {
-    slot: Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>,
+    slot: ListenerCancellationSlot,
     generation: u64,
 }
 
