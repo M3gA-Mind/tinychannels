@@ -34,8 +34,10 @@ impl tinychannels::channel::ChannelAdapter for FixtureChannel {
 
     async fn status(
         &self,
-    ) -> Result<tinychannels::controllers::ChannelAccountSnapshot, tinychannels::channel::ChannelSendError>
-    {
+    ) -> Result<
+        tinychannels::controllers::ChannelAccountSnapshot,
+        tinychannels::channel::ChannelSendError,
+    > {
         match self.1 {
             Some(true) => Ok(tinychannels::controllers::ChannelAccountSnapshot {
                 health_state: Some("healthy".into()),

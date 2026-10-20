@@ -32,9 +32,9 @@
 use std::sync::Arc;
 use tinychannels_runtime::config::WhatsAppConfigExt as _;
 
+use crate::channel::ChannelAdapter;
 use crate::host::ChannelHost;
 use crate::providers::irc;
-use crate::channel::ChannelAdapter;
 use crate::providers::long_tail::LongTailNative;
 use crate::{
     DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, LinqChannel, MattermostChannel,
@@ -942,8 +942,7 @@ fn build_whatsapp_web(
             tracing::warn!("[channels] whatsapp web configured but session_path not set");
             return None;
         }
-        build_whatsapp_web_channel(&config, host)
-            .map(|channel| channel as Arc<dyn ChannelAdapter>)
+        build_whatsapp_web_channel(&config, host).map(|channel| channel as Arc<dyn ChannelAdapter>)
     }
     #[cfg(not(feature = "whatsapp-web"))]
     {

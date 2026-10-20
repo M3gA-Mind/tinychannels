@@ -3913,8 +3913,16 @@ async fn whatsapp_selection_follows_the_stanza_shape_and_web_binds_its_media_aut
         select("whatsapp", &cloud_config).expect("a Cloud stanza selects the Cloud adapter");
     let web = select("whatsapp", &web_config).expect("a session stanza selects the Web adapter");
     assert!(matches!(cloud, super::WhatsAppNative::Cloud(_)));
-    assert_eq!(cloud.channel().name(), "whatsapp");
-    assert_eq!(web.channel().name(), "whatsapp");
+    let cloud_adapter: &dyn tinychannels::channel::ChannelAdapter = match &cloud {
+        super::WhatsAppNative::Cloud(channel) => channel.as_ref(),
+        super::WhatsAppNative::Web(_) => unreachable!("cloud stanza selected web adapter"),
+    };
+    let web_adapter: &dyn tinychannels::channel::ChannelAdapter = match &web {
+        super::WhatsAppNative::Web(channel) => channel.as_ref(),
+        super::WhatsAppNative::Cloud(_) => unreachable!("web stanza selected cloud adapter"),
+    };
+    assert_eq!(cloud_adapter.descriptor().id, "whatsapp");
+    assert_eq!(web_adapter.descriptor().id, "whatsapp");
 
     // Only Web learns its media authority from the session; before the device
     // is linked that authority is unknown, and Cloud's is its configuration.
