@@ -440,7 +440,11 @@ async fn rejected_events_are_delivered_on_retry_before_dedup_commits() {
         let before_retry = accepting.0.lock().unwrap().len();
         assert!(channel.dispatch_typed_envelope(&envelope, &accepting).await);
         let delivered = accepting.0.lock().unwrap();
-        assert_eq!(delivered.len(), before_retry + 1, "case {index} retry delivery");
+        assert_eq!(
+            delivered.len(),
+            before_retry + 1,
+            "case {index} retry delivery"
+        );
         let ingress = delivered.last().unwrap();
         match (index, ingress) {
             (0, ChannelIngress::Inbound(message)) => {
@@ -448,12 +452,21 @@ async fn rejected_events_are_delivered_on_retry_before_dedup_commits() {
                 assert_eq!(message.text, "retry");
             }
             (1, ChannelIngress::Event(event)) => {
-                assert_eq!(event.event_id, "signal:reaction:added:1700000000123:+15551111:1700000001002");
-                assert!(matches!(&event.event, ChannelEventKind::ReactionAdded { .. }));
+                assert_eq!(
+                    event.event_id,
+                    "signal:reaction:added:1700000000123:+15551111:1700000001002"
+                );
+                assert!(matches!(
+                    &event.event,
+                    ChannelEventKind::ReactionAdded { .. }
+                ));
             }
             (2, ChannelIngress::Event(event)) => {
                 assert_eq!(event.event_id, "signal:delete:1700000000123:+15551111");
-                assert!(matches!(&event.event, ChannelEventKind::MessageDeleted { .. }));
+                assert!(matches!(
+                    &event.event,
+                    ChannelEventKind::MessageDeleted { .. }
+                ));
             }
             (3, ChannelIngress::Event(event)) => {
                 assert_eq!(event.event_id, "signal:read:1700000000123:+15551111");
@@ -463,7 +476,11 @@ async fn rejected_events_are_delivered_on_retry_before_dedup_commits() {
         }
         drop(delivered);
         assert!(channel.dispatch_typed_envelope(&envelope, &accepting).await);
-        assert_eq!(accepting.0.lock().unwrap().len(), before_retry + 1, "case {index} duplicate suppression");
+        assert_eq!(
+            accepting.0.lock().unwrap().len(),
+            before_retry + 1,
+            "case {index} duplicate suppression"
+        );
     }
 
     assert_eq!(accepting.0.lock().unwrap().len(), 4);
@@ -492,9 +509,12 @@ async fn cancelled_blocked_delivery_can_be_retried() {
             .await
     });
 
-    tokio::time::timeout(std::time::Duration::from_secs(2), blocked.started.notified())
-        .await
-        .expect("listener must reach the blocked sink");
+    tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        blocked.started.notified(),
+    )
+    .await
+    .expect("listener must reach the blocked sink");
     let concurrent = RecordingTypedSink::default();
     assert!(
         !channel
@@ -507,6 +527,10 @@ async fn cancelled_blocked_delivery_can_be_retried() {
     assert_eq!(dispatch.await.unwrap().unwrap(), None);
 
     let accepting = RecordingTypedSink::default();
-    assert!(channel.dispatch_typed_envelope(&retry_envelope, &accepting).await);
+    assert!(
+        channel
+            .dispatch_typed_envelope(&retry_envelope, &accepting)
+            .await
+    );
     assert_eq!(accepting.0.lock().unwrap().len(), 1);
 }

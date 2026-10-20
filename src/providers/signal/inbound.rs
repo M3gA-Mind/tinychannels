@@ -422,11 +422,12 @@ impl SignalChannel {
             return true;
         }
         let text = data.message.as_deref().unwrap_or_default();
-        let reservation = match self.reserve_seen(format!("{}:{}", accepted.sender, accepted.timestamp)) {
-            SeenReservationResult::Accepted => return true,
-            SeenReservationResult::Pending => return false,
-            SeenReservationResult::Reserved(reservation) => reservation,
-        };
+        let reservation =
+            match self.reserve_seen(format!("{}:{}", accepted.sender, accepted.timestamp)) {
+                SeenReservationResult::Accepted => return true,
+                SeenReservationResult::Pending => return false,
+                SeenReservationResult::Reserved(reservation) => reservation,
+            };
         let message_id = format!("sig_{}", accepted.timestamp);
         let conversation = Self::conversation_of(&accepted.target);
         let ingested = if has_attachments && !self.ignore_attachments {
