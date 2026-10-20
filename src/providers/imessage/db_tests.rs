@@ -84,6 +84,29 @@ fn read_state_is_followed_by_date_read() {
 }
 
 #[test]
+fn read_receipt_cursor_orders_equal_timestamps_by_rowid_and_pages_them() {
+    let conn = schema();
+    for rowid in 1..=22 {
+        insert(&conn, rowid, 1, Some("sent"));
+    }
+    conn.execute(
+        "UPDATE message SET date_read = 100 WHERE is_from_me = 1",
+        [],
+    )
+    .unwrap();
+
+    let first = read_since_cursor(&conn, 0, 0).unwrap();
+    assert_eq!(first.len(), 20);
+    assert_eq!(first.first().unwrap().rowid, 1);
+    assert_eq!(first.last().unwrap().rowid, 20);
+    let next = read_since_cursor(&conn, 100, 20).unwrap();
+    assert_eq!(next.len(), 2);
+    assert_eq!(next[0].rowid, 21);
+    assert_eq!(next[1].rowid, 22);
+    assert_eq!(max_read_cursor(&conn).unwrap(), (100, 22));
+}
+
+#[test]
 fn sent_messages_are_found_after_a_baseline() {
     let conn = schema();
     assert_eq!(max_sent_rowid(&conn).unwrap(), 0);

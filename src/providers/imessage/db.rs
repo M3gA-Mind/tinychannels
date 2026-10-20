@@ -8,7 +8,7 @@
 //! and the app must not depend on the module's implementation, so each keeps
 //! its own small reader over the same documented schema.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// Seconds between the Unix epoch and the Apple epoch (2001-01-01).
 const APPLE_EPOCH_OFFSET_SECS: i64 = 978_307_200;
@@ -130,7 +130,7 @@ pub(crate) fn max_read_cursor(conn: &Connection) -> anyhow::Result<(i64, i64)> {
 
 /// Our sent messages read after `since`, oldest read first.
 pub(crate) fn read_since(conn: &Connection, since: i64) -> anyhow::Result<Vec<ReadRow>> {
-    read_since_cursor(conn, since, 0)
+    read_since_cursor(conn, since, i64::MAX)
 }
 
 /// Our sent messages after a composite receipt cursor, oldest first.
