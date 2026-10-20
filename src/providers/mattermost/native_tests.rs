@@ -57,6 +57,80 @@ fn channel(server: &MockServer, media: Arc<StubMedia>) -> MattermostChannel {
 }
 
 #[tokio::test]
+async fn configured_mattermost_reaction_uses_authenticated_native_v4_requests() {
+    use crate::channel::ChannelReaction;
+    use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
+    use wiremock::matchers::{body_json, header, method, path};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/users/me"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "bot-user-1",
+            "username": "fixture-bot"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/reactions"))
+        .and(header("authorization", "Bearer test-token"))
+        .and(body_json(json!({
+            "user_id": "bot-user-1",
+            "post_id": "post-42",
+            "emoji_name": "thumbsup"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+            "user_id": "bot-user-1",
+            "post_id": "post-42",
+            "emoji_name": "thumbsup"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let channel = MattermostChannel::with_http_client(
+        server.uri(),
+        "test-token".into(),
+        Some("channel-42".into()),
+        vec!["*".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    );
+    let result = ChannelReaction::send_reaction(
+        &channel,
+        &ChannelRef {
+            id: "mattermost".into(),
+            account_id: None,
+        },
+        &ConversationRef {
+            kind: ConversationKind::Channel,
+            id: "channel-42".into(),
+            ..Default::default()
+        },
+        "post-42",
+        &tinychannels_bus::channel::ChannelReaction {
+            value: "thumbsup".into(),
+            custom_emoji_id: None,
+        },
+        false,
+    )
+    .await;
+    assert!(result.is_ok(), "Mattermost reaction request failed: {result:?}");
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2);
+    assert!(requests.iter().all(|request| {
+        request
+            .headers
+            .get("authorization")
+            .and_then(|value| value.to_str().ok())
+            == Some("Bearer test-token")
+    }));
+}
+
+#[tokio::test]
 async fn typed_image_upload_uses_scoped_bytes_and_posts_caption_with_real_id() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))
