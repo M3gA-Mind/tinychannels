@@ -50,3 +50,14 @@ fn every_v1_collection_has_one_step_into_its_v2_name() {
         assert_eq!((step.from, step.to), (1, 2), "{}", step.id);
     }
 }
+
+#[test]
+fn scoped_channel_media_collection_is_declared_for_module_storage() {
+    let schema = storage_schema();
+    let media = schema
+        .items
+        .iter()
+        .find(|item| item.name() == "channels.media_metadata")
+        .expect("the channel media store collection is declared");
+    assert!(matches!(media, Item::Collection { scope: ScopeClass::Module, .. }));
+}
