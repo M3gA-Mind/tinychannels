@@ -321,7 +321,7 @@ impl crate::channel::ChannelStreamingDraft for SlackChannel {
     ) -> Result<(), ChannelSendError> {
         // Slack's existing finalization path is the same provider edit as an
         // intermediate update; no extra send or overflow messages are needed.
-        self.update_draft(draft_id, intent).await
+        crate::channel::ChannelStreamingDraft::update_draft(self, draft_id, intent).await
     }
 
     async fn upsert_draft(
