@@ -667,7 +667,7 @@ async fn send_typed_part(
                 conversation: context.map(|context| context.conversation.clone()),
                 sequence: context.map(|_| sequence),
                 segment_index: context.map(|_| segment_index),
-                idempotency_key,
+                idempotency_key: idempotency_key.clone(),
                 parts: prepared_parts,
                 text: prepared_text,
             },

@@ -641,11 +641,57 @@ async fn receiptless_acceptance_is_hosted_only_and_keeps_scoped_identity() {
     assert_eq!(accepted.receipt.channel.as_ref(), Some(&channel));
     assert_eq!(accepted.receipt.conversation.as_ref(), Some(&conversation));
 
+    let hosted_sender = Sender {
+        host: replies.host.clone(),
+        media_account_scope: crate::provider::MediaScope::default(),
+        context: Some(context.clone()),
+        capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+        channel: "telegram:-10042".into(),
+        hosted: true,
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    };
+    let hosted_reply = ProgressiveReply::new_hosted_scoped(
+        Arc::new(hosted_sender),
+        "telegram:-10042",
+        tinychannels_bus::ChannelCapabilities::unknown(),
+        context.clone(),
+    );
+    let typed_parts = [tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                kind: tinychannels_bus::MediaKind::Image,
+                url: Some("https://media.invalid/receiptless.png".into()),
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    }];
+    let media_outcome = hosted_reply
+        .send_content_parts(&typed_parts, "")
+        .await
+        .expect("host acceptance must allow receiptless typed content");
+    assert!(media_outcome.error.is_none());
+    assert!(media_outcome.receipt.primary_platform_message_id.is_none());
+    assert!(media_outcome.receipt.platform_message_ids.is_empty());
+
     let native_sender = Sender {
         hosted: false,
         ..sender
     };
     assert!(send_typed_part(&native_sender, request()).await.is_err());
+    let native_reply = ProgressiveReply::new_scoped(
+        Arc::new(native_sender),
+        "telegram:-10042",
+        tinychannels_bus::ChannelCapabilities::unknown(),
+        context,
+    );
+    assert!(
+        native_reply
+            .send_content_parts(&typed_parts, "")
+            .await
+            .is_err()
+    );
     replies.shutdown().await.unwrap();
 }
 

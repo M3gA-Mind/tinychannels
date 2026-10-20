@@ -646,6 +646,7 @@ impl ProgressiveReply {
             )
             .await?;
         if outcome.error.is_none()
+            && !self.allow_receiptless_delivery
             && outcome.receipt.primary_platform_message_id.is_none()
             && outcome.receipt.platform_message_ids.is_empty()
             && outcome.receipt.parts.is_empty()
