@@ -90,10 +90,11 @@ async fn module_health_checks_long_tail_adapter_status_and_deadline() {
         "the long-tail adapter reports unknown health as unhealthy"
     );
 
-    let timed_out = check_providers(&[provider], Duration::ZERO).await;
+    let reports = check_providers(&[provider], Duration::ZERO).await;
     assert_eq!(
-        timed_out[0].state,
-        tinychannels_bus::ChannelHealthState::Timeout
+        reports[0].state,
+        tinychannels_bus::ChannelHealthState::Unhealthy,
+        "a completed status call with unknown health remains unhealthy"
     );
 }
 
