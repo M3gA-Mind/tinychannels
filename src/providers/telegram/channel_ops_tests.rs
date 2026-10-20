@@ -487,7 +487,11 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                         }
                     }
                 }).await;
-                listener.abort();
+                if listener.is_finished() {
+                    eprintln!("Telegram conformance listener ended: {:?}", listener.await);
+                } else {
+                    listener.abort();
+                }
                 capture.map_err(|_| unsupported_fixture_operation())?;
             }
             let captured = self.events.events.lock().unwrap().last().cloned()
