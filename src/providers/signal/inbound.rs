@@ -16,7 +16,7 @@ use tinychannels_bus::{
     ChannelEventKind, ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef,
     SenderRef,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 fn signal_ref() -> ChannelRef {
     ChannelRef {
@@ -342,6 +342,25 @@ impl SignalChannel {
         sink: &(dyn ChannelInboundSink + Send + Sync),
     ) -> bool {
         self.dispatch_envelope_to(envelope, Some(sink), None).await
+    }
+
+    pub(super) async fn dispatch_typed_until_cancel(
+        &self,
+        envelope: &Envelope,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+        cancellation: &mut watch::Receiver<bool>,
+    ) -> anyhow::Result<Option<bool>> {
+        tokio::select! {
+            biased;
+            _ = cancellation.wait_for(|value| *value) => Ok(None),
+            delivered = self.dispatch_typed_envelope(envelope, sink) => {
+                if delivered {
+                    Ok(Some(true))
+                } else {
+                    anyhow::bail!("Signal inbound sink rejected an event")
+                }
+            }
+        }
     }
 
     async fn dispatch_envelope_to(

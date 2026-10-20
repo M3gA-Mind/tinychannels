@@ -21,6 +21,7 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
@@ -48,7 +49,22 @@ pub struct SignalChannel {
     ignore_stories: bool,
     http_client: Client,
     native: NativeState,
-    listener_cancel: Arc<std::sync::Mutex<Option<watch::Sender<bool>>>>,
+    listener_cancel: Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>,
+    listener_generation: Arc<AtomicU64>,
+}
+
+pub(super) struct ListenerRegistration {
+    slot: Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>,
+    generation: u64,
+}
+
+impl Drop for ListenerRegistration {
+    fn drop(&mut self) {
+        let mut active = self.slot.lock().unwrap_or_else(|error| error.into_inner());
+        if active.as_ref().is_some_and(|(generation, _)| *generation == self.generation) {
+            *active = None;
+        }
+    }
 }
 
 use crate::providers::native::HostPorts as NativeState;
@@ -126,6 +142,7 @@ impl SignalChannel {
             http_client,
             native: NativeState::default(),
             listener_cancel: Arc::new(std::sync::Mutex::new(None)),
+            listener_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -149,6 +166,7 @@ impl SignalChannel {
             http_client,
             native: NativeState::default(),
             listener_cancel: Arc::new(std::sync::Mutex::new(None)),
+            listener_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
