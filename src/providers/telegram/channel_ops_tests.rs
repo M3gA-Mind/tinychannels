@@ -270,7 +270,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 .iter()
                 .find(|request| request.url.path().ends_with("/getUpdates"))
                 .ok_or_else(|| {
-                    eprintln!("no getUpdates request; captured {} requests", requests.len());
+                    eprintln!("no getUpdates request; paths={:?}", requests.iter().map(|r| r.url.path()).collect::<Vec<_>>());
                     unsupported_fixture_operation()
                 })?;
             let captured = self.events.events.lock().unwrap().last().cloned();
