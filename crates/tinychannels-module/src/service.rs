@@ -807,7 +807,9 @@ impl Channels {
         &self,
         request: tinychannels_bus::module_inbound::PrepareChannelInboundRequest,
     ) -> BusResult<tinychannels_bus::module_inbound::PreparedChannelInbound> {
-        use tinychannels_bus::module_inbound::{ChannelInboundSource, PreparedChannelInbound};
+        use tinychannels_bus::module_inbound::{
+            ChannelInboundPreparationMode, ChannelInboundSource, PreparedChannelInbound,
+        };
         if self.terminal.load(Ordering::Acquire) {
             return Err(BusError::failed("channel module is shutting down"));
         }
@@ -838,11 +840,18 @@ impl Channels {
             ChannelInboundSource::Envelope {
                 envelope,
                 timestamp,
-            } => (
-                tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp)
-                    .map_err(|error| BusError::failed(error.to_string()))?,
-                envelope,
-            ),
+            } => {
+                let message = match request.preparation_mode {
+                    ChannelInboundPreparationMode::LegacyText => {
+                        tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp)
+                            .map_err(|error| BusError::failed(error.to_string()))?
+                    }
+                    ChannelInboundPreparationMode::Typed => {
+                        tinychannels::typed_message_from_inbound_envelope(&envelope, timestamp)
+                    }
+                };
+                (message, envelope)
+            }
         };
         let prepared = PreparedChannelInbound {
             history_key: tinychannels::context::conversation_history_key(&message),
