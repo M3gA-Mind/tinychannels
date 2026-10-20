@@ -27,19 +27,6 @@ pub(crate) struct NativeLaunch {
 }
 
 impl NativeLaunch {
-    pub(crate) fn with_legacy<T>(provider: &'static str, channel: Arc<T>) -> Self
-    where
-        T: tinychannels::LongTailNative + tinychannels::traits::Channel + 'static,
-    {
-        let provider_id = channel.descriptor().id;
-        Self {
-            provider_id,
-            start: Box::new(move |hooks, host, supervision, outbound_only| {
-                Running::start_native(provider, channel, hooks, host, supervision, outbound_only)
-            }),
-        }
-    }
-
     /// A long-tail text provider held as its trait object.
     fn long_tail(
         provider: &'static str,
