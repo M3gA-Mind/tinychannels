@@ -69,6 +69,32 @@ async fn dispatch_interaction(
     interaction: tinychannels_bus::ChannelInteraction,
     typing: &mut TypingRefreshes,
 ) -> Result<tinychannels_bus::ChannelInteractionResult> {
+    if let Some(native) = &native {
+        match &interaction {
+            tinychannels_bus::ChannelInteraction::Describe => {
+                return Ok(crate::interaction::describe_adapter(
+                    native.adapter.as_ref(),
+                    true,
+                ));
+            }
+            tinychannels_bus::ChannelInteraction::DescribeV2 => {
+                return Ok(crate::interaction::describe_adapter(
+                    native.adapter.as_ref(),
+                    false,
+                ));
+            }
+            _ => {}
+        }
+        if let Some(result) = crate::interaction::dispatch_native_draft(
+            native.adapter.as_ref(),
+            native.drafts.as_ref(),
+            interaction.clone(),
+        )
+        .await
+        {
+            return result;
+        }
+    }
     use tinychannels_bus::ChannelInteraction as Op;
     match interaction {
         describe @ (Op::Describe | Op::DescribeV2) => {

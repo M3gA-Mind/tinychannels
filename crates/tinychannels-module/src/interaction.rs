@@ -27,6 +27,99 @@ pub(crate) fn describe_adapter(
     }
 }
 
+/// Convert the frozen interaction DTO to the typed intent sent to a configured
+/// provider. The configured adapter supplies account scope; the caller's
+/// recipient remains only the conversation address.
+fn draft_intent(
+    adapter: &dyn tinychannels::channel::ChannelAdapter,
+    message: &tinychannels::SendMessage,
+) -> tinychannels_bus::ChannelOutboundIntent {
+    let descriptor = adapter.descriptor();
+    let mut intent = tinychannels::outbound_intent_from_send_message(&descriptor.id, message);
+    intent.channel_ref = Some(tinychannels_bus::ChannelRef {
+        id: descriptor.id,
+        account_id: descriptor.account_id,
+    });
+    if let Some(conversation) = intent.conversation_ref.as_mut() {
+        conversation.scope_id = intent
+            .channel_ref
+            .as_ref()
+            .and_then(|channel| channel.account_id.clone());
+    }
+    if message.subject.is_none() {
+        intent.payload = tinychannels_bus::OutboundPayload::Text {
+            text: message.content.clone(),
+        };
+    }
+    intent
+}
+
+/// Route draft start/update/finalize through an adapter's typed draft port.
+/// `None` means the provider has not migrated that operation yet, so the
+/// caller may use the temporary legacy-provider compatibility path.
+pub(crate) async fn dispatch_native_draft(
+    adapter: &dyn tinychannels::channel::ChannelAdapter,
+    drafts: &dyn tinychannels::channel::ChannelStreamingDraft,
+    interaction: ChannelInteraction,
+) -> Option<tinybus::Result<ChannelInteractionResult>> {
+    use ChannelInteraction as Op;
+    let capabilities = adapter.declared_capabilities();
+    match interaction {
+        Op::SendDraft { message } => {
+            if !capabilities.streaming_reply_pipeline {
+                return Some(Ok(ChannelInteractionResult::Draft(None)));
+            }
+            let intent = draft_intent(adapter, &message);
+            match drafts.start_draft(intent).await {
+                Ok(id) => Some(Ok(ChannelInteractionResult::Draft(id))),
+                Err(error) if error.unsupported => None,
+                Err(_) => Some(Err(tinybus::Error::failed(
+                    "provider draft creation failed",
+                ))),
+            }
+        }
+        Op::UpdateDraft {
+            recipient,
+            message_id,
+            text,
+        } => {
+            if !capabilities.streaming_reply_pipeline {
+                return None;
+            }
+            let message = tinychannels::SendMessage::new(text, recipient);
+            let intent = draft_intent(adapter, &message);
+            match drafts.update_draft(&message_id, intent).await {
+                Ok(()) => Some(Ok(ChannelInteractionResult::Completed)),
+                Err(error) if error.unsupported => None,
+                Err(_) => Some(Err(tinybus::Error::failed(
+                    "provider draft update failed",
+                ))),
+            }
+        }
+        Op::FinalizeDraft {
+            recipient,
+            message_id,
+            text,
+            thread_ts,
+        } => {
+            if !capabilities.streaming_reply_pipeline {
+                return None;
+            }
+            let mut message = tinychannels::SendMessage::new(text, recipient);
+            message.thread_ts = thread_ts;
+            let intent = draft_intent(adapter, &message);
+            match drafts.finalize_draft(&message_id, intent).await {
+                Ok(()) => Some(Ok(ChannelInteractionResult::Completed)),
+                Err(error) if error.unsupported => None,
+                Err(_) => Some(Err(tinybus::Error::failed(
+                    "provider draft finalization failed",
+                ))),
+            }
+        }
+        _ => None,
+    }
+}
+
 /// Capability facts bound to the exact adapter handle selected at startup.
 pub(crate) fn configured_adapter_capabilities(
     provider: &std::sync::Arc<crate::provider::Running>,
