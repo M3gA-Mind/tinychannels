@@ -99,7 +99,7 @@ impl NativeProvider for YuanbaoChannel {
     }
 
     fn proactive_target(&self) -> Option<String> {
-        crate::traits::Channel::proactive_target(self)
+        None
     }
 
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError> {
@@ -146,17 +146,14 @@ impl NativeProvider for YuanbaoChannel {
     }
 
     async fn set_typing(&self, conversation: &str, on: bool) -> Result<(), ChannelSendError> {
-        let result = if on {
-            crate::traits::Channel::start_typing(self, conversation).await
-        } else {
-            crate::traits::Channel::stop_typing(self, conversation).await
-        };
-        result.map_err(|_| ChannelSendError {
-            kind: tinychannels_bus::channel::SendErrorKind::Transient,
-            message: "Yuanbao typing indicator failed".into(),
-            retryable: true,
-            ..Default::default()
-        })
+        self.set_typing_native(conversation, on)
+            .await
+            .map_err(|_| ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "Yuanbao typing indicator failed".into(),
+                retryable: true,
+                ..Default::default()
+            })
     }
 
     async fn react(

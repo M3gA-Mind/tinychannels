@@ -331,7 +331,13 @@ fn supports_draft_updates_is_true() {
     assert!(ch.supports_draft_updates());
     assert!(Channel::supports_remote_control(&ch));
     assert!(Channel::supports_chat_approvals(&ch));
-    assert!(crate::providers::long_tail::LongTail::typing_supported(&ch));
+    assert!(
+        crate::providers::native::NativeProvider::declared_capabilities(&ch)
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "typing")
+    );
     let capabilities = ch.capabilities();
     assert!(capabilities.streaming_reply_pipeline);
     assert!(!capabilities.progressive_edits);
