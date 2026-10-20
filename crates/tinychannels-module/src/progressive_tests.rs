@@ -2690,6 +2690,7 @@ async fn filler_callback_error_after_acceptance_is_not_retried() {
             }),
             capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
             channel: "discord:filler-unknown".into(),
+            hosted: false,
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:filler-unknown",
@@ -4468,6 +4469,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             context: Some(context.clone()),
             capabilities: capabilities.clone(),
             channel: "telegram:bot-1".into(),
+            hosted: false,
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         });
         let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -4748,6 +4750,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         context: Some(audio_turn.clone()),
         capabilities: audio_caps.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut audio_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -4807,6 +4810,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         context: Some(link_turn.clone()),
         capabilities: link_caps.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut link_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -4898,6 +4902,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut too_long = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -4967,6 +4972,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         context: Some(duration_context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut duration_limited = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -5023,6 +5029,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let prompt = [tinychannels_bus::OutboundContentPart::Content {
@@ -5113,6 +5120,7 @@ async fn dingtalk_final_voice_pipeline_keeps_transcript_and_codec_metadata() {
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "dingtalk:robot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -5261,6 +5269,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -5406,6 +5415,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
             context: Some(case_context.clone()),
             capabilities: capabilities.clone(),
             channel: "telegram:bot-1".into(),
+            hosted: false,
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         });
         let mut case_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -5464,6 +5474,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         context: Some(explicit_context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     let explicit_parts = [
@@ -5530,6 +5541,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         context: Some(explicit_allowed_context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     explicit_allowed_sender
@@ -5726,6 +5738,7 @@ async fn send_final_voice_case(
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
