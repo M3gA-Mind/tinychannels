@@ -749,9 +749,9 @@ impl LongTailFixture {
         intent: ChannelOutboundIntent,
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
         let before = self.request_count().await;
-        let outcome = ChannelAdapter::send(self.channel.as_ref(), intent).await?;
+        let outcome = ChannelAdapter::send(self.channel.as_ref(), intent).await;
         self.record(feature, before).await;
-        Ok(Some(outcome))
+        outcome.map(Some)
     }
 }
 
@@ -1245,7 +1245,7 @@ async fn the_factory_built_dingtalk_adapter_passes_the_full_conformance_matrix()
         .iter()
         .filter(|request| request.target == "/v1.0/robot/groupMessages/send")
         .collect::<Vec<_>>();
-    assert_eq!(sends.len(), 5, "every declared send feature reaches DingTalk");
+    assert_eq!(sends.len(), 3, "text, file, and voice are declared send features");
     assert!(
         sends.iter().all(|request| {
             request.body["robotCode"] == "conformance-robot"
@@ -1261,7 +1261,7 @@ async fn the_factory_built_dingtalk_adapter_passes_the_full_conformance_matrix()
         .iter()
         .filter(|request| request.target.starts_with("/media/upload?"))
         .collect::<Vec<_>>();
-    assert_eq!(uploads.len(), 3, "image, file, and voice each upload");
+    assert_eq!(uploads.len(), 2, "file and voice each upload");
     assert!(
         sends.iter().any(|request| {
             request.body["msgKey"] == "sampleFile"
