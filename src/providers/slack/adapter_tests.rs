@@ -776,9 +776,27 @@ async fn reactions_for_another_channel_are_forbidden() {
 async fn health_checks_follow_the_auth_test_status() {
     let server = mock_api().await;
     mount_auth(&server, "UBOT").await;
-    assert!(Channel::health_check(&channel_for(&server, &[])).await);
+    let channel = channel_for(&server, &[]);
+    assert!(Channel::health_check(&channel).await);
+    assert_eq!(
+        ChannelAdapter::status(&channel)
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
+        Some("healthy"),
+        "adapter status must report the actual auth.test result"
+    );
     let dead = SlackChannel::new("t".into(), None, vec![]).with_api_base("http://127.0.0.1:1/api");
     assert!(!Channel::health_check(&dead).await);
+    assert_eq!(
+        ChannelAdapter::status(&dead)
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
+        Some("unhealthy")
+    );
     let empty = mock_api().await;
     assert!(!Channel::health_check(&channel_for(&empty, &[])).await);
 }

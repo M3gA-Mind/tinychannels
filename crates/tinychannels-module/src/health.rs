@@ -18,29 +18,12 @@ pub(crate) async fn check_providers(
     let mut reports = Vec::with_capacity(channels.len());
     for channel in channels {
         let name = channel.name();
-        let state = match channel {
-            tinychannels::factory::BuiltChannel::Legacy(channel) => {
-                tinychannels::runtime::check_channels_health(
-                    &[std::sync::Arc::clone(channel)],
-                    budget,
-                )
-                .await
-                .into_iter()
-                .next()
-                .map_or(
-                    tinychannels_bus::ChannelHealthState::Unhealthy,
-                    |(_, state)| state,
-                )
+        let state = match tokio::time::timeout(budget, channel.adapter().status()).await {
+            Err(_) => tinychannels_bus::ChannelHealthState::Timeout,
+            Ok(Ok(snapshot)) if snapshot.health_state.as_deref() == Some("healthy") => {
+                tinychannels_bus::ChannelHealthState::Healthy
             }
-            tinychannels::factory::BuiltChannel::LongTail(adapter) => {
-                match tokio::time::timeout(budget, adapter.status()).await {
-                    Err(_) => tinychannels_bus::ChannelHealthState::Timeout,
-                    Ok(Ok(snapshot)) if snapshot.health_state.as_deref() == Some("healthy") => {
-                        tinychannels_bus::ChannelHealthState::Healthy
-                    }
-                    _ => tinychannels_bus::ChannelHealthState::Unhealthy,
-                }
-            }
+            _ => tinychannels_bus::ChannelHealthState::Unhealthy,
         };
         reports.push(tinychannels_bus::ChannelHealthReport {
             channel: name,

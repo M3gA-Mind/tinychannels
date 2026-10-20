@@ -163,13 +163,7 @@ impl Channel for SlackChannel {
     }
 
     async fn health_check(&self) -> bool {
-        self.http_client()
-            .get(self.api_url("auth.test"))
-            .bearer_auth(&self.bot_token)
-            .send()
-            .await
-            .map(|response| response.status().is_success())
-            .unwrap_or(false)
+        self.health_status().await
     }
 
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
@@ -228,13 +222,18 @@ impl crate::channel::ChannelAdapter for SlackChannel {
     }
 
     async fn status(&self) -> Result<ChannelAccountSnapshot, ChannelSendError> {
+        let health_state = if self.health_status().await {
+            "healthy"
+        } else {
+            "unhealthy"
+        };
         Ok(ChannelAccountSnapshot {
             channel_id: "slack".into(),
             states: vec![
                 ChannelAccountState::Configured,
                 ChannelAccountState::Enabled,
             ],
-            health_state: Some("unknown".into()),
+            health_state: Some(health_state.into()),
             ..Default::default()
         })
     }

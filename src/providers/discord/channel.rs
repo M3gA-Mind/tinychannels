@@ -165,6 +165,16 @@ impl DiscordChannel {
         self.http_client.clone()
     }
 
+    pub(crate) async fn health_status(&self) -> bool {
+        self.http_client()
+            .get(format!("{}/users/@me", self.api_base))
+            .header("Authorization", format!("Bot {}", self.bot_token))
+            .send()
+            .await
+            .map(|response| response.status().is_success())
+            .unwrap_or(false)
+    }
+
     /// Check if a Discord user ID is in the allowlist.
     ///
     /// Empty list ⇒ allow-all: an unconfigured allowlist applies no per-user
@@ -537,13 +547,7 @@ impl Channel for DiscordChannel {
     }
 
     async fn health_check(&self) -> bool {
-        self.http_client()
-            .get(format!("{}/users/@me", self.api_base))
-            .header("Authorization", format!("Bot {}", self.bot_token))
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
+        self.health_status().await
     }
 
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {

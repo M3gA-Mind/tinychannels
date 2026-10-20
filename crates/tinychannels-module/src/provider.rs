@@ -1785,6 +1785,7 @@ impl Running {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn start(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
@@ -1793,6 +1794,7 @@ impl Running {
         let name = channel.name().to_owned();
         Self::start_inner(Some(channel), name, hooks, host, None, false, None)
     }
+    #[cfg(test)]
     pub(crate) fn start_supervised(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
@@ -1802,6 +1804,7 @@ impl Running {
         let name = channel.name().to_owned();
         Self::start_inner(Some(channel), name, hooks, host, Some(policy), false, None)
     }
+    #[cfg(test)]
     pub(crate) fn start_outbound(
         channel: Arc<dyn Channel>,
         hooks: Arc<Hooks>,
