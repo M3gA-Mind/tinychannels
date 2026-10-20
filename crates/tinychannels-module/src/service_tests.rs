@@ -2957,12 +2957,12 @@ async fn typed_inbound_preparation_preserves_rich_parts_without_legacy_projectio
     assert_eq!(typed.envelope, envelope);
     assert_eq!(typed.message.content, "");
     assert_eq!(typed.message.channel, "telegram");
-    assert_eq!(typed.thread_id, "channel:telegram/alice/room-4/thread-8");
+    assert_eq!(typed.thread_id, "channel:telegram/alice/room-4#thread:thread-8");
 
     let legacy = service
         .prepare_channel_inbound(PrepareChannelInboundRequest {
             source: ChannelInboundSource::Envelope {
-                envelope,
+                envelope: envelope.clone(),
                 timestamp: 123,
             },
             namespace: "openhuman".into(),
