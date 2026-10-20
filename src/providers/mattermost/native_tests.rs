@@ -366,6 +366,111 @@ async fn mattermost_native_edit_and_delete_report_ambiguous_server_failures() {
 }
 
 #[tokio::test]
+async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_semantics() {
+    use crate::channel::{ChannelDelete, ChannelEdit, ChannelReaction, ChannelTypedSend};
+    use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef, MessageReceipt};
+    use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    drop(listener);
+    let channel = MattermostChannel::with_http_client(
+        format!("http://{address}"),
+        "test-token".into(),
+        None,
+        vec!["*".into()],
+        true,
+        false,
+        reqwest::Client::builder().no_proxy().build().unwrap(),
+    );
+
+    let send_error = ChannelTypedSend::send_typed(
+        &channel,
+        ChannelOutboundMessage {
+            channel_id: "mattermost".into(),
+            conversation_id: "channel-1".into(),
+            channel_ref: Some(ChannelRef {
+                id: "mattermost".into(),
+                account_id: Some("account-1".into()),
+            }),
+            conversation_ref: Some(ConversationRef {
+                kind: ConversationKind::Channel,
+                id: "channel-1".into(),
+                ..Default::default()
+            }),
+            idempotency_key: "transport-failure".into(),
+            parts: vec![OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "hello".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("a refused final post has an ambiguous delivery state");
+    assert_eq!(send_error.kind, SendErrorKind::Unknown);
+    assert!(send_error.sent_before_error);
+    assert!(!send_error.retryable);
+
+    let receipt = MessageReceipt {
+        channel: Some(ChannelRef {
+            id: "mattermost".into(),
+            account_id: Some("account-1".into()),
+        }),
+        conversation: Some(ConversationRef {
+            kind: ConversationKind::Channel,
+            id: "channel-1".into(),
+            ..Default::default()
+        }),
+        primary_platform_message_id: Some("post-1".into()),
+        ..Default::default()
+    };
+    let edit_error = ChannelEdit::edit(
+        &channel,
+        &receipt,
+        ChannelOutboundIntent {
+            channel_id: "mattermost".into(),
+            conversation_id: "channel-1".into(),
+            payload: OutboundPayload::Text {
+                text: "edited".into(),
+            },
+            ..Default::default()
+        },
+    )
+    .await
+    .expect_err("a refused edit may have reached the server");
+    assert_eq!(edit_error.kind, SendErrorKind::Unknown);
+    assert!(edit_error.sent_before_error);
+    assert!(!edit_error.retryable);
+
+    let delete_error = ChannelDelete::delete(&channel, &receipt)
+        .await
+        .expect_err("a refused delete may have reached the server");
+    assert_eq!(delete_error.kind, SendErrorKind::Unknown);
+    assert!(delete_error.sent_before_error);
+    assert!(!delete_error.retryable);
+
+    let identity_error = ChannelReaction::send_reaction(
+        &channel,
+        receipt.channel.as_ref().unwrap(),
+        receipt.conversation.as_ref().unwrap(),
+        "post-1",
+        &tinychannels_bus::channel::ChannelReaction {
+            value: "thumbsup".into(),
+            custom_emoji_id: None,
+        },
+        false,
+    )
+    .await
+    .expect_err("a failed identity lookup must not count as a reaction mutation");
+    assert_eq!(identity_error.kind, SendErrorKind::Transient);
+    assert!(identity_error.retryable);
+    assert!(!identity_error.sent_before_error);
+}
+
+#[tokio::test]
 async fn mattermost_reaction_errors_distinguish_safe_retry_from_unknown_mutation() {
     use crate::channel::ChannelReaction;
     use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef, SendErrorKind};
