@@ -60,6 +60,43 @@ async fn module_health_checks_preserve_provider_order_and_bound_pending_calls() 
     );
 }
 
+#[tokio::test]
+async fn module_health_checks_long_tail_adapter_status_and_deadline() {
+    let config = tinychannels_bus::ChannelsConfig {
+        irc: Some(tinychannels_bus::config::IrcConfig {
+            server: "irc.example.test".into(),
+            port: 6697,
+            nickname: "openhuman".into(),
+            username: None,
+            channels: vec!["#test".into()],
+            allowed_users: vec![],
+            server_password: None,
+            nickserv_password: None,
+            sasl_password: None,
+            verify_tls: Some(true),
+        }),
+        ..Default::default()
+    };
+    let adapter =
+        tinychannels::build_long_tail_channel(&config, &tinychannels::DefaultHttpClients, "irc")
+            .expect("configured IRC adapter");
+    let provider = tinychannels::factory::BuiltChannel::LongTail(adapter.clone());
+
+    let reports = check_providers(std::slice::from_ref(&provider), Duration::from_secs(1)).await;
+    assert_eq!(reports[0].channel, "irc");
+    assert_eq!(
+        reports[0].state,
+        tinychannels_bus::ChannelHealthState::Unhealthy,
+        "the long-tail adapter reports unknown health as unhealthy"
+    );
+
+    let timed_out = check_providers(&[provider], Duration::ZERO).await;
+    assert_eq!(
+        timed_out[0].state,
+        tinychannels_bus::ChannelHealthState::Timeout
+    );
+}
+
 #[test]
 fn module_health_budget_rejects_unbounded_or_zero_deadlines() {
     assert!(health_budget(0).is_err());

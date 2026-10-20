@@ -3962,5 +3962,13 @@ async fn a_long_tail_provider_starts_as_a_native_adapter_and_is_listed() {
     let running = service.running.lock().await.get("mattermost").cloned();
     let running = running.expect("mattermost is running");
     assert_eq!(running.adapter_handle().descriptor().id, "mattermost");
+    assert_eq!(
+        service
+            .channel_status("mattermost".into())
+            .await
+            .expect("native adapter status is available"),
+        "unhealthy",
+        "unknown provider health is not reported as connected"
+    );
     service.shutdown().await.unwrap();
 }
