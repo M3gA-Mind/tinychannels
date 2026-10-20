@@ -507,8 +507,14 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
         }
         if feature == Feature::InboundReactions {
             self.capture_configured_ingress().await?;
-            let captured = self.events.events.lock().unwrap().last().cloned()
-                .ok_or_else(|| fixture_operation_failed("listener emitted no reaction event"))?;
+            let captured = self.events.events.lock().unwrap().iter().rev()
+                .find(|event| matches!(
+                    event.event,
+                    tinychannels_bus::ChannelEventKind::ReactionAdded { .. }
+                        | tinychannels_bus::ChannelEventKind::ReactionRemoved { .. }
+                ))
+                .cloned()
+                .ok_or_else(|| fixture_operation_failed("listener emitted no inbound reaction event"))?;
             let requests = self.server.received_requests().await.unwrap_or_default();
             let request = requests
                 .iter()
