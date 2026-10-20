@@ -4319,7 +4319,7 @@ async fn configured_telegram_draft_keeps_topic_and_legacy_reply_separate() {
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 1);
     let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
-    assert_eq!(body["chat_id"], 100);
+    assert_eq!(body["chat_id"], "100");
     assert_eq!(body["message_thread_id"], "7");
     assert_eq!(body["reply_to_message_id"], 55);
 }
