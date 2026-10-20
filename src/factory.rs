@@ -592,7 +592,7 @@ fn build_long_tail_channel_inner(
         }
         "yuanbao" => {
             let yb = config.yuanbao.as_ref()?;
-            build_yuanbao_channel(yb, host, None)
+            build_yuanbao_channel(yb, host, None, None)
         }
         _ => None,
     }
@@ -602,6 +602,7 @@ fn build_yuanbao_channel(
     config: &tinychannels_bus::config::YuanbaoConfig,
     host: Option<&Arc<dyn ChannelHost>>,
     _voice_http: Option<reqwest::Client>,
+    _cos_endpoint: Option<String>,
 ) -> Option<Arc<dyn LongTailNative>> {
     let mut channel = match YuanbaoChannel::new(config.clone()) {
         Ok(channel) => channel,
@@ -626,6 +627,10 @@ fn build_yuanbao_channel(
     if let Some(client) = _voice_http {
         channel = channel.with_voice_http_client(client);
     }
+    #[cfg(test)]
+    if let Some(endpoint) = _cos_endpoint {
+        channel = channel.with_test_cos_endpoint(endpoint);
+    }
     Some(Arc::new(channel))
 }
 
@@ -635,8 +640,28 @@ pub(crate) fn build_yuanbao_channel_with_voice_http_for_test(
     host: &Arc<dyn ChannelHost>,
     voice_http: reqwest::Client,
 ) -> Option<Arc<dyn LongTailNative>> {
-    let channel = build_yuanbao_channel(config.yuanbao.as_ref()?, Some(host), Some(voice_http))?;
+    let channel = build_yuanbao_channel(
+        config.yuanbao.as_ref()?,
+        Some(host),
+        Some(voice_http),
+        None,
+    )?;
     Some(channel)
+}
+
+#[cfg(test)]
+pub(crate) fn build_yuanbao_channel_with_media_http_for_test(
+    config: &ChannelsConfig,
+    host: &Arc<dyn ChannelHost>,
+    voice_http: reqwest::Client,
+    cos_endpoint: String,
+) -> Option<Arc<dyn LongTailNative>> {
+    build_yuanbao_channel(
+        config.yuanbao.as_ref()?,
+        Some(host),
+        Some(voice_http),
+        Some(cos_endpoint),
+    )
 }
 
 /// Build the Signal provider with the host ports it can use: scoped media and
