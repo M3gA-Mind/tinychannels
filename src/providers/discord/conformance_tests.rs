@@ -493,6 +493,7 @@ impl AdapterFixture for DiscordFixture {
                 self.observed.lock().retain(|o| !(o.operation == "send" && o.feature == feature));
                 Ok(Some(ChannelSendOutcome { receipt: finalized, error: None }))
             }
+            Feature::ManagedReaction | Feature::ManagedThreadCreate | Feature::ManagedThreadUpdate | Feature::ManagedThreadList => Err(ChannelSendError::default()),
         }
     }
 }

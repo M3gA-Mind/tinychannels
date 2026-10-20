@@ -430,6 +430,7 @@ impl AdapterFixture for IMessageFixture {
                 );
                 Ok(None)
             }
+            F::ManagedReaction | F::ManagedThreadCreate | F::ManagedThreadUpdate | F::ManagedThreadList => Err(ChannelSendError::default()),
         };
         self.harvest(feature);
         result
