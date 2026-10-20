@@ -41,6 +41,15 @@ fn acknowledgement_categories_keep_their_context_and_priority() {
     assert!(jitter_millis(u64::MAX) < MAX_JITTER_MS);
 }
 
+#[test]
+fn jitter_millis_is_bounded_for_short_and_capped_backoffs() {
+    for _ in 0..256 {
+        assert!(jitter_millis(1) < 1_000);
+        assert!(jitter_millis(60) < MAX_JITTER_MS);
+    }
+    assert_eq!(jitter_millis(0), 0);
+}
+
 #[derive(Default)]
 struct RecordingObserver(std::sync::Mutex<Vec<String>>);
 
@@ -111,6 +120,65 @@ async fn listener_retries_failed_and_clean_exits_then_stops_when_receiver_closes
             "restarted:fixture",
             "connected:fixture",
         ]
+    );
+}
+
+struct CleanExitListener {
+    entries: Arc<std::sync::Mutex<Vec<tokio::time::Instant>>>,
+    stop_after: usize,
+    receiver: std::sync::Mutex<Option<tokio::sync::mpsc::Receiver<ChannelMessage>>>,
+}
+
+#[async_trait::async_trait]
+impl Channel for CleanExitListener {
+    fn name(&self) -> &str {
+        "clean-exit"
+    }
+
+    async fn send(&self, _: &crate::traits::SendMessage) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn listen(
+        &self,
+        _: tokio::sync::mpsc::Sender<ChannelMessage>,
+    ) -> anyhow::Result<()> {
+        let count = {
+            let mut entries = self.entries.lock().expect("entries lock");
+            entries.push(tokio::time::Instant::now());
+            entries.len()
+        };
+        if count >= self.stop_after {
+            self.receiver.lock().expect("receiver lock").take();
+        }
+        Ok(())
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn clean_listener_exits_escalate_backoff_under_paused_clock() {
+    let entries = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (tx, rx) = tokio::sync::mpsc::channel::<ChannelMessage>(1);
+    let channel: Arc<dyn Channel> = Arc::new(CleanExitListener {
+        entries: Arc::clone(&entries),
+        stop_after: 4,
+        receiver: std::sync::Mutex::new(Some(rx)),
+    });
+
+    spawn_supervised_listener(channel, tx, 1, 8, Arc::new(NoopListenerObserver))
+        .await
+        .expect("supervised listener task");
+
+    let entries = entries.lock().expect("entries lock");
+    assert_eq!(entries.len(), 4);
+    let whole_second_gaps: Vec<u64> = entries
+        .windows(2)
+        .map(|pair| pair[1].duration_since(pair[0]).as_secs())
+        .collect();
+    assert_eq!(
+        whole_second_gaps,
+        vec![1, 2, 4],
+        "clean listener exits must use the escalating retry backoff"
     );
 }
 

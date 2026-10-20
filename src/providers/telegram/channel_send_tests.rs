@@ -165,6 +165,48 @@ async fn send_text_chunks_retries_without_markdown_when_markdown_rejected() {
 }
 
 #[tokio::test]
+async fn send_text_chunks_short_message_retries_plain_preserving_thread_and_reply() {
+    let server = mock_api().await;
+    Mock::given(method("POST"))
+        .and(path(api_path("sendMessage")))
+        .and(body_partial_json(
+            serde_json::json!({ "parse_mode": "Markdown" }),
+        ))
+        .respond_with(ResponseTemplate::new(400).set_body_string("can't parse entities"))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let ch = channel_for(&server, &["*"]);
+
+    ch.send_text_chunks("**markdown fallback**", "100", Some("3"), Some(5))
+        .await
+        .unwrap();
+
+    let bodies = json_bodies(&server, "sendMessage").await;
+    assert_eq!(
+        bodies,
+        vec![
+            serde_json::json!({
+                "chat_id": "100",
+                "text": "**markdown fallback**",
+                "parse_mode": "Markdown",
+                "message_thread_id": "3",
+                "reply_to_message_id": 5,
+            }),
+            serde_json::json!({
+                "chat_id": "100",
+                "text": "**markdown fallback**",
+                "message_thread_id": "3",
+                "reply_to_message_id": 5,
+            }),
+        ],
+        "short messages retry once without Markdown while preserving reply routing"
+    );
+    assert!(bodies[1].get("parse_mode").is_none());
+}
+
+#[tokio::test]
 async fn send_text_chunks_fails_when_markdown_and_plain_both_rejected() {
     let server = mock_api().await;
     mount_post(
