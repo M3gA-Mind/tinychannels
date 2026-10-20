@@ -30,11 +30,7 @@ pub fn format_approval_prompt(tool_name: &str, action_summary: &str) -> String {
 }
 
 /// Where to deliver a prompt for a conversation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ReplyContext {
-    pub reply_target: String,
-    pub thread_ts: Option<String>,
-}
+pub use tinychannels_bus::approvals::ReplyContext;
 
 /// A parked tool call to ask about.
 #[derive(Debug, Clone, PartialEq, Eq)]

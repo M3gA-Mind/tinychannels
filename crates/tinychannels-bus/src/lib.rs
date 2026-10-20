@@ -1,6 +1,7 @@
 //! Pure serialized vocabulary, schema declarations and errors for TinyChannels.
 //! Provider seams and algorithms live in `tinychannels-runtime`; the root
 //! implementation crate preserves legacy module paths through re-exports.
+pub mod approvals;
 pub mod capabilities;
 #[allow(
     deprecated,
