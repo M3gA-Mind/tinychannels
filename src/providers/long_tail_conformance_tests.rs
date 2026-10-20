@@ -124,6 +124,31 @@ impl VoiceMediaStore for ConformanceVoice {
         use base64::Engine as _;
         Ok(tinychannels_bus::HostReadVoiceMediaResult {
             audio_base64: base64::engine::general_purpose::STANDARD.encode(b"conformance-audio"),
+            mime_type: "audio/mp4".into(),
+            file_name: Some("voice.m4a".into()),
+        })
+    }
+}
+
+struct QQConformanceVoice;
+
+#[async_trait]
+impl VoiceMediaStore for QQConformanceVoice {
+    async fn store_voice(
+        &self,
+        _request: VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        anyhow::bail!("conformance fixture only reads scoped voice")
+    }
+
+    async fn read_voice(
+        &self,
+        _scope: tinychannels_bus::HostVoiceScope,
+        _opaque_id: String,
+    ) -> anyhow::Result<tinychannels_bus::HostReadVoiceMediaResult> {
+        use base64::Engine as _;
+        Ok(tinychannels_bus::HostReadVoiceMediaResult {
+            audio_base64: base64::engine::general_purpose::STANDARD.encode(b"conformance-audio"),
             mime_type: "audio/ogg".into(),
             file_name: Some("voice.ogg".into()),
         })
@@ -254,7 +279,7 @@ impl LongTailFixture {
         .await;
         let host: Arc<dyn crate::host::ChannelHost> = crate::ChannelHostBuilder::new()
             .media_repository(Arc::new(ConformanceMedia))
-            .voice_media_store(Arc::new(ConformanceVoice))
+            .voice_media_store(Arc::new(QQConformanceVoice))
             .build();
         let config = ChannelsConfig {
             qq: Some(QQConfig {
