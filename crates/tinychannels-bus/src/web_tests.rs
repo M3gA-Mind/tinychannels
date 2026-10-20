@@ -487,7 +487,11 @@ fn schema_export_is_deterministic_and_contains_every_variant() {
     let sender = &schema["$defs"]["SenderRef"];
     let required = sender["required"].as_array().unwrap();
     assert!(required.iter().any(|field| field == "id"));
-    assert!(!required.iter().any(|field| field == "name"));
+    assert!(required.iter().any(|field| field == "name"));
+    let name_schema = &sender["properties"]["name"];
+    let name_types = name_schema["type"].as_array().unwrap();
+    assert!(name_types.iter().any(|kind| kind == "string"));
+    assert!(name_types.iter().any(|kind| kind == "null"));
 }
 
 const HISTORICAL_EVENT_NAMES: &[&str] = &[
