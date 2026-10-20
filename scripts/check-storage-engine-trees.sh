@@ -37,9 +37,13 @@ for package in data["packages"]:
 '
 }
 
-tree_names() {
+normalize_names() {
   # Git Bash on Windows can leave CRLF in captured cargo output.
-  cargo tree --locked "$@" --prefix none | tr -d '\r' | awk 'NF {print $1}'
+  tr -d '\r' | awk 'NF {print $1}'
+}
+
+tree_names() {
+  cargo tree --locked "$@" --prefix none | normalize_names
 }
 
 if [[ "${1:-}" == "--self-test" ]]; then
@@ -70,10 +74,21 @@ if [[ "${1:-}" == "--self-test" ]]; then
     printf 'self-test failed: the SQLite exception accepted an unrelated offender\n' >&2
     exit 1
   fi
-  metadata='{"workspace_members":["dylib-id","binary-id"],"packages":[{"id":"dylib-id","name":"dylib-only","targets":[{"kind":["dylib"]}]},{"id":"binary-id","name":"binary-only","targets":[{"kind":["bin"]}]},{"id":"external-id","name":"external-dylib","targets":[{"kind":["dylib"]}]}]}'
+  metadata='{"workspace_members":["lib-id","rlib-id","dylib-id","cdylib-id","staticlib-id","proc-macro-id","binary-id"],"packages":[{"id":"lib-id","name":"lib-only","targets":[{"kind":["lib"]}]},{"id":"rlib-id","name":"rlib-only","targets":[{"kind":["rlib"]}]},{"id":"dylib-id","name":"dylib-only","targets":[{"kind":["dylib"]}]},{"id":"cdylib-id","name":"cdylib-only","targets":[{"kind":["cdylib"]}]},{"id":"staticlib-id","name":"staticlib-only","targets":[{"kind":["staticlib"]}]},{"id":"proc-macro-id","name":"proc-macro-only","targets":[{"kind":["proc-macro"]}]},{"id":"binary-id","name":"binary-only","targets":[{"kind":["bin"]}]},{"id":"external-id","name":"external-dylib","targets":[{"kind":["dylib"]}]}]}'
   selected="$(printf '%s' "$metadata" | library_packages)"
-  if [[ "$selected" != "dylib-only" ]]; then
-    printf 'self-test failed: library enumeration did not select only the workspace dylib target\n' >&2
+  expected=$'lib-only\nrlib-only\ndylib-only\ncdylib-only\nstaticlib-only\nproc-macro-only'
+  if [[ "$selected" != "$expected" ]]; then
+    printf 'self-test failed: library enumeration did not select all six native library kinds by workspace member ID\n' >&2
+    exit 1
+  fi
+  empty_metadata='{"workspace_members":[],"packages":[]}'
+  if [[ -n "$(printf '%s' "$empty_metadata" | library_packages)" ]]; then
+    printf 'self-test failed: empty workspace metadata selected a package\n' >&2
+    exit 1
+  fi
+  normalized="$(printf 'tinychannels\r\nserde\r\n' | normalize_names)"
+  if [[ "$normalized" != $'tinychannels\nserde' ]]; then
+    printf 'self-test failed: CRLF cargo output was not normalized\n' >&2
     exit 1
   fi
   printf 'storage engine tree gate self-test passed\n'
