@@ -166,7 +166,7 @@ impl SignalChannel {
         accepted: &Accepted<'_>,
         reaction: &Value,
         sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
-    ) {
+    ) -> bool {
         let emoji = reaction
             .get("emoji")
             .and_then(Value::as_str)
@@ -180,7 +180,7 @@ impl SignalChannel {
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let Some(target_ts) = target_ts.filter(|_| !emoji.is_empty()) else {
-            return;
+            return true;
         };
         let direction = if removed { "removed" } else { "added" };
         let event_id = format!(
@@ -188,7 +188,7 @@ impl SignalChannel {
             accepted.sender, accepted.timestamp
         );
         if !self.mark_seen(event_id.clone()) {
-            return;
+            return true;
         }
         let message_id = format!("sig_{target_ts}");
         let provider_message_id = Some(target_ts.to_string());
@@ -220,7 +220,7 @@ impl SignalChannel {
             kind,
         );
         self.publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
-            .await;
+            .await
     }
 
     async fn dispatch_receipt(
@@ -228,14 +228,14 @@ impl SignalChannel {
         envelope: &Envelope,
         receipt: &Value,
         sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
-    ) {
+    ) -> bool {
         let Some(sender) = Self::sender(envelope).filter(|s| self.is_sender_allowed(s)) else {
-            return;
+            return true;
         };
         let read = receipt.get("isRead").and_then(Value::as_bool) == Some(true);
         let delivered = receipt.get("isDelivery").and_then(Value::as_bool) == Some(true);
         if !(read || delivered) {
-            return;
+            return true;
         }
         let when = receipt.get("when").and_then(Value::as_u64);
         let actor = Some(Self::sender_of(envelope, &sender));
@@ -273,9 +273,14 @@ impl SignalChannel {
                 Some(Self::conversation_of(&sender)),
                 kind,
             );
-            self.publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
-                .await;
+            if !self
+                .publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
+                .await
+            {
+                return false;
+            }
         }
+        true
     }
 
     async fn dispatch_delete(
@@ -284,13 +289,13 @@ impl SignalChannel {
         accepted: &Accepted<'_>,
         deleted: &Value,
         sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
-    ) {
+    ) -> bool {
         let Some(stamp) = deleted.get("timestamp").and_then(Value::as_u64) else {
-            return;
+            return true;
         };
         let event_id = format!("signal:delete:{stamp}:{}", accepted.sender);
         if !self.mark_seen(event_id.clone()) {
-            return;
+            return true;
         }
         let _ = envelope;
         let event = channel_event(
@@ -304,7 +309,7 @@ impl SignalChannel {
             },
         );
         self.publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
-            .await;
+            .await
     }
 
     async fn publish_typed(
@@ -370,22 +375,21 @@ impl SignalChannel {
         tx: Option<&mpsc::Sender<ChannelMessage>>,
     ) -> bool {
         if let Some(receipt) = &envelope.receipt_message {
-            self.dispatch_receipt(envelope, receipt, sink).await;
-            return true;
+            return self.dispatch_receipt(envelope, receipt, sink).await;
         }
         let Some(accepted) = self.accept(envelope) else {
             return true;
         };
         let data = accepted.data;
         if let Some(reaction) = &data.reaction {
-            self.dispatch_reaction(envelope, &accepted, reaction, sink)
+            return self
+                .dispatch_reaction(envelope, &accepted, reaction, sink)
                 .await;
-            return true;
         }
         if let Some(deleted) = &data.remote_delete {
-            self.dispatch_delete(envelope, &accepted, deleted, sink)
+            return self
+                .dispatch_delete(envelope, &accepted, deleted, sink)
                 .await;
-            return true;
         }
         let has_attachments = data.attachments.as_ref().is_some_and(|a| !a.is_empty());
         if has_attachments && self.ignore_attachments && data.message.is_none() {
