@@ -5111,6 +5111,10 @@ async fn a_built_linq_launch_starts_as_the_native_linq_adapter() {
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::LinqNativeV2);
     assert_eq!(handle.descriptor().id, "linq");
+    assert!(
+        running.channel.is_none(),
+        "configured Linq launch must not retain the legacy Channel trait object"
+    );
     running.stop().await.unwrap();
 }
 
