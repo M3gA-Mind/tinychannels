@@ -2,7 +2,6 @@
 
 use super::{IMessageChannel, ListenerCursor, ListenerRegistration};
 use crate::channel::ChannelInboundSink;
-use rusqlite::Connection;
 use std::sync::atomic::Ordering;
 use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
 use tokio::sync::{oneshot, watch};
@@ -37,7 +36,12 @@ impl IMessageChannel {
             generation,
         };
 
-        self.listen_typed_with(sink, &mut cancellation, None).await
+        let result = self.listen_typed_with(sink, &mut cancellation, None).await;
+        if *cancellation.borrow() {
+            Ok(())
+        } else {
+            result
+        }
     }
 
     pub(super) async fn stop_typed_listener(&self) -> Result<(), ChannelSendError> {

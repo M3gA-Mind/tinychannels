@@ -123,6 +123,12 @@ async fn typed_listener_retries_rejected_rows_without_replaying_accepted_predece
         &accepted[0],
         ChannelIngress::Inbound(envelope) if envelope.message_id == "IN1"
     ));
+    if let ChannelIngress::Inbound(envelope) = &accepted[0] {
+        assert_eq!(envelope.channel.id, "imessage");
+        assert_eq!(envelope.channel.account_id, None);
+        assert_eq!(envelope.conversation.id, PEER);
+        assert_eq!(envelope.sender.id, PEER);
+    }
     drop(accepted);
 
     let recording = Arc::new(RecordingIngress::default());
@@ -149,6 +155,115 @@ async fn typed_listener_retries_rejected_rows_without_replaying_accepted_predece
         ChannelIngress::Inbound(envelope) if envelope.message_id == "IN2"
     ));
     let _ = stop.send(true);
+}
+
+#[tokio::test]
+async fn stopping_typed_listener_cancels_backpressure_and_releases_registration() {
+    let rig = rig();
+    let blocked = Arc::new(BlockingIngress::default());
+    let channel = rig.channel.clone();
+    let sink = blocked.clone();
+    let listener = tokio::spawn(async move { ChannelAdapter::start(&channel, sink.as_ref()).await });
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if rig
+                .channel
+                .listener_cursor
+                .lock()
+                .unwrap()
+                .is_some()
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("listener fixes its startup cursor");
+
+    rig.inbound(1, Some("blocked"), false, &[]);
+    tokio::time::timeout(Duration::from_secs(2), blocked.entered.notified())
+        .await
+        .expect("listener reaches the blocking ingress sink");
+    ChannelAdapter::stop(&rig.channel).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), listener)
+        .await
+        .expect("stop interrupts sink backpressure")
+        .unwrap()
+        .unwrap();
+    assert!(rig.channel.listener_cancel.lock().unwrap().is_none());
+    assert_eq!(
+        rig.channel.listener_cursor.lock().unwrap().unwrap().inbound_rowid,
+        0,
+        "a cancelled push must not advance the accepted cursor"
+    );
+
+    let recording = Arc::new(RecordingIngress::default());
+    let channel = rig.channel.clone();
+    let sink = recording.clone();
+    let restarted = tokio::spawn(async move { ChannelAdapter::start(&channel, sink.as_ref()).await });
+    tokio::time::timeout(Duration::from_secs(2), recording.entered.notified())
+        .await
+        .expect("restart retries the message that was not accepted");
+    ChannelAdapter::stop(&rig.channel).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), restarted)
+        .await
+        .expect("restarted listener stops")
+        .unwrap()
+        .unwrap();
+    let delivered = recording.items.lock().unwrap();
+    assert_eq!(delivered.len(), 1);
+    assert!(matches!(
+        &delivered[0],
+        ChannelIngress::Inbound(envelope) if envelope.message_id == "IN1"
+    ));
+}
+
+#[tokio::test]
+async fn typed_read_receipts_keep_the_recipient_conversation_scope() {
+    let rig = rig();
+    let conn = rig.conn();
+    conn.execute(
+        "INSERT INTO message (ROWID, guid, handle_id, text, is_from_me, date, date_read) \
+         VALUES (90, 'OUT90', 1, 'sent', 1, 700000000000000000, 0)",
+        [],
+    )
+    .unwrap();
+
+    let recording = Arc::new(RecordingIngress::default());
+    let (stop, cancellation) = watch::channel(false);
+    let (ready, started) = oneshot::channel();
+    let channel = rig.channel.clone();
+    let sink = recording.clone();
+    let listener = tokio::spawn(async move {
+        channel
+            .listen_typed_with_ready(sink.as_ref(), cancellation, ready)
+            .await
+    });
+    started.await.unwrap();
+    rig.conn()
+        .execute("UPDATE message SET date_read = 700000000000000001 WHERE ROWID = 90", [])
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(2), recording.entered.notified())
+        .await
+        .expect("typed listener publishes the read receipt");
+    stop.send(true).unwrap();
+    listener.await.unwrap().unwrap();
+
+    let delivered = recording.items.lock().unwrap();
+    assert_eq!(delivered.len(), 1);
+    match &delivered[0] {
+        ChannelIngress::Event(event) => {
+            assert_eq!(event.channel.id, "imessage");
+            assert_eq!(event.conversation.as_ref().unwrap().id, PEER);
+            assert!(matches!(
+                event.event,
+                tinychannels_bus::ChannelEventKind::ReadReceipt { ref message_id, .. }
+                    if message_id == "OUT90"
+            ));
+        }
+        other => panic!("expected a typed read receipt event, got {other:?}"),
+    }
 }
 
 fn text(body: &str) -> OutboundContentPart {
