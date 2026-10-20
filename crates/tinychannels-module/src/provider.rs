@@ -1299,7 +1299,7 @@ impl NativePorts {
             edits: channel.clone(),
             deletes: channel.clone(),
             drafts: channel,
-            listener_mode: LongTailListenerMode::Legacy,
+            listener_mode: LongTailListenerMode::Adapter,
         }
     }
 
