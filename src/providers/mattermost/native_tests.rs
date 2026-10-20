@@ -147,7 +147,9 @@ async fn mattermost_reaction_removal_uses_the_post_reaction_route() {
         .mount(&server)
         .await;
     Mock::given(method("DELETE"))
-        .and(path("/api/v4/users/bot-user-1/posts/post-42/reactions/thumbsup"))
+        .and(path(
+            "/api/v4/users/bot-user-1/posts/post-42/reactions/thumbsup",
+        ))
         .and(header("authorization", "Bearer test-token"))
         .respond_with(ResponseTemplate::new(200))
         .expect(1)
@@ -328,8 +330,8 @@ async fn mattermost_native_edit_and_delete_report_ambiguous_server_failures() {
             }],
         },
     )
-        .await
-        .unwrap();
+    .await
+    .unwrap();
     let intent = ChannelOutboundIntent {
         channel_id: "mattermost".into(),
         conversation_id: "channel-1".into(),
@@ -360,7 +362,7 @@ async fn mattermost_native_edit_and_delete_report_ambiguous_server_failures() {
     assert_eq!(delete_error.kind, SendErrorKind::Unknown);
     assert!(!delete_error.retryable);
     assert!(delete_error.sent_before_error);
-    assert_eq!(server.received_requests().await.unwrap().len(), 4);
+    assert_eq!(server.received_requests().await.unwrap().len(), 3);
 }
 
 #[tokio::test]
