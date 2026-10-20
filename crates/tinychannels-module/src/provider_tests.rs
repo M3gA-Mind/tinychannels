@@ -1275,6 +1275,15 @@ impl IngressVoiceCallback {
         self.ingress_changed.notify_one();
         Ok(())
     }
+
+    async fn report_status(
+        &self,
+        _channel: String,
+        _state: String,
+        _detail: Option<String>,
+    ) -> Result<()> {
+        Ok(())
+    }
 }
 
 async fn ingress_fixture() -> (
