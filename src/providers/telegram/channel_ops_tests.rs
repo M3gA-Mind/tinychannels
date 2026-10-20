@@ -263,6 +263,14 @@ fn unsupported_fixture_operation() -> tinychannels_bus::channel::ChannelSendErro
     }
 }
 
+fn fixture_operation_failed(message: impl Into<String>) -> tinychannels_bus::channel::ChannelSendError {
+    tinychannels_bus::channel::ChannelSendError {
+        kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
+        message: message.into(),
+        ..Default::default()
+    }
+}
+
 fn telegram_voice_update() -> serde_json::Value {
     serde_json::json!({
         "update_id": 902,
@@ -524,17 +532,17 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
         }
         if feature == Feature::VoiceIn {
             if self.events.inbounds.lock().unwrap().is_empty() {
-                return Err(unsupported_fixture_operation());
+                return Err(fixture_operation_failed("voice listener did not publish an inbound envelope"));
             }
             let envelope = self.events.inbounds.lock().unwrap().last().cloned()
-                .ok_or_else(unsupported_fixture_operation)?;
+                .ok_or_else(|| fixture_operation_failed("voice envelope was missing"))?;
             let mut note = envelope.parts.iter().find_map(|part| match part {
                 tinychannels_bus::ContentPart::VoiceNote { voice_note } => Some(voice_note.clone()),
                 _ => None,
-            }).ok_or_else(unsupported_fixture_operation)?;
+            }).ok_or_else(|| fixture_operation_failed("voice envelope had no typed voice note"))?;
             let stored = self.voice.stored.lock().unwrap().iter().rev()
                 .find(|request| request.direction == tinychannels_bus::HostVoiceMediaDirection::Inbound)
-                .cloned().ok_or_else(unsupported_fixture_operation)?;
+                .cloned().ok_or_else(|| fixture_operation_failed("voice store did not receive inbound audio"))?;
             let status = crate::host::enrich_voice_note(
                 &mut note,
                 stored.scope.clone(),
@@ -547,10 +555,10 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 Some(self.transcriber.clone()),
             ).await;
             if status != crate::host::VoiceEnrichmentStatus::HostTranscription {
-                return Err(unsupported_fixture_operation());
+                return Err(fixture_operation_failed(format!("voice enrichment status was {status:?}")));
             }
             let Some(transcript) = note.transcript.as_ref() else {
-                return Err(unsupported_fixture_operation());
+                return Err(fixture_operation_failed("voice transcript was missing"));
             };
             if transcript.text != "telegram conformance transcript"
                 || note.media.opaque_id.as_deref() != Some("telegram-inbound-voice")
@@ -558,11 +566,11 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 || note.media.path.is_some()
                 || note.media.local_cache_path.is_some()
             {
-                return Err(unsupported_fixture_operation());
+                return Err(fixture_operation_failed("voice transcript or opaque media scope did not match"));
             }
             let requests = self.server.received_requests().await.unwrap_or_default();
             let request = requests.iter().find(|r| r.url.path().ends_with("/getUpdates"))
-                .ok_or_else(unsupported_fixture_operation)?;
+                .ok_or_else(|| fixture_operation_failed("listener did not issue getUpdates"))?;
             self.observations.lock().unwrap().push(tinychannels_conformance::WireObservation {
                 feature,
                 operation: "voice_in".into(),
