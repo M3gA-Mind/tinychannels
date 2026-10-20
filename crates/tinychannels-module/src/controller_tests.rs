@@ -25,6 +25,15 @@ struct BackendFixture(
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
 impl BackendFixture {
+    async fn report_status(
+        &self,
+        _channel: String,
+        _state: String,
+        _detail: Option<String>,
+    ) -> Result<()> {
+        Ok(())
+    }
+
     async fn dispatch_controller_backend(
         &self,
         request: ChannelBackendRequest,
