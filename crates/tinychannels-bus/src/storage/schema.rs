@@ -13,7 +13,10 @@
 //! feature is compiled in: the grant and the migration must not depend on how
 //! this crate was built.
 
-use tinystoragedrivers_core::{CollectionSpec, schema::{Owner, Schema, ScopeClass}};
+use tinystoragedrivers_core::{
+    CollectionSpec,
+    schema::{Owner, Schema, ScopeClass},
+};
 
 use super::migrate;
 

@@ -8,9 +8,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_core::{
-    BlobReader, BlobStore, DocumentStore, Filter, Precondition, Query,
-};
+use tinystoragedrivers_core::{BlobReader, BlobStore, DocumentStore, Filter, Precondition, Query};
 use tokio::io::AsyncReadExt;
 
 use tinychannels_bus::storage::{MEDIA_METADATA as MEDIA_COLLECTION, media_metadata_spec};
