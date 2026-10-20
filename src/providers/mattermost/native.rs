@@ -178,7 +178,7 @@ impl NativeProvider for MattermostChannel {
         }
         .map_err(|_| mattermost_request_error("reaction", true))?;
         if !response.status().is_success() {
-            return Err(mattermost_status_error(response.status(), "reaction"));
+            return Err(mattermost_status_error(&response, "reaction", true));
         }
         Ok(())
     }
@@ -200,7 +200,7 @@ impl NativeProvider for MattermostChannel {
             .await
             .map_err(|_| mattermost_request_error("post edit", true))?;
         if !response.status().is_success() {
-            return Err(mattermost_status_error(response.status(), "post edit"));
+            return Err(mattermost_status_error(&response, "post edit", true));
         }
         Ok(())
     }
@@ -218,7 +218,7 @@ impl NativeProvider for MattermostChannel {
             .await
             .map_err(|_| mattermost_request_error("post delete", true))?;
         if !response.status().is_success() {
-            return Err(mattermost_status_error(response.status(), "post delete"));
+            return Err(mattermost_status_error(&response, "post delete", true));
         }
         Ok(())
     }
@@ -244,10 +244,7 @@ impl MattermostChannel {
             .await
             .map_err(|_| mattermost_request_error("identity lookup", false))?;
         if !response.status().is_success() {
-            return Err(mattermost_status_error(
-                response.status(),
-                "identity lookup",
-            ));
+            return Err(mattermost_status_error(&response, "identity lookup", false));
         }
         let identity: serde_json::Value = response.json().await.map_err(|_| ChannelSendError {
             kind: SendErrorKind::Unknown,
@@ -403,21 +400,39 @@ fn mattermost_request_error(operation: &str, may_have_been_applied: bool) -> Cha
     }
 }
 
-fn mattermost_status_error(status: reqwest::StatusCode, operation: &str) -> ChannelSendError {
+fn mattermost_status_error(
+    response: &reqwest::Response,
+    operation: &str,
+    may_have_been_applied: bool,
+) -> ChannelSendError {
+    let status = response.status();
+    let rate_limited = status == reqwest::StatusCode::TOO_MANY_REQUESTS;
     let server_error = status.is_server_error();
+    let retry_after = response
+        .headers()
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<f64>().ok());
     ChannelSendError {
         kind: if status == reqwest::StatusCode::UNAUTHORIZED
             || status == reqwest::StatusCode::FORBIDDEN
         {
             SendErrorKind::Forbidden
+        } else if rate_limited {
+            SendErrorKind::RateLimited
         } else if server_error {
-            SendErrorKind::Unknown
+            if may_have_been_applied {
+                SendErrorKind::Unknown
+            } else {
+                SendErrorKind::Transient
+            }
         } else {
             SendErrorKind::BadFormat
         },
         message: format!("Mattermost {operation} failed with HTTP {status}"),
-        retryable: server_error,
-        sent_before_error: server_error,
+        retryable: rate_limited || (server_error && !may_have_been_applied),
+        sent_before_error: server_error && may_have_been_applied,
+        retry_after: if rate_limited { retry_after } else { None },
         ..Default::default()
     }
 }
