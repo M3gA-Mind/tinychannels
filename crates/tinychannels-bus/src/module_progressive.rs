@@ -383,6 +383,10 @@ pub enum ProgressiveTransportResult {
     /// Observation callback accepted the event; this does not acknowledge a
     /// provider send.
     Acknowledged,
+    /// Trusted hosted callback accepted typed output for delivery, while the
+    /// provider receipt is delivered asynchronously on another event path.
+    /// This is not a provider receipt and is rejected for native sends.
+    Accepted,
     Success(Value),
     /// Structured result for hosts that can preserve normalized receipts and
     /// partial-send failure facts across the module boundary.

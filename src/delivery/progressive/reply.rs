@@ -26,6 +26,7 @@ pub struct ProgressiveReply {
     output_sequence: u64,
     use_global_edit_latch: bool,
     text_limit: Option<(u64, tinychannels_bus::LengthUnit)>,
+    allow_receiptless_delivery: bool,
 }
 
 impl ProgressiveReply {
@@ -60,6 +61,7 @@ impl ProgressiveReply {
                 .text
                 .text_limit
                 .map(|limit| (limit, capabilities.text.length_unit)),
+            allow_receiptless_delivery: false,
         }
     }
 
@@ -73,6 +75,21 @@ impl ProgressiveReply {
         let mut reply = Self::new(sender, channel, capabilities);
         reply.output_context = Some(context);
         reply.use_global_edit_latch = false;
+        reply
+    }
+
+    /// Start a scoped turn whose trusted host callback accepts delivery while
+    /// the provider receipt arrives asynchronously. The module callback must
+    /// use the distinct `Accepted` result; an empty provider `Outcome` remains
+    /// an error.
+    pub fn new_hosted_scoped(
+        sender: Arc<dyn ProgressiveSender>,
+        channel: impl Into<String>,
+        capabilities: ChannelCapabilities,
+        context: ProgressiveOutputContext,
+    ) -> Self {
+        let mut reply = Self::new_scoped(sender, channel, capabilities, context);
+        reply.allow_receiptless_delivery = true;
         reply
     }
 
@@ -597,7 +614,7 @@ impl ProgressiveReply {
                 outcome.error = next.error;
                 break;
             }
-            if no_receipt {
+            if no_receipt && !self.allow_receiptless_delivery {
                 outcome.error = Some(tinychannels_bus::channel::ChannelSendError {
                     kind: tinychannels_bus::channel::SendErrorKind::Unknown,
                     message: "provider accepted a progressive send without a receipt id".into(),

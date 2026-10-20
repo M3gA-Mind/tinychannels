@@ -34,6 +34,7 @@ struct Sender {
     context: Option<ProgressiveOutputContext>,
     capabilities: tinychannels_bus::ChannelCapabilities,
     channel: String,
+    hosted: bool,
     send_sequence: std::sync::atomic::AtomicU64,
 }
 
@@ -683,7 +684,25 @@ async fn send_typed_part(
             ProgressiveSendError::PartialOutcome(Box::new(outcome))
         })? {
         ChannelBackendResult::ProgressiveTransport(result) => match *result {
-            ProgressiveTransportResult::Outcome(outcome) => Ok(*outcome),
+            ProgressiveTransportResult::Outcome(outcome) => {
+                let empty = outcome.error.is_none()
+                    && outcome.receipt.primary_platform_message_id.is_none()
+                    && outcome.receipt.platform_message_ids.is_empty()
+                    && outcome.receipt.parts.is_empty();
+                if sender.hosted && empty {
+                    Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                        "hosted receiptless delivery requires explicit acceptance"
+                    )))
+                } else {
+                    Ok(*outcome)
+                }
+            }
+            ProgressiveTransportResult::Accepted if sender.hosted => {
+                Ok(tinychannels_bus::channel::ChannelSendOutcome::default())
+            }
+            ProgressiveTransportResult::Accepted => Err(ProgressiveSendError::Other(
+                anyhow::anyhow!("receiptless acceptance is only valid for hosted sends"),
+            )),
             ProgressiveTransportResult::Unavailable => Err(ProgressiveSendError::Unavailable),
             ProgressiveTransportResult::Failed => Err(ProgressiveSendError::Other(
                 anyhow::anyhow!("typed provider send failed with unknown outcome"),
@@ -1301,19 +1320,20 @@ async fn run(
         media_account_scope,
     } = target;
     let mut reply = if let Some(context) = context {
-        ProgressiveReply::new_scoped(
-            Arc::new(Sender {
-                host,
-                media_account_scope: media_account_scope.clone(),
-                context: Some(context.clone()),
-                capabilities: capabilities.clone(),
-                channel: channel.clone(),
-                send_sequence: std::sync::atomic::AtomicU64::new(0),
-            }),
-            channel,
-            capabilities,
-            context,
-        )
+        let sender = Arc::new(Sender {
+            host,
+            media_account_scope: media_account_scope.clone(),
+            context: Some(context.clone()),
+            capabilities: capabilities.clone(),
+            channel: channel.clone(),
+            hosted,
+            send_sequence: std::sync::atomic::AtomicU64::new(0),
+        });
+        if hosted {
+            ProgressiveReply::new_hosted_scoped(sender, channel, capabilities, context)
+        } else {
+            ProgressiveReply::new_scoped(sender, channel, capabilities, context)
+        }
     } else {
         ProgressiveReply::new(
             Arc::new(Sender {
@@ -1322,6 +1342,7 @@ async fn run(
                 context: None,
                 capabilities: capabilities.clone(),
                 channel: channel.clone(),
+                hosted,
                 send_sequence: std::sync::atomic::AtomicU64::new(0),
             }),
             channel,
