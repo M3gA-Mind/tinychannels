@@ -705,8 +705,6 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 let ProgressiveTransportRequest::Edit {
                     channel_ref,
                     conversation,
-                    message_id: _,
-                    text: _,
                     ..
                 } = request.as_ref()
                 else {
