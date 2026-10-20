@@ -34,12 +34,14 @@ struct Sender {
     context: Option<ProgressiveOutputContext>,
     capabilities: tinychannels_bus::ChannelCapabilities,
     channel: String,
+    hosted: bool,
     send_sequence: std::sync::atomic::AtomicU64,
 }
 
 struct ProgressiveTarget {
     channel: String,
     media_account_scope: crate::provider::MediaScope,
+    hosted: bool,
 }
 
 impl Sender {
@@ -100,6 +102,9 @@ impl Sender {
         match result {
             ChannelBackendResult::ProgressiveTransport(result) => match *result {
                 ProgressiveTransportResult::Acknowledged => Ok(Value::Null),
+                ProgressiveTransportResult::Accepted => Err(ProgressiveSendError::Other(
+                    anyhow::anyhow!("hosted acceptance is only valid for typed sends"),
+                )),
                 ProgressiveTransportResult::Outcome(outcome) => match outcome.error {
                     None => serde_json::to_value(outcome.receipt)
                         .map_err(|error| ProgressiveSendError::Other(error.into())),
@@ -663,7 +668,7 @@ async fn send_typed_part(
                 conversation: context.map(|context| context.conversation.clone()),
                 sequence: context.map(|_| sequence),
                 segment_index: context.map(|_| segment_index),
-                idempotency_key,
+                idempotency_key: idempotency_key.clone(),
                 parts: prepared_parts,
                 text: prepared_text,
             },
@@ -683,7 +688,44 @@ async fn send_typed_part(
             ProgressiveSendError::PartialOutcome(Box::new(outcome))
         })? {
         ChannelBackendResult::ProgressiveTransport(result) => match *result {
-            ProgressiveTransportResult::Outcome(outcome) => Ok(*outcome),
+            ProgressiveTransportResult::Outcome(outcome) => {
+                let empty = outcome.error.is_none()
+                    && outcome.receipt.primary_platform_message_id.is_none()
+                    && outcome.receipt.platform_message_ids.is_empty()
+                    && outcome.receipt.parts.is_empty();
+                if sender.hosted && empty {
+                    Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                        "hosted receiptless delivery requires explicit acceptance"
+                    )))
+                } else {
+                    Ok(*outcome)
+                }
+            }
+            ProgressiveTransportResult::Accepted if sender.hosted => {
+                let Some(context) = context else {
+                    return Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                        "hosted acceptance has no scoped identity"
+                    )));
+                };
+                let Some(idempotency_key) = idempotency_key else {
+                    return Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                        "hosted acceptance has no idempotency identity"
+                    )));
+                };
+                Ok(tinychannels_bus::channel::ChannelSendOutcome {
+                    receipt: tinychannels_bus::channel::MessageReceipt {
+                        idempotency_key: Some(idempotency_key),
+                        channel: Some(context.channel.clone()),
+                        conversation: Some(context.conversation.clone()),
+                        thread_id: context.conversation.thread_id.clone(),
+                        ..Default::default()
+                    },
+                    error: None,
+                })
+            }
+            ProgressiveTransportResult::Accepted => Err(ProgressiveSendError::Other(
+                anyhow::anyhow!("receiptless acceptance is only valid for hosted sends"),
+            )),
             ProgressiveTransportResult::Unavailable => Err(ProgressiveSendError::Unavailable),
             ProgressiveTransportResult::Failed => Err(ProgressiveSendError::Other(
                 anyhow::anyhow!("typed provider send failed with unknown outcome"),
@@ -777,7 +819,16 @@ impl Replies {
                 turn_id,
                 lifetime_ms,
             } => {
-                self.open_output(channel, conversation, turn_id, lifetime_ms)
+                self.open_output(channel, conversation, turn_id, lifetime_ms, false)
+                    .await
+            }
+            ProgressiveCommand::OpenHostedOutput {
+                channel,
+                conversation,
+                turn_id,
+                lifetime_ms,
+            } => {
+                self.open_output(channel, conversation, turn_id, lifetime_ms, true)
                     .await
             }
             ProgressiveCommand::Feed { handle, events } => {
@@ -953,7 +1004,8 @@ impl Replies {
     }
 
     async fn open(&self, channel: String) -> Result<ProgressiveResult> {
-        self.open_inner(channel, None, LEGACY_TURN_LIFETIME).await
+        self.open_inner(channel, None, LEGACY_TURN_LIFETIME, false)
+            .await
     }
 
     async fn open_output(
@@ -962,8 +1014,14 @@ impl Replies {
         conversation: tinychannels_bus::ConversationRef,
         turn_id: String,
         lifetime_ms: u64,
+        hosted: bool,
     ) -> Result<ProgressiveResult> {
         if channel.id.is_empty()
+            || (hosted
+                && channel
+                    .account_id
+                    .as_deref()
+                    .is_none_or(|account| account.trim().is_empty()))
             || conversation.id.is_empty()
             || turn_id.is_empty()
             || lifetime_ms == 0
@@ -986,6 +1044,7 @@ impl Replies {
                 conversation,
             }),
             lifetime,
+            hosted,
         )
         .await
     }
@@ -995,13 +1054,23 @@ impl Replies {
         channel: String,
         context: Option<ProgressiveOutputContext>,
         lifetime: Duration,
+        hosted: bool,
     ) -> Result<ProgressiveResult> {
         if channel.is_empty() || channel.len() > 4096 {
             return Err(Error::failed("invalid progressive target"));
         }
         let provider_id = tinychannels_bus::provider_id(&channel);
         let running = self.running.lock().await;
-        let (capabilities, media_account_scope) = if let Some(context) = context.as_ref() {
+        let (capabilities, media_account_scope) = if hosted {
+            // Hosted output is authorized by this object's captured callback,
+            // not by a model- or caller-supplied provider capability claim.
+            // Keep the engine conservative; the host still validates the full
+            // scoped address before it emits any delivery effect.
+            (
+                tinychannels_bus::ChannelCapabilities::unknown(),
+                crate::provider::MediaScope::default(),
+            )
+        } else if let Some(context) = context.as_ref() {
             let configured_instance = context
                 .channel
                 .account_id
@@ -1081,6 +1150,7 @@ impl Replies {
             ProgressiveTarget {
                 channel,
                 media_account_scope,
+                hosted,
             },
             capabilities,
             context,
@@ -1272,21 +1342,23 @@ async fn run(
     let ProgressiveTarget {
         channel,
         media_account_scope,
+        hosted,
     } = target;
     let mut reply = if let Some(context) = context {
-        ProgressiveReply::new_scoped(
-            Arc::new(Sender {
-                host,
-                media_account_scope: media_account_scope.clone(),
-                context: Some(context.clone()),
-                capabilities: capabilities.clone(),
-                channel: channel.clone(),
-                send_sequence: std::sync::atomic::AtomicU64::new(0),
-            }),
-            channel,
-            capabilities,
-            context,
-        )
+        let sender = Arc::new(Sender {
+            host,
+            media_account_scope: media_account_scope.clone(),
+            context: Some(context.clone()),
+            capabilities: capabilities.clone(),
+            channel: channel.clone(),
+            hosted,
+            send_sequence: std::sync::atomic::AtomicU64::new(0),
+        });
+        if hosted {
+            ProgressiveReply::new_hosted_scoped(sender, channel, capabilities, context)
+        } else {
+            ProgressiveReply::new_scoped(sender, channel, capabilities, context)
+        }
     } else {
         ProgressiveReply::new(
             Arc::new(Sender {
@@ -1295,6 +1367,7 @@ async fn run(
                 context: None,
                 capabilities: capabilities.clone(),
                 channel: channel.clone(),
+                hosted,
                 send_sequence: std::sync::atomic::AtomicU64::new(0),
             }),
             channel,

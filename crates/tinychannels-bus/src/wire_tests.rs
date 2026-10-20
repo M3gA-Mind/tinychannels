@@ -43,6 +43,38 @@ fn unsupported_send_flag_is_additive_to_legacy_error_wire_shape() {
 }
 
 #[test]
+fn hosted_progressive_open_keeps_scoped_address_and_is_a_new_contract_revision() {
+    let command = module_progressive::ProgressiveCommand::OpenHostedOutput {
+        channel: channel::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("relay:tenant-7:account".into()),
+        },
+        conversation: channel::ConversationRef {
+            kind: channel::ConversationKind::Group,
+            id: "chat-42".into(),
+            scope_id: Some("tenant-scope".into()),
+            parent_id: Some("parent-9".into()),
+            thread_id: Some("thread-7".into()),
+            topic_id: Some("topic-3".into()),
+        },
+        turn_id: "turn-1".into(),
+        lifetime_ms: 30_000,
+    };
+    let wire = serde_json::to_value(command).unwrap();
+    assert_eq!(wire["operation"], "open_hosted_output");
+    assert_eq!(wire["channel"]["accountId"], "relay:tenant-7:account");
+    assert_eq!(wire["conversation"]["scopeId"], "tenant-scope");
+    assert_eq!(wire["conversation"]["parentId"], "parent-9");
+    assert_eq!(wire["conversation"]["threadId"], "thread-7");
+    assert_eq!(wire["conversation"]["topicId"], "topic-3");
+    assert_eq!(wire["turn_id"], "turn-1");
+    assert_eq!(wire["lifetime_ms"], 30_000);
+    assert_eq!(CONTRACT_VERSION, 28);
+    assert!(is_compatible(28));
+    assert!(!is_compatible(27));
+}
+
+#[test]
 fn host_capability_payloads_keep_typed_snake_case_wire() {
     let request = HostTranscriptionRequest {
         audio_base64: "UklGRg==".into(),
@@ -333,7 +365,7 @@ fn defaults_keep_safe_delivery_and_disconnection_wire_values() {
     }
     assert!(is_compatible(CONTRACT_VERSION));
     assert!(!is_compatible(CONTRACT_VERSION + 1));
-    assert_eq!(CONTRACT_VERSION, 27);
+    assert_eq!(CONTRACT_VERSION, 28);
     assert!(!is_compatible(25));
     assert!(!is_compatible(24));
     assert_eq!(module_relay::MODULE_OPERATION_VERSION, (1, 25));

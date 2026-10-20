@@ -227,6 +227,17 @@ pub enum ProgressiveCommand {
         /// that covers its turn backstop and closes this handle on completion.
         lifetime_ms: u64,
     },
+    /// Open a scoped output stream whose transport is the trusted host callback
+    /// captured by this compiled module runtime. Unlike `OpenOutput`, this
+    /// does not select a locally configured provider; the host callback owns
+    /// account authorization and delivery. Capabilities remain conservative.
+    OpenHostedOutput {
+        channel: crate::channel::ChannelRef,
+        conversation: crate::channel::ConversationRef,
+        turn_id: String,
+        /// Host-owned output lease in milliseconds.
+        lifetime_ms: u64,
+    },
     Feed {
         handle: String,
         events: Vec<ProgressiveEvent>,
@@ -372,6 +383,10 @@ pub enum ProgressiveTransportResult {
     /// Observation callback accepted the event; this does not acknowledge a
     /// provider send.
     Acknowledged,
+    /// Trusted hosted callback accepted typed output for delivery, while the
+    /// provider receipt is delivered asynchronously on another event path.
+    /// This is not a provider receipt and is rejected for native sends.
+    Accepted,
     Success(Value),
     /// Structured result for hosts that can preserve normalized receipts and
     /// partial-send failure facts across the module boundary.

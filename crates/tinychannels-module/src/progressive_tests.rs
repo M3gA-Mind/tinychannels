@@ -365,6 +365,427 @@ async fn open(replies: &Replies) -> String {
     }
 }
 
+#[tokio::test]
+async fn hosted_output_uses_the_captured_callback_without_a_local_provider() {
+    let (replies, callback) = fixture(false).await;
+    let channel = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("relay:tenant-7:telegram-account".into()),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Group,
+        id: "-10042".into(),
+        thread_id: Some("topic-9".into()),
+        ..Default::default()
+    };
+    assert!(replies.running.lock().await.is_empty());
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: channel.clone(),
+            conversation: conversation.clone(),
+            turn_id: "turn-relay-1".into(),
+            lifetime_ms: 30_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected hosted output handle")
+    };
+
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "relay reply".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    match result {
+        ProgressiveResult::DeliveryOutcome { outcome } => {
+            assert!(outcome.error.is_none());
+            assert_eq!(
+                outcome.receipt.platform_message_ids,
+                vec!["fixture-message".to_owned()]
+            );
+        }
+        _ => panic!("hosted final delivery must retain its typed outcome"),
+    }
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+
+    let requests = callback.requests.lock().await;
+    let observer = requests
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::OutputEvent {
+                channel: route,
+                turn_id,
+                channel_ref,
+                conversation: request_conversation,
+                sequence,
+                event,
+            } => Some((
+                route,
+                turn_id,
+                channel_ref,
+                request_conversation,
+                sequence,
+                event,
+            )),
+            _ => None,
+        })
+        .expect("canonical output event is observed by the captured host");
+    assert_eq!(observer.0, "telegram:-10042");
+    assert_eq!(observer.1.as_deref(), Some("turn-relay-1"));
+    assert_eq!(observer.2.as_ref(), Some(&channel));
+    assert_eq!(observer.3.as_ref(), Some(&conversation));
+    assert_eq!(*observer.4, 1);
+    assert!(
+        matches!(observer.5.as_ref(), ChannelOutputEvent::FinalMessage { text, .. } if text == "relay reply")
+    );
+
+    let send = requests
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                channel: route,
+                turn_id,
+                channel_ref,
+                conversation: request_conversation,
+                sequence,
+                segment_index,
+                idempotency_key,
+                parts,
+                text,
+            } => Some((
+                route,
+                turn_id,
+                channel_ref,
+                request_conversation,
+                sequence,
+                segment_index,
+                idempotency_key,
+                parts,
+                text,
+            )),
+            _ => None,
+        })
+        .expect("terminal output is sent through the typed callback");
+    assert_eq!(send.0, "telegram:-10042");
+    assert_eq!(send.1.as_deref(), Some("turn-relay-1"));
+    assert_eq!(send.2.as_ref(), Some(&channel));
+    assert_eq!(send.3.as_ref(), Some(&conversation));
+    // The engine increments its canonical output sequence before dispatching
+    // each event; the terminal typed send retains that same sequence.
+    assert_eq!(send.4.as_ref(), Some(observer.4));
+    assert_eq!(*send.5, Some(0));
+    assert!(send.6.as_deref().is_some_and(|key| !key.is_empty()));
+    assert_eq!(send.8, "relay reply");
+    assert_eq!(
+        send.7,
+        &vec![tinychannels_bus::OutboundContentPart::Content {
+            part: tinychannels_bus::ContentPart::Text {
+                text: "relay reply".into(),
+                markdown_dialect: None,
+            }
+        }]
+    );
+}
+
+#[tokio::test]
+async fn hosted_output_accepts_explicit_host_delivery_without_provider_receipt() {
+    let (replies, callback) = fixture(false).await;
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Accepted);
+    let channel = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("relay:tenant-7:telegram-account".into()),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Group,
+        id: "-10042".into(),
+        thread_id: Some("topic-9".into()),
+        ..Default::default()
+    };
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: channel.clone(),
+            conversation: conversation.clone(),
+            turn_id: "turn-relay-accepted".into(),
+            lifetime_ms: 30_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected hosted output handle")
+    };
+
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "accepted by host".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    let ProgressiveResult::DeliveryOutcome { outcome } = result else {
+        panic!("host acceptance must retain a typed terminal result: {result:?}")
+    };
+    assert!(outcome.error.is_none());
+    assert!(outcome.receipt.primary_platform_message_id.is_none());
+    assert!(outcome.receipt.platform_message_ids.is_empty());
+    assert!(outcome.receipt.parts.is_empty());
+    assert!(outcome.receipt.idempotency_key.as_deref().is_some());
+    assert_eq!(outcome.receipt.channel.as_ref(), Some(&channel));
+    assert_eq!(outcome.receipt.conversation.as_ref(), Some(&conversation));
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn hosted_output_rejects_ambiguous_receiptless_provider_outcome() {
+    let (replies, callback) = fixture(false).await;
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Outcome(Box::default()));
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some("relay:tenant-7:telegram-account".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Group,
+                id: "-10042".into(),
+                ..Default::default()
+            },
+            turn_id: "turn-relay-empty-outcome".into(),
+            lifetime_ms: 30_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected hosted output handle")
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "must not be accepted".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        result,
+        ProgressiveResult::DeliveryBatch {
+            failure: Some(_),
+            ..
+        }
+    ));
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn receiptless_acceptance_is_hosted_only_and_keeps_scoped_identity() {
+    let (replies, callback) = fixture(false).await;
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Accepted);
+    let channel = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("relay:tenant-7:telegram-account".into()),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Group,
+        id: "-10042".into(),
+        thread_id: Some("topic-9".into()),
+        ..Default::default()
+    };
+    let context = ProgressiveOutputContext {
+        turn_id: "turn-relay-accepted".into(),
+        channel: channel.clone(),
+        conversation: conversation.clone(),
+    };
+    let request = || TypedPartRequest {
+        channel: "telegram:-10042",
+        parts: &[],
+        text: "accepted by host",
+        context: Some(&context),
+        sequence: 1,
+        segment_index: 0,
+        final_phase: true,
+    };
+    let sender = Sender {
+        host: replies.host.clone(),
+        media_account_scope: crate::provider::MediaScope::default(),
+        context: Some(context.clone()),
+        capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+        channel: "telegram:-10042".into(),
+        hosted: true,
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    };
+    let accepted = send_typed_part(&sender, request()).await.unwrap();
+    assert!(accepted.error.is_none());
+    assert!(accepted.receipt.primary_platform_message_id.is_none());
+    assert!(accepted.receipt.platform_message_ids.is_empty());
+    assert!(accepted.receipt.parts.is_empty());
+    assert!(accepted.receipt.idempotency_key.as_deref().is_some());
+    assert_eq!(accepted.receipt.channel.as_ref(), Some(&channel));
+    assert_eq!(accepted.receipt.conversation.as_ref(), Some(&conversation));
+
+    let hosted_sender = Sender {
+        host: replies.host.clone(),
+        media_account_scope: crate::provider::MediaScope::default(),
+        context: Some(context.clone()),
+        capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+        channel: "telegram:-10042".into(),
+        hosted: true,
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    };
+    let hosted_reply = ProgressiveReply::new_hosted_scoped(
+        Arc::new(hosted_sender),
+        "telegram:-10042",
+        tinychannels_bus::ChannelCapabilities::unknown(),
+        context.clone(),
+    );
+    let typed_parts = [tinychannels_bus::OutboundContentPart::Content {
+        part: tinychannels_bus::ContentPart::Image {
+            media: tinychannels_bus::MediaReference {
+                kind: tinychannels_bus::MediaKind::Image,
+                url: Some("https://media.invalid/receiptless.png".into()),
+                ..Default::default()
+            },
+            caption: None,
+            alt_text: None,
+        },
+    }];
+    let media_outcome = hosted_reply
+        .send_content_parts(&typed_parts, "")
+        .await
+        .expect("host acceptance must allow receiptless typed content");
+    assert!(media_outcome.error.is_none());
+    assert!(media_outcome.receipt.primary_platform_message_id.is_none());
+    assert!(media_outcome.receipt.platform_message_ids.is_empty());
+
+    let native_sender = Sender {
+        hosted: false,
+        ..sender
+    };
+    assert!(send_typed_part(&native_sender, request()).await.is_err());
+    let native_reply = ProgressiveReply::new_scoped(
+        Arc::new(native_sender),
+        "telegram:-10042",
+        tinychannels_bus::ChannelCapabilities::unknown(),
+        context,
+    );
+    assert!(
+        native_reply
+            .send_content_parts(&typed_parts, "")
+            .await
+            .is_err()
+    );
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn hosted_output_rejects_missing_account_scope_before_callback() {
+    let (replies, callback) = fixture(false).await;
+    let result = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: None,
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Dm,
+                id: "chat-42".into(),
+                ..Default::default()
+            },
+            turn_id: "turn-relay-2".into(),
+            lifetime_ms: 30_000,
+        })
+        .await;
+    assert!(result.is_err());
+    assert!(callback.requests.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn hosted_output_keeps_partial_provider_failure_and_receipt() {
+    let (replies, callback) = fixture(false).await;
+    let mut partial = tinychannels_bus::channel::ChannelSendOutcome::default();
+    partial.receipt.platform_message_ids = vec!["accepted-segment".into()];
+    partial.error = Some(tinychannels_bus::channel::ChannelSendError {
+        kind: tinychannels_bus::channel::SendErrorKind::RateLimited,
+        message: "later segment was rate limited".into(),
+        sent_before_error: true,
+        ..Default::default()
+    });
+    *callback.send_result.lock().await =
+        Some(ProgressiveTransportResult::Outcome(Box::new(partial)));
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some("relay:tenant-7:telegram-account".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Group,
+                id: "-10042".into(),
+                ..Default::default()
+            },
+            turn_id: "turn-relay-failure".into(),
+            lifetime_ms: 30_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected hosted output handle")
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "partially delivered".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    match result {
+        ProgressiveResult::DeliveryBatch {
+            outcomes,
+            failure:
+                Some(tinychannels_bus::module_progressive::ProgressiveOutputFailure::ProviderTransport),
+            ..
+        } => {
+            assert_eq!(outcomes.len(), 1);
+            assert_eq!(
+                outcomes[0].receipt.platform_message_ids,
+                vec!["accepted-segment".to_owned()]
+            );
+            let error = outcomes[0]
+                .error
+                .as_ref()
+                .expect("partial delivery retains its error");
+            assert_eq!(
+                error.kind,
+                tinychannels_bus::channel::SendErrorKind::RateLimited
+            );
+            assert!(error.sent_before_error);
+        }
+        _ => panic!("partial host transport failure must not become success"),
+    }
+}
+
 async fn open_scoped(
     replies: &Replies,
     account: &str,
@@ -660,6 +1081,7 @@ async fn oversized_feed_is_rejected_atomically_before_updating_reply_state() {
             context: None,
             capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
             channel: "discord:fixture".into(),
+            hosted: false,
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:fixture",
@@ -1271,6 +1693,7 @@ async fn thinking_limit_is_atomic_and_independent_of_text_budget() {
             context: None,
             capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
             channel: "discord:fixture".into(),
+            hosted: false,
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:fixture",
@@ -1317,6 +1740,7 @@ async fn progressive_edits_and_deletes_preserve_target_and_message_id() {
         context: None,
         capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
         channel: "discord:fixture".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     sender
@@ -1344,6 +1768,7 @@ async fn transport_failures_preserve_recovery_classification() {
         context: None,
         capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
         channel: "discord:fixture".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     for result in [
@@ -1359,6 +1784,7 @@ async fn transport_failures_preserve_recovery_classification() {
             .unwrap_err();
         match result {
             ProgressiveTransportResult::Acknowledged
+            | ProgressiveTransportResult::Accepted
             | ProgressiveTransportResult::UnsupportedContent => unreachable!(),
             ProgressiveTransportResult::Unavailable => {
                 assert!(matches!(error, ProgressiveSendError::Unavailable))
@@ -2310,6 +2736,7 @@ async fn filler_callback_error_after_acceptance_is_not_retried() {
             }),
             capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
             channel: "discord:filler-unknown".into(),
+            hosted: false,
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         }),
         "discord:filler-unknown",
@@ -2596,9 +3023,14 @@ async fn scoped_output_expiry_cleans_an_existing_draft_without_sending_a_reply()
     for _ in 0..5 {
         tokio::task::yield_now().await;
     }
-    assert!(callback.requests.lock().await.iter().any(|request| matches!(request,
-        ProgressiveTransportRequest::Send { message, .. } if message["text"] == "visible draft"
-    )));
+    assert!(callback
+        .requests
+        .lock()
+        .await
+        .iter()
+        .any(|request| matches!(request,
+            ProgressiveTransportRequest::Send { message, .. } if message["text"] == "visible draft"
+        )));
 
     tokio::time::advance(Duration::from_millis(150)).await;
     for _ in 0..5 {
@@ -4083,6 +4515,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
             context: Some(context.clone()),
             capabilities: capabilities.clone(),
             channel: "telegram:bot-1".into(),
+            hosted: false,
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         });
         let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -4363,6 +4796,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         context: Some(audio_turn.clone()),
         capabilities: audio_caps.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut audio_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -4422,6 +4856,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         context: Some(link_turn.clone()),
         capabilities: link_caps.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut link_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -4513,6 +4948,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut too_long = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -4582,6 +5018,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         context: Some(duration_context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut duration_limited = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -4638,6 +5075,7 @@ async fn final_voice_policy_runs_through_progressive_reply_and_loaded_codec() {
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let prompt = [tinychannels_bus::OutboundContentPart::Content {
@@ -4728,6 +5166,7 @@ async fn dingtalk_final_voice_pipeline_keeps_transcript_and_codec_metadata() {
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "dingtalk:robot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -4876,6 +5315,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -5021,6 +5461,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
             context: Some(case_context.clone()),
             capabilities: capabilities.clone(),
             channel: "telegram:bot-1".into(),
+            hosted: false,
             send_sequence: std::sync::atomic::AtomicU64::new(0),
         });
         let mut case_reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
@@ -5079,6 +5520,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         context: Some(explicit_context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     let explicit_parts = [
@@ -5145,6 +5587,7 @@ async fn final_voice_pipeline_uses_tinyvoice_bus_contract_in_normal_suite() {
         context: Some(explicit_allowed_context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     };
     explicit_allowed_sender
@@ -5341,6 +5784,7 @@ async fn send_final_voice_case(
         context: Some(context.clone()),
         capabilities: capabilities.clone(),
         channel: "telegram:bot-1".into(),
+        hosted: false,
         send_sequence: std::sync::atomic::AtomicU64::new(0),
     });
     let mut reply = tinychannels::delivery::progressive::ProgressiveReply::new_scoped(
