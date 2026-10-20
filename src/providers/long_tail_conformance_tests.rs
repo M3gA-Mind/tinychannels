@@ -235,6 +235,8 @@ fn unsupported_result() -> Result<Option<ChannelSendOutcome>, ChannelSendError> 
     })
 }
 
+type PostScope = (String, Option<String>);
+
 struct LongTailFixture {
     id: &'static str,
     channel: Arc<dyn LongTailNative>,
@@ -244,7 +246,7 @@ struct LongTailFixture {
     /// Message ids the mock returned, in response order.
     response_ids: Arc<Mutex<Vec<String>>>,
     /// Conversation facts associated with post IDs created by the mock wire.
-    post_scopes: Arc<Mutex<HashMap<String, (String, Option<String>)>>>,
+    post_scopes: Arc<Mutex<HashMap<String, PostScope>>>,
     observed: Mutex<Vec<WireObservation>>,
 }
 
