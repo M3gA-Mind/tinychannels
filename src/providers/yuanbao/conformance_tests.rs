@@ -140,12 +140,27 @@ impl Fixture {
         let provider_id = crate::providers::yuanbao::wire::get_string(&fields, 3);
         let reply_to_id = crate::providers::yuanbao::wire::get_string(&fields, 7);
         let elements = crate::providers::yuanbao::wire::get_repeated_bytes(&fields, 6);
+        let expected_text = match feature {
+            Feature::Text => "conformance",
+            Feature::ReplyAddressing => "reply",
+            _ => panic!("send recorder only accepts text features"),
+        };
         let payload_kinds = elements
             .iter()
             .map(|element| {
                 let fields = crate::providers::yuanbao::wire::parse_fields(element).unwrap();
                 match crate::providers::yuanbao::wire::get_string(&fields, 1).as_str() {
-                    "TIMTextElem" => "text".to_owned(),
+                    "TIMTextElem" => {
+                        let content = crate::providers::yuanbao::wire::get_bytes(&fields, 2);
+                        let content_fields =
+                            crate::providers::yuanbao::wire::parse_fields(&content).unwrap();
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_string(&content_fields, 1),
+                            expected_text,
+                            "captured Yuanbao text must match the outgoing intent"
+                        );
+                        "text".to_owned()
+                    }
                     other => other.to_owned(),
                 }
             })
@@ -426,6 +441,10 @@ impl AdapterFixture for Fixture {
                 let fields = crate::providers::yuanbao::wire::parse_fields(&request.data).unwrap();
                 let group = crate::providers::yuanbao::wire::get_string(&fields, 3);
                 assert_eq!(group, "group-42");
+                assert_eq!(
+                    crate::providers::yuanbao::wire::get_varint(&fields, 5),
+                    crate::providers::yuanbao::proto_constants::ws_heartbeat::RUNNING as u64
+                );
                 self.observations.lock().push(WireObservation {
                     feature,
                     operation: "typing".into(),
@@ -442,7 +461,26 @@ impl AdapterFixture for Fixture {
                     request: serde_json::json!({"command":request.cmd,"group_code":group}),
                 });
                 ChannelTyping::stop_typing(self.channel.as_ref(), GROUP).await?;
-                let _stop = session.recv_frame().await;
+                let stop = tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    session.recv_frame(),
+                )
+                .await
+                .expect("typing stop heartbeat should reach the gateway");
+                assert_eq!(
+                    stop.cmd,
+                    crate::providers::yuanbao::proto_constants::biz_cmd::SEND_GROUP_HEARTBEAT
+                );
+                let stop_fields =
+                    crate::providers::yuanbao::wire::parse_fields(&stop.data).unwrap();
+                assert_eq!(
+                    crate::providers::yuanbao::wire::get_string(&stop_fields, 3),
+                    "group-42"
+                );
+                assert_eq!(
+                    crate::providers::yuanbao::wire::get_varint(&stop_fields, 5),
+                    crate::providers::yuanbao::proto_constants::ws_heartbeat::FINISH as u64
+                );
                 Ok(None)
             }
             Feature::VoiceIn => self.voice_in().await,
@@ -620,7 +658,7 @@ impl AdapterFixture for Fixture {
                 result.map(|_| None)
             }
             Feature::Reactions => {
-                ChannelReaction::send_reaction(
+                let result = ChannelReaction::send_reaction(
                     self.channel.as_ref(),
                     &channel_ref(),
                     &group_ref(),
@@ -628,25 +666,30 @@ impl AdapterFixture for Fixture {
                     &Default::default(),
                     false,
                 )
-                .await?;
-                Ok(None)
+                .await;
+                assert_no_wire_request(&self.session).await;
+                result.map(|_| None)
             }
-            Feature::Edit => ChannelEdit::edit(
-                self.channel.as_ref(),
-                &MessageReceipt::default(),
-                self.intent(
-                    feature,
-                    OutboundPayload::Text {
-                        text: "edit".into(),
-                    },
-                ),
-            )
-            .await
-            .map(|_| None),
+            Feature::Edit => {
+                let result = ChannelEdit::edit(
+                    self.channel.as_ref(),
+                    &MessageReceipt::default(),
+                    self.intent(
+                        feature,
+                        OutboundPayload::Text {
+                            text: "edit".into(),
+                        },
+                    ),
+                )
+                .await;
+                assert_no_wire_request(&self.session).await;
+                result.map(|_| None)
+            }
             Feature::Delete => {
-                ChannelDelete::delete(self.channel.as_ref(), &MessageReceipt::default())
-                    .await
-                    .map(|_| None)
+                let result =
+                    ChannelDelete::delete(self.channel.as_ref(), &MessageReceipt::default()).await;
+                assert_no_wire_request(&self.session).await;
+                result.map(|_| None)
             }
             Feature::InboundReactions | Feature::ReadReceipts => Err(ChannelSendError {
                 kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
@@ -654,18 +697,21 @@ impl AdapterFixture for Fixture {
                 unsupported: true,
                 ..Default::default()
             }),
-            Feature::StreamingDraft => ChannelStreamingDraft::upsert_draft(
-                self.channel.as_ref(),
-                None,
-                self.intent(
-                    feature,
-                    OutboundPayload::Text {
-                        text: "draft".into(),
-                    },
-                ),
-            )
-            .await
-            .map(|_| None),
+            Feature::StreamingDraft => {
+                let result = ChannelStreamingDraft::upsert_draft(
+                    self.channel.as_ref(),
+                    None,
+                    self.intent(
+                        feature,
+                        OutboundPayload::Text {
+                            text: "draft".into(),
+                        },
+                    ),
+                )
+                .await;
+                assert_no_wire_request(&self.session).await;
+                result.map(|_| None)
+            }
         }
     }
 }
