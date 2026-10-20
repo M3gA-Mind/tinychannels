@@ -160,6 +160,7 @@ async fn configured_capabilities(
 
 fn configured_route_capabilities(
     channel_name: &str,
+    message: &tinychannels::ChannelMessage,
     scope: Option<&tinychannels_bus::module_remote::RemoteSessionScope>,
     configured: Option<&tinychannels_bus::module_control::ConfiguredControlChannel>,
     live: Option<tinychannels_bus::ChannelCapabilities>,
@@ -171,9 +172,13 @@ fn configured_route_capabilities(
         let Some(account_id) = scope.channel.account_id.as_deref() else {
             return tinychannels_bus::ChannelCapabilities::unknown();
         };
-        if configured.name != channel_name
+        if tinychannels_bus::provider_id(&configured.name) != channel_name
             || account_id != configured.name
-            || scope.channel.id != tinychannels_bus::provider_id(&configured.name)
+            || tinychannels_bus::provider_id(&configured.name) != scope.channel.id
+            || message.channel != scope.channel.id
+            || message.reply_target != scope.conversation.id
+            || message.thread_ts != scope.conversation.thread_id
+            || message.topic_id != scope.conversation.topic_id
             || scope.session_key.trim().is_empty()
             || scope.conversation.id.trim().is_empty()
         {
@@ -184,6 +189,19 @@ fn configured_route_capabilities(
     live.unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
 }
 
+fn live_route_instance<'a, T>(
+    running: &'a HashMap<String, T>,
+    channel_name: &str,
+    configured_name: Option<&str>,
+) -> Option<&'a T> {
+    if let Some(configured_name) = configured_name {
+        return running.get(configured_name);
+    }
+    running
+        .get(channel_name)
+        .or_else(|| running.get(tinychannels_bus::provider_id(channel_name)))
+}
+
 async fn route_capabilities(
     running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
     channel_name: &str,
@@ -192,9 +210,7 @@ async fn route_capabilities(
 ) -> tinychannels_bus::ChannelCapabilities {
     let live = {
         let running = running.lock().await;
-        running
-            .get(channel_name)
-            .or_else(|| running.get(tinychannels_bus::provider_id(channel_name)))
+        live_route_instance(&running, channel_name, configured.map(|channel| channel.name.as_str()))
             .map(crate::interaction::configured_adapter_capabilities)
     };
     configured_route_capabilities(channel_name, scope, configured, live)
@@ -666,26 +682,18 @@ impl Channels {
         if self.terminal.load(Ordering::Acquire) {
             return Err(BusError::failed("channel module is shutting down"));
         }
-        let (name, configured_account, remote_command) = match &request {
+        let name = match &request {
             tinychannels_bus::module_control::ChannelControlRequest::Capabilities { channel }
-            | tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 { channel } => {
-                (channel.as_str(), None, false)
-            }
+            | tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 { channel } => channel.as_str(),
             tinychannels_bus::module_control::ChannelControlRequest::Route {
                 message,
-                session_scope,
                 ..
-            } => (
-                message.channel.as_str(),
-                session_scope
-                    .as_ref()
-                    .and_then(|scope| scope.channel.account_id.as_deref()),
-                tinychannels::remote::parse_remote_command(&message.content).is_some(),
-            ),
-            _ => ("", None, false),
+            } => message.channel.as_str(),
+            _ => "",
         };
         let capabilities = match &request {
             tinychannels_bus::module_control::ChannelControlRequest::Route {
+                message,
                 session_scope,
                 configured_channel,
                 ..
@@ -693,6 +701,7 @@ impl Channels {
                 route_capabilities(
                     &self.running,
                     name,
+                    message,
                     session_scope.as_deref(),
                     configured_channel.as_ref(),
                 )
@@ -700,21 +709,6 @@ impl Channels {
             }
             _ => configured_capabilities(&self.running, name).await,
         };
-        let running_names = self
-            .running
-            .lock()
-            .await
-            .keys()
-            .cloned()
-            .collect::<Vec<_>>();
-        tracing::debug!(
-            channel = name,
-            ?configured_account,
-            remote_command,
-            remote_control = capabilities.remote_control,
-            ?running_names,
-            "resolved PREPARE_CHANNEL_CONTROL route"
-        );
         crate::control::prepare(&self.host, request, capabilities).await
     }
 
