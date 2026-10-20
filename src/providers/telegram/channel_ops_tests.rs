@@ -3,7 +3,6 @@ use crate::providers::telegram::fixtures::*;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tinychannels_conformance::AdapterFixture;
 use tinychannels_runtime::channel::ChannelAdapter;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -2613,7 +2612,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
             ..Default::default()
         },
         channel.capabilities(),
-        Arc::new(TelegramConformanceSink(channel)),
+        Arc::new(TelegramConformanceSink(channel.clone())),
     );
     let fixture = TelegramWireFixture {
         adapter,
