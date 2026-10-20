@@ -1831,16 +1831,25 @@ impl Running {
     }
     /// Start a provider whose concrete object is both the listener and the
     /// native v2 executor (the WhatsApp Cloud and Web adapters).
-    pub(crate) fn start_native(
+    pub(crate) fn start_native<T>(
         provider: &'static str,
-        legacy: Arc<dyn Channel>,
-        channel: Arc<dyn tinychannels::LongTailNative>,
+        channel: Arc<T>,
         hooks: Arc<Hooks>,
         host: HostChannels,
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
-    ) -> Arc<Self> {
+    ) -> Arc<Self>
+    where
+        T: tinychannels::LongTailNative + Channel + 'static,
+    {
         let provider_name = channel.descriptor().id;
+        let legacy: Arc<dyn Channel> = channel.clone();
+        let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
+        let listener_mode = if provider == "Signal" {
+            LongTailListenerMode::Adapter
+        } else {
+            LongTailListenerMode::Legacy
+        };
         Self::start_inner(
             Some(legacy),
             provider_name,
@@ -1848,34 +1857,7 @@ impl Running {
             host,
             supervision,
             outbound_only,
-            Some(NativePorts::long_tail(
-                channel,
-                provider,
-                LongTailListenerMode::Legacy,
-            )),
-        )
-    }
-
-    pub(crate) fn start_signal(
-        legacy: Arc<dyn Channel>,
-        channel: Arc<dyn tinychannels::LongTailNative>,
-        hooks: Arc<Hooks>,
-        host: HostChannels,
-        supervision: Option<ChannelSupervisionPolicy>,
-        outbound_only: bool,
-    ) -> Arc<Self> {
-        Self::start_inner(
-            Some(legacy),
-            "signal".into(),
-            hooks,
-            host,
-            supervision,
-            outbound_only,
-            Some(NativePorts::long_tail(
-                channel,
-                "Signal",
-                LongTailListenerMode::Adapter,
-            )),
+            Some(NativePorts::long_tail(adapter, provider, listener_mode)),
         )
     }
 
