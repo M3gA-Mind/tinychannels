@@ -5137,7 +5137,7 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     assert!(transcript.contains("typed SMTP launch"), "{transcript}");
 
     let events = ModuleEvents(
-        host,
+        host.clone(),
         running.configured_instance.clone(),
         running.media_account_scope.clone(),
     );
@@ -5171,6 +5171,7 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
             .await
             .unwrap()
     );
+    host.flush().await.unwrap();
     let delivered = callbacks.inbound.lock().await;
     assert_eq!(delivered.len(), 1);
     assert_eq!(delivered[0].0, "email:work");
