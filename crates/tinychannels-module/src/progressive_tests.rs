@@ -585,7 +585,13 @@ async fn hosted_output_rejects_ambiguous_receiptless_provider_outcome() {
         })
         .await
         .unwrap();
-    assert!(matches!(result, ProgressiveResult::DeliveryBatch { failure: Some(_), .. }));
+    assert!(matches!(
+        result,
+        ProgressiveResult::DeliveryBatch {
+            failure: Some(_),
+            ..
+        }
+    ));
     replies.shutdown().await.unwrap();
 }
 
@@ -1732,6 +1738,7 @@ async fn transport_failures_preserve_recovery_classification() {
             .unwrap_err();
         match result {
             ProgressiveTransportResult::Acknowledged
+            | ProgressiveTransportResult::Accepted
             | ProgressiveTransportResult::UnsupportedContent => unreachable!(),
             ProgressiveTransportResult::Unavailable => {
                 assert!(matches!(error, ProgressiveSendError::Unavailable))
