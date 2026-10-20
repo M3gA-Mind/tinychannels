@@ -117,19 +117,20 @@ async fn typed_listener_retries_rejected_rows_without_replaying_accepted_predece
         .unwrap_err();
     assert!(failure.retryable);
 
-    let accepted = reject_second.accepted.lock().unwrap();
-    assert_eq!(accepted.len(), 1);
-    assert!(matches!(
-        &accepted[0],
-        ChannelIngress::Inbound(envelope) if envelope.message_id == "IN1"
-    ));
-    if let ChannelIngress::Inbound(envelope) = &accepted[0] {
-        assert_eq!(envelope.channel.id, "imessage");
-        assert_eq!(envelope.channel.account_id, None);
-        assert_eq!(envelope.conversation.id, PEER);
-        assert_eq!(envelope.sender.id, PEER);
+    {
+        let accepted = reject_second.accepted.lock().unwrap();
+        assert_eq!(accepted.len(), 1);
+        assert!(matches!(
+            &accepted[0],
+            ChannelIngress::Inbound(envelope) if envelope.message_id == "IN1"
+        ));
+        if let ChannelIngress::Inbound(envelope) = &accepted[0] {
+            assert_eq!(envelope.channel.id, "imessage");
+            assert_eq!(envelope.channel.account_id, None);
+            assert_eq!(envelope.conversation.id, PEER);
+            assert_eq!(envelope.sender.id, PEER);
+        }
     }
-    drop(accepted);
 
     let recording = Arc::new(RecordingIngress::default());
     let (stop_retry, retry_cancellation) = watch::channel(false);
