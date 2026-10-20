@@ -3992,6 +3992,19 @@ async fn a_long_tail_provider_starts_as_a_native_adapter_and_is_listed() {
 #[tokio::test]
 async fn starting_an_unconfigured_provider_reports_not_configured() {
     let service = inbound_preparation_service().await;
+    let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    let finished = Running::start(
+        Arc::new(CaptureChannel(tx)),
+        Arc::new(Hooks::default()),
+        service.host.clone(),
+    );
+    finished.stop().await.unwrap();
+    service
+        .running
+        .lock()
+        .await
+        .insert("mattermost".into(), finished);
+
     let error = service
         .start_channel("mattermost".into(), ChannelsConfig::default())
         .await
