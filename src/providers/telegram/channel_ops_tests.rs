@@ -1821,6 +1821,7 @@ fn streaming_draft_intent(text: &str) -> tinychannels_bus::ChannelOutboundIntent
             id: "100:7".into(),
             scope_id: Some("configured-bot".into()),
             thread_id: Some("7".into()),
+            topic_id: Some("8".into()),
             ..Default::default()
         }),
         reply_to_id: Some("55".into()),
@@ -1869,7 +1870,7 @@ async fn typed_draft_lifecycle_uses_telegram_placeholder_edit_and_final_wire_cal
         vec![serde_json::json!({
             "chat_id": "100",
             "text": "...",
-            "message_thread_id": "7",
+            "message_thread_id": "8",
             "reply_to_message_id": 55,
         })]
     );
@@ -1880,7 +1881,28 @@ async fn typed_draft_lifecycle_uses_telegram_placeholder_edit_and_final_wire_cal
         serde_json::json!({ "chat_id": "100", "message_id": 321, "text": "partial" })
     );
     assert_eq!(edits[1]["parse_mode"], "MarkdownV2");
-    assert_eq!(edits[1]["text"], "final ");
+    assert_eq!(edits[1]["text"], "final");
+}
+
+#[tokio::test]
+async fn typed_draft_finalize_keeps_overflow_delete_and_chunk_fallback() {
+    let server = mock_api().await;
+    mount_post(&server, "deleteMessage", ok_with(serde_json::json!(true))).await;
+    mount_post(&server, "sendMessage", ok()).await;
+    let channel = streaming(&server);
+    let mut intent = streaming_draft_intent(&"y".repeat(TELEGRAM_MAX_MESSAGE_LENGTH + 1));
+    intent.conversation_id = "100".into();
+    intent.conversation_ref.as_mut().unwrap().id = "100".into();
+
+    tinychannels_runtime::channel::ChannelStreamingDraft::finalize_draft(&channel, "8", intent)
+        .await
+        .unwrap();
+
+    assert_eq!(
+        json_bodies(&server, "deleteMessage").await,
+        vec![serde_json::json!({ "chat_id": "100", "message_id": 8 })]
+    );
+    assert_eq!(json_bodies(&server, "sendMessage").await.len(), 2);
 }
 
 fn typed_text(id: &str, text: String) -> tinychannels_bus::ChannelOutboundMessage {
