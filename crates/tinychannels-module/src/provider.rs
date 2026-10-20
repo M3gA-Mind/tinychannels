@@ -1810,9 +1810,10 @@ impl Running {
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
     ) -> Arc<Self> {
+        let provider_name = channel.descriptor().id;
         Self::start_inner(
             None,
-            "Telegram".to_owned(),
+            provider_name,
             hooks,
             host,
             supervision,
@@ -1830,9 +1831,10 @@ impl Running {
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
     ) -> Arc<Self> {
+        let provider_name = channel.descriptor().id;
         Self::start_inner(
             None,
-            provider.to_owned(),
+            provider_name,
             hooks,
             host,
             supervision,
@@ -1870,9 +1872,10 @@ impl Running {
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
     ) -> Arc<Self> {
+        let provider_name = channel.descriptor().id;
         Self::start_inner(
             None,
-            "Slack".to_owned(),
+            provider_name,
             hooks,
             host,
             supervision,
