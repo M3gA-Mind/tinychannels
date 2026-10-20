@@ -352,7 +352,7 @@ impl EmailChannel {
             .join(",");
 
         // Fetch message bodies
-        let messages = session.uid_fetch(&uid_set, "UID BODY.PEEK[]").await?;
+        let messages = session.uid_fetch(&uid_set, "(UID BODY.PEEK[])").await?;
         let messages: Vec<Fetch> = messages.try_collect().await?;
 
         for msg in messages {
