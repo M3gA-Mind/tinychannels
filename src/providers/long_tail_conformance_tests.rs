@@ -1283,9 +1283,9 @@ async fn the_factory_built_dingtalk_adapter_passes_the_full_conformance_matrix()
             "the voice response media_id must be used by the subsequent send: {sends:#?}"
         );
         assert!(
-            uploads.iter().all(|request| request
-                .target
-                .contains("access_token=fixture-token")),
+            uploads
+                .iter()
+                .all(|request| request.target.contains("access_token=fixture-token")),
             "both media uploads must use the token issued by the OAuth endpoint: {uploads:#?}"
         );
     }
