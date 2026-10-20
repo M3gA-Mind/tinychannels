@@ -264,7 +264,7 @@ async fn typed_listener_reports_unavailable_and_invalid_messages_databases() {
 async fn typed_tapbacks_are_scoped_reaction_events_and_ignore_orphans() {
     let rig = rig();
     let sink = RecordingIngress::default();
-    let (_, mut cancellation) = watch::channel(false);
+    let (_stop, mut cancellation) = watch::channel(false);
     let mut added = rig.inbound(20, Some("Liked a message"), false, &[]);
     added.associated_type = 2001;
     added.associated_guid = Some("p:0/TARGET".into());
@@ -338,7 +338,7 @@ async fn typed_attachments_use_the_scoped_media_ingest_path() {
     let file = rig.attachment("typed-photo.png", TYPED_PNG);
     let row = rig.inbound(25, Some("look"), false, &[(&file, "image/png")]);
     let sink = RecordingIngress::default();
-    let (_, mut cancellation) = watch::channel(false);
+    let (_stop, mut cancellation) = watch::channel(false);
 
     rig.channel
         .dispatch_row_typed(row, &sink, &mut cancellation)
