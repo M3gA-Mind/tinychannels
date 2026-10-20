@@ -13,15 +13,17 @@
 //! feature is compiled in: the grant and the migration must not depend on how
 //! this crate was built.
 
-use tinystoragedrivers_core::schema::{Owner, Schema, ScopeClass};
+use tinystoragedrivers_core::{
+    CollectionSpec,
+    schema::{Owner, Schema, ScopeClass},
+};
 
 use super::migrate;
 
 /// The owner every collection below is prefixed with.
 pub const OWNER: &str = "channels";
 
-/// Body version of every `channels.*` collection. Version 1 is the pre-registry
-/// layout stored under the legacy names; the migration steps write 2.
+/// Body version of collections that have legacy v1 layouts and migrate to v2.
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// Entries awaiting a terminal outcome.
@@ -37,6 +39,23 @@ pub const REMOTE_BINDINGS: &str = "channels.remote_bindings";
 pub const REMOTE_BUSY: &str = "channels.remote_busy";
 /// The one-time legacy import marker.
 pub const REMOTE_META: &str = "channels.remote_meta";
+
+/// Scoped metadata for opaque channel media references.
+pub const MEDIA_METADATA: &str = "channels.media_metadata";
+/// Blob prefix holding channel media bytes referenced by `MEDIA_METADATA`.
+pub const MEDIA_BLOB_PREFIX: &str = "channels/media/";
+/// The media metadata collection starts at v1; no earlier granted layout
+/// exists to migrate.
+pub const MEDIA_METADATA_VERSION: u32 = 1;
+
+/// The canonical collection shape requested by the module's media store.
+///
+/// Keep this request and the host grant generated from [`storage_schema`]
+/// identical so module-scoped storage can validate `ensure_collection`.
+#[must_use]
+pub fn media_metadata_spec() -> CollectionSpec {
+    CollectionSpec::new(MEDIA_METADATA)
+}
 
 /// The linked device record.
 pub const WHATSAPP_DEVICE: &str = "channels.whatsapp_device";
@@ -68,13 +87,14 @@ pub const WHATSAPP_COLLECTIONS: [&str; 8] = [
 ];
 
 /// Every collection the `channels` owner declares, in declaration order.
-pub const COLLECTIONS: [&str; 14] = [
+pub const COLLECTIONS: [&str; 15] = [
     DELIVERY_PENDING,
     DELIVERY_FAILED,
     DELIVERY_RESULTS,
     REMOTE_BINDINGS,
     REMOTE_BUSY,
     REMOTE_META,
+    MEDIA_METADATA,
     WHATSAPP_DEVICE,
     WHATSAPP_IDENTITY,
     WHATSAPP_SESSION,
@@ -93,8 +113,17 @@ pub const COLLECTIONS: [&str; 14] = [
 pub fn storage_schema() -> Schema {
     let owner = Owner::new(OWNER).unwrap_or_else(|_| unreachable!("`{OWNER}` is a valid owner"));
     let schema = COLLECTIONS.iter().fold(Schema::new(owner), |schema, name| {
-        schema.collection(name, SCHEMA_VERSION, ScopeClass::Module)
+        if *name == MEDIA_METADATA {
+            schema.collection_with(
+                MEDIA_METADATA_VERSION,
+                media_metadata_spec(),
+                ScopeClass::Module,
+            )
+        } else {
+            schema.collection(name, SCHEMA_VERSION, ScopeClass::Module)
+        }
     });
+    let schema = schema.blobs(MEDIA_BLOB_PREFIX, ScopeClass::Module);
     migrate::steps()
         .into_iter()
         .fold(schema, |schema, step| schema.step(step))

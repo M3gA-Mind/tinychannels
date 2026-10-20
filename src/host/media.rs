@@ -8,13 +8,13 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_core::{
-    BlobReader, BlobStore, CollectionSpec, DocumentStore, Filter, Precondition, Query,
-};
+use tinystoragedrivers_core::{BlobReader, BlobStore, DocumentStore, Filter, Precondition, Query};
 use tokio::io::AsyncReadExt;
 
-const MEDIA_COLLECTION: &str = "channels_media_metadata";
-const MEDIA_KEY_PREFIX: &str = "channels/media/";
+use tinychannels_bus::storage::{
+    MEDIA_BLOB_PREFIX, MEDIA_METADATA as MEDIA_COLLECTION, media_metadata_spec,
+};
+const MEDIA_KEY_PREFIX: &str = MEDIA_BLOB_PREFIX;
 const OPAQUE_ID_PREFIX: &str = "tinychannels_media_v1_";
 
 /// The identity required to store or resolve media for one channel turn.
@@ -119,7 +119,7 @@ impl ScopedMediaStore {
         let content_type = normalized_content_type(&content_type);
         validate_content_type(kind, &content_type, &bytes)?;
         self.documents
-            .ensure_collection(&CollectionSpec::new(MEDIA_COLLECTION))
+            .ensure_collection(&media_metadata_spec())
             .await
             .map_err(|_| anyhow::anyhow!("media metadata storage is unavailable"))?;
 
