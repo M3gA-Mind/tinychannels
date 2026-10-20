@@ -121,6 +121,61 @@ async fn pending_and_failed_deliveries_become_snake_case_ms_records_under_key_id
 }
 
 #[tokio::test]
+async fn v21_media_file_and_voice_payloads_survive_storage_schema_upgrade() {
+    let mut media = v1_entry("legacy-media");
+    media["intent"]["payload"] = json!({
+        "kind": "media",
+        "text": "caption",
+        "media_urls": ["https://example.test/image.png"],
+    });
+    let mut files = v1_entry("legacy-files");
+    files["intent"]["payload"] = json!({
+        "kind": "files",
+        "file_urls": ["https://example.test/file.pdf"],
+    });
+    let mut voice = v1_entry("legacy-voice");
+    voice["intent"]["payload"] = json!({
+        "kind": "voice",
+        "media_url": "https://example.test/voice.ogg",
+    });
+
+    let storage = migrated(&[
+        ("channels_delivery_pending", "legacy-media", media),
+        ("channels_delivery_pending", "legacy-files", files),
+        ("channels_delivery_pending", "legacy-voice", voice),
+    ])
+    .await;
+    let store = tinychannels::storage::DocumentDeliveryStore::new(
+        std::sync::Arc::clone(storage.documents()),
+    );
+    let loaded = store.load_pending_all().await.unwrap();
+    assert_eq!(loaded.len(), 3);
+
+    for entry in loaded {
+        match (entry.id.as_str(), entry.intent.payload) {
+            (
+                "legacy-media",
+                tinychannels_bus::OutboundPayload::Media { text, media_urls },
+            ) => {
+                assert_eq!(text.as_deref(), Some("caption"));
+                assert_eq!(media_urls, ["https://example.test/image.png"]);
+            }
+            (
+                "legacy-files",
+                tinychannels_bus::OutboundPayload::Files { file_urls },
+            ) => assert_eq!(file_urls, ["https://example.test/file.pdf"]),
+            (
+                "legacy-voice",
+                tinychannels_bus::OutboundPayload::Voice {
+                    voice: tinychannels_bus::OutboundVoice::Media { media, .. },
+                },
+            ) => assert_eq!(media.url.as_deref(), Some("https://example.test/voice.ogg")),
+            (id, payload) => panic!("unexpected migrated payload for {id}: {payload:?}"),
+        }
+    }
+}
+
+#[tokio::test]
 async fn an_entry_whose_id_disagrees_with_its_idempotency_key_is_dropped_not_fatal() {
     let mut bad = v1_entry("good");
     bad["id"] = json!("other");
