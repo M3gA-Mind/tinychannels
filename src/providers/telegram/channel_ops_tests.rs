@@ -1885,6 +1885,35 @@ async fn typed_draft_lifecycle_uses_telegram_placeholder_edit_and_final_wire_cal
 }
 
 #[tokio::test]
+async fn typed_thread_scope_does_not_become_a_reply_target() {
+    let server = mock_api().await;
+    mount_post(
+        &server,
+        "sendMessage",
+        ok_with(serde_json::json!({ "message_id": 322 })),
+    )
+    .await;
+    let channel = streaming(&server);
+    let mut intent = streaming_draft_intent("partial");
+    intent.conversation_id = "100".into();
+    intent.reply_to_id = None;
+    let conversation = intent.conversation_ref.as_mut().unwrap();
+    conversation.id = "100".into();
+    conversation.thread_id = Some("7".into());
+    conversation.topic_id = None;
+
+    let id = tinychannels_runtime::channel::ChannelStreamingDraft::start_draft(&channel, intent)
+        .await
+        .unwrap();
+
+    assert_eq!(id.as_deref(), Some("322"));
+    let requests = json_bodies(&server, "sendMessage").await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["message_thread_id"], "7");
+    assert!(requests[0].get("reply_to_message_id").is_none());
+}
+
+#[tokio::test]
 async fn typed_draft_finalize_keeps_overflow_delete_and_chunk_fallback() {
     let server = mock_api().await;
     mount_post(&server, "deleteMessage", ok_with(serde_json::json!(true))).await;
