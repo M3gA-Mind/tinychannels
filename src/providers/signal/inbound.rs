@@ -8,6 +8,7 @@ use crate::channel::ChannelInboundSink;
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, channel_event, media_of, publish, publish_event,
 };
+use crate::providers::native::SeenReservation;
 use crate::traits::ChannelMessage;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -59,8 +60,8 @@ impl SignalChannel {
         }
     }
 
-    fn mark_seen(&self, key: String) -> bool {
-        self.native.mark_seen(key)
+    fn reserve_seen(&self, key: String) -> Option<SeenReservation> {
+        self.native.reserve_seen(key)
     }
 
     fn accept<'a>(&self, envelope: &'a Envelope) -> Option<Accepted<'a>> {
@@ -187,9 +188,9 @@ impl SignalChannel {
             "signal:reaction:{direction}:{target_ts}:{}:{}",
             accepted.sender, accepted.timestamp
         );
-        if !self.mark_seen(event_id.clone()) {
+        let Some(reservation) = self.reserve_seen(event_id.clone()) else {
             return true;
-        }
+        };
         let message_id = format!("sig_{target_ts}");
         let provider_message_id = Some(target_ts.to_string());
         let actor = Self::sender_of(envelope, &accepted.sender);
@@ -219,8 +220,15 @@ impl SignalChannel {
             Some(Self::conversation_of(&accepted.target)),
             kind,
         );
-        self.publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
+        if self
+            .publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
             .await
+        {
+            reservation.commit();
+            true
+        } else {
+            false
+        }
     }
 
     async fn dispatch_receipt(
@@ -273,12 +281,17 @@ impl SignalChannel {
                 Some(Self::conversation_of(&sender)),
                 kind,
             );
+            let event_id = format!("signal:{label}:{stamp}:{sender}");
+            let Some(reservation) = self.reserve_seen(event_id) else {
+                continue;
+            };
             if !self
                 .publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
                 .await
             {
                 return false;
             }
+            reservation.commit();
         }
         true
     }
@@ -294,9 +307,9 @@ impl SignalChannel {
             return true;
         };
         let event_id = format!("signal:delete:{stamp}:{}", accepted.sender);
-        if !self.mark_seen(event_id.clone()) {
+        let Some(reservation) = self.reserve_seen(event_id.clone()) else {
             return true;
-        }
+        };
         let _ = envelope;
         let event = channel_event(
             "signal",
@@ -308,8 +321,15 @@ impl SignalChannel {
                 provider_message_id: Some(stamp.to_string()),
             },
         );
-        self.publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
+        if self
+            .publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
             .await
+        {
+            reservation.commit();
+            true
+        } else {
+            false
+        }
     }
 
     async fn publish_typed(
@@ -396,9 +416,9 @@ impl SignalChannel {
             return true;
         }
         let text = data.message.as_deref().unwrap_or_default();
-        if !self.mark_seen(format!("{}:{}", accepted.sender, accepted.timestamp)) {
+        let Some(reservation) = self.reserve_seen(format!("{}:{}", accepted.sender, accepted.timestamp)) else {
             return true;
-        }
+        };
         let message_id = format!("sig_{}", accepted.timestamp);
         let conversation = Self::conversation_of(&accepted.target);
         let ingested = if has_attachments && !self.ignore_attachments {
@@ -409,6 +429,7 @@ impl SignalChannel {
         };
         let parts = assemble(text, None, ingested);
         if parts.is_empty() {
+            reservation.commit();
             return true;
         }
         let envelope_out = ChannelInboundEnvelope {
@@ -431,15 +452,20 @@ impl SignalChannel {
             )
             .await
         {
+            reservation.commit();
             return true;
         }
         let Some(tx) = tx else {
             return false;
         };
-        match self.process_envelope(envelope) {
+        let delivered = match self.process_envelope(envelope) {
             Some(message) => tx.send(message).await.is_ok(),
             None => true,
+        };
+        if delivered {
+            reservation.commit();
         }
+        delivered
     }
 }
 
