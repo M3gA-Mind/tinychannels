@@ -317,6 +317,42 @@ async fn target_readback_failure_keeps_source_for_safe_retry() {
 }
 
 #[tokio::test]
+async fn source_delete_conflict_keeps_legacy_row_for_safe_retry() {
+    let (_backend, storage) = storage().await;
+    let docs = storage.documents().clone();
+    seed(
+        docs.as_ref(),
+        "channels_delivery_pending",
+        "op",
+        legacy_delivery("op"),
+    )
+    .await;
+
+    let faults = FaultPlan::new();
+    faults.fail_operation_nth("documents.delete", 1, ErrorKind::Conflict);
+    let failing: Arc<dyn DocumentStore> = Arc::new(Failing::with_plan(Arc::clone(&docs), faults));
+    let error = crate::storage::prepare(&failing).await.unwrap_err();
+
+    assert_eq!(error.kind(), ErrorKind::Conflict);
+    assert!(docs.get(DELIVERY_PENDING, "op").await.unwrap().is_some());
+    assert!(
+        docs.get("channels_delivery_pending", "op")
+            .await
+            .unwrap()
+            .is_some(),
+        "a failed conditional delete must keep the legacy source available"
+    );
+
+    crate::storage::prepare(&docs).await.unwrap();
+    assert!(
+        docs.get("channels_delivery_pending", "op")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn malformed_owner_marker_refuses_to_skip_a_migration() {
     let (_backend, storage) = storage().await;
     let docs = storage.documents().clone();
