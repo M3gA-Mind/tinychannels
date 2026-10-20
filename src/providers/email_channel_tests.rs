@@ -1356,7 +1356,6 @@ async fn rejected_typed_mail_is_retried_without_replaying_accepted_uids() {
 
 #[tokio::test]
 async fn accepted_email_retries_only_failed_seen_acknowledgement() {
-    eprintln!("created");
     let channel = imap_channel(&["*"], 30);
     let (port, server) = fake_imap(vec![ConnScript {
         searches: vec![vec![(7, ALICE)]],
@@ -1372,7 +1371,6 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
         .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
         .await
         .expect_err("a rejected IMAP STORE must fail the acknowledgement");
-    eprintln!("process returned");
     assert!(error.to_string().contains("cannot mark seen"), "{error:#}");
     let Some(tinychannels_bus::ChannelIngress::Inbound(accepted)) = rx.try_recv().ok() else {
         panic!("the email was accepted before the STORE acknowledgement failed");
@@ -1381,9 +1379,7 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
     assert!(rx.try_recv().is_err());
     assert_eq!(channel.seen_messages.lock().await.len(), 1);
     drop(session);
-    eprintln!("session dropped");
     let failed_commands = server.await.unwrap().remove(0).join("\n");
-    eprintln!("server returned");
     assert!(failed_commands.contains("UID STORE 7 +FLAGS (\\Seen)"));
 
     let (port, server) = fake_imap(vec![ConnScript {
