@@ -1197,6 +1197,33 @@ async fn configured_slack_reactions_use_native_web_api_without_managed_fallback(
         .expect(1)
         .mount(&server)
         .await;
+    Mock::given(method("POST"))
+        .and(path("/reactions.remove"))
+        .and(header("authorization", "Bearer s"))
+        .and(body_json(serde_json::json!({
+            "channel": "C1",
+            "timestamp": "171.2",
+            "name": "tada"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/reactions.add"))
+        .and(header("authorization", "Bearer s"))
+        .and(body_json(serde_json::json!({
+            "channel": "C2",
+            "timestamp": "172.3",
+            "name": "eyes"
+        })))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"ok": false, "error": "channel_not_found"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
 
     let (host, fixture, _server) = connected_host().await;
     let mut backend = HostBackend::new(
@@ -1229,8 +1256,43 @@ async fn configured_slack_reactions_use_native_web_api_without_managed_fallback(
         .await
         .expect("configured Slack reaction should use the native adapter");
     assert!(result.success);
+    let removed = backend
+        .send_reaction(
+            &config,
+            "slack",
+            serde_json::json!({
+                "channelId": "C1",
+                "messageId": "171.2",
+                "emoji": ":tada:",
+                "remove": true
+            }),
+        )
+        .await
+        .expect("configured Slack reaction removal should use the native adapter");
+    assert!(removed.success);
+
+    let api_error = backend
+        .send_reaction(
+            &config,
+            "slack",
+            serde_json::json!({
+                "channelId": "C2",
+                "messageId": "172.3",
+                "emoji": "👀"
+            }),
+        )
+        .await
+        .expect_err("Slack API rejection must be returned to the caller");
+    assert!(api_error.to_string().contains("channel_not_found"));
+
+    let before_invalid = server.received_requests().await.unwrap().len();
+    assert!(backend
+        .send_reaction(&config, "slack", serde_json::json!({}))
+        .await
+        .is_err());
+    assert_eq!(server.received_requests().await.unwrap().len(), before_invalid);
     assert!(fixture.0.lock().await.is_empty());
-    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    assert_eq!(before_invalid, 3);
     host.shutdown().await.unwrap();
 }
 
