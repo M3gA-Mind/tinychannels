@@ -6,11 +6,74 @@ use crate::channel::{
 use crate::providers::imessage::fixtures::*;
 use crate::providers::native::fixtures::stored_media;
 use crate::traits::Channel;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::time::Duration;
+use tokio::sync::{Notify, oneshot, watch};
 use tinychannels_bus::channel::{ChannelSendOutcome, MessageReceipt, SendErrorKind};
 use tinychannels_bus::{
-    ChannelOutboundIntent, ChannelOutboundMessage, ContentPart, ConversationKind, ConversationRef,
-    MediaKind, MediaReference, OutboundContentPart, OutboundPayload, OutboundVoice,
+    ChannelIngress, ChannelOutboundIntent, ChannelOutboundMessage, ContentPart, ConversationKind,
+    ConversationRef, MediaKind, MediaReference, OutboundContentPart, OutboundPayload,
+    OutboundVoice,
 };
+
+#[derive(Default)]
+struct RecordingIngress {
+    items: Mutex<Vec<ChannelIngress>>,
+    entered: Notify,
+}
+
+#[async_trait]
+impl crate::channel::ChannelInboundSink for RecordingIngress {
+    async fn push(
+        &self,
+        ingress: ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.items.lock().unwrap().push(ingress);
+        self.entered.notify_one();
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct RejectSecondIngress {
+    calls: AtomicUsize,
+    accepted: Mutex<Vec<ChannelIngress>>,
+}
+
+#[async_trait]
+impl crate::channel::ChannelInboundSink for RejectSecondIngress {
+    async fn push(
+        &self,
+        ingress: ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        if self.calls.fetch_add(1, Ordering::SeqCst) == 1 {
+            return Err(tinychannels_bus::channel::ChannelSendError {
+                message: "fixture rejects second delivery".into(),
+                retryable: true,
+                ..Default::default()
+            });
+        }
+        self.accepted.lock().unwrap().push(ingress);
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct BlockingIngress {
+    entered: Notify,
+}
+
+#[async_trait]
+impl crate::channel::ChannelInboundSink for BlockingIngress {
+    async fn push(
+        &self,
+        _ingress: ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        self.entered.notify_one();
+        std::future::pending().await
+    }
+}
 
 fn message(to: &str, parts: Vec<OutboundContentPart>) -> ChannelOutboundMessage {
     ChannelOutboundMessage {
@@ -28,6 +91,64 @@ fn message(to: &str, parts: Vec<OutboundContentPart>) -> ChannelOutboundMessage 
         idempotency_key: "k".into(),
         parts,
     }
+}
+
+#[tokio::test]
+async fn typed_listener_retries_rejected_rows_without_replaying_accepted_predecessors() {
+    let rig = rig();
+    let reject_second = Arc::new(RejectSecondIngress::default());
+    let (stop, cancellation) = watch::channel(false);
+    let (ready, started) = oneshot::channel();
+    let channel = rig.channel.clone();
+    let sink = reject_second.clone();
+    let listener = tokio::spawn(async move {
+        channel
+            .listen_typed_with_ready(sink.as_ref(), cancellation, ready)
+            .await
+    });
+    started.await.unwrap();
+
+    rig.inbound(1, Some("first"), false, &[]);
+    rig.inbound(2, Some("second"), false, &[]);
+    let failure = tokio::time::timeout(Duration::from_secs(2), listener)
+        .await
+        .expect("rejected ingress terminates the current listener")
+        .unwrap()
+        .unwrap_err();
+    assert!(failure.retryable);
+
+    let accepted = reject_second.accepted.lock().unwrap();
+    assert_eq!(accepted.len(), 1);
+    assert!(matches!(
+        &accepted[0],
+        ChannelIngress::Inbound(envelope) if envelope.message_id == "IN1"
+    ));
+    drop(accepted);
+
+    let recording = Arc::new(RecordingIngress::default());
+    let (stop_retry, retry_cancellation) = watch::channel(false);
+    let (ready_retry, retry_started) = oneshot::channel();
+    let channel = rig.channel.clone();
+    let sink = recording.clone();
+    let retry = tokio::spawn(async move {
+        channel
+            .listen_typed_with_ready(sink.as_ref(), retry_cancellation, ready_retry)
+            .await
+    });
+    retry_started.await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), recording.entered.notified())
+        .await
+        .expect("the rejected row is retried");
+    stop_retry.send(true).unwrap();
+    retry.await.unwrap().unwrap();
+
+    let delivered = recording.items.lock().unwrap();
+    assert_eq!(delivered.len(), 1);
+    assert!(matches!(
+        &delivered[0],
+        ChannelIngress::Inbound(envelope) if envelope.message_id == "IN2"
+    ));
+    let _ = stop.send(true);
 }
 
 fn text(body: &str) -> OutboundContentPart {

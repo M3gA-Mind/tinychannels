@@ -37,11 +37,7 @@ impl IMessageChannel {
             generation,
         };
 
-        tokio::select! {
-            biased;
-            _ = cancellation.wait_for(|stopped| *stopped) => Ok(()),
-            result = self.listen_typed_with(sink, &mut cancellation, None) => result,
-        }
+        self.listen_typed_with(sink, &mut cancellation, None).await
     }
 
     pub(super) async fn stop_typed_listener(&self) -> Result<(), ChannelSendError> {
@@ -133,12 +129,7 @@ impl IMessageChannel {
             if let Ok(reads) = reads {
                 for read in reads {
                     let date_read = read.date_read;
-                    let result = tokio::select! {
-                        biased;
-                        _ = cancellation.wait_for(|stopped| *stopped) => return Ok(()),
-                        result = self.dispatch_read_typed(read, sink, cancellation) => result,
-                    };
-                    result?;
+                    self.dispatch_read_typed(read, sink, cancellation).await?;
                     cursor.read_date = cursor.read_date.max(date_read);
                     self.save_listener_cursor(cursor);
                 }
@@ -147,12 +138,7 @@ impl IMessageChannel {
             if let Ok(rows) = rows {
                 for row in rows {
                     let rowid = row.rowid;
-                    let result = tokio::select! {
-                        biased;
-                        _ = cancellation.wait_for(|stopped| *stopped) => return Ok(()),
-                        result = self.dispatch_row_typed(row, sink, cancellation) => result,
-                    };
-                    result?;
+                    self.dispatch_row_typed(row, sink, cancellation).await?;
                     cursor.inbound_rowid = cursor.inbound_rowid.max(rowid);
                     self.save_listener_cursor(cursor);
                 }
