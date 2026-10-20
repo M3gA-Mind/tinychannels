@@ -274,14 +274,14 @@ impl SignalChannel {
                     },
                 )
             };
+            let event_id = format!("signal:{label}:{stamp}:{sender}");
             let event = channel_event(
                 "signal",
-                format!("signal:{label}:{stamp}:{sender}"),
+                event_id.clone(),
                 when,
                 Some(Self::conversation_of(&sender)),
                 kind,
             );
-            let event_id = format!("signal:{label}:{stamp}:{sender}");
             let Some(reservation) = self.reserve_seen(event_id) else {
                 continue;
             };
