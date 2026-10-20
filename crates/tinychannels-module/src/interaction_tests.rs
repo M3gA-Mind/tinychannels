@@ -2,6 +2,82 @@ use super::*;
 use std::sync::{Arc, Mutex};
 use tinychannels::{ChannelMessage, SendMessage};
 
+struct NativeDescribeAdapter;
+
+#[async_trait::async_trait]
+impl tinychannels::channel::ChannelAdapter for NativeDescribeAdapter {
+    fn descriptor(&self) -> tinychannels_bus::channel::ChannelDescriptor {
+        tinychannels_bus::channel::ChannelDescriptor {
+            id: "fixture".into(),
+            display_name: "Fixture".into(),
+            account_id: Some("fixture:one".into()),
+            ..Default::default()
+        }
+    }
+
+    fn declared_capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+        capabilities.reactions = true;
+        capabilities.streaming_reply_pipeline = true;
+        capabilities
+    }
+
+    fn proactive_target(&self) -> Option<String> {
+        Some("configured-native-room".into())
+    }
+
+    async fn start(
+        &self,
+        _: &(dyn tinychannels::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+
+    async fn stop(&self) -> Result<(), tinychannels::channel::ChannelSendError> {
+        Ok(())
+    }
+
+    async fn send(
+        &self,
+        _: tinychannels_bus::ChannelOutboundIntent,
+    ) -> Result<tinychannels::channel::ChannelSendOutcome, tinychannels::channel::ChannelSendError>
+    {
+        Ok(Default::default())
+    }
+
+    async fn status(
+        &self,
+    ) -> Result<
+        tinychannels::controllers::ChannelAccountSnapshot,
+        tinychannels::channel::ChannelSendError,
+    > {
+        Ok(Default::default())
+    }
+}
+
+#[tokio::test]
+async fn native_describe_uses_configured_adapter_facts_and_keeps_v1_projection() {
+    let adapter = NativeDescribeAdapter;
+    let v2 = describe_adapter(&adapter, false);
+    let ChannelInteractionResult::InfoV2(v2) = v2 else {
+        panic!("missing native v2 capabilities")
+    };
+    assert_eq!(v2.capabilities.account.configured, Some(true));
+    assert_eq!(v2.capabilities.account.enabled, Some(true));
+    assert_eq!(
+        v2.capabilities.account.proactive_target.as_deref(),
+        Some("configured-native-room")
+    );
+    assert!(v2.capabilities.reactions);
+
+    let v1 = describe_adapter(&adapter, true);
+    let wire = serde_json::to_value(v1).unwrap();
+    assert_eq!(wire["result"], "info");
+    assert_eq!(wire["value"]["proactive_target"], "configured-native-room");
+    assert_eq!(wire["value"]["supports_reactions"], true);
+    assert_eq!(wire["value"]["supports_draft_updates"], true);
+}
+
 #[derive(Default)]
 struct DraftProvider(Mutex<Vec<String>>);
 #[async_trait::async_trait]

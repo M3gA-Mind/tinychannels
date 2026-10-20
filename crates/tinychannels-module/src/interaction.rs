@@ -1,6 +1,32 @@
 //! Module-owned provider interaction execution.
 use tinychannels::Channel;
 
+/// Return Describe information from the exact configured native adapter.
+/// V1 keeps its wire projection until the compatibility window ends; all
+/// capability facts come from the same adapter selected for provider launch.
+pub(crate) fn describe_adapter(
+    adapter: &dyn tinychannels::channel::ChannelAdapter,
+    legacy: bool,
+) -> ChannelInteractionResult {
+    let mut capabilities = adapter.declared_capabilities();
+    capabilities.account.configured = Some(true);
+    capabilities.account.enabled = Some(true);
+    capabilities.account.proactive_target = adapter.proactive_target();
+
+    if legacy {
+        ChannelInteractionResult::Info(Box::new(ChannelInteractionInfo {
+            capabilities: (&capabilities).into(),
+            proactive_target: capabilities.account.proactive_target.clone(),
+            supports_reactions: capabilities.reactions,
+            supports_draft_updates: capabilities.streaming_reply_pipeline,
+        }))
+    } else {
+        ChannelInteractionResult::InfoV2(Box::new(
+            tinychannels_bus::ChannelInteractionInfoV2 { capabilities },
+        ))
+    }
+}
+
 /// Capability facts bound to the exact adapter handle selected at startup.
 pub(crate) fn configured_adapter_capabilities(
     provider: &std::sync::Arc<crate::provider::Running>,
