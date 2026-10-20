@@ -134,6 +134,110 @@ async fn configured_mattermost_reaction_uses_authenticated_native_v4_requests() 
 }
 
 #[tokio::test]
+async fn typed_edit_and_delete_use_the_provider_returned_post_id() {
+    use crate::channel::{ChannelAdapter, ChannelDelete, ChannelEdit, ChannelTypedSend};
+    use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
+    use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
+    use wiremock::matchers::{body_json, header, method, path};
+
+    let server = MockServer::start().await;
+    let next_id = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let ids = next_id.clone();
+    Mock::given(method("POST"))
+        .and(path("/api/v4/posts"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(move |_| {
+            let id = if ids.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 {
+                "post-edit-1"
+            } else {
+                "post-delete-1"
+            };
+            ResponseTemplate::new(201).set_body_json(json!({"id": id}))
+        })
+        .expect(2)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api/v4/posts/post-edit-1"))
+        .and(header("authorization", "Bearer test-token"))
+        .and(body_json(json!({"id": "post-edit-1", "message": "updated"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "post-edit-1"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/api/v4/posts/post-delete-1"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "OK"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let channel = channel(&server, Arc::new(StubMedia::default()));
+    let make_text = |key: &str, text: &str| ChannelOutboundMessage {
+        channel_id: "mattermost".into(),
+        conversation_id: "channel-1".into(),
+        channel_ref: Some(ChannelRef {
+            id: "mattermost".into(),
+            account_id: Some("account-1".into()),
+        }),
+        conversation_ref: Some(ConversationRef {
+            kind: ConversationKind::Channel,
+            id: "channel-1".into(),
+            ..Default::default()
+        }),
+        idempotency_key: key.into(),
+        parts: vec![OutboundContentPart::Content {
+            part: ContentPart::Text {
+                text: text.into(),
+                format: None,
+            },
+        }],
+        ..Default::default()
+    };
+    let original = ChannelTypedSend::send_typed(&channel, &make_text("edit-target", "before"))
+        .await
+        .unwrap();
+    let intent = ChannelOutboundIntent {
+        idempotency_key: "edit-1".into(),
+        channel_id: "mattermost".into(),
+        conversation_id: "channel-1".into(),
+        channel_ref: Some(ChannelRef {
+            id: "mattermost".into(),
+            account_id: Some("account-1".into()),
+        }),
+        conversation_ref: Some(ConversationRef {
+            kind: ConversationKind::Channel,
+            id: "channel-1".into(),
+            ..Default::default()
+        }),
+        payload: OutboundPayload::Text {
+            text: "updated".into(),
+        },
+        ..Default::default()
+    };
+    let edited = ChannelEdit::edit(&channel, &original.receipt, intent)
+        .await
+        .expect("typed edit should use the receipt returned by Mattermost");
+    assert_eq!(
+        edited.primary_platform_message_id.as_deref(),
+        Some("post-edit-1")
+    );
+
+    let deletion_target = ChannelTypedSend::send_typed(
+        &channel,
+        &make_text("delete-target", "to delete"),
+    )
+    .await
+    .unwrap();
+    ChannelDelete::delete(&channel, &deletion_target.receipt)
+        .await
+        .expect("typed delete should use the receipt returned by Mattermost");
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 4);
+}
+
+#[tokio::test]
 async fn typed_image_upload_uses_scoped_bytes_and_posts_caption_with_real_id() {
     let server = MockServer::start().await;
     Mock::given(method("POST"))

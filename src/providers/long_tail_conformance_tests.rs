@@ -1315,6 +1315,38 @@ async fn the_mattermost_adapter_passes_the_full_conformance_matrix() {
     assert_eq!(results.len(), Feature::ALL.len());
     let failed = failures(&results);
     assert!(failed.is_empty(), "conformance failures: {failed:#?}");
+    check_feature(&fixture, Feature::Reactions)
+        .await
+        .expect("Mattermost reaction fixture should pass when replayed alone");
+    let observations = fixture.observations();
+    let reaction = observations
+        .iter()
+        .find(|observation| observation.feature == Feature::Reactions)
+        .expect("Mattermost reaction must have an actual wire observation");
+    assert_eq!(reaction.operation, "reaction_send");
+    assert!(reaction.request["post_id"].as_str().is_some_and(|id| id.parse::<u64>().is_ok()));
+    assert_eq!(reaction.request["emoji_name"], "thumbsup");
+    check_feature(&fixture, Feature::Edit)
+        .await
+        .expect("Mattermost edit fixture should pass when replayed alone");
+    let observations = fixture.observations();
+    let edit = observations
+        .iter()
+        .find(|observation| observation.feature == Feature::Edit)
+        .expect("Mattermost edit must have an actual wire observation");
+    assert_eq!(edit.operation, "edit");
+    assert_eq!(edit.request["message"], "edited text");
+    assert_eq!(edit.request["id"], edit.platform_message_ids[0]);
+    check_feature(&fixture, Feature::Delete)
+        .await
+        .expect("Mattermost delete fixture should pass when replayed alone");
+    let observations = fixture.observations();
+    let delete = observations
+        .iter()
+        .find(|observation| observation.feature == Feature::Delete)
+        .expect("Mattermost delete must have an actual wire observation");
+    assert_eq!(delete.operation, "delete");
+    assert_eq!(delete.request["path"], format!("/api/v4/posts/{}", delete.platform_message_ids[0]));
 }
 
 #[tokio::test]
