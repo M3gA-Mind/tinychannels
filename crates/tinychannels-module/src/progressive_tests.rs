@@ -590,6 +590,60 @@ async fn hosted_output_rejects_ambiguous_receiptless_provider_outcome() {
 }
 
 #[tokio::test]
+async fn receiptless_acceptance_is_hosted_only_and_keeps_scoped_identity() {
+    let (replies, callback) = fixture(false).await;
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Accepted);
+    let channel = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("relay:tenant-7:telegram-account".into()),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Group,
+        id: "-10042".into(),
+        thread_id: Some("topic-9".into()),
+        ..Default::default()
+    };
+    let context = ProgressiveOutputContext {
+        turn_id: "turn-relay-accepted".into(),
+        channel: channel.clone(),
+        conversation: conversation.clone(),
+    };
+    let request = || TypedPartRequest {
+        channel: "telegram:-10042",
+        parts: &[],
+        text: "accepted by host",
+        context: Some(&context),
+        sequence: 1,
+        segment_index: 0,
+        final_phase: true,
+    };
+    let sender = Sender {
+        host: replies.host.clone(),
+        media_account_scope: crate::provider::MediaScope::default(),
+        context: Some(context.clone()),
+        capabilities: tinychannels_bus::ChannelCapabilities::unknown(),
+        channel: "telegram:-10042".into(),
+        hosted: true,
+        send_sequence: std::sync::atomic::AtomicU64::new(0),
+    };
+    let accepted = send_typed_part(&sender, request()).await.unwrap();
+    assert!(accepted.error.is_none());
+    assert!(accepted.receipt.primary_platform_message_id.is_none());
+    assert!(accepted.receipt.platform_message_ids.is_empty());
+    assert!(accepted.receipt.parts.is_empty());
+    assert!(accepted.receipt.idempotency_key.as_deref().is_some());
+    assert_eq!(accepted.receipt.channel.as_ref(), Some(&channel));
+    assert_eq!(accepted.receipt.conversation.as_ref(), Some(&conversation));
+
+    let native_sender = Sender {
+        hosted: false,
+        ..sender
+    };
+    assert!(send_typed_part(&native_sender, request()).await.is_err());
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn hosted_output_rejects_missing_account_scope_before_callback() {
     let (replies, callback) = fixture(false).await;
     let result = replies
