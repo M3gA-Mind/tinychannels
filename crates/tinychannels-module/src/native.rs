@@ -103,8 +103,9 @@ pub(crate) fn build_native_v2(
             .map(|channel| NativeLaunch::with_legacy("iMessage", channel)),
         "linq" => tinychannels::factory::build_linq_channel(config, host, http)
             .map(|channel| NativeLaunch::with_legacy("Linq", channel)),
-        "email" => tinychannels::factory::build_email_channel(config, host)
-            .map(|channel| NativeLaunch::with_legacy("Email", channel)),
+        "email" => tinychannels::factory::build_email_channel(config, host).map(|channel| {
+            NativeLaunch::long_tail("Email", channel, LongTailListenerMode::Adapter)
+        }),
         id => {
             let display = long_tail_display(id)?;
             let listener_mode = match id {

@@ -218,6 +218,12 @@ pub(crate) trait NativeProvider: Send + Sync {
     /// Send one resolved step and report the message ids the platform issued.
     async fn deliver(&self, target: &Target, step: &Step) -> Result<Vec<Sent>, ChannelSendError>;
 
+    /// Provider-owned health state for the typed adapter descriptor. Adapters
+    /// without a probe remain explicitly unknown.
+    async fn health_state(&self) -> &'static str {
+        "unknown"
+    }
+
     /// Run a provider-owned typed listener when this native adapter supports
     /// inbound events. Most adapters are outbound-only and retain the no-op.
     async fn start_listener(
@@ -368,7 +374,11 @@ macro_rules! native_v2_adapter {
                         tinychannels_bus::controllers::ChannelAccountState::Configured,
                         tinychannels_bus::controllers::ChannelAccountState::Enabled,
                     ],
-                    health_state: Some("unknown".into()),
+                    health_state: Some(
+                        $crate::providers::native::NativeProvider::health_state(self)
+                            .await
+                            .into(),
+                    ),
                     ..Default::default()
                 })
             }
