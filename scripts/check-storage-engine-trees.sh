@@ -14,7 +14,7 @@ check_tree() {
   if [[ -n "$offender" ]]; then
     # SQLite is the one deliberate feature exception: the implementation's
     # opt-in iMessage reader uses rusqlite. Keep it confined to that package
-    # and verify the default build below remains SQLite-free.
+    # and verify the no-default-features build below remains SQLite-free.
     if [[ "$package" == "tinychannels" && "${ALLOW_IMESSAGE_SQLITE:-0}" == 1 ]]; then
       offender="$(printf '%s\n' "$offender" | grep -Ev '^(rusqlite|libsqlite3-sys)$' || true)"
     fi
@@ -39,7 +39,7 @@ for package in data["packages"]:
 
 tree_names() {
   # Git Bash on Windows can leave CRLF in captured cargo output.
-  cargo tree "$@" --prefix none | tr -d '\r' | awk 'NF {print $1}'
+  cargo tree --locked "$@" --prefix none | tr -d '\r' | awk 'NF {print $1}'
 }
 
 if [[ "${1:-}" == "--self-test" ]]; then
@@ -80,7 +80,7 @@ if [[ "${1:-}" == "--self-test" ]]; then
   exit 0
 fi
 
-metadata="$(cargo metadata --format-version 1 --no-deps | tr -d '\r')"
+metadata="$(cargo metadata --locked --format-version 1 --no-deps | tr -d '\r')"
 packages="$(printf '%s' "$metadata" | library_packages)"
 if [[ -z "$packages" ]]; then
   printf 'failed closed: workspace metadata contained no native library packages\n' >&2
@@ -94,7 +94,7 @@ while IFS= read -r package; do
     ALLOW_IMESSAGE_SQLITE=1 check_tree "$package" "$names"
     default_names="$(tree_names -p "$package" --no-default-features -e normal,build)"
     if printf '%s\n' "$default_names" | grep -Ex '^(rusqlite|libsqlite3-sys)$' >/dev/null; then
-      printf 'tinychannels default build unexpectedly includes SQLite\n' >&2
+      printf 'tinychannels no-default-features build unexpectedly includes SQLite\n' >&2
       exit 1
     fi
     check_tree "$package" "$default_names"
