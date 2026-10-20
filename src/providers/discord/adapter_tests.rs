@@ -81,7 +81,7 @@ async fn the_legacy_channel_reports_the_same_facts() {
 }
 
 #[tokio::test]
-async fn the_adapter_describes_itself_and_manages_no_lifecycle_of_its_own() {
+async fn the_adapter_describes_itself_without_starting_a_gateway() {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(wiremock::matchers::path("/users/@me"))
@@ -109,15 +109,6 @@ async fn the_adapter_describes_itself_and_manages_no_lifecycle_of_its_own() {
         channel.v2_capabilities()
     );
 
-    struct Sink;
-    #[async_trait::async_trait]
-    impl ChannelInboundSink for Sink {
-        async fn push(&self, _: tinychannels_bus::ChannelIngress) -> Result<(), ChannelSendError> {
-            Ok(())
-        }
-    }
-    ChannelAdapter::start(&channel, &Sink).await.unwrap();
-    ChannelAdapter::stop(&channel).await.unwrap();
     let status = ChannelAdapter::status(&channel).await.unwrap();
     assert_eq!(status.channel_id, "discord");
     assert_eq!(status.health_state.as_deref(), Some("healthy"));
