@@ -68,11 +68,34 @@ impl EmailChannel {
         tx.send(message).await.is_ok()
     }
 
-    /// Publish `email` as a typed envelope. False when it did not parse, had
-    /// nothing to say, or the host did not take it.
+    /// Publish `email` through the compatibility event sink.
     async fn publish_typed(&self, email: &ParsedEmail) -> bool {
-        let Some(parsed) = MessageParser::default().parse(&email.raw) else {
+        let Some(envelope) = self.typed_envelope(email).await else {
             return false;
+        };
+        publish("email", self.native.events.as_ref(), envelope).await
+    }
+
+    /// Deliver an email through the ordered native ingress sink. Rejections
+    /// are propagated to listener supervision and never fall back to the
+    /// legacy channel queue.
+    pub(super) async fn dispatch_typed_email(
+        &self,
+        email: &ParsedEmail,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> anyhow::Result<()> {
+        let Some(envelope) = self.typed_envelope(email).await else {
+            anyhow::bail!("Email message could not be parsed for typed ingress");
+        };
+        sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope))
+            .await
+            .map_err(|_| anyhow::Error::new(super::InboundSinkRejected))
+    }
+
+    /// Construct a typed envelope with host-scoped media and voice parts.
+    async fn typed_envelope(&self, email: &ParsedEmail) -> Option<ChannelInboundEnvelope> {
+        let Some(parsed) = MessageParser::default().parse(&email.raw) else {
+            return None;
         };
         let subject = parsed.subject().unwrap_or("(no subject)").to_owned();
         let in_reply_to = ids_of(parsed.in_reply_to()).into_iter().next();
@@ -159,7 +182,7 @@ impl EmailChannel {
             })),
             ..Default::default()
         };
-        publish("email", self.native.events.as_ref(), envelope).await
+        Some(envelope)
     }
 }
 

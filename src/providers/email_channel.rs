@@ -401,15 +401,6 @@ impl EmailChannel {
             }
         }
 
-        // Mark fetched messages as seen
-        if !results.is_empty() {
-            let _ = session
-                .uid_store(&uid_set, "+FLAGS (\\Seen)")
-                .await?
-                .try_collect::<Vec<_>>()
-                .await;
-        }
-
         Ok(results)
     }
 
@@ -460,6 +451,54 @@ impl EmailChannel {
     async fn listen_with_idle(&self, tx: mpsc::Sender<ChannelMessage>) -> Result<()> {
         self.listen_with_reconnect(&tx, || self.connect_imap())
             .await
+    }
+
+    #[cfg(feature = "email")]
+    async fn listen_typed_with<S, F, Fut>(
+        &self,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+        connect: F,
+    ) -> std::result::Result<(), ChannelSendError>
+    where
+        S: ImapStream,
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<Session<S>>>,
+    {
+        let (cancel, mut cancellation) = watch::channel(false);
+        let generation = self
+            .listener_generation
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        {
+            let mut active = self
+                .listener_cancel
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if active.is_some() {
+                return Err(ChannelSendError {
+                    message: "Email listener is already running".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            *active = Some((generation, cancel));
+        }
+        let _registration = ListenerRegistration {
+            slot: self.listener_cancel.clone(),
+            generation,
+        };
+
+        let result = tokio::select! {
+            biased;
+            _ = cancellation.wait_for(|stopped| *stopped) => Ok(()),
+            result = self.listen_with_reconnect_to(EmailDelivery::Typed(sink), connect) => result,
+        };
+        result.map_err(|_| ChannelSendError {
+            kind: crate::channel::SendErrorKind::Transient,
+            message: "Email listener stopped after an inbound delivery error".into(),
+            retryable: true,
+            ..Default::default()
+        })
     }
 
     /// The reconnect loop over any session source, so it is testable without
