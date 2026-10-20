@@ -1057,7 +1057,7 @@ async fn health_check_bounds_a_stalled_logout_after_successful_login() {
     }])
     .await;
     let channel = imap_channel(&["*"], 30);
-    let probe = tokio::spawn(async move {
+    let mut probe = tokio::spawn(async move {
         channel
             .typed_health_state(plain_session(&channel, port), Duration::from_secs(2))
             .await
