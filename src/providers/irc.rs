@@ -772,9 +772,12 @@ impl crate::providers::long_tail::LongTail for IrcChannel {
         }
         let has_thread = message.reply_to_id.is_some()
             || message.thread_id.is_some()
-            || message.conversation_ref.as_ref().is_some_and(|conversation| {
-                conversation.thread_id.is_some() || conversation.topic_id.is_some()
-            });
+            || message
+                .conversation_ref
+                .as_ref()
+                .is_some_and(|conversation| {
+                    conversation.thread_id.is_some() || conversation.topic_id.is_some()
+                });
         if has_thread {
             return Err(crate::providers::long_tail::unsupported::<Self>(
                 "reply or thread addressing",
