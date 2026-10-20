@@ -21,9 +21,8 @@ if [[ ! -f "$artifact" ]]; then
   exit 1
 fi
 
-artifact_dir="$target_directory/module-artifact-verification"
-rm -rf "$artifact_dir"
-mkdir -p "$artifact_dir"
+artifact_dir="$(mktemp -d "$target_directory/module-artifact-verification.XXXXXX")"
+trap 'rm -rf "$artifact_dir"' EXIT
 staged_artifact="$artifact_dir/$(basename "$artifact")"
 cp "$artifact" "$staged_artifact"
 if command -v sha256sum >/dev/null 2>&1; then
