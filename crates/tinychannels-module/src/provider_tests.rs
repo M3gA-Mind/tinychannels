@@ -4160,8 +4160,6 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
         },
         ..Default::default()
     };
-    running
-        .validate_adapter_intent(&intent)
     let sent = handle.send(intent.clone()).await.unwrap();
     assert_eq!(
         sent.receipt.primary_platform_message_id.as_deref(),
