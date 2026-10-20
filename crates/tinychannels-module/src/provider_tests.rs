@@ -5058,7 +5058,7 @@ async fn a_built_native_launch_starts_on_the_ordered_queue() {
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), "signal".to_owned(), None);
-    let running = launch.start(hooks, host, None, false);
+    let running = launch.start(hooks, host, None, true);
     assert_eq!(running.adapter_handle().mode, AdapterMode::SignalNativeV2);
     assert!(
         running.channel.is_some(),
@@ -5107,7 +5107,7 @@ async fn a_built_linq_launch_starts_as_the_native_linq_adapter() {
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), "linq".to_owned(), None);
-    let running = launch.start(hooks, host, None, true);
+    let running = launch.start(hooks, host, None, false);
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::LinqNativeV2);
     assert_eq!(handle.descriptor().id, "linq");
