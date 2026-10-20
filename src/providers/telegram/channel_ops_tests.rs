@@ -3134,7 +3134,10 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
         .collect::<Vec<_>>();
     assert!(
         failures.is_empty(),
-        "Telegram conformance failures: {failures:#?}"
+        "Telegram conformance failures: {failures:#?}; events={:?}; inbounds={:?}; voice={:?}",
+        fixture.events.events.lock().unwrap().len(),
+        fixture.events.inbounds.lock().unwrap().len(),
+        fixture.voice.stored.lock().unwrap().iter().map(|r| (&r.direction, &r.scope)).collect::<Vec<_>>()
     );
 }
 
