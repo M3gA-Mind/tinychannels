@@ -1123,6 +1123,12 @@ async fn the_mattermost_adapter_passes_the_full_conformance_matrix() {
     let results = check_all_features(&fixture).await;
     assert_eq!(results.len(), Feature::ALL.len());
     let failed = failures(&results);
+    if !failed.is_empty() {
+        for feature in [Feature::Text, Feature::Image, Feature::Video, Feature::Audio, Feature::File, Feature::VoiceOut] {
+            let result = check_feature(&fixture, feature).await;
+            eprintln!("{feature:?}: {result:?}; observed: {:#?}", fixture.observations());
+        }
+    }
     assert!(failed.is_empty(), "conformance failures: {failed:#?}");
 }
 
