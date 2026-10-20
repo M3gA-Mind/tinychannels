@@ -498,6 +498,98 @@ async fn hosted_output_uses_the_captured_callback_without_a_local_provider() {
 }
 
 #[tokio::test]
+async fn hosted_output_accepts_explicit_host_delivery_without_provider_receipt() {
+    let (replies, callback) = fixture(false).await;
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Accepted);
+    let channel = tinychannels_bus::ChannelRef {
+        id: "telegram".into(),
+        account_id: Some("relay:tenant-7:telegram-account".into()),
+    };
+    let conversation = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Group,
+        id: "-10042".into(),
+        thread_id: Some("topic-9".into()),
+        ..Default::default()
+    };
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: channel.clone(),
+            conversation: conversation.clone(),
+            turn_id: "turn-relay-accepted".into(),
+            lifetime_ms: 30_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected hosted output handle")
+    };
+
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle: handle.clone(),
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "accepted by host".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    let ProgressiveResult::DeliveryOutcome { outcome } = result else {
+        panic!("host acceptance must retain a typed terminal result: {result:?}")
+    };
+    assert!(outcome.error.is_none());
+    assert!(outcome.receipt.primary_platform_message_id.is_none());
+    assert!(outcome.receipt.platform_message_ids.is_empty());
+    assert!(outcome.receipt.parts.is_empty());
+    assert!(outcome.receipt.idempotency_key.as_deref().is_some());
+    assert_eq!(outcome.receipt.channel.as_ref(), Some(&channel));
+    assert_eq!(outcome.receipt.conversation.as_ref(), Some(&conversation));
+    replies
+        .execute(ProgressiveCommand::Close { handle })
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn hosted_output_rejects_ambiguous_receiptless_provider_outcome() {
+    let (replies, callback) = fixture(false).await;
+    *callback.send_result.lock().await = Some(ProgressiveTransportResult::Outcome(Box::default()));
+    let ProgressiveResult::Opened { handle } = replies
+        .execute(ProgressiveCommand::OpenHostedOutput {
+            channel: tinychannels_bus::ChannelRef {
+                id: "telegram".into(),
+                account_id: Some("relay:tenant-7:telegram-account".into()),
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Group,
+                id: "-10042".into(),
+                ..Default::default()
+            },
+            turn_id: "turn-relay-empty-outcome".into(),
+            lifetime_ms: 30_000,
+        })
+        .await
+        .unwrap()
+    else {
+        panic!("expected hosted output handle")
+    };
+    let result = replies
+        .execute(ProgressiveCommand::FeedOutput {
+            handle,
+            events: vec![ChannelOutputEvent::FinalMessage {
+                text: "must not be accepted".into(),
+                parts: vec![],
+                receipt: None,
+            }],
+        })
+        .await
+        .unwrap();
+    assert!(matches!(result, ProgressiveResult::DeliveryBatch { failure: Some(_), .. }));
+    replies.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn hosted_output_rejects_missing_account_scope_before_callback() {
     let (replies, callback) = fixture(false).await;
     let result = replies

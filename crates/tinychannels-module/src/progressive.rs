@@ -701,7 +701,26 @@ async fn send_typed_part(
                 }
             }
             ProgressiveTransportResult::Accepted if sender.hosted => {
-                Ok(tinychannels_bus::channel::ChannelSendOutcome::default())
+                let Some(context) = context else {
+                    return Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                        "hosted acceptance has no scoped identity"
+                    )));
+                };
+                let Some(idempotency_key) = idempotency_key else {
+                    return Err(ProgressiveSendError::Other(anyhow::anyhow!(
+                        "hosted acceptance has no idempotency identity"
+                    )));
+                };
+                Ok(tinychannels_bus::channel::ChannelSendOutcome {
+                    receipt: tinychannels_bus::channel::MessageReceipt {
+                        idempotency_key: Some(idempotency_key),
+                        channel: Some(context.channel.clone()),
+                        conversation: Some(context.conversation.clone()),
+                        thread_id: context.conversation.thread_id.clone(),
+                        ..Default::default()
+                    },
+                    error: None,
+                })
             }
             ProgressiveTransportResult::Accepted => Err(ProgressiveSendError::Other(
                 anyhow::anyhow!("receiptless acceptance is only valid for hosted sends"),
