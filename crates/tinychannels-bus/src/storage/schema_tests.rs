@@ -19,11 +19,7 @@ fn the_schema_composes_and_declares_every_collection_as_module_scoped() {
             } else {
                 SCHEMA_VERSION
             };
-            assert_eq!(
-                *version, expected_version,
-                "{}",
-                item.name()
-            );
+            assert_eq!(*version, expected_version, "{}", item.name());
             Some(item.name())
         })
         .collect();
