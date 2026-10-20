@@ -494,7 +494,7 @@ impl EmailChannel {
             result = self.listen_with_reconnect_to(EmailDelivery::Typed(sink), connect) => result,
         };
         result.map_err(|_| ChannelSendError {
-            kind: crate::channel::SendErrorKind::Transient,
+            kind: tinychannels_bus::channel::SendErrorKind::Transient,
             message: "Email listener stopped after an inbound delivery error".into(),
             retryable: true,
             ..Default::default()
