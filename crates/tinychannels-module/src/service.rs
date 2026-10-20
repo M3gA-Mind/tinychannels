@@ -957,31 +957,16 @@ impl Channels {
     }
 
     /// Send one outbound message through a running provider.
+    /// This v1 wire method is retained for existing callers; adapt it to the
+    /// typed outbound contract immediately at the module boundary.
     async fn send_message(&self, name: String, message: SendMessage) -> BusResult<()> {
-        // Cloned out of the map so the send does not hold the registry lock for
-        // the duration of a network round trip.
-        if self.terminal.load(Ordering::SeqCst) {
-            return Err(BusError::failed("module is shutting down"));
+        let mut intent = tinychannels::outbound_intent_from_send_message(&name, &message);
+        if message.subject.is_none() {
+            intent.payload = tinychannels_bus::OutboundPayload::Text {
+                text: message.content,
+            };
         }
-        let entry = {
-            let running = self.running.lock().await;
-            running
-                .get(&name)
-                .filter(|entry| !entry.is_finished())
-                .cloned()
-                .ok_or_else(|| BusError::MethodFailed {
-                    name: UNKNOWN_CHANNEL_ERROR.to_owned(),
-                    message: format!("channel {name} is not running"),
-                })?
-        };
-
-        entry
-            .send(message)
-            .await
-            .map_err(|error| BusError::MethodFailed {
-                name: SEND_FAILED_ERROR.to_owned(),
-                message: error.to_string(),
-            })
+        self.send_channel_intent(name, intent).await.map(|_| ())
     }
 
     /// Run provider interactions in the same bounded actor queue as sends.

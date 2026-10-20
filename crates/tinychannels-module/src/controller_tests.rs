@@ -1040,7 +1040,13 @@ async fn backend_preserves_host_owned_operations_and_default_selection() {
     );
     assert!(
         backend
-            .send_message(&config, "telegram", SendMessage::new("body", "room"))
+            .send_outbound_intent(
+                &config,
+                tinychannels::outbound_intent_from_send_message(
+                    "telegram",
+                    &tinychannels::SendMessage::new("body", "room"),
+                ),
+            )
             .await
             .unwrap_err()
             .to_string()
