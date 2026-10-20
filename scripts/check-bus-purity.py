@@ -19,6 +19,36 @@ FORBIDDEN = ('async fn ', 'async_trait', 'tokio::', 'std::sync', 'std::thread',
              'std::fs', 'std::env', 'std::time', 'parking_lot::', 'sha2::', 'hmac::',
              'rand::', 'uuid::', 'fn build_session_key', 'fn classify_send_error',
              'fn authenticated_inbound_event', 'fn segment_for_delivery')
+STORAGE_PORT_PACKAGES = {'tinystoragedrivers-core'}
+
+
+def dependency_closure(nodes, roots):
+    """Return the non-dev dependency closure for package ids in roots."""
+    pending = list(roots)
+    seen = set()
+    while pending:
+        package = pending.pop()
+        if package in seen:
+            continue
+        seen.add(package)
+        pending.extend(
+            edge['pkg'] for edge in nodes[package]['deps']
+            if any(kind['kind'] != 'dev' for kind in edge['dep_kinds'])
+        )
+    return seen
+
+
+def optional_storage_port_roots(manifest, packages):
+    """Select only the explicitly optional TSD storage-port package ids."""
+    declared = {
+        spec.get('package', name) if isinstance(spec, dict) else name
+        for name, spec in manifest.get('dependencies', {}).items()
+        if isinstance(spec, dict) and spec.get('optional')
+    }
+    return {
+        package_id for package_id, name in packages.items()
+        if name in STORAGE_PORT_PACKAGES and name in declared
+    }
 
 
 def declared_forbidden_dependencies(manifest):
@@ -70,35 +100,14 @@ def main():
         ], cwd=ROOT))
         packages = {p['id']: p['name'] for p in graph['packages']}
         nodes = {n['id']: n for n in graph['resolve']['nodes']}
-        pending = [next(p['id'] for p in graph['packages'] if p['name'] == 'tinychannels-bus')]
-        seen = set()
-        while pending:
-            package = pending.pop()
-            if package in seen:
-                continue
-            seen.add(package)
-            for edge in nodes[package]['deps']:
-                if any(kind['kind'] != 'dev' for kind in edge['dep_kinds']):
-                    pending.append(edge['pkg'])
+        bus_id = next(p['id'] for p in graph['packages'] if p['name'] == 'tinychannels-bus')
+        seen = dependency_closure(nodes, [bus_id])
         exempt = set()
         if mode in {'storage', 'all'} and 'storage' in features:
-            # Only explicitly optional storage-port dependencies and their
-            # closure are exempt from the default contract dependency allowlist.
-            optional_storage = {
-                spec.get('package', name) if isinstance(spec, dict) else name
-                for name, spec in manifest.get('dependencies', {}).items()
-                if isinstance(spec, dict) and spec.get('optional')
-            }
-            pending = [p['id'] for p in graph['packages'] if p['name'] in optional_storage]
-            while pending:
-                package = pending.pop()
-                if package in exempt:
-                    continue
-                exempt.add(package)
-                pending.extend(
-                    edge['pkg'] for edge in nodes[package]['deps']
-                    if any(kind['kind'] != 'dev' for kind in edge['dep_kinds'])
-                )
+            # Only the explicitly optional TSD storage-port dependency and its
+            # closure are exempt; unrelated optional edges remain audited.
+            roots = optional_storage_port_roots(manifest, packages)
+            exempt = dependency_closure(nodes, roots)
         unsafe = sorted({packages[p] for p in seen - exempt} - ALLOWED)
         unsafe_runtime = sorted({packages[p] for p in seen - exempt} & FORBIDDEN_DEPS)
         if unsafe_runtime:
