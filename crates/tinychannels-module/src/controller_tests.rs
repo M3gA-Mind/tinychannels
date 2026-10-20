@@ -1,4 +1,5 @@
 use super::*;
+use crate::provider::Running;
 use std::sync::Arc;
 use tinybus::broker::Broker;
 use tinybus::transport::memory::MemoryBus;
@@ -258,7 +259,7 @@ impl ManagedConformanceFixture {
         self.replies.shutdown().await.unwrap();
         self.running.stop().await.unwrap();
         self.host.shutdown().await.unwrap();
-        server.shutdown().await.unwrap();
+        drop(server);
     }
 }
 
@@ -582,7 +583,6 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                     platform_message_id: returned_id,
                     ..Default::default()
                 });
-                outcome.receipt.text = Some(text.clone());
                 outcome.receipt.idempotency_key = Some(message_id.clone());
                 Ok(Some(outcome))
             }

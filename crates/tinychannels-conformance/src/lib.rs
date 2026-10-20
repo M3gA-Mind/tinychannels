@@ -193,7 +193,7 @@ pub trait AdapterFixture: Send + Sync {
 pub trait ConformanceFixture: Send + Sync {
     fn capabilities(&self) -> ChannelCapabilities;
     fn expected_scope(&self, feature: ConformanceFeature) -> ExpectedScope;
-    fn receipt_required(&self, feature: ConformanceFeature) -> bool {
+    fn receipt_required(&self, _feature: ConformanceFeature) -> bool {
         true
     }
     fn clear_observations(&self);
