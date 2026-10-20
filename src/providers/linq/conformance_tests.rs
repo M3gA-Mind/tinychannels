@@ -400,6 +400,7 @@ impl AdapterFixture for LinqFixture {
                 self.push(feature, "voice_in", vec![], kinds, json!({}));
                 Ok(None)
             }
+            F::ManagedReaction | F::ManagedThreadCreate | F::ManagedThreadUpdate | F::ManagedThreadList => Err(ChannelSendError::default()),
         };
         self.harvest(feature).await;
         result

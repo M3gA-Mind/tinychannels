@@ -769,6 +769,7 @@ impl AdapterFixture for LarkFixture {
                     ..Default::default()
                 })
             }
+            Feature::ManagedReaction | Feature::ManagedThreadCreate | Feature::ManagedThreadUpdate | Feature::ManagedThreadList => Err(ChannelSendError::default()),
         }
     }
 }

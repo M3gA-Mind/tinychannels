@@ -413,6 +413,7 @@ impl AdapterFixture for CloudKit {
             | Feature::Edit
             | Feature::Delete
             | Feature::StreamingDraft => OutboundPayload::Text { text: "op".into() },
+            Feature::ManagedReaction | Feature::ManagedThreadCreate | Feature::ManagedThreadUpdate | Feature::ManagedThreadList => OutboundPayload::Text { text: String::new() },
         };
         let intent = self.intent(feature, payload);
         let result = match feature {
@@ -577,6 +578,7 @@ impl AdapterFixture for CloudKit {
             _ => crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent)
                 .await
                 .map(Some),
+            Feature::ManagedReaction | Feature::ManagedThreadCreate | Feature::ManagedThreadUpdate | Feature::ManagedThreadList => Err(ChannelSendError::default()),
         };
         self.observe_wire(feature);
         match result {
