@@ -26,6 +26,98 @@ fn whatsapp(cloud: bool) -> ChannelsConfig {
     }
 }
 
+#[test]
+fn temporary_route_authority_requires_matching_configured_scope_and_prefers_live_state() {
+    use tinychannels_bus::module_control::ConfiguredControlChannel;
+    use tinychannels_bus::module_remote::RemoteSessionScope;
+
+    let mut allowed = tinychannels_bus::ChannelCapabilities::unknown();
+    allowed.remote_control = true;
+    let configured = ConfiguredControlChannel {
+        name: "telegram:bot-a".into(),
+        capabilities: allowed.clone(),
+    };
+    let valid_scope = RemoteSessionScope {
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:bot-a".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            id: "chat-1".into(),
+            ..Default::default()
+        },
+        session_key: "main:telegram:account:bot-a:chat-1".into(),
+    };
+
+    assert!(
+        configured_route_capabilities("telegram:bot-a", None, Some(&configured), None,)
+            .remote_control
+            == false
+    );
+
+    let mut wrong_account = valid_scope.clone();
+    wrong_account.channel.account_id = Some("telegram:bot-b".into());
+    assert!(
+        !configured_route_capabilities(
+            "telegram:bot-a",
+            Some(&wrong_account),
+            Some(&configured),
+            None,
+        )
+        .remote_control
+    );
+
+    let mut wrong_provider = valid_scope.clone();
+    wrong_provider.channel.id = "discord".into();
+    assert!(
+        !configured_route_capabilities(
+            "telegram:bot-a",
+            Some(&wrong_provider),
+            Some(&configured),
+            None,
+        )
+        .remote_control
+    );
+
+    assert!(
+        !configured_route_capabilities(
+            "telegram:bot-b",
+            Some(&valid_scope),
+            Some(&configured),
+            None,
+        )
+        .remote_control
+    );
+
+    let mut live_denied = tinychannels_bus::ChannelCapabilities::unknown();
+    live_denied.remote_control = false;
+    assert!(
+        !configured_route_capabilities(
+            "telegram:bot-a",
+            Some(&valid_scope),
+            Some(&configured),
+            Some(live_denied),
+        )
+        .remote_control
+    );
+
+    let live_allowed = tinychannels_bus::ChannelCapabilities {
+        remote_control: true,
+        ..tinychannels_bus::ChannelCapabilities::unknown()
+    };
+    let mut snapshot_denied = configured.clone();
+    snapshot_denied.capabilities.remote_control = false;
+    assert!(
+        configured_route_capabilities(
+            "telegram:bot-a",
+            Some(&valid_scope),
+            Some(&snapshot_denied),
+            Some(live_allowed),
+        )
+        .remote_control
+    );
+}
+
 #[tokio::test]
 async fn shutdown_closes_web_turn_admission_before_clearing_projection_state() {
     let bus = tinybus::transport::memory::MemoryBus::new();
@@ -2855,6 +2947,7 @@ async fn remote_help_is_parsed_and_rendered_inside_the_module() {
                 },
                 history_len: 0,
                 session_scope: None,
+                configured_channel: None,
                 providers: vec![],
             },
         )
@@ -2973,6 +3066,7 @@ async fn route_preparation_preserves_aliases_history_resets_and_ordinary_message
         message: serde_json::from_value(serde_json::json!({"id":"fixture","sender":"sender","reply_target":"chat","content":content,"channel":channel,"timestamp":1})).unwrap(),
         route: RemoteRoute { provider: "old".into(), model: "model".into() }, history_len: 3,
         session_scope: None,
+        configured_channel: None,
         providers: vec![ProviderDescriptor { name: "approved".into(), aliases: vec!["alias".into()] }],
     }
     };

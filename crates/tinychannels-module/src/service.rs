@@ -158,6 +158,48 @@ async fn configured_capabilities(
         .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
 }
 
+fn configured_route_capabilities(
+    channel_name: &str,
+    scope: Option<&tinychannels_bus::module_remote::RemoteSessionScope>,
+    configured: Option<&tinychannels_bus::module_control::ConfiguredControlChannel>,
+    live: Option<tinychannels_bus::ChannelCapabilities>,
+) -> tinychannels_bus::ChannelCapabilities {
+    if let Some(configured) = configured {
+        let Some(scope) = scope else {
+            return tinychannels_bus::ChannelCapabilities::unknown();
+        };
+        let Some(account_id) = scope.channel.account_id.as_deref() else {
+            return tinychannels_bus::ChannelCapabilities::unknown();
+        };
+        if configured.name != channel_name
+            || account_id != configured.name
+            || scope.channel.id != tinychannels_bus::provider_id(&configured.name)
+            || scope.session_key.trim().is_empty()
+            || scope.conversation.id.trim().is_empty()
+        {
+            return tinychannels_bus::ChannelCapabilities::unknown();
+        }
+        return live.unwrap_or_else(|| configured.capabilities.clone());
+    }
+    live.unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
+}
+
+async fn route_capabilities(
+    running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    channel_name: &str,
+    scope: Option<&tinychannels_bus::module_remote::RemoteSessionScope>,
+    configured: Option<&tinychannels_bus::module_control::ConfiguredControlChannel>,
+) -> tinychannels_bus::ChannelCapabilities {
+    let live = {
+        let running = running.lock().await;
+        running
+            .get(channel_name)
+            .or_else(|| running.get(tinychannels_bus::provider_id(channel_name)))
+            .map(crate::interaction::configured_adapter_capabilities)
+    };
+    configured_route_capabilities(channel_name, scope, configured, live)
+}
+
 /// The served object.
 pub(crate) struct Channels {
     pub(crate) host: HostChannels,
@@ -642,7 +684,22 @@ impl Channels {
             ),
             _ => ("", None, false),
         };
-        let capabilities = configured_capabilities(&self.running, name).await;
+        let capabilities = match &request {
+            tinychannels_bus::module_control::ChannelControlRequest::Route {
+                session_scope,
+                configured_channel,
+                ..
+            } => {
+                route_capabilities(
+                    &self.running,
+                    name,
+                    session_scope.as_deref(),
+                    configured_channel.as_ref(),
+                )
+                .await
+            }
+            _ => configured_capabilities(&self.running, name).await,
+        };
         let running_names = self
             .running
             .lock()
