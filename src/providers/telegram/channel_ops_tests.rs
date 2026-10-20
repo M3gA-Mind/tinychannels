@@ -480,7 +480,11 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 let capture = tokio::time::timeout(std::time::Duration::from_secs(2), async {
                     loop {
                         self.events.notified.notified().await;
-                        if !self.events.events.lock().unwrap().is_empty() { break; }
+                        if !self.events.events.lock().unwrap().is_empty()
+                            && !self.events.inbounds.lock().unwrap().is_empty()
+                        {
+                            break;
+                        }
                     }
                 }).await;
                 listener.abort();
