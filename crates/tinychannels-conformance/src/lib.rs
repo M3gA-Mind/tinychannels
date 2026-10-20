@@ -40,6 +40,14 @@ pub enum ConformanceFeature {
     Delete,
     ReadReceipts,
     StreamingDraft,
+    /// Managed-host reaction controller operation.
+    ManagedReaction,
+    /// Managed-host thread creation operation.
+    ManagedThreadCreate,
+    /// Managed-host thread update operation.
+    ManagedThreadUpdate,
+    /// Managed-host thread listing operation.
+    ManagedThreadList,
 }
 
 impl ConformanceFeature {
@@ -68,6 +76,15 @@ impl ConformanceFeature {
         Self::Delete,
         Self::ReadReceipts,
         Self::StreamingDraft,
+    ];
+
+    /// Managed controller operations supported by the host callback contract.
+    pub const MANAGED: [Self; 5] = [
+        Self::ManagedReaction,
+        Self::ManagedThreadCreate,
+        Self::ManagedThreadUpdate,
+        Self::ManagedThreadList,
+        Self::Edit,
     ];
 
     fn declared(self, capabilities: &ChannelCapabilities) -> bool {
@@ -111,6 +128,10 @@ impl ConformanceFeature {
                 .iter()
                 .any(|event| event == "read_receipt"),
             Self::StreamingDraft => capabilities.progressive_edits && action("draft-update"),
+            Self::ManagedReaction => capabilities.reactions,
+            Self::ManagedThreadCreate => action("thread-create"),
+            Self::ManagedThreadUpdate => action("thread-update"),
+            Self::ManagedThreadList => action("thread-list"),
         }
     }
 }
@@ -162,13 +183,64 @@ pub trait AdapterFixture: Send + Sync {
     ) -> Result<Option<ChannelSendOutcome>, ChannelSendError>;
 }
 
+/// Common conformance surface for provider adapters and managed host callbacks.
+///
+/// Adapter fixtures should implement [`AdapterFixture`] so capabilities are
+/// always read from the concrete configured adapter. A managed fixture uses
+/// this trait directly because managed controller capabilities are supplied by
+/// the host contract rather than a provider adapter.
+#[async_trait]
+pub trait ConformanceFixture: Send + Sync {
+    fn capabilities(&self) -> ChannelCapabilities;
+    fn expected_scope(&self, feature: ConformanceFeature) -> ExpectedScope;
+    fn receipt_required(&self, feature: ConformanceFeature) -> bool {
+        true
+    }
+    fn clear_observations(&self);
+    fn observations(&self) -> Vec<WireObservation>;
+    async fn exercise(
+        &self,
+        feature: ConformanceFeature,
+    ) -> Result<Option<ChannelSendOutcome>, ChannelSendError>;
+}
+
+#[async_trait]
+impl<T: AdapterFixture + ?Sized> ConformanceFixture for T {
+    fn capabilities(&self) -> ChannelCapabilities {
+        self.adapter().declared_capabilities()
+    }
+
+    fn expected_scope(&self, feature: ConformanceFeature) -> ExpectedScope {
+        AdapterFixture::expected_scope(self, feature)
+    }
+
+    fn receipt_required(&self, feature: ConformanceFeature) -> bool {
+        AdapterFixture::receipt_required(self, feature)
+    }
+
+    fn clear_observations(&self) {
+        AdapterFixture::clear_observations(self)
+    }
+
+    fn observations(&self) -> Vec<WireObservation> {
+        AdapterFixture::observations(self)
+    }
+
+    async fn exercise(
+        &self,
+        feature: ConformanceFeature,
+    ) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+        AdapterFixture::exercise(self, feature).await
+    }
+}
+
 /// Run one honesty and wire-behavior check.
 pub async fn check_feature(
-    fixture: &dyn AdapterFixture,
+    fixture: &dyn ConformanceFixture,
     feature: ConformanceFeature,
 ) -> Result<(), String> {
     fixture.clear_observations();
-    let declared = feature.declared(&fixture.adapter().declared_capabilities());
+    let declared = feature.declared(&fixture.capabilities());
     let result = fixture.exercise(feature).await;
     let observations = fixture.observations();
 
@@ -245,6 +317,15 @@ pub async fn check_feature(
             | ConformanceFeature::StreamingDraft
     );
     let receipt = outcome.as_ref().map(|outcome| &outcome.receipt);
+    let managed_thread_operation = matches!(
+        feature,
+        ConformanceFeature::ManagedThreadCreate
+            | ConformanceFeature::ManagedThreadUpdate
+            | ConformanceFeature::ManagedThreadList
+    );
+    if managed_thread_operation && observation.platform_message_ids.is_empty() {
+        return Err(format!("declared {feature:?} returned no thread identifiers"));
+    }
     if requires_receipt && fixture.receipt_required(feature) {
         let Some(receipt) = receipt else {
             return Err(format!("declared {feature:?} returned no receipt"));
@@ -371,6 +452,10 @@ impl ConformanceFeature {
                 "draft_finalize",
                 "draft_cancel_cleanup",
             ],
+        Self::ManagedReaction => &["reaction_send"],
+        Self::ManagedThreadCreate => &["thread_create"],
+        Self::ManagedThreadUpdate => &["thread_update"],
+        Self::ManagedThreadList => &["thread_list"],
             _ => &["send"],
         }
     }
@@ -378,10 +463,21 @@ impl ConformanceFeature {
 
 /// Run the entire shared feature matrix against a provider fixture.
 pub async fn check_all_features(
-    fixture: &dyn AdapterFixture,
+    fixture: &dyn ConformanceFixture,
 ) -> Vec<(ConformanceFeature, Result<(), String>)> {
     let mut results = Vec::with_capacity(ConformanceFeature::ALL.len());
     for feature in ConformanceFeature::ALL {
+        results.push((feature, check_feature(fixture, feature).await));
+    }
+    results
+}
+
+/// Run a managed-controller matrix against a configured host callback fixture.
+pub async fn check_managed_features(
+    fixture: &dyn ConformanceFixture,
+) -> Vec<(ConformanceFeature, Result<(), String>)> {
+    let mut results = Vec::with_capacity(ConformanceFeature::MANAGED.len());
+    for feature in ConformanceFeature::MANAGED {
         results.push((feature, check_feature(fixture, feature).await));
     }
     results

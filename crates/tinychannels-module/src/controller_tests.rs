@@ -7,7 +7,10 @@ use tinychannels_bus::controllers::ChannelThreadResult;
 use tokio::sync::Mutex;
 
 #[derive(Clone, Default)]
-struct BackendFixture(Arc<Mutex<Vec<ChannelBackendRequest>>>);
+struct BackendFixture(
+    Arc<Mutex<Vec<ChannelBackendRequest>>>,
+    Arc<Mutex<Vec<ChannelBackendResult>>>,
+);
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
 impl BackendFixture {
@@ -16,13 +19,56 @@ impl BackendFixture {
         request: ChannelBackendRequest,
     ) -> Result<ChannelBackendResult> {
         self.0.lock().await.push(request.clone());
-        match request {
+        let result = match request {
             ChannelBackendRequest::RemoteControl(_) => {
                 Err(tinybus::Error::failed("unexpected remote callback"))
             }
-            ChannelBackendRequest::ProgressiveTransport(_) => Err(tinybus::Error::failed(
-                "unexpected progressive transport callback",
-            )),
+            ChannelBackendRequest::ProgressiveTransport(request) => {
+                use tinychannels_bus::module_progressive::{
+                    ProgressiveTransportRequest as Request,
+                    ProgressiveTransportResult as Response,
+                };
+                match *request {
+                    Request::SendTyped {
+                        channel_ref,
+                        conversation,
+                        ..
+                    } => {
+                        let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+                        outcome.receipt.channel = channel_ref;
+                        outcome.receipt.conversation = conversation;
+                        outcome.receipt.primary_platform_message_id =
+                            Some("managed-message-1".into());
+                        outcome.receipt.platform_message_ids = vec!["managed-message-1".into()];
+                        outcome.receipt.parts.push(
+                            tinychannels_bus::channel::MessageReceiptPart {
+                                platform_message_id: "managed-message-1".into(),
+                                ..Default::default()
+                            },
+                        );
+                        Ok(ChannelBackendResult::ProgressiveTransport(Box::new(
+                            Response::Outcome(Box::new(outcome)),
+                        )))
+                    }
+                    Request::Edit {
+                        channel_ref,
+                        conversation,
+                        ..
+                    } => Ok(ChannelBackendResult::ProgressiveTransport(Box::new(
+                        Response::Success(serde_json::json!({
+                            "message_id": "managed-edited-1",
+                            "channel": channel_ref,
+                            "conversation": conversation,
+                        })),
+                    ))),
+                    Request::OutputEvent { .. }
+                    | Request::Delete { .. }
+                    | Request::Typing { .. }
+                    | Request::Send { .. } => Ok(ChannelBackendResult::ProgressiveTransport(
+                        Box::new(Response::Acknowledged),
+                    )),
+                }
+            }
             ChannelBackendRequest::Disconnect {
                 channel, auth_mode, ..
             } => Ok(ChannelBackendResult::Disconnected(
@@ -78,7 +124,11 @@ impl BackendFixture {
                     raw: None,
                 },
             )),
+        };
+        if let Ok(result) = &result {
+            self.1.lock().await.push(result.clone());
         }
+        result
     }
 }
 
