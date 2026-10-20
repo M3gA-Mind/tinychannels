@@ -77,10 +77,10 @@ impl Fixture {
         let voice_store = Arc::new(MatrixVoiceStore::default());
         *voice_store.inner.audio_base64.lock().unwrap() =
             Some(base64::engine::general_purpose::STANDARD.encode(b"voice fixture"));
-        let cos_server = enable_media.then(|| async { wiremock::MockServer::start().await });
-        let cos_server = match cos_server {
-            Some(server) => Some(server.await),
-            None => None,
+        let cos_server = if enable_media {
+            Some(wiremock::MockServer::start().await)
+        } else {
+            None
         };
         let media_repository = enable_media.then(|| Arc::new(MatrixMediaRepository::default()));
         if let Some(server) = &cos_server {
@@ -370,6 +370,60 @@ impl Fixture {
 struct MatrixVoiceStore {
     inner: StubVoice,
     read_calls: std::sync::atomic::AtomicUsize,
+}
+
+#[derive(Default)]
+struct MatrixMediaRepository {
+    scopes: Mutex<Vec<MediaScope>>,
+    uploaded: Arc<Mutex<Vec<Vec<u8>>>>,
+}
+
+#[async_trait]
+impl MediaRepository for MatrixMediaRepository {
+    async fn store_media(&self, _request: MediaStoreRequest) -> anyhow::Result<MediaReference> {
+        anyhow::bail!("conformance only reads pre-existing scoped media")
+    }
+
+    async fn read_media(
+        &self,
+        scope: MediaScope,
+        opaque_id: String,
+        _max_bytes: u64,
+    ) -> anyhow::Result<StoredMedia> {
+        self.scopes.lock().push(scope);
+        let (kind, content_type, file_name, bytes) = match opaque_id.as_str() {
+            "fixture-Image" => (
+                MediaKind::Image,
+                "image/png",
+                "conformance.png",
+                matrix_png(320, 200),
+            ),
+            "fixture-Document" => (
+                MediaKind::Document,
+                "application/pdf",
+                "conformance.pdf",
+                b"%PDF-1.7 yuanbao conformance".to_vec(),
+            ),
+            _ => anyhow::bail!("unknown scoped Yuanbao media reference"),
+        };
+        Ok(StoredMedia {
+            media: MediaReference {
+                opaque_id: Some(opaque_id),
+                kind,
+                ..Default::default()
+            },
+            content_type: content_type.into(),
+            file_name: Some(file_name.into()),
+            bytes,
+        })
+    }
+}
+
+fn matrix_png(width: u32, height: u32) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    bytes.extend_from_slice(&width.to_be_bytes());
+    bytes.extend_from_slice(&height.to_be_bytes());
+    bytes
 }
 
 #[async_trait]
