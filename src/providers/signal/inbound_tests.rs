@@ -439,14 +439,16 @@ async fn rejected_events_are_delivered_on_retry_before_dedup_commits() {
         assert!(!channel.dispatch_typed_envelope(&envelope, &rejecting).await);
         let before_retry = accepting.0.lock().unwrap().len();
         assert!(channel.dispatch_typed_envelope(&envelope, &accepting).await);
-        let delivered = accepting.0.lock().unwrap();
-        assert_eq!(
-            delivered.len(),
-            before_retry + 1,
-            "case {index} retry delivery"
-        );
-        let ingress = delivered.last().unwrap();
-        match (index, ingress) {
+        let ingress = {
+            let delivered = accepting.0.lock().unwrap();
+            assert_eq!(
+                delivered.len(),
+                before_retry + 1,
+                "case {index} retry delivery"
+            );
+            delivered.last().unwrap().clone()
+        };
+        match (index, &ingress) {
             (0, ChannelIngress::Inbound(message)) => {
                 assert_eq!(message.message_id, "sig_1700000001001");
                 assert_eq!(message.text, "retry");
@@ -474,7 +476,6 @@ async fn rejected_events_are_delivered_on_retry_before_dedup_commits() {
             }
             _ => panic!("retry delivered the wrong ingress for case {index}: {ingress:?}"),
         }
-        drop(delivered);
         assert!(channel.dispatch_typed_envelope(&envelope, &accepting).await);
         assert_eq!(
             accepting.0.lock().unwrap().len(),
