@@ -496,6 +496,7 @@ impl AdapterFixture for LongTailFixture {
             channel: account(self.id),
             conversation: if self.id == "qq" {
                 ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Dm,
                     id: CHANNEL.into(),
                     ..Default::default()
                 }
@@ -503,7 +504,7 @@ impl AdapterFixture for LongTailFixture {
                 conversation()
             },
             reply_to_id: None,
-            thread_id: Some(ROOT.into()),
+            thread_id: (self.id != "qq").then(|| ROOT.into()),
         }
     }
 
@@ -812,34 +813,29 @@ async fn the_factory_built_qq_adapter_passes_the_full_conformance_matrix() {
     let results = check_all_features(&fixture).await;
     assert_eq!(results.len(), Feature::ALL.len());
     let failed = failures(&results);
-    assert!(
-        failed.is_empty(),
-        "QQ conformance failures: {failed:#?}; observations={:#?}; requests={:#?}",
-        fixture.observations(),
-        fixture
-            .fixed_server
-            .as_ref()
-            .unwrap()
-            .requests
-            .lock()
-            .unwrap()
-            .clone()
+    assert!(failed.is_empty(), "QQ conformance failures: {failed:#?}");
+    let requests = fixture
+        .fixed_server
+        .as_ref()
+        .unwrap()
+        .requests
+        .lock()
+        .unwrap();
+    let message_sends = requests
+        .iter()
+        .filter(|request| request.target.ends_with("/messages"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        message_sends.len(),
+        5,
+        "declared features must send once each"
     );
-    let observations = fixture.observations();
-    for feature in [
-        Feature::Text,
-        Feature::Image,
-        Feature::Video,
-        Feature::File,
-        Feature::VoiceOut,
-    ] {
-        assert!(
-            observations
-                .iter()
-                .any(|observation| observation.feature == feature),
-            "declared QQ feature {feature:?} was not observed on the wire"
-        );
-    }
+    assert_eq!(message_sends[0].body["msg_type"], 0);
+    assert!(
+        message_sends[1..]
+            .iter()
+            .all(|request| request.body["msg_type"] == 7)
+    );
 }
 
 #[tokio::test]
