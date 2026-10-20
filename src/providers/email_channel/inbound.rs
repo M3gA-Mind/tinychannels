@@ -94,9 +94,7 @@ impl EmailChannel {
 
     /// Construct a typed envelope with host-scoped media and voice parts.
     async fn typed_envelope(&self, email: &ParsedEmail) -> Option<ChannelInboundEnvelope> {
-        let Some(parsed) = MessageParser::default().parse(&email.raw) else {
-            return None;
-        };
+        let parsed = MessageParser::default().parse(&email.raw)?;
         let subject = parsed.subject().unwrap_or("(no subject)").to_owned();
         let in_reply_to = ids_of(parsed.in_reply_to()).into_iter().next();
         let references = ids_of(parsed.references());
