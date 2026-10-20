@@ -1,6 +1,5 @@
 use super::*;
 use crate::providers::imessage::fixtures::*;
-use crate::traits::Channel as _;
 use std::time::Duration;
 use tinychannels_bus::{ChannelEventKind, ContentPart};
 
@@ -284,8 +283,11 @@ async fn listen_publishes_rich_messages_and_read_receipts_end_to_end() {
     .unwrap();
     let channel = rig.channel.clone();
     let (tx, _rx) = pair();
-    let listen = tokio::spawn(async move { channel.listen(tx).await });
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let listen = tokio::spawn(async move { channel.listen_with_ready(tx, Some(ready_tx)).await });
+    ready_rx
+        .await
+        .expect("listener reports readiness after capturing its startup cursor");
     conn.execute(
         "INSERT INTO message (ROWID, guid, handle_id, text, is_from_me, date) \
          VALUES (3, 'NEW', 1, 'fresh', 0, 700000000000000000)",
@@ -304,9 +306,20 @@ async fn listen_publishes_rich_messages_and_read_receipts_end_to_end() {
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
     listen.abort();
-    assert_eq!(rig.events.inbound()[0].message_id, "NEW");
+    let inbound = rig.events.inbound();
+    assert_eq!(
+        inbound
+            .first()
+            .expect("listener publishes the post-startup message")
+            .message_id,
+        "NEW"
+    );
+    let events = rig.events.events();
     assert!(matches!(
-        rig.events.events()[0].event,
+        events
+            .first()
+            .expect("listener publishes the post-startup read receipt")
+            .event,
         ChannelEventKind::ReadReceipt { .. }
     ));
 }
