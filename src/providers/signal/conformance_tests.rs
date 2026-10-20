@@ -18,6 +18,7 @@ use tinychannels_bus::{
 use tinychannels_conformance::{
     AdapterFixture, ConformanceFeature, ExpectedScope, WireObservation, check_all_features,
 };
+use tokio::sync::mpsc;
 use wiremock::MockServer;
 
 const REPLY_TS: &str = "1700000000002";

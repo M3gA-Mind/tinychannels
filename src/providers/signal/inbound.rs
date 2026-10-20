@@ -359,6 +359,7 @@ impl SignalChannel {
 
     /// Handle one SSE envelope. False when the legacy receiver is gone and the
     /// listener should stop.
+    #[cfg(test)]
     pub(super) async fn dispatch_envelope(
         &self,
         envelope: &Envelope,
