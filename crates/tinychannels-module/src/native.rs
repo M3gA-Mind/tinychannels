@@ -27,18 +27,10 @@ pub(crate) struct NativeLaunch {
 }
 
 impl NativeLaunch {
-    pub(crate) fn new<T>(provider: &'static str, channel: Arc<T>) -> Self
-    where
-        T: tinychannels::channel::ChannelAdapter
-            + tinychannels::channel::ChannelTypedSend
-            + tinychannels::channel::ChannelTyping
-            + tinychannels::channel::ChannelReaction
-            + tinychannels::channel::ChannelEdit
-            + tinychannels::channel::ChannelDelete
-            + tinychannels::channel::ChannelStreamingDraft
-            + ?Sized
-            + 'static,
-    {
+    pub(crate) fn new(
+        provider: &'static str,
+        channel: Arc<dyn tinychannels::LongTailNative>,
+    ) -> Self {
         Self {
             provider_id: channel.descriptor().id,
             start: Box::new(move |hooks, host, supervision, outbound_only| {

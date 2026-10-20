@@ -1279,18 +1279,10 @@ pub(crate) enum LongTailListenerMode {
 }
 
 impl NativePorts {
-    pub(crate) fn native<T>(channel: Arc<T>, provider: &'static str) -> Self
-    where
-        T: tinychannels::channel::ChannelAdapter
-            + tinychannels::channel::ChannelTypedSend
-            + tinychannels::channel::ChannelTyping
-            + tinychannels::channel::ChannelReaction
-            + tinychannels::channel::ChannelEdit
-            + tinychannels::channel::ChannelDelete
-            + tinychannels::channel::ChannelStreamingDraft
-            + ?Sized
-            + 'static,
-    {
+    pub(crate) fn native(
+        channel: Arc<dyn tinychannels::LongTailNative>,
+        provider: &'static str,
+    ) -> Self {
         Self {
             provider,
             adapter: channel.clone(),
@@ -1830,25 +1822,14 @@ impl Running {
     }
     /// Start a provider whose concrete object is both the listener and the
     /// native v2 executor (the WhatsApp Cloud and Web adapters).
-    pub(crate) fn start_native<T>(
+    pub(crate) fn start_native(
         provider: &'static str,
-        channel: Arc<T>,
+        channel: Arc<dyn tinychannels::LongTailNative>,
         hooks: Arc<Hooks>,
         host: HostChannels,
         supervision: Option<ChannelSupervisionPolicy>,
         outbound_only: bool,
-    ) -> Arc<Self>
-    where
-        T: tinychannels::channel::ChannelAdapter
-            + tinychannels::channel::ChannelTypedSend
-            + tinychannels::channel::ChannelTyping
-            + tinychannels::channel::ChannelReaction
-            + tinychannels::channel::ChannelEdit
-            + tinychannels::channel::ChannelDelete
-            + tinychannels::channel::ChannelStreamingDraft
-            + ?Sized
-            + 'static,
-    {
+    ) -> Arc<Self> {
         Self::start_inner(
             None,
             provider.to_owned(),
