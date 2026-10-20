@@ -169,6 +169,7 @@ impl DiscordChannel {
 
     /// Route one dispatch event. Returns `false` once the legacy receiver is
     /// gone and the session should end.
+    #[cfg(test)]
     pub(super) async fn handle_dispatch(
         &self,
         event_type: &str,
