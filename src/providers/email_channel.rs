@@ -35,6 +35,8 @@ use std::collections::HashSet;
 #[cfg(feature = "email")]
 use std::sync::Arc;
 #[cfg(feature = "email")]
+use std::sync::{Mutex as StdMutex, atomic::{AtomicU64, Ordering}};
+#[cfg(feature = "email")]
 use std::time::Duration;
 #[cfg(feature = "email")]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -46,6 +48,8 @@ use tokio::net::TcpStream;
 use tokio::sync::Mutex;
 #[cfg(feature = "email")]
 use tokio::sync::mpsc;
+#[cfg(feature = "email")]
+use tokio::sync::watch;
 #[cfg(feature = "email")]
 use tokio::time::{sleep, timeout};
 #[cfg(feature = "email")]
@@ -68,6 +72,8 @@ mod native;
 pub use crate::config::EmailConfig;
 #[cfg(feature = "email")]
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
+#[cfg(feature = "email")]
+use crate::channel::{ChannelInboundSink, ChannelSendError};
 use crate::providers::mail::{ImapCredentials, MailSecret, SmtpCredentials, SmtpSecurity};
 #[cfg(feature = "email")]
 use crate::providers::mail::{LettreMailSender, MailCredentials, MailSender, OutboundEmail};
@@ -110,7 +116,44 @@ pub struct EmailChannel {
     /// Subjects of inbound mail by message id, so a reply keeps its thread subject.
     #[cfg(feature = "email")]
     subjects: native::Subjects,
+    #[cfg(feature = "email")]
+    listener_cancel: ListenerCancellationSlot,
+    #[cfg(feature = "email")]
+    listener_generation: Arc<AtomicU64>,
 }
+
+#[cfg(feature = "email")]
+type ListenerCancellationSlot = Arc<StdMutex<Option<(u64, watch::Sender<bool>)>>>;
+
+#[cfg(feature = "email")]
+struct ListenerRegistration {
+    slot: ListenerCancellationSlot,
+    generation: u64,
+}
+
+#[cfg(feature = "email")]
+impl Drop for ListenerRegistration {
+    fn drop(&mut self) {
+        let mut active = self.slot.lock().unwrap_or_else(|error| error.into_inner());
+        if active
+            .as_ref()
+            .is_some_and(|(generation, _)| *generation == self.generation)
+        {
+            *active = None;
+        }
+    }
+}
+
+#[cfg(feature = "email")]
+enum EmailDelivery<'a> {
+    Legacy(&'a mpsc::Sender<ChannelMessage>),
+    Typed(&'a (dyn ChannelInboundSink + Send + Sync)),
+}
+
+#[cfg(feature = "email")]
+#[derive(Debug, thiserror::Error)]
+#[error("Email inbound sink rejected an event")]
+struct InboundSinkRejected;
 
 impl EmailChannel {
     pub fn new(config: EmailConfig) -> Self {
@@ -126,6 +169,10 @@ impl EmailChannel {
             native: NativeState::default(),
             #[cfg(feature = "email")]
             subjects: native::Subjects::default(),
+            #[cfg(feature = "email")]
+            listener_cancel: Arc::new(StdMutex::new(None)),
+            #[cfg(feature = "email")]
+            listener_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
