@@ -1016,20 +1016,6 @@ impl crate::providers::long_tail::LongTail for MattermostChannel {
         Ok(())
     }
 
-    async fn send_reporting_ids(&self, message: &SendMessage) -> Result<Vec<String>> {
-        self.post_message(message).await
-    }
-
-    fn address(&self, message: &mut SendMessage) {
-        // Mattermost packs the thread root into the recipient (`channel:root`).
-        if let Some(root) = message
-            .thread_ts
-            .take_if(|_| !message.recipient.contains(':'))
-        {
-            message.recipient = format!("{}:{root}", message.recipient);
-        }
-    }
-
     async fn send_typed_message(
         &self,
         message: &tinychannels_bus::ChannelOutboundMessage,
