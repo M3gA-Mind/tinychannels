@@ -9,6 +9,7 @@
 mod capabilities;
 mod db;
 mod inbound;
+mod listener;
 mod native;
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
@@ -20,8 +21,35 @@ use directories::UserDirs;
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::Mutex as StdMutex;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
+
+type ListenerCancellationSlot = Arc<StdMutex<Option<(u64, watch::Sender<bool>)>>>;
+
+struct ListenerRegistration {
+    slot: ListenerCancellationSlot,
+    generation: u64,
+}
+
+impl Drop for ListenerRegistration {
+    fn drop(&mut self) {
+        let mut active = self.slot.lock().unwrap_or_else(|error| error.into_inner());
+        if active
+            .as_ref()
+            .is_some_and(|(generation, _)| *generation == self.generation)
+        {
+            *active = None;
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ListenerCursor {
+    inbound_rowid: i64,
+    read_date: i64,
+}
 
 /// The newest-first poll: inbound messages with text, newer than `?1`.
 const NEW_MESSAGES_SQL: &str = "SELECT m.ROWID, h.id, m.text \
@@ -50,6 +78,9 @@ pub struct IMessageChannel {
     /// How long a send waits for Messages to record the message it made.
     resolve_timeout: Duration,
     native: NativeState,
+    listener_cancel: ListenerCancellationSlot,
+    listener_generation: Arc<AtomicU64>,
+    listener_cursor: Arc<StdMutex<Option<ListenerCursor>>>,
 }
 
 impl IMessageChannel {
@@ -62,6 +93,9 @@ impl IMessageChannel {
             converter_command: vec!["afconvert".to_string()],
             resolve_timeout: Duration::from_secs(5),
             native: NativeState::default(),
+            listener_cancel: Arc::new(StdMutex::new(None)),
+            listener_generation: Arc::new(AtomicU64::new(0)),
+            listener_cursor: Arc::new(StdMutex::new(None)),
         }
     }
 
