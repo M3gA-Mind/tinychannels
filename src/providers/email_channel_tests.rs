@@ -995,7 +995,8 @@ async fn health_check_passes_on_a_successful_login() {
     assert!(
         channel
             .typed_health_state(plain_session(&channel, port), HANG_GUARD)
-            .await == "healthy"
+            .await
+            == "healthy"
     );
     let commands = server.await.unwrap().remove(0).join("\n");
     assert!(commands.contains("LOGIN"), "{commands}");
