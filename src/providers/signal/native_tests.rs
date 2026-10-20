@@ -5,7 +5,6 @@ use crate::channel::{
 };
 use crate::providers::native::fixtures::stored_media;
 use crate::providers::signal::fixtures::*;
-use crate::traits::Channel;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Mutex;
@@ -636,10 +635,10 @@ async fn unsupported_content_never_reaches_the_daemon() {
 }
 
 #[tokio::test]
-async fn legacy_channel_methods_use_the_typed_path_and_keep_typed_errors() {
+async fn typed_provider_ports_send_and_preserve_typed_errors() {
     let server = mock_daemon(b"").await;
     let channel = channel_for(&server);
-    let outcome = Channel::send_typed_with_receipt(&channel, &message(vec![text("typed")]))
+    let outcome = ChannelTypedSend::send_typed(&channel, &message(vec![text("typed")]))
         .await
         .unwrap();
     assert_eq!(outcome.receipt.platform_message_ids, ["1700000000123"]);
@@ -647,8 +646,9 @@ async fn legacy_channel_methods_use_the_typed_path_and_keep_typed_errors() {
         value: "👍".into(),
         custom_emoji_id: None,
     };
-    Channel::send_reaction(
+    ReactionPort::send_reaction(
         &channel,
+        &ChannelRef { id: "signal".into(), account_id: None },
         &conversation(PEER),
         "1700000000001",
         &thumbs,
@@ -657,12 +657,12 @@ async fn legacy_channel_methods_use_the_typed_path_and_keep_typed_errors() {
     .await
     .unwrap();
     let sent = receipt("1700000000123", PEER);
-    Channel::edit_message(&channel, &sent, &edit_intent("e"))
+    ChannelEdit::edit(&channel, &sent, edit_intent("e"))
         .await
         .unwrap();
-    Channel::delete_message(&channel, &sent).await.unwrap();
+    ChannelDelete::delete(&channel, &sent).await.unwrap();
 
-    let error = Channel::send_typed_with_receipt(
+    let error = ChannelTypedSend::send_typed(
         &channel,
         &message(vec![OutboundContentPart::Content {
             part: ContentPart::Poll {
@@ -676,11 +676,8 @@ async fn legacy_channel_methods_use_the_typed_path_and_keep_typed_errors() {
     )
     .await
     .unwrap_err();
-    let failure = error
-        .downcast_ref::<crate::providers::native::NativeFailure>()
-        .unwrap();
-    assert!(failure.0.unsupported);
-    assert!(failure.to_string().contains("content kind"));
+    assert!(error.unsupported);
+    assert!(error.message.contains("content kind"));
 }
 
 #[tokio::test]
@@ -733,7 +730,7 @@ fn the_descriptor_and_defaults_identify_the_native_adapter() {
     assert_eq!(NativeProvider::proactive_target(&dm_only), None);
     assert!(channel.supports_reactions() && channel.supports_edit());
     assert!(channel.supports_reply_to_id() && !channel.supports_thread_id());
-    assert_eq!(Channel::capabilities(&channel), channel.declared());
+    assert!(channel.declared().reactions && channel.declared().actions.supported.iter().any(|a| a == "edit"));
 }
 
 #[tokio::test]
