@@ -2,6 +2,7 @@
 
 use super::{IMessageChannel, ListenerCursor, ListenerRegistration};
 use crate::channel::ChannelInboundSink;
+use rusqlite::Connection;
 use std::sync::atomic::Ordering;
 use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
 use tokio::sync::{oneshot, watch};
@@ -85,10 +86,16 @@ impl IMessageChannel {
             .await
             .map_err(|_| listener_error("iMessage database worker failed"))?
             .map_err(|_| listener_error("iMessage database could not be opened"))?;
-        let (mut conn, mut cursor) = tokio::task::spawn_blocking(move || {
+        let (mut conn, mut cursor) = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
             let rowid = super::max_inbound_rowid(&conn)?;
             let read_date = super::db::max_date_read(&conn).unwrap_or(0);
-            anyhow::Ok((conn, ListenerCursor { inbound_rowid: rowid, read_date }))
+            Ok::<(Connection, ListenerCursor), anyhow::Error>((
+                conn,
+                ListenerCursor {
+                    inbound_rowid: rowid,
+                    read_date,
+                },
+            ))
         })
         .await
         .map_err(|_| listener_error("iMessage cursor worker failed"))?
