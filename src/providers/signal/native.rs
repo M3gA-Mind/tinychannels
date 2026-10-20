@@ -195,6 +195,46 @@ impl NativeProvider for SignalChannel {
         vec![("voiceOut", "attachment")]
     }
 
+    async fn start_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        let (cancel, cancellation) = tokio::sync::watch::channel(false);
+        {
+            let mut active = self
+                .listener_cancel
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if active.is_some() {
+                return Err(ChannelSendError {
+                    kind: SendErrorKind::Transient,
+                    message: "Signal listener is already running".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            *active = Some(cancel);
+        }
+        let result = self.listen_typed(sink, cancellation).await;
+        *self
+            .listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner()) = None;
+        result.map_err(|error| super::native::rpc_error(&error, "listener"))
+    }
+
+    async fn stop_listener(&self) -> Result<(), ChannelSendError> {
+        if let Some(cancel) = self
+            .listener_cancel
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            let _ = cancel.send(true);
+        }
+        Ok(())
+    }
+
     fn proactive_target(&self) -> Option<String> {
         self.group_id
             .clone()

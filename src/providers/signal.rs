@@ -14,6 +14,7 @@ mod inbound;
 mod native;
 
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
+use crate::channel::ChannelInboundSink;
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use futures_util::StreamExt;
@@ -21,7 +22,7 @@ use reqwest::Client;
 use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 const GROUP_TARGET_PREFIX: &str = "group:";
@@ -47,6 +48,7 @@ pub struct SignalChannel {
     ignore_stories: bool,
     http_client: Client,
     native: NativeState,
+    listener_cancel: Arc<std::sync::Mutex<Option<watch::Sender<bool>>>>,
 }
 
 use crate::providers::native::HostPorts as NativeState;
@@ -123,6 +125,7 @@ impl SignalChannel {
             ignore_stories,
             http_client,
             native: NativeState::default(),
+            listener_cancel: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -145,6 +148,7 @@ impl SignalChannel {
             ignore_stories,
             http_client,
             native: NativeState::default(),
+            listener_cancel: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -365,6 +369,22 @@ impl SignalChannel {
     }
 }
 
+async fn sleep_or_cancel(
+    cancellation: &mut Option<watch::Receiver<bool>>,
+    seconds: u64,
+) -> bool {
+    if let Some(cancel) = cancellation.as_mut() {
+        tokio::select! {
+            biased;
+            _ = cancel.wait_for(|value| *value) => false,
+            _ = tokio::time::sleep(Duration::from_secs(seconds)) => true,
+        }
+    } else {
+        tokio::time::sleep(Duration::from_secs(seconds)).await;
+        true
+    }
+}
+
 #[async_trait]
 impl Channel for SignalChannel {
     fn name(&self) -> &str {
@@ -456,6 +476,23 @@ impl Channel for SignalChannel {
     }
 
     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        self.listen_loop(Some(tx), None, None).await
+    }
+
+    async fn listen_typed(
+        &self,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+        cancellation: watch::Receiver<bool>,
+    ) -> anyhow::Result<()> {
+        self.listen_loop(None, Some(sink), Some(cancellation)).await
+    }
+
+    async fn listen_loop(
+        &self,
+        tx: Option<mpsc::Sender<ChannelMessage>>,
+        sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+        mut cancellation: Option<watch::Receiver<bool>>,
+    ) -> anyhow::Result<()> {
         let mut url = reqwest::Url::parse(&format!("{}/api/v1/events", self.http_url))?;
         url.query_pairs_mut().append_pair("account", &self.account);
 
@@ -465,6 +502,9 @@ impl Channel for SignalChannel {
         let max_delay_secs = 60u64;
 
         loop {
+            if cancellation.as_ref().is_some_and(|cancel| *cancel.borrow()) {
+                return Ok(());
+            }
             let resp = self
                 .http_client()
                 .get(url.clone())
@@ -478,13 +518,17 @@ impl Channel for SignalChannel {
                     let status = r.status();
                     let body = r.text().await.unwrap_or_default();
                     tracing::warn!("Signal SSE returned {status}: {body}");
-                    tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay_secs)).await;
+                    if !sleep_or_cancel(&mut cancellation, retry_delay_secs).await {
+                        return Ok(());
+                    }
                     retry_delay_secs = (retry_delay_secs * 2).min(max_delay_secs);
                     continue;
                 }
                 Err(e) => {
                     tracing::warn!("Signal SSE connect error: {e}, retrying...");
-                    tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay_secs)).await;
+                    if !sleep_or_cancel(&mut cancellation, retry_delay_secs).await {
+                        return Ok(());
+                    }
                     retry_delay_secs = (retry_delay_secs * 2).min(max_delay_secs);
                     continue;
                 }
@@ -496,7 +540,17 @@ impl Channel for SignalChannel {
             let mut buffer = String::new();
             let mut current_data = String::new();
 
-            while let Some(chunk) = bytes_stream.next().await {
+            loop {
+                let next_chunk = if let Some(cancel) = cancellation.as_mut() {
+                    tokio::select! {
+                        biased;
+                        _ = cancel.wait_for(|value| *value) => return Ok(()),
+                        chunk = bytes_stream.next() => chunk,
+                    }
+                } else {
+                    bytes_stream.next().await
+                };
+                let Some(chunk) = next_chunk else { break; };
                 let chunk = match chunk {
                     Ok(c) => c,
                     Err(e) => {
@@ -529,10 +583,17 @@ impl Channel for SignalChannel {
                         if !current_data.is_empty() {
                             match serde_json::from_str::<SseEnvelope>(&current_data) {
                                 Ok(sse) => {
-                                    if let Some(ref envelope) = sse.envelope
-                                        && !self.dispatch_envelope(envelope, &tx).await
-                                    {
-                                        return Ok(());
+                                    if let Some(ref envelope) = sse.envelope {
+                                        let keep_running = if let Some(sink) = sink {
+                                            self.dispatch_typed_envelope(envelope, sink).await
+                                        } else if let Some(tx) = tx.as_ref() {
+                                            self.dispatch_envelope(envelope, tx).await
+                                        } else {
+                                            false
+                                        };
+                                        if !keep_running {
+                                            return Ok(());
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -555,7 +616,15 @@ impl Channel for SignalChannel {
                 match serde_json::from_str::<SseEnvelope>(&current_data) {
                     Ok(sse) => {
                         if let Some(ref envelope) = sse.envelope {
-                            let _ = self.dispatch_envelope(envelope, &tx).await;
+                            let keep_running = if let Some(sink) = sink {
+                                self.dispatch_typed_envelope(envelope, sink).await
+                            } else if let Some(tx) = tx.as_ref() {
+                                self.dispatch_envelope(envelope, tx).await
+                            } else {
+                                false
+                            };
+                            if !keep_running {
+                                return Ok(());
                         }
                     }
                     Err(e) => {
@@ -565,7 +634,9 @@ impl Channel for SignalChannel {
             }
 
             tracing::debug!("Signal SSE stream ended, reconnecting...");
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+            if !sleep_or_cancel(&mut cancellation, 2).await {
+                return Ok(());
+            }
         }
     }
 
