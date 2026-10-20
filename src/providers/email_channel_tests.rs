@@ -894,6 +894,28 @@ async fn an_empty_search_fetches_nothing() {
     assert!(!commands.contains("UID STORE"), "{commands}");
 }
 
+/// Fetching a message must not mark it read before the host accepts its
+/// ordered ingress event. The listener owns that acknowledgement after push.
+#[tokio::test]
+async fn fetched_mail_stays_unseen_until_ingress_is_accepted() {
+    let (port, server) = fake_imap(vec![ConnScript {
+        searches: vec![vec![(7, ALICE)]],
+        ..Default::default()
+    }])
+    .await;
+    let channel = imap_channel(&["*"], 30);
+    let mut session = plain_session(&channel, port).await.unwrap();
+    session.select("INBOX").await.unwrap();
+    let messages = channel.fetch_unseen(&mut session).await.unwrap();
+    assert_eq!(messages.len(), 1);
+    let _ = session.logout().await;
+    let commands = server.await.unwrap().remove(0).join("\n");
+    assert!(
+        !commands.contains("UID STORE"),
+        "fetch must leave the UID unseen until dispatch succeeds: {commands}"
+    );
+}
+
 /// The IDLE budget elapsing ends IDLE with `DONE` and hands back a usable
 /// session.
 #[tokio::test]
