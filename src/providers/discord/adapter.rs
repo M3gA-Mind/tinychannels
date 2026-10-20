@@ -18,6 +18,23 @@ use tinychannels_bus::{
 
 const INLINE_VOICE_BYTES: u64 = 8 * 1024 * 1024;
 
+struct GatewayListenerGuard<'a>(&'a DiscordChannel);
+
+impl Drop for GatewayListenerGuard<'_> {
+    fn drop(&mut self) {
+        self.0.listener_cancel.lock().take();
+    }
+}
+
+fn gateway_error(error: impl std::fmt::Display) -> ChannelSendError {
+    ChannelSendError {
+        kind: crate::channel::SendErrorKind::Unknown,
+        message: format!("Discord Gateway listener failed: {error}"),
+        retryable: true,
+        ..Default::default()
+    }
+}
+
 fn wrong_channel(operation: &str) -> ChannelSendError {
     ChannelSendError {
         kind: crate::channel::SendErrorKind::Forbidden,
@@ -236,14 +253,60 @@ impl ChannelAdapter for DiscordChannel {
 
     async fn start(
         &self,
-        _sink: &(dyn ChannelInboundSink + Send + Sync),
+        sink: &(dyn ChannelInboundSink + Send + Sync),
     ) -> Result<(), ChannelSendError> {
-        // The module runtime owns the single gateway session and publishes
-        // the same normalized ingress through its event sink.
-        Ok(())
+        let (cancel, mut cancellation) = tokio::sync::watch::channel(false);
+        {
+            let mut active = self.listener_cancel.lock();
+            if active.is_some() {
+                return Err(ChannelSendError {
+                    kind: crate::channel::SendErrorKind::Unknown,
+                    message: "Discord Gateway listener is already running".into(),
+                    retryable: false,
+                    ..Default::default()
+                });
+            }
+            *active = Some(cancel);
+        }
+        let _cleanup = GatewayListenerGuard(self);
+        let (tx, mut inbound) = tokio::sync::mpsc::channel(1);
+        let gateway = self.run_gateway(tx);
+        tokio::pin!(gateway);
+
+        loop {
+            tokio::select! {
+                biased;
+                changed = cancellation.changed() => {
+                    if changed.is_err() || *cancellation.borrow() {
+                        return Ok(());
+                    }
+                }
+                result = &mut gateway => return result.map_err(gateway_error),
+                message = inbound.recv() => {
+                    let Some(message) = message else {
+                        return Ok(());
+                    };
+                    let envelope = crate::inbound_envelope_from_legacy_message(&message);
+                    tokio::select! {
+                        biased;
+                        changed = cancellation.changed() => {
+                            if changed.is_err() || *cancellation.borrow() {
+                                return Ok(());
+                            }
+                        }
+                        result = sink.push(tinychannels_bus::ChannelIngress::Inbound(envelope)) => {
+                            result?;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     async fn stop(&self) -> Result<(), ChannelSendError> {
+        if let Some(cancel) = self.listener_cancel.lock().as_ref() {
+            cancel.send_replace(true);
+        }
         Ok(())
     }
 

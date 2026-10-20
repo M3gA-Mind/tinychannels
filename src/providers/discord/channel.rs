@@ -23,6 +23,8 @@ pub struct DiscordChannel {
     pub(super) listen_to_bots: bool,
     pub(super) mention_only: bool,
     typing_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// Cancellation for the single Gateway session owned by the typed adapter.
+    pub(super) listener_cancel: Mutex<Option<tokio::sync::watch::Sender<bool>>>,
     http_client: reqwest::Client,
     pub(super) api_base: String,
     /// Host speech-to-text for inbound voice messages. `None` leaves the
@@ -62,6 +64,7 @@ impl DiscordChannel {
             listen_to_bots,
             mention_only,
             typing_handle: Mutex::new(None),
+            listener_cancel: Mutex::new(None),
             http_client: reqwest::Client::new(),
             api_base: DISCORD_API_BASE.to_string(),
             transcriber: None,
@@ -93,6 +96,7 @@ impl DiscordChannel {
             listen_to_bots,
             mention_only,
             typing_handle: Mutex::new(None),
+            listener_cancel: Mutex::new(None),
             http_client,
             api_base: DISCORD_API_BASE.to_string(),
             transcriber: None,
