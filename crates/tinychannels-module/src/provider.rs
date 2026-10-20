@@ -2013,6 +2013,8 @@ impl Running {
                         forward_host.deliver_inbound(&forward_name, envelope).await;
                     }
                 })))
+            } else {
+                None
             };
             let listener_host = host.clone();
             let listener_cancel = worker_cancel.subscribe();
