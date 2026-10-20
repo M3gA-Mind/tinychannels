@@ -728,7 +728,7 @@ async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Ve
         } else if upper.starts_with("UID STORE") && script.reject_store {
             reply.extend_from_slice(format!("{tag} NO cannot mark seen\\r\\n").as_bytes());
             let _ = write.write_all(&reply).await;
-            continue;
+            break;
         } else if upper.starts_with("IDLE") {
             idle_tag = Some(tag.to_string());
             match idles.next() {
@@ -1356,7 +1356,6 @@ async fn rejected_typed_mail_is_retried_without_replaying_accepted_uids() {
 
 #[tokio::test]
 async fn accepted_email_retries_only_failed_seen_acknowledgement() {
-    eprintln!("stage setup");
     let channel = imap_channel(&["*"], 30);
     let (port, server) = fake_imap(vec![ConnScript {
         searches: vec![vec![(7, ALICE)]],
@@ -1372,7 +1371,6 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
         .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
         .await
         .expect_err("a rejected IMAP STORE must fail the acknowledgement");
-    eprintln!("stage store error");
     assert!(error.to_string().contains("cannot mark seen"), "{error:#}");
     let Some(tinychannels_bus::ChannelIngress::Inbound(accepted)) = rx.try_recv().ok() else {
         panic!("the email was accepted before the STORE acknowledgement failed");
@@ -1381,9 +1379,7 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
     assert!(rx.try_recv().is_err());
     assert_eq!(channel.seen_messages.lock().await.len(), 1);
     drop(session);
-    eprintln!("stage dropped first session");
     let failed_commands = server.await.unwrap().remove(0).join("\n");
-    eprintln!("stage first server done");
     assert!(failed_commands.contains("UID STORE 7 +FLAGS (\\Seen)"));
 
     let (port, server) = fake_imap(vec![ConnScript {
@@ -1397,12 +1393,9 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
         .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
         .await
         .unwrap();
-    eprintln!("stage second process done");
     assert!(rx.try_recv().is_err(), "accepted ingress must not be replayed");
     let _ = session.logout().await;
-    eprintln!("stage second logout");
     let retry_commands = server.await.unwrap().remove(0).join("\n");
-    eprintln!("stage second server done");
     assert!(retry_commands.contains("UID STORE 7 +FLAGS (\\Seen)"));
 }
 
