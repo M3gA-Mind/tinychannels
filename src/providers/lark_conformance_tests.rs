@@ -2,13 +2,15 @@
 
 use super::api_tests::{FixtureVoiceCodec, fixture_client, is_token_request, token_ok};
 use crate::channel::{
-    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelReaction, ChannelStreamingDraft,
-    ChannelTyping,
+    ChannelAdapter, ChannelDelete, ChannelEdit, ChannelInboundSink, ChannelReaction,
+    ChannelStreamingDraft, ChannelTyping,
 };
 use crate::factory::{HttpClientFactory, build_long_tail_channel_with_host};
 use crate::host::ChannelHostBuilder;
 use crate::providers::http_test_support::HttpsServer;
-use crate::providers::native::fixtures::{StubMedia, StubVoice, stored_media};
+use crate::providers::native::fixtures::{
+    RecordingEvents, StubMedia, StubTranscriber, StubVoice, stored_media,
+};
 use async_trait::async_trait;
 use base64::Engine as _;
 use parking_lot::Mutex;
@@ -19,8 +21,8 @@ use tinychannels_bus::channel::{
     SendErrorKind,
 };
 use tinychannels_bus::{
-    ChannelOutboundIntent, ContentPart, MediaKind, MediaReference, OutboundContentPart,
-    OutboundPayload, OutboundVoice,
+    ChannelIngress, ChannelOutboundIntent, ContentPart, MediaKind, MediaReference,
+    OutboundContentPart, OutboundPayload, OutboundVoice,
 };
 use tinychannels_conformance::{
     AdapterFixture, ConformanceFeature as Feature, ExpectedScope, WireObservation,
@@ -45,43 +47,90 @@ struct LarkFixture {
     media: Arc<StubMedia>,
     observations: Mutex<Vec<WireObservation>>,
     issued_message_ids: Arc<Mutex<Vec<String>>>,
+    voice_store: Arc<StubVoice>,
+    webhook_port: Option<u16>,
+    voice_in_enabled: bool,
+}
+
+#[derive(Clone)]
+struct LarkFixtureSink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
+
+#[async_trait]
+impl ChannelInboundSink for LarkFixtureSink {
+    async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+        self.0.send(ingress).map_err(|_| ChannelSendError {
+            kind: SendErrorKind::Transient,
+            message: "Lark conformance sink closed".into(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
 }
 
 impl LarkFixture {
     async fn start() -> Self {
+        Self::start_with_voice_ingress(false).await
+    }
+
+    async fn start_with_voice_ingress(voice_in_enabled: bool) -> Self {
+        let webhook_port = if voice_in_enabled {
+            let probe = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = probe.local_addr().unwrap().port();
+            drop(probe);
+            Some(port)
+        } else {
+            None
+        };
         let next_id = Arc::new(AtomicUsize::new(1));
         let issued_message_ids = Arc::new(Mutex::new(Vec::new()));
-        let server = HttpsServer::start({
-            let next_id = next_id.clone();
-            let issued = issued_message_ids.clone();
-            move |request| {
-                if is_token_request(request) {
-                    token_ok("t-conformance")
-                } else if request.target == "/open-apis/im/v1/images" {
-                    (
-                        200,
-                        r#"{"code":0,"data":{"image_key":"img-conformance"}}"#.into(),
-                    )
-                } else if request.target == "/open-apis/im/v1/files" {
-                    (
-                        200,
-                        r#"{"code":0,"data":{"file_key":"file-conformance"}}"#.into(),
-                    )
-                } else if request.target.starts_with("/open-apis/im/v1/messages?") {
-                    let id = format!("om-{}", next_id.fetch_add(1, Ordering::SeqCst));
-                    issued.lock().push(id.clone());
-                    (
-                        200,
-                        format!(r#"{{"code":0,"data":{{"message_id":"{id}"}}}}"#),
-                    )
-                } else {
-                    (
-                        404,
-                        r#"{"code":99991663,"msg":"unexpected request"}"#.into(),
-                    )
+        let server = HttpsServer::start_with_bytes(
+            {
+                let next_id = next_id.clone();
+                let issued = issued_message_ids.clone();
+                move |request| {
+                    if is_token_request(request) {
+                        let (status, body) = token_ok("t-conformance");
+                        (status, body.into_bytes())
+                    } else if request.method == "GET"
+                        && request
+                            .target
+                            .ends_with("/resources/fixture-voice?type=file")
+                    {
+                        (
+                            200,
+                            include_bytes!("telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+                        )
+                    } else if request.target == "/open-apis/im/v1/images" {
+                        (
+                            200,
+                            r#"{"code":0,"data":{"image_key":"img-conformance"}}"#
+                                .as_bytes()
+                                .to_vec(),
+                        )
+                    } else if request.target == "/open-apis/im/v1/files" {
+                        (
+                            200,
+                            r#"{"code":0,"data":{"file_key":"file-conformance"}}"#
+                                .as_bytes()
+                                .to_vec(),
+                        )
+                    } else if request.target.starts_with("/open-apis/im/v1/messages?") {
+                        let id = format!("om-{}", next_id.fetch_add(1, Ordering::SeqCst));
+                        issued.lock().push(id.clone());
+                        (
+                            200,
+                            format!(r#"{{"code":0,"data":{{"message_id":"{id}"}}}}"#).into_bytes(),
+                        )
+                    } else {
+                        (
+                            404,
+                            r#"{"code":99991663,"msg":"unexpected request"}"#.as_bytes().to_vec(),
+                        )
+                    }
                 }
-            }
-        })
+            },
+            "audio/ogg",
+        )
         .await;
         let media = Arc::new(StubMedia::default());
         let voice = Arc::new(StubVoice::default());
@@ -89,19 +138,29 @@ impl LarkFixture {
             Some(base64::engine::general_purpose::STANDARD.encode(b"voice-source"));
         let host = ChannelHostBuilder::new()
             .media_repository(media.clone())
-            .voice_media_store(voice)
-            .voice_codec(Arc::new(FixtureVoiceCodec))
-            .build();
+            .voice_media_store(voice.clone())
+            .voice_codec(Arc::new(FixtureVoiceCodec));
+        let host = if voice_in_enabled {
+            host.transcriber(Arc::new(StubTranscriber::default()))
+                .events(Arc::new(RecordingEvents::delivering()))
+                .build()
+        } else {
+            host.build()
+        };
         let config = tinychannels_bus::ChannelsConfig {
             lark: Some(tinychannels_bus::config::LarkConfig {
                 app_id: "app-id".into(),
                 app_secret: "app-secret".into(),
                 encrypt_key: None,
-                verification_token: None,
+                verification_token: Some("verify-token".into()),
                 allowed_users: vec!["*".into()],
                 use_feishu: true,
-                receive_mode: Default::default(),
-                port: None,
+                receive_mode: if voice_in_enabled {
+                    tinychannels_bus::config::LarkReceiveMode::Webhook
+                } else {
+                    Default::default()
+                },
+                port: webhook_port,
             }),
             ..Default::default()
         };
@@ -115,6 +174,9 @@ impl LarkFixture {
             media,
             observations: Mutex::new(Vec::new()),
             issued_message_ids,
+            voice_store: voice,
+            webhook_port,
+            voice_in_enabled,
         }
     }
 
@@ -137,6 +199,192 @@ impl LarkFixture {
 
     async fn request_count(&self) -> usize {
         self.server.requests.lock().unwrap().len()
+    }
+
+    async fn receive_voice_in(&self) -> Result<Option<ChannelSendOutcome>, ChannelSendError> {
+        let port = self.webhook_port.ok_or_else(|| ChannelSendError {
+            kind: SendErrorKind::BadFormat,
+            message: "Lark voice ingress fixture is not configured".into(),
+            unsupported: true,
+            ..Default::default()
+        })?;
+        let payload = serde_json::json!({
+            "header": {
+                "event_type": "im.message.receive_v1",
+                "event_id": "event-voice-in-1",
+                "token": "verify-token"
+            },
+            "event": {
+                "sender": {
+                    "sender_type": "user",
+                    "sender_id": {"open_id": "ou-voice-sender"}
+                },
+                "message": {
+                    "message_id": "om-voice-in-1",
+                    "chat_id": CHANNEL,
+                    "chat_type": "p2p",
+                    "message_type": "audio",
+                    "content": serde_json::json!({
+                        "file_key": "fixture-voice",
+                        "duration": 1000
+                    }).to_string(),
+                    "create_time": "1760900000000"
+                }
+            }
+        });
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let sink = LarkFixtureSink(sender);
+        let adapter = self.channel.clone();
+        let listener =
+            tokio::spawn(async move { ChannelAdapter::start(adapter.as_ref(), &sink).await });
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(std::time::Duration::from_secs(2))
+            .build()
+            .map_err(|_| ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "could not create Lark conformance client".into(),
+                retryable: true,
+                ..Default::default()
+            })?;
+        let post_result = async {
+            for _ in 0..100 {
+                if listener.is_finished() {
+                    return Err(ChannelSendError {
+                        kind: SendErrorKind::Transient,
+                        message: "Lark webhook listener stopped before accepting an event".into(),
+                        retryable: true,
+                        ..Default::default()
+                    });
+                }
+                match client
+                    .post(format!("http://127.0.0.1:{port}/lark"))
+                    .json(&payload)
+                    .send()
+                    .await
+                {
+                    Ok(response) => return Ok(response),
+                    Err(_) => tokio::time::sleep(std::time::Duration::from_millis(20)).await,
+                }
+            }
+            Err(ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "Lark webhook did not become ready".into(),
+                retryable: true,
+                ..Default::default()
+            })
+        }
+        .await;
+        let ingress_result = match post_result {
+            Ok(response) if response.status().is_success() => {
+                tokio::time::timeout(std::time::Duration::from_secs(2), receiver.recv())
+                    .await
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| ChannelSendError {
+                        kind: SendErrorKind::Transient,
+                        message: "Lark voice event was not delivered to the typed sink".into(),
+                        retryable: true,
+                        ..Default::default()
+                    })
+            }
+            Ok(response) => Err(ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: format!("Lark webhook returned {}", response.status()),
+                retryable: true,
+                ..Default::default()
+            }),
+            Err(error) => Err(error),
+        };
+        let stop_result = ChannelAdapter::stop(self.channel.as_ref()).await;
+        let listener_result = tokio::time::timeout(std::time::Duration::from_secs(2), listener)
+            .await
+            .map_err(|_| ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "Lark typed listener did not stop".into(),
+                retryable: true,
+                ..Default::default()
+            })?
+            .map_err(|_| ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "Lark typed listener task failed".into(),
+                retryable: true,
+                ..Default::default()
+            })?;
+        stop_result?;
+        listener_result?;
+        let ingress = ingress_result?;
+        let ChannelIngress::Inbound(envelope) = ingress else {
+            return Err(ChannelSendError {
+                kind: SendErrorKind::BadFormat,
+                message: "Lark voice fixture received a non-message ingress".into(),
+                ..Default::default()
+            });
+        };
+        assert_eq!(
+            envelope.channel,
+            ChannelRef {
+                id: "lark".into(),
+                account_id: None,
+            }
+        );
+        assert_eq!(
+            envelope.conversation.kind,
+            tinychannels_bus::ConversationKind::Dm
+        );
+        assert_eq!(envelope.conversation.id, CHANNEL);
+        assert!(envelope.conversation.thread_id.is_none());
+        assert_eq!(envelope.message_id, "om-voice-in-1");
+        let voice_notes = envelope
+            .parts
+            .iter()
+            .filter_map(|part| match part {
+                ContentPart::VoiceNote { voice_note } => Some(voice_note),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(voice_notes.len(), 1);
+        let voice_note = voice_notes[0];
+        assert_eq!(voice_note.media.opaque_id.as_deref(), Some("voice-1"));
+        assert_eq!(voice_note.media.kind, MediaKind::Audio);
+        assert!(voice_note.media.path.is_none());
+        assert!(voice_note.media.url.is_none());
+        assert!(voice_note.media.local_cache_path.is_none());
+        let transcript = voice_note
+            .transcript
+            .as_ref()
+            .expect("configured host transcriber should enrich the voice note");
+        assert_eq!(transcript.text, "hello");
+        assert_eq!(transcript.language.as_deref(), Some("en"));
+        assert_eq!(
+            transcript.state,
+            tinychannels_bus::VoiceTranscriptState::Complete
+        );
+        assert_eq!(
+            transcript.source,
+            tinychannels_bus::VoiceTranscriptSource::HostStt
+        );
+        let mut payload_kinds = Vec::new();
+        for part in &envelope.parts {
+            if let ContentPart::VoiceNote { voice_note } = part {
+                payload_kinds.push("audio".into());
+                if voice_note.transcript.is_some() {
+                    payload_kinds.push("transcript".into());
+                }
+            }
+        }
+        self.observations.lock().push(WireObservation {
+            feature: Feature::VoiceIn,
+            operation: "voice_in".into(),
+            channel: envelope.channel.clone(),
+            conversation: envelope.conversation.clone(),
+            reply_to_id: envelope.reply_to_id.clone(),
+            thread_id: envelope.conversation.thread_id.clone(),
+            payload_kinds,
+            platform_message_ids: Vec::new(),
+            request: payload,
+        });
+        Ok(None)
     }
 
     async fn send_and_record(
@@ -245,11 +493,27 @@ impl AdapterFixture for LarkFixture {
     }
 
     fn expected_scope(&self, _feature: Feature) -> ExpectedScope {
-        ExpectedScope {
-            channel: channel_ref(),
-            conversation: conversation_ref(),
-            reply_to_id: None,
-            thread_id: None,
+        if _feature == Feature::VoiceIn {
+            ExpectedScope {
+                channel: ChannelRef {
+                    id: "lark".into(),
+                    account_id: None,
+                },
+                conversation: ConversationRef {
+                    kind: tinychannels_bus::ConversationKind::Dm,
+                    id: CHANNEL.into(),
+                    ..Default::default()
+                },
+                reply_to_id: None,
+                thread_id: None,
+            }
+        } else {
+            ExpectedScope {
+                channel: channel_ref(),
+                conversation: conversation_ref(),
+                reply_to_id: None,
+                thread_id: None,
+            }
         }
     }
 
@@ -496,6 +760,7 @@ impl AdapterFixture for LarkFixture {
             }
             // These inbound-only features have no outbound adapter operation;
             // the actual fixture has no ingress event source installed.
+            Feature::VoiceIn if self.voice_in_enabled => self.receive_voice_in().await,
             Feature::VoiceIn | Feature::InboundReactions | Feature::ReadReceipts => {
                 Err(ChannelSendError {
                     kind: SendErrorKind::BadFormat,
@@ -523,4 +788,48 @@ async fn the_host_aware_lark_adapter_passes_the_full_conformance_matrix() {
         })
         .collect::<Vec<_>>();
     assert!(failed.is_empty(), "Lark conformance failures: {failed:#?}");
+}
+
+#[tokio::test]
+async fn configured_lark_voice_in_is_observed_through_its_typed_webhook_listener() {
+    use tinychannels_conformance::check_feature;
+
+    let fixture = LarkFixture::start_with_voice_ingress(true).await;
+    let capabilities = fixture.channel.declared_capabilities();
+    assert!(capabilities.voice_in.supported);
+
+    check_feature(&fixture, Feature::VoiceIn)
+        .await
+        .unwrap_or_else(|error| panic!("Lark voice ingress conformance failed: {error}"));
+
+    let requests = fixture.server.requests.lock().unwrap();
+    let download = requests
+        .iter()
+        .find(|request| {
+            request.method == "GET"
+                && request
+                    .target
+                    .ends_with("/resources/fixture-voice?type=file")
+        })
+        .expect("the typed listener must download the actual voice resource");
+    assert!(
+        download
+            .headers
+            .to_ascii_lowercase()
+            .contains("authorization: bearer t-conformance"),
+        "voice download must use the token issued to the configured app"
+    );
+    let stored = fixture.voice_store.stored.lock().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(
+        stored[0].direction,
+        tinychannels_bus::HostVoiceMediaDirection::Inbound
+    );
+    assert_eq!(stored[0].mime_type, "audio/ogg");
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&stored[0].audio_base64)
+            .unwrap(),
+        include_bytes!("telegram/fixtures/sine-ogg-opus.ogg")
+    );
 }
