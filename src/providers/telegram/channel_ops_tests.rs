@@ -64,7 +64,12 @@ impl TelegramWireFixture {
         *cursor = request_end;
         for request in requests {
             let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
-            let Some(chat) = body.get("chat_id").and_then(serde_json::Value::as_i64) else {
+            let Some(chat) = body.get("chat_id").map(|value| {
+                value
+                    .as_i64()
+                    .map(|id| id.to_string())
+                    .or_else(|| value.as_str().map(str::to_owned))
+            }).flatten() else {
                 continue;
             };
             let id = receipt
@@ -78,7 +83,7 @@ impl TelegramWireFixture {
                     channel: self.scope.channel.clone(),
                     conversation: tinychannels_bus::ConversationRef {
                         kind: tinychannels_bus::ConversationKind::Dm,
-                        id: chat.to_string(),
+                        id: chat,
                         ..Default::default()
                     },
                     reply_to_id: body
@@ -232,14 +237,26 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 emails: vec![],
                 organization: None,
             }),
-            Feature::Buttons => rich_part(tinychannels_bus::ContentPart::Buttons {
-                rows: vec![vec![tinychannels_bus::ButtonAction {
-                    id: "conformance".into(),
-                    label: "Continue".into(),
-                    style: None,
-                    disabled: false,
-                }]],
-            }),
+            Feature::Buttons => tinychannels_bus::OutboundPayload::Parts {
+                parts: vec![
+                    tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Text {
+                            text: "Choose an action".into(),
+                            markdown_dialect: None,
+                        },
+                    },
+                    tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Buttons {
+                            rows: vec![vec![tinychannels_bus::ButtonAction {
+                                id: "conformance".into(),
+                                label: "Continue".into(),
+                                style: None,
+                                disabled: false,
+                            }]],
+                        },
+                    },
+                ],
+            },
             Feature::Poll => rich_part(tinychannels_bus::ContentPart::Poll {
                 question: "Choose one".into(),
                 options: vec!["Alpha".into(), "Beta".into()],
@@ -280,6 +297,9 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             let conversation = tinychannels_bus::ConversationRef {
                 kind: tinychannels_bus::ConversationKind::Dm,
                 id: chat.to_owned(),
+                thread_id: body.get("message_thread_id").map(|value| {
+                    value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string())
+                }),
                 ..Default::default()
             };
             let path = request.url.path();
@@ -2556,7 +2576,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
     use tinychannels_conformance::{ConformanceFeature, ExpectedScope, check_all_features};
 
     let server = mock_api().await;
-    for endpoint in ["sendMessage", "sendLocation", "sendContact", "sendPoll"] {
+    for endpoint in ["sendMessage", "sendLocation", "sendVenue", "sendContact", "sendPoll"] {
         mount_post(
             &server,
             endpoint,
