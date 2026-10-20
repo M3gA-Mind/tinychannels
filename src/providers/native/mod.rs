@@ -232,6 +232,12 @@ pub(crate) trait NativeProvider: Send + Sync {
         anyhow::bail!("provider has no typed webhook ingress")
     }
 
+    /// Provider health projection for typed account status. Providers that do
+    /// not own a health probe remain explicitly unknown.
+    async fn health_state(&self) -> &'static str {
+        "unknown"
+    }
+
     /// Run a provider-owned typed listener when this native adapter supports
     /// inbound events. Most adapters are outbound-only and retain the no-op.
     async fn start_listener(
@@ -395,7 +401,11 @@ macro_rules! native_v2_adapter {
                         tinychannels_bus::controllers::ChannelAccountState::Configured,
                         tinychannels_bus::controllers::ChannelAccountState::Enabled,
                     ],
-                    health_state: Some("unknown".into()),
+                    health_state: Some(
+                        $crate::providers::native::NativeProvider::health_state(self)
+                            .await
+                            .into(),
+                    ),
                     ..Default::default()
                 })
             }

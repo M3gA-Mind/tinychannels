@@ -1328,6 +1328,7 @@ pub(crate) struct NativePorts {
 pub(crate) enum LongTailListenerMode {
     Legacy,
     Adapter,
+    Webhook,
 }
 
 impl NativePorts {
@@ -1989,18 +1990,20 @@ impl Running {
         let native_listener = worker_native
             .as_ref()
             .is_some_and(|ports| ports.listener_mode == LongTailListenerMode::Adapter);
+        let external_webhook = worker_native
+            .as_ref()
+            .is_some_and(|ports| ports.listener_mode == LongTailListenerMode::Webhook);
+        let legacy_listener = !native_listener && !external_webhook;
         let worker = tokio::spawn(async move {
             let name = worker_provider_name;
             host.report_status(&name, "connecting", None).await;
-            let (tx, rx) = if native_listener {
-                (None, None)
-            } else {
+            let (tx, rx) = if legacy_listener {
                 let (tx, rx) = tokio::sync::mpsc::channel(256);
                 (Some(tx), Some(rx))
-            };
-            let mut forwarder = if native_listener {
-                None
             } else {
+                (None, None)
+            };
+            let mut forwarder = if legacy_listener {
                 let forward_host = host.clone();
                 let forward_name = name.clone();
                 Some(AbortOnDrop(tokio::spawn(async move {
@@ -2044,6 +2047,10 @@ impl Running {
                         )
                         .await
                     }
+                } else if external_webhook {
+                    let mut listener_cancel = listener_cancel;
+                    let _ = listener_cancel.wait_for(|value| *value).await;
+                    Ok(())
                 } else if outbound_only {
                     // Keep the inbound sender alive until cancellation so the forwarder
                     // has the same explicit cleanup path as native listeners.

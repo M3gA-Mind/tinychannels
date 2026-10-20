@@ -112,6 +112,19 @@ impl LinqChannel {
         self.http_client.clone()
     }
 
+    async fn health_probe(&self) -> bool {
+        let url = format!("{}/phonenumbers", self.api_base);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            self.http_client()
+                .get(&url)
+                .bearer_auth(&self.api_token)
+                .send(),
+        )
+        .await
+        .is_ok_and(|response| response.is_ok_and(|response| response.status().is_success()))
+    }
+
     /// Check if a sender phone number is allowed (E.164 format: +1234567890)
     fn is_sender_allowed(&self, phone: &str) -> bool {
         self.allowed_senders.iter().any(|n| n == "*" || n == phone)
@@ -399,16 +412,7 @@ impl Channel for LinqChannel {
     }
 
     async fn health_check(&self) -> bool {
-        // Check if we can reach the Linq API
-        let url = format!("{}/phonenumbers", self.api_base);
-
-        self.http_client()
-            .get(&url)
-            .bearer_auth(&self.api_token)
-            .send()
-            .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
+        self.health_probe().await
     }
 
     async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {

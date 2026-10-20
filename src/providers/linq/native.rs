@@ -265,6 +265,14 @@ impl NativeProvider for LinqChannel {
         true
     }
 
+    async fn health_state(&self) -> &'static str {
+        if self.health_probe().await {
+            "healthy"
+        } else {
+            "unhealthy"
+        }
+    }
+
     async fn deliver_webhook(
         &self,
         signature: Option<&str>,
