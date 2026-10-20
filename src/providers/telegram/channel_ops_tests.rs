@@ -307,6 +307,34 @@ fn telegram_conformance_updates() -> Vec<serde_json::Value> {
 }
 
 impl TelegramWireFixture {
+    async fn capture_configured_ingress(&self) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        if !self.events.inbounds.lock().unwrap().is_empty()
+            && !self.events.events.lock().unwrap().is_empty()
+        {
+            return Ok(());
+        }
+        self.events.events.lock().unwrap().clear();
+        self.events.inbounds.lock().unwrap().clear();
+        let (tx, _rx) = tokio::sync::mpsc::channel(4);
+        let channel = self.channel.clone();
+        let listener = tokio::spawn(async move {
+            #[allow(deprecated)]
+            tinychannels_runtime::traits::Channel::listen(channel.as_ref(), tx).await
+        });
+        let capture = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                self.events.notified.notified().await;
+                if !self.events.events.lock().unwrap().is_empty()
+                    && !self.events.inbounds.lock().unwrap().is_empty()
+                {
+                    break;
+                }
+            }
+        }).await;
+        listener.abort();
+        capture.map_err(|_| fixture_operation_failed("configured listener did not publish reaction and voice ingress"))
+    }
+
     async fn record_operation(
         &self,
         feature: tinychannels_conformance::ConformanceFeature,
@@ -478,26 +506,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             return Ok(None);
         }
         if feature == Feature::InboundReactions {
-            self.events.events.lock().unwrap().clear();
-            self.events.inbounds.lock().unwrap().clear();
-            let (tx, _rx) = tokio::sync::mpsc::channel(4);
-            let channel = self.channel.clone();
-            let listener = tokio::spawn(async move {
-                #[allow(deprecated)]
-                tinychannels_runtime::traits::Channel::listen(channel.as_ref(), tx).await
-            });
-            let capture = tokio::time::timeout(std::time::Duration::from_secs(2), async {
-                loop {
-                    self.events.notified.notified().await;
-                    if !self.events.events.lock().unwrap().is_empty()
-                        && !self.events.inbounds.lock().unwrap().is_empty()
-                    {
-                        break;
-                    }
-                }
-            }).await;
-            listener.abort();
-            capture.map_err(|_| unsupported_fixture_operation())?;
+            self.capture_configured_ingress().await?;
             let captured = self.events.events.lock().unwrap().last().cloned()
                 .ok_or_else(unsupported_fixture_operation)?;
             let requests = self.server.received_requests().await.unwrap_or_default();
@@ -531,9 +540,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             return Ok(None);
         }
         if feature == Feature::VoiceIn {
-            if self.events.inbounds.lock().unwrap().is_empty() {
-                return Err(fixture_operation_failed("voice listener did not publish an inbound envelope"));
-            }
+            self.capture_configured_ingress().await?;
             let envelope = self.events.inbounds.lock().unwrap().last().cloned()
                 .ok_or_else(|| fixture_operation_failed("voice envelope was missing"))?;
             let mut note = envelope.parts.iter().find_map(|part| match part {
