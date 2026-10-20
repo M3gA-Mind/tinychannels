@@ -4161,6 +4161,7 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
         },
         ..Default::default()
     };
+    eprintln!("provider={:?} instance={:?} intent_channel={:?} channel_ref={:?}", running.provider_name(), running.configured_instance, tinychannels_bus::provider_id(&intent.channel_id), intent.channel_ref);
     running
         .validate_adapter_intent(&intent)
         .expect("adapter scope accepts the account selected by hooks");
