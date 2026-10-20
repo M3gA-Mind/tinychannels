@@ -165,13 +165,14 @@ async fn typed_listener_connects_to_sse_publishes_and_stops() {
     })
     .await
     .expect("typed Signal SSE event should reach the adapter sink");
-    let got = sink.0.lock().unwrap();
-    let ChannelIngress::Inbound(envelope) = &got[0] else {
-        panic!("expected typed inbound message, got {:?}", got[0]);
-    };
-    assert_eq!(envelope.text, "typed hello");
-    assert_eq!(envelope.sender.name.as_deref(), Some("Ada"));
-    drop(got);
+    {
+        let got = sink.0.lock().unwrap();
+        let ChannelIngress::Inbound(envelope) = &got[0] else {
+            panic!("expected typed inbound message, got {:?}", got[0]);
+        };
+        assert_eq!(envelope.text, "typed hello");
+        assert_eq!(envelope.sender.name.as_deref(), Some("Ada"));
+    }
 
     ChannelAdapter::stop(channel.as_ref()).await.unwrap();
     tokio::time::timeout(Duration::from_secs(2), listener)
