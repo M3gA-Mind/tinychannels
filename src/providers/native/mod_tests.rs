@@ -39,6 +39,34 @@ fn text_intent(body: &str) -> ChannelOutboundIntent {
 }
 
 #[test]
+fn seen_reservations_only_suppress_committed_keys() {
+    let ports = HostPorts::default();
+    let reservation = match ports.reserve_seen("event-1".into()) {
+        SeenReservationResult::Reserved(reservation) => reservation,
+        _ => panic!("first dispatch should own a new key"),
+    };
+    assert!(!ports.has_seen("event-1"));
+    assert!(matches!(
+        ports.reserve_seen("event-1".into()),
+        SeenReservationResult::Pending
+    ));
+    assert!(!ports.mark_seen("event-1".into()));
+
+    drop(reservation);
+    assert!(!ports.has_seen("event-1"));
+    let reservation = match ports.reserve_seen("event-1".into()) {
+        SeenReservationResult::Reserved(reservation) => reservation,
+        _ => panic!("dropping a reservation should release the key"),
+    };
+    reservation.commit();
+    assert!(ports.has_seen("event-1"));
+    assert!(matches!(
+        ports.reserve_seen("event-1".into()),
+        SeenReservationResult::Accepted
+    ));
+}
+
+#[test]
 fn the_error_helpers_distinguish_unsupported_from_rejected() {
     let unsupported = unsupported("no");
     assert!(unsupported.unsupported && !unsupported.retryable);
