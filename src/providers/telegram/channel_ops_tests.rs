@@ -251,6 +251,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                     conversation_id: "100".into(),
                     channel_ref: Some(self.scope.channel.clone()),
                     conversation_ref: Some(self.scope.conversation.clone()),
+                    turn_id: Some("conformance-turn".into()),
                     payload: tinychannels_bus::OutboundPayload::Text {
                         text: "existing message".into(),
                     },
@@ -269,6 +270,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                         conversation_id: "100".into(),
                         channel_ref: Some(self.scope.channel.clone()),
                         conversation_ref: Some(self.scope.conversation.clone()),
+                        turn_id: Some("conformance-turn".into()),
                         payload: tinychannels_bus::OutboundPayload::Text {
                             text: "edited conformance message".into(),
                         },
@@ -452,6 +454,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             conversation_id: "100".into(),
             channel_ref: Some(self.scope.channel.clone()),
             conversation_ref: Some(self.scope.conversation.clone()),
+            turn_id: Some("conformance-turn".into()),
             reply_to_id: (feature == Feature::ReplyAddressing).then(|| "321".into()),
             thread_id: (feature == Feature::ThreadAddressing).then(|| "77".into()),
             payload,
@@ -2763,7 +2766,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
     use tinychannels_conformance::{ConformanceFeature, ExpectedScope, check_all_features};
 
     let server = mock_api().await;
-    for endpoint in ["sendMessage", "sendLocation", "sendVenue", "sendContact", "sendPoll"] {
+    for endpoint in ["sendMessage", "sendLocation", "sendVenue", "sendContact", "sendPoll", "sendPhoto", "sendVideo", "sendAudio", "sendDocument", "sendSticker"] {
         mount_post(
             &server,
             endpoint,
@@ -2811,6 +2814,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
     let events = Arc::new(TelegramConformanceEvents::default());
     let host: Arc<dyn crate::host::ChannelHost> = crate::host::ChannelHostBuilder::new()
         .events(events.clone())
+        .media_repository(Arc::new(TelegramConformanceMedia))
         .build();
     let mut channel = crate::build_telegram_channel(&config, &host, &crate::DefaultHttpClients)
         .expect("configured factory builds Telegram");
@@ -2820,7 +2824,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
     let scope = ExpectedScope {
         channel: tinychannels_bus::ChannelRef {
             id: "telegram".into(),
-            account_id: None,
+            account_id: Some("telegram-conformance".into()),
         },
         conversation: tinychannels_bus::ConversationRef {
             kind: tinychannels_bus::ConversationKind::Dm,
