@@ -119,6 +119,20 @@ pub fn legacy_message_from_inbound_envelope(
         for part in &envelope.parts {
             match part {
                 ContentPart::Text { text: value, .. } => text.push(value.as_str()),
+                ContentPart::VoiceNote { voice_note } => {
+                    let Some(transcript) = voice_note.transcript.as_ref().filter(|transcript| {
+                        transcript.state == VoiceTranscriptState::Complete
+                            && !transcript.text.trim().is_empty()
+                    }) else {
+                        anyhow::bail!(
+                            "legacy message cannot represent a voice note without a complete transcript"
+                        );
+                    };
+                    // The prepared result retains the canonical envelope and
+                    // its audio reference. This compatibility view carries
+                    // the transcript into legacy text dispatch.
+                    text.push(transcript.text.as_str());
+                }
                 _ => anyhow::bail!("legacy message cannot represent non-text inbound content"),
             }
         }

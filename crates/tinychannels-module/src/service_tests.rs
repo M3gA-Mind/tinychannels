@@ -2740,6 +2740,150 @@ async fn inbound_preparation_service() -> Channels {
     Channels::new(host, None)
 }
 
+#[tokio::test]
+async fn inbound_voice_transcript_projects_to_legacy_text_and_preserves_typed_scope() {
+    use tinychannels_bus::module_inbound::{ChannelInboundSource, PrepareChannelInboundRequest};
+    use tinychannels_bus::{
+        ChannelInboundEnvelope, ChannelRef, ContentPart, ConversationKind, ConversationRef,
+        MediaKind, MediaReference, SenderRef, VoiceNote, VoiceTranscript, VoiceTranscriptSource,
+        VoiceTranscriptState,
+    };
+
+    let service = inbound_preparation_service().await;
+    let envelope = ChannelInboundEnvelope {
+        channel: ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:bot-a".into()),
+        },
+        message_id: "voice-42".into(),
+        conversation: ConversationRef {
+            kind: ConversationKind::Dm,
+            id: "chat-7".into(),
+            topic_id: Some("topic-3".into()),
+            ..Default::default()
+        },
+        sender: SenderRef {
+            id: "alice".into(),
+            ..Default::default()
+        },
+        parts: vec![
+            ContentPart::Text {
+                text: "caption".into(),
+                markdown_dialect: None,
+            },
+            ContentPart::VoiceNote {
+                voice_note: VoiceNote {
+                    media: MediaReference {
+                        opaque_id: Some("voice-media-ref".into()),
+                        kind: MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    transcript: Some(VoiceTranscript {
+                        text: "turn left at the next street".into(),
+                        language: Some("en".into()),
+                        state: VoiceTranscriptState::Complete,
+                        source: VoiceTranscriptSource::HostStt,
+                    }),
+                    ..Default::default()
+                },
+            },
+            ContentPart::VoiceNote {
+                voice_note: VoiceNote {
+                    media: MediaReference {
+                        opaque_id: Some("voice-media-ref-2".into()),
+                        kind: MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    transcript: Some(VoiceTranscript {
+                        text: "then stop".into(),
+                        language: Some("en".into()),
+                        state: VoiceTranscriptState::Complete,
+                        source: VoiceTranscriptSource::Provider,
+                    }),
+                    ..Default::default()
+                },
+            },
+        ],
+        ..Default::default()
+    };
+
+    let prepared = service
+        .prepare_channel_inbound(PrepareChannelInboundRequest {
+            source: ChannelInboundSource::Envelope {
+                envelope: envelope.clone(),
+                timestamp: 42,
+            },
+            namespace: "openhuman".into(),
+            session_policy: Default::default(),
+        })
+        .await
+        .expect("a completed voice transcript is valid legacy turn text");
+
+    assert_eq!(
+        prepared.message.content,
+        "caption\nturn left at the next street\nthen stop"
+    );
+    assert_eq!(prepared.envelope, envelope);
+    assert_eq!(prepared.thread_id, "channel:telegram/alice/chat-7");
+    assert_eq!(
+        prepared.envelope.channel.account_id.as_deref(),
+        Some("telegram:bot-a")
+    );
+    assert_eq!(
+        prepared.envelope.conversation.topic_id.as_deref(),
+        Some("topic-3")
+    );
+
+    let invalid_transcripts = [
+        None,
+        Some(VoiceTranscript {
+            text: "transcription failed".into(),
+            language: Some("en".into()),
+            state: VoiceTranscriptState::Unavailable,
+            source: VoiceTranscriptSource::HostStt,
+        }),
+        Some(VoiceTranscript {
+            text: String::new(),
+            language: Some("en".into()),
+            state: VoiceTranscriptState::Complete,
+            source: VoiceTranscriptSource::HostStt,
+        }),
+        Some(VoiceTranscript {
+            text: "   \n".into(),
+            language: Some("en".into()),
+            state: VoiceTranscriptState::Complete,
+            source: VoiceTranscriptSource::HostStt,
+        }),
+        Some(VoiceTranscript {
+            text: "still processing".into(),
+            language: Some("en".into()),
+            state: VoiceTranscriptState::Pending,
+            source: VoiceTranscriptSource::HostStt,
+        }),
+    ];
+    for transcript in invalid_transcripts {
+        let mut incomplete = envelope.clone();
+        let ContentPart::VoiceNote { voice_note } = &mut incomplete.parts[1] else {
+            unreachable!("the voice note follows the caption");
+        };
+        voice_note.transcript = transcript;
+        assert!(
+            service
+                .prepare_channel_inbound(PrepareChannelInboundRequest {
+                    source: ChannelInboundSource::Envelope {
+                        envelope: incomplete,
+                        timestamp: 43,
+                    },
+                    namespace: "openhuman".into(),
+                    session_policy: Default::default(),
+                })
+                .await
+                .is_err()
+        );
+    }
+    service.shutdown().await.unwrap();
+}
+
 async fn enable_remote_providers(channels: &Channels) {
     let host = channels.host.clone();
     for configured_name in ["telegram", "discord"] {
