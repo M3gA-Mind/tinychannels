@@ -255,7 +255,13 @@ pub async fn check_feature(
             || receipt.parts.is_empty()
         {
             return Err(format!(
-                "declared {feature:?} returned an incomplete or mis-scoped receipt"
+                "declared {feature:?} returned an incomplete or mis-scoped receipt: channel {:?} (expected {:?}), conversation {:?} (expected {:?}), {} IDs, {} parts",
+                receipt.channel,
+                expected.channel,
+                receipt.conversation,
+                expected.conversation,
+                receipt.platform_message_ids.len(),
+                receipt.parts.len(),
             ));
         }
     }

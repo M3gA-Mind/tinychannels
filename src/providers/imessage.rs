@@ -264,6 +264,23 @@ end tell"#
     }
 
     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
+        self.listen_with_ready(tx, None).await
+    }
+
+    async fn health_check(&self) -> bool {
+        self.is_healthy_on(std::env::consts::OS)
+    }
+}
+
+impl IMessageChannel {
+    /// Run the listener and optionally signal after its startup cursor is fixed.
+    /// The readiness sender is used by tests to synchronize first-message
+    /// delivery with the same cursor boundary as the production listener.
+    async fn listen_with_ready(
+        &self,
+        tx: mpsc::Sender<ChannelMessage>,
+        ready: Option<tokio::sync::oneshot::Sender<()>>,
+    ) -> anyhow::Result<()> {
         tracing::info!("iMessage channel listening (AppleScript bridge)...");
 
         // Query the Messages SQLite database for new messages
@@ -295,6 +312,9 @@ end tell"#
             .await??;
         let mut last_rowid = initial_rowid;
         let mut last_read = initial_read;
+        if let Some(ready) = ready {
+            let _ = ready.send(());
+        }
 
         loop {
             tokio::time::sleep(self.poll_interval).await;
@@ -332,10 +352,6 @@ end tell"#
                 }
             }
         }
-    }
-
-    async fn health_check(&self) -> bool {
-        self.is_healthy_on(std::env::consts::OS)
     }
 }
 
