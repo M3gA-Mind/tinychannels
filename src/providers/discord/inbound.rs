@@ -648,6 +648,7 @@ impl DiscordChannel {
     }
 
     /// `MESSAGE_UPDATE`: a user edited a message.
+    #[cfg(test)]
     pub(super) async fn handle_message_update(&self, d: &Value, bot_user_id: &str) {
         self.handle_message_update_to(d, bot_user_id, None).await;
     }
@@ -708,6 +709,7 @@ impl DiscordChannel {
     }
 
     /// `MESSAGE_DELETE`: a message was removed.
+    #[cfg(test)]
     pub(super) async fn handle_message_delete(&self, d: &Value) {
         self.handle_message_delete_to(d, None).await;
     }
@@ -748,6 +750,7 @@ impl DiscordChannel {
     }
 
     /// `MESSAGE_REACTION_ADD` / `MESSAGE_REACTION_REMOVE`.
+    #[cfg(test)]
     pub(super) async fn handle_reaction(&self, d: &Value, bot_user_id: &str, added: bool) {
         self.handle_reaction_to(d, bot_user_id, added, None).await;
     }
@@ -837,6 +840,7 @@ impl DiscordChannel {
 
     /// `INTERACTION_CREATE` for a button press: acknowledge it, then publish
     /// the opaque action id for the host to validate.
+    #[cfg(test)]
     pub(super) async fn handle_interaction(&self, d: &Value) {
         self.handle_interaction_to(d, None).await;
     }
