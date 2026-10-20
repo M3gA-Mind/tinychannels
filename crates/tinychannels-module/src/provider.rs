@@ -2513,15 +2513,14 @@ impl Running {
         &self,
         interaction: tinychannels_bus::ChannelInteraction,
     ) -> Result<tinychannels_bus::ChannelInteractionResult> {
-        if let Some(native) = &self.native_ports {
-            if let Some(result) = crate::interaction::dispatch_native_webhook(
+        if let Some(native) = &self.native_ports
+            && let Some(result) = crate::interaction::dispatch_native_webhook(
                 native.adapter.as_ref(),
                 interaction.clone(),
             )
             .await
-            {
-                return result;
-            }
+        {
+            return result;
         }
         crate::interaction::dispatch(
             self.channel
