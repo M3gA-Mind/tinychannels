@@ -1166,6 +1166,55 @@ mod websocket_loopback {
 
         server.await.expect("join server");
     }
+
+    #[tokio::test]
+    async fn wss_dialer_rejects_a_self_signed_server_certificate() {
+        use std::sync::Arc;
+        use tokio::net::TcpListener;
+        use tokio_rustls::TlsAcceptor;
+
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let certificate = include_bytes!("../../tests/fixtures/tls/cert.der");
+        let private_key = include_bytes!("../../tests/fixtures/tls/key.der");
+        let server_config = tokio_rustls::rustls::ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(
+                vec![tokio_rustls::rustls::pki_types::CertificateDer::from(
+                    certificate.to_vec(),
+                )],
+                tokio_rustls::rustls::pki_types::PrivatePkcs8KeyDer::from(private_key.to_vec())
+                    .into(),
+            )
+            .expect("test certificate and key");
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let port = listener.local_addr().expect("local address").port();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("accept TCP");
+            assert!(
+                acceptor.accept(socket).await.is_err(),
+                "client should abort its handshake when the self-signed certificate is rejected"
+            );
+        });
+
+        let dialer = WebSocketRelayDialer::new(WebSocketRelayConfig::new(format!(
+            "https://localhost:{port}"
+        )));
+        let error = tokio::time::timeout(std::time::Duration::from_secs(3), dialer.dial())
+            .await
+            .expect("TLS certificate rejection is bounded")
+            .err()
+            .expect("the native-root WSS connector must reject the self-signed certificate");
+        let message = error.to_string().to_ascii_lowercase();
+        assert!(
+            message.contains("certificate") || message.contains("unknownissuer"),
+            "expected a certificate-verification error, got {message}"
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(3), server)
+            .await
+            .expect("TLS fixture shuts down")
+            .expect("TLS fixture task");
+    }
 }
 // Pins the public paths previous releases published.
 //
