@@ -9,6 +9,7 @@ use crate::traits::Channel;
 use async_trait::async_trait;
 use serde_json::json;
 use std::sync::Mutex;
+use std::time::Duration;
 use tinychannels_bus::channel::{MessageReceipt, MessageReceiptPart};
 use tinychannels_bus::{
     ChannelIngress, ChannelOutboundIntent, ChannelOutboundMessage, ChannelRef, ContentPart,
