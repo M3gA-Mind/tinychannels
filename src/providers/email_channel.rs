@@ -660,10 +660,8 @@ impl EmailChannel {
         if uid == 0 {
             return Ok(());
         }
-        let _ = session
-            .uid_store(&uid.to_string(), "+FLAGS (\\Seen)")
-            .await?
-            .try_collect::<Vec<_>>()
+        session
+            .run_command_and_check_ok(format!("UID STORE {uid} +FLAGS (\\Seen)"))
             .await?;
         Ok(())
     }
