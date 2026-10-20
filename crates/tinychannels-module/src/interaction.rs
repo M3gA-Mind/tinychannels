@@ -37,6 +37,7 @@ fn draft_intent(
     message: &tinychannels::SendMessage,
 ) -> tinychannels_bus::ChannelOutboundIntent {
     let descriptor = adapter.descriptor();
+    let is_telegram = descriptor.id == "telegram";
     let mut intent = tinychannels::outbound_intent_from_send_message(&descriptor.id, message);
     intent.channel_ref = Some(tinychannels_bus::ChannelRef {
         id: descriptor.id,
@@ -56,7 +57,7 @@ fn draft_intent(
             text: message.content.clone(),
         };
     }
-    if descriptor.id == "telegram" {
+    if is_telegram {
         // The frozen Telegram DTO uses `recipient` for chat/topic routing and
         // `thread_ts` for the parent message. The generic converter cannot
         // distinguish those provider-specific meanings, so normalize them at
