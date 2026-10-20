@@ -15,8 +15,7 @@ mod native;
 
 use crate::channel::ChannelInboundSink;
 use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
-use crate::traits::{Channel, ChannelMessage, SendMessage};
-use async_trait::async_trait;
+use crate::traits::ChannelMessage;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
@@ -401,136 +400,6 @@ async fn sleep_or_cancel(cancellation: &mut Option<watch::Receiver<bool>>, secon
     } else {
         tokio::time::sleep(Duration::from_secs(seconds)).await;
         true
-    }
-}
-
-#[async_trait]
-impl Channel for SignalChannel {
-    fn name(&self) -> &str {
-        "signal"
-    }
-
-    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
-        self.declared()
-    }
-
-    fn supports_remote_control(&self) -> bool {
-        true
-    }
-    fn supports_chat_approvals(&self) -> bool {
-        true
-    }
-    fn supports_reactions(&self) -> bool {
-        true
-    }
-    fn supports_edit(&self) -> bool {
-        true
-    }
-    fn supports_reply_to_id(&self) -> bool {
-        true
-    }
-
-    async fn send_typed_with_receipt(
-        &self,
-        message: &tinychannels_bus::ChannelOutboundMessage,
-    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
-        super::native::outbound::send_typed(self, message)
-            .await
-            .map_err(super::native::to_anyhow)
-    }
-
-    async fn send_reaction(
-        &self,
-        conversation: &tinychannels_bus::channel::ConversationRef,
-        provider_message_id: &str,
-        reaction: &tinychannels_bus::channel::ChannelReaction,
-        remove: bool,
-    ) -> anyhow::Result<()> {
-        super::native::NativeProvider::react(
-            self,
-            conversation,
-            provider_message_id,
-            reaction,
-            remove,
-        )
-        .await
-        .map_err(super::native::to_anyhow)
-    }
-
-    async fn edit_message(
-        &self,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-        intent: &tinychannels_bus::ChannelOutboundIntent,
-    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
-        super::native::edit(self, receipt, intent)
-            .await
-            .map_err(super::native::to_anyhow)
-    }
-
-    async fn delete_message(
-        &self,
-        receipt: &tinychannels_bus::channel::MessageReceipt,
-    ) -> anyhow::Result<()> {
-        super::native::delete(self, receipt)
-            .await
-            .map_err(super::native::to_anyhow)
-    }
-
-    async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
-        let params = match Self::parse_recipient_target(&message.recipient) {
-            RecipientTarget::Direct(number) => serde_json::json!({
-                "recipient": [number],
-                "message": &message.content,
-                "account": &self.account,
-            }),
-            RecipientTarget::Group(group_id) => serde_json::json!({
-                "groupId": group_id,
-                "message": &message.content,
-                "account": &self.account,
-            }),
-        };
-
-        self.rpc_request("send", params).await?;
-        Ok(())
-    }
-
-    async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        self.listen_loop(Some(tx), None, None).await
-    }
-
-    async fn health_check(&self) -> bool {
-        let url = format!("{}/api/v1/check", self.http_url);
-        let Ok(resp) = self
-            .http_client()
-            .get(&url)
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-        else {
-            return false;
-        };
-        resp.status().is_success()
-    }
-
-    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        let params = match Self::parse_recipient_target(recipient) {
-            RecipientTarget::Direct(number) => serde_json::json!({
-                "recipient": [number],
-                "account": &self.account,
-            }),
-            RecipientTarget::Group(group_id) => serde_json::json!({
-                "groupId": group_id,
-                "account": &self.account,
-            }),
-        };
-        self.rpc_request("sendTyping", params).await?;
-        Ok(())
-    }
-
-    async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
-        // signal-cli doesn't have a stop-typing RPC; typing indicators
-        // auto-expire after ~15s on the client side.
-        Ok(())
     }
 }
 
