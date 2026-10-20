@@ -5011,7 +5011,7 @@ async fn a_built_native_launch_starts_on_the_ordered_queue() {
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), "signal".to_owned(), None);
-    let running = launch.start(hooks, host, None, true);
+    let running = launch.start(hooks, host.clone(), None, true);
     assert_eq!(running.adapter_handle().mode, AdapterMode::SignalNativeV2);
     assert!(
         running.channel.is_some(),
@@ -5035,7 +5035,7 @@ async fn a_built_imessage_launch_starts_as_the_native_imessage_adapter() {
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), "imessage".to_owned(), None);
-    let running = launch.start(hooks, host, None, true);
+    let running = launch.start(hooks, host.clone(), None, true);
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::IMessageNativeV2);
     assert_eq!(handle.descriptor().id, "imessage");
@@ -5070,23 +5070,30 @@ async fn a_built_linq_launch_starts_as_the_native_linq_adapter() {
 #[tokio::test]
 async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     use tinychannels::factory::DefaultHttpClients;
+    let (smtp_port, smtp_server) = email_module_smtp_server();
     let config = tinychannels_bus::ChannelsConfig {
         email: Some(tinychannels_bus::config::EmailConfig {
             from_address: "bot@example.com".into(),
+            smtp_host: "127.0.0.1".into(),
+            smtp_port,
+            smtp_tls: false,
+            username: "bot".into(),
+            password: "secret".into(),
             ..Default::default()
         }),
         ..Default::default()
     };
     let noop: Arc<dyn tinychannels::host::ChannelHost> = tinychannels::host::NoopHost::arc();
-    let launch = crate::native::build_native_v2("email", &config, &noop, &DefaultHttpClients)
+    let launch = crate::native::build_native_v2("email:work", &config, &noop, &DefaultHttpClients)
         .expect("email is configured");
     let hooks = Arc::new(Hooks::default());
-    let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
-    let _provider_host = hooks.host(host.clone(), "email".to_owned(), None);
-    let running = launch.start(hooks, host, None, true);
+    let (host, callbacks, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), "email:work".to_owned(), None);
+    let running = launch.start(hooks, host.clone(), None, true);
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::EmailNativeV2);
     assert_eq!(handle.descriptor().id, "email");
+    assert_eq!(handle.configured_instance, "email:work");
     assert!(
         running.channel.is_none(),
         "typed Email launch must not retain a legacy Channel transport"
@@ -5099,7 +5106,136 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
         Some(crate::provider::LongTailListenerMode::Adapter),
         "email IMAP ingress must run through its typed adapter listener"
     );
+
+    let outcome = running
+        .send_typed(typed_test_message(
+            "email",
+            "typed SMTP launch",
+            "alice@example.com",
+        ))
+        .await
+        .expect("the typed Email port sends through SMTP");
+    assert_eq!(
+        outcome.receipt.channel,
+        Some(tinychannels_bus::ChannelRef {
+            id: "email".into(),
+            account_id: Some("email:work".into()),
+        })
+    );
+    assert!(
+        outcome
+            .receipt
+            .primary_platform_message_id
+            .as_deref()
+            .is_some_and(|id| id.ends_with("@example.com")),
+        "SMTP-issued Message-ID is returned as the typed receipt"
+    );
+    let transcript = tokio::task::spawn_blocking(move || smtp_server.join().unwrap())
+        .await
+        .unwrap();
+    assert!(transcript.contains("RCPT TO:<alice@example.com>"), "{transcript}");
+    assert!(transcript.contains("typed SMTP launch"), "{transcript}");
+
+    let events = ModuleEvents(
+        host,
+        running.configured_instance.clone(),
+        running.media_account_scope.clone(),
+    );
+    let mut inbound = tinychannels_bus::ChannelInboundEnvelope {
+        channel: tinychannels_bus::ChannelRef {
+            id: "forged-provider".into(),
+            account_id: Some("forged-account".into()),
+        },
+        message_id: "mail-1@example.com".into(),
+        reply_to_id: Some("parent@example.com".into()),
+        conversation: tinychannels_bus::ConversationRef {
+            kind: tinychannels_bus::ConversationKind::Dm,
+            id: "alice@example.com".into(),
+            ..Default::default()
+        },
+        sender: tinychannels_bus::SenderRef {
+            id: "alice@example.com".into(),
+            ..Default::default()
+        },
+        text: "inbound mail".into(),
+        parts: vec![tinychannels_bus::ContentPart::Text {
+            text: "inbound mail".into(),
+            markdown_dialect: None,
+        }],
+        ..Default::default()
+    };
+    inbound.conversation.scope_id = Some("mailbox-inbox".into());
+    assert!(
+        events
+            .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(inbound))
+            .await
+            .unwrap()
+    );
+    let delivered = callbacks.inbound.lock().await;
+    assert_eq!(delivered.len(), 1);
+    assert_eq!(delivered[0].0, "email:work");
+    assert_eq!(delivered[0].1["channel"]["id"], "email");
+    assert_eq!(delivered[0].1["channel"]["accountId"], "email:work");
+    assert_eq!(delivered[0].1["messageId"], "mail-1@example.com");
+    assert_eq!(delivered[0].1["replyToId"], "parent@example.com");
+    assert_eq!(delivered[0].1["conversation"]["id"], "alice@example.com");
+    assert_eq!(delivered[0].1["conversation"]["scopeId"], "mailbox-inbox");
+    assert_eq!(delivered[0].1["sender"]["id"], "alice@example.com");
+    drop(delivered);
+
+    assert!(
+        running
+            .webhook(tinychannels_bus::ChannelInteraction::DeliverWebhook {
+                signature: None,
+                body_base64: String::new(),
+            })
+            .await
+            .is_err(),
+        "Email has no legacy webhook fallback"
+    );
     running.stop().await.unwrap();
+}
+
+fn email_module_smtp_server() -> (u16, std::thread::JoinHandle<String>) {
+    use std::io::{BufRead, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let handle = std::thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        let mut write = socket.try_clone().unwrap();
+        let mut reader = std::io::BufReader::new(socket);
+        let mut commands = Vec::new();
+        write.write_all(b"220 fake\r\n").unwrap();
+        let mut in_data = false;
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            let command = line.trim_end().to_owned();
+            line.clear();
+            commands.push(command.clone());
+            let response: &[u8] = match (in_data, command.as_str()) {
+                (true, ".") => {
+                    in_data = false;
+                    b"250 queued\r\n"
+                }
+                (true, _) => continue,
+                (false, command) if command.starts_with("DATA") => {
+                    in_data = true;
+                    b"354 go\r\n"
+                }
+                (false, command) if command.starts_with("QUIT") => {
+                    let _ = write.write_all(b"221 bye\r\n");
+                    break;
+                }
+                (false, command) if command.starts_with("EHLO") => b"250-fake\r\n250 AUTH PLAIN\r\n",
+                (false, command) if command.starts_with("AUTH") => b"235 authenticated\r\n",
+                _ => b"250 ok\r\n",
+            };
+            write.write_all(response).unwrap();
+        }
+        commands.join("\n")
+    });
+    (port, handle)
 }
 
 struct ModuleIrcPeer {
