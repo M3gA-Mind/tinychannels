@@ -728,7 +728,7 @@ async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Ve
         } else if upper.starts_with("UID STORE") && script.reject_store {
             reply.extend_from_slice(format!("{tag} NO cannot mark seen\\r\\n").as_bytes());
             let _ = write.write_all(&reply).await;
-            break;
+            continue;
         } else if upper.starts_with("IDLE") {
             idle_tag = Some(tag.to_string());
             match idles.next() {
