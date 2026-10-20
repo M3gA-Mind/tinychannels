@@ -944,18 +944,19 @@ async fn factory_built_yuanbao_with_media_repository_passes_declared_media_matri
         .media_repository
         .as_ref()
         .expect("media-enabled fixture installs its repository");
-    let scopes = repository.scopes.lock();
-    assert_eq!(
-        scopes.len(),
-        2,
-        "image and file each read scoped media once"
-    );
-    for scope in scopes.iter() {
-        assert_eq!(scope.channel, channel_ref());
-        assert_eq!(scope.conversation, group_ref());
-        assert_eq!(scope.turn_id, "yuanbao-conformance-turn");
+    {
+        let scopes = repository.scopes.lock();
+        assert_eq!(
+            scopes.len(),
+            2,
+            "image and file each read scoped media once"
+        );
+        for scope in scopes.iter() {
+            assert_eq!(scope.channel, channel_ref());
+            assert_eq!(scope.conversation, group_ref());
+            assert_eq!(scope.turn_id, "yuanbao-conformance-turn");
+        }
     }
-    drop(scopes);
     assert_eq!(
         *repository.uploaded.lock(),
         vec![
