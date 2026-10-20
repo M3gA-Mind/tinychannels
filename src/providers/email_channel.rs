@@ -475,14 +475,32 @@ impl EmailChannel {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<Session<S>>>,
     {
+        self.listen_with_reconnect_to(EmailDelivery::Legacy(tx), connect)
+            .await
+    }
+
+    #[cfg(feature = "email")]
+    async fn listen_with_reconnect_to<S, F, Fut>(
+        &self,
+        delivery: EmailDelivery<'_>,
+        connect: F,
+    ) -> Result<()>
+    where
+        S: ImapStream,
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<Session<S>>>,
+    {
         let mut backoff = self.reconnect_backoff;
         let max_backoff = self.max_reconnect_backoff;
 
         loop {
-            match self.run_idle_session(tx, connect()).await {
+            match self.run_idle_session(&delivery, connect()).await {
                 Ok(()) => {
                     // Clean exit (channel closed)
                     return Ok(());
+                }
+                Err(error) if error.downcast_ref::<InboundSinkRejected>().is_some() => {
+                    return Err(error);
                 }
                 Err(e) => {
                     error!(
@@ -501,7 +519,7 @@ impl EmailChannel {
     #[cfg(feature = "email")]
     async fn run_idle_session<S: ImapStream>(
         &self,
-        tx: &mpsc::Sender<ChannelMessage>,
+        delivery: &EmailDelivery<'_>,
         connect: impl std::future::Future<Output = Result<Session<S>>>,
     ) -> Result<()> {
         // Connect and authenticate
@@ -515,7 +533,7 @@ impl EmailChannel {
         );
 
         // Check for existing unseen messages first
-        self.process_unseen(&mut session, tx).await?;
+        self.process_unseen_to(&mut session, delivery).await?;
 
         loop {
             // Enter IDLE and wait for changes (consumes session, returns it via result)
@@ -523,12 +541,12 @@ impl EmailChannel {
                 Ok((IdleWaitResult::NewMail, returned_session)) => {
                     debug!("New mail notification received");
                     session = returned_session;
-                    self.process_unseen(&mut session, tx).await?;
+                    self.process_unseen_to(&mut session, delivery).await?;
                 }
                 Ok((IdleWaitResult::Timeout, returned_session)) => {
                     // Re-check for mail after IDLE timeout (defensive)
                     session = returned_session;
-                    self.process_unseen(&mut session, tx).await?;
+                    self.process_unseen_to(&mut session, delivery).await?;
                 }
                 Ok((IdleWaitResult::Interrupted, _)) => {
                     info!("IDLE interrupted, exiting");
@@ -549,29 +567,66 @@ impl EmailChannel {
         session: &mut Session<S>,
         tx: &mpsc::Sender<ChannelMessage>,
     ) -> Result<()> {
+        self.process_unseen_to(session, &EmailDelivery::Legacy(tx))
+            .await
+    }
+
+    #[cfg(feature = "email")]
+    async fn process_unseen_to<S: ImapStream>(
+        &self,
+        session: &mut Session<S>,
+        delivery: &EmailDelivery<'_>,
+    ) -> Result<()> {
         let messages = self.fetch_unseen(session).await?;
 
         for email in messages {
+            let uid = email._uid;
+            let message_id = email.msg_id.clone();
             // Check allowlist
             if !self.is_sender_allowed(&email.sender) {
                 warn!("Blocked email from {}", email.sender);
+                self.mark_uid_seen(session, uid).await?;
                 continue;
             }
 
-            let is_new = {
-                let mut seen = self.seen_messages.lock().await;
-                seen.insert(email.msg_id.clone())
+            if self.seen_messages.lock().await.contains(&email.msg_id) {
+                self.mark_uid_seen(session, uid).await?;
+                continue;
+            }
+
+            let accepted = match delivery {
+                EmailDelivery::Legacy(tx) => self.dispatch_email(email, tx).await,
+                EmailDelivery::Typed(sink) => {
+                    self.dispatch_typed_email(&email, *sink).await?;
+                    true
+                }
             };
-            if !is_new {
-                continue;
-            }
-
-            if !self.dispatch_email(email, tx).await {
+            if !accepted {
                 // Channel closed, exit cleanly
                 return Ok(());
             }
+
+            self.seen_messages.lock().await.insert(message_id);
+            self.mark_uid_seen(session, uid).await?;
         }
 
+        Ok(())
+    }
+
+    #[cfg(feature = "email")]
+    async fn mark_uid_seen<S: ImapStream>(
+        &self,
+        session: &mut Session<S>,
+        uid: u32,
+    ) -> Result<()> {
+        if uid == 0 {
+            return Ok(());
+        }
+        let _ = session
+            .uid_store(&uid.to_string(), "+FLAGS (\\Seen)")
+            .await?
+            .try_collect::<Vec<_>>()
+            .await;
         Ok(())
     }
 
