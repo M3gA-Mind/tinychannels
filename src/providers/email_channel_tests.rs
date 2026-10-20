@@ -636,6 +636,8 @@ const ALICE: &[u8] = b"From: Alice <alice@example.com>\r\nSubject: Hi\r\nMessage
 const MALLORY: &[u8] =
     b"From: mallory@evil.test\r\nSubject: Spam\r\nMessage-ID: <m1@evil.test>\r\n\r\nBuy now\r\n";
 const ALICE_AGAIN: &[u8] = b"From: alice@example.com\r\nSubject: Hi again\r\nMessage-ID: <a1@example.com>\r\n\r\nSame id\r\n";
+const ALICE_NO_MESSAGE_ID: &[u8] =
+    b"From: alice@example.com\r\nSubject: No Message-ID\r\n\r\nStable by UID\r\n";
 const BOB_HTML: &[u8] = b"From: bob@example.com\r\nSubject: Html\r\nContent-Type: text/html\r\n\r\n<p>Hello <b>Bob</b></p>\r\n";
 const BAD_DATE: &[u8] = b"From: carol@example.com\r\nSubject: Odd date\r\nMessage-ID: <c1@example.com>\r\nDate: Sat, 31 Feb 2024 10:00:00 +0000\r\n\r\nWhen?\r\n";
 
@@ -704,7 +706,9 @@ async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Ve
             let _ = write.write_all(&reply).await;
             continue;
         } else if upper.starts_with("SELECT") {
-            reply.extend_from_slice(b"* 2 EXISTS\r\n* FLAGS (\\Seen)\r\n");
+            reply.extend_from_slice(
+                b"* 2 EXISTS\r\n* FLAGS (\\Seen)\r\n* OK [UIDVALIDITY 1234] UIDs valid\r\n",
+            );
         } else if upper.starts_with("UID SEARCH") {
             current = searches.next().unwrap_or_default();
             reply.extend_from_slice(b"* SEARCH");
@@ -713,10 +717,20 @@ async fn serve_connection(sock: tokio::net::TcpStream, script: ConnScript) -> Ve
             }
             reply.extend_from_slice(b"\r\n");
         } else if upper.starts_with("UID FETCH") {
+            if upper.contains("UID BODY.PEEK[]") && !upper.contains("(UID BODY.PEEK[])") {
+                reply.extend_from_slice(format!("{tag} BAD invalid attribute list\r\n").as_bytes());
+                let _ = write.write_all(&reply).await;
+                continue;
+            }
+            if upper.contains("RFC822") || upper.contains("BODY[]") {
+                for (uid, _) in &current {
+                    seen.push(format!("IMPLICIT_SEEN_BY_FETCH {uid}"));
+                }
+            }
             for (seq, (uid, raw)) in current.iter().enumerate() {
                 reply.extend_from_slice(
                     format!(
-                        "* {} FETCH (UID {uid} RFC822 {{{}}}\r\n",
+                        "* {} FETCH (UID {uid} BODY[] {{{}}}\r\n",
                         seq + 1,
                         raw.len()
                     )
@@ -833,7 +847,7 @@ async fn listen_delivers_new_mail_and_reconnects_after_failures() {
     let second = recv(&mut rx).await;
     assert_eq!(second.sender, "bob@example.com");
     assert_eq!(second.content.trim_end(), "Subject: Html\n\nHello Bob");
-    assert!(second.id.starts_with("gen-"), "{}", second.id);
+    assert!(second.id.starts_with("email:"), "{}", second.id);
     assert!(second.timestamp > 1_704_164_645);
 
     let third = recv(&mut rx).await;
@@ -854,7 +868,7 @@ async fn listen_delivers_new_mail_and_reconnects_after_failures() {
         first_conn.contains(&format!("{prefix} 1,2 {suffix}"))
             || first_conn.contains(&format!("{prefix} 2,1 {suffix}"))
     };
-    assert!(either("UID FETCH", "RFC822"), "{first_conn}");
+    assert!(either("UID FETCH", "(UID BODY.PEEK[])"), "{first_conn}");
     assert!(
         first_conn.contains("UID STORE 1 +FLAGS (\\Seen)"),
         "{first_conn}"
@@ -899,7 +913,13 @@ async fn an_empty_search_fetches_nothing() {
     let channel = imap_channel(&["*"], 30);
     let mut session = plain_session(&channel, port).await.unwrap();
     session.select("INBOX").await.unwrap();
-    assert!(channel.fetch_unseen(&mut session).await.unwrap().is_empty());
+    assert!(
+        channel
+            .fetch_unseen(&mut session, 1234)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let _ = session.logout().await;
     let commands = server.await.unwrap().remove(0).join("\n");
     assert!(!commands.contains("UID FETCH"), "{commands}");
@@ -918,7 +938,7 @@ async fn fetched_mail_stays_unseen_until_ingress_is_accepted() {
     let channel = imap_channel(&["*"], 30);
     let mut session = plain_session(&channel, port).await.unwrap();
     session.select("INBOX").await.unwrap();
-    let messages = channel.fetch_unseen(&mut session).await.unwrap();
+    let messages = channel.fetch_unseen(&mut session, 1234).await.unwrap();
     assert_eq!(messages.len(), 1);
     let _ = session.logout().await;
     let commands = server.await.unwrap().remove(0).join("\n");
@@ -926,6 +946,15 @@ async fn fetched_mail_stays_unseen_until_ingress_is_accepted() {
         !commands.contains("UID STORE"),
         "fetch must leave the UID unseen until dispatch succeeds: {commands}"
     );
+    assert!(
+        commands.contains("BODY.PEEK[]"),
+        "fetch must not set Seen: {commands}"
+    );
+    assert!(
+        commands.contains("(UID BODY.PEEK[])") || !commands.contains("UID BODY.PEEK[]"),
+        "multiple fetch attributes require the IMAP parenthesized list: {commands}"
+    );
+    assert!(!commands.contains("IMPLICIT_SEEN_BY_FETCH"), "{commands}");
 }
 
 /// The IDLE budget elapsing ends IDLE with `DONE` and hands back a usable
@@ -1299,7 +1328,7 @@ async fn rejected_typed_mail_is_retried_without_replaying_accepted_uids() {
         accepted: std::sync::Mutex::new(Vec::new()),
     };
     let error = channel
-        .process_unseen_to(&mut session, &EmailDelivery::Typed(&rejecting))
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&rejecting), 1234)
         .await
         .expect_err("a rejected typed ingress must stop this delivery pass");
     assert!(error.downcast_ref::<InboundSinkRejected>().is_some());
@@ -1334,7 +1363,7 @@ async fn rejected_typed_mail_is_retried_without_replaying_accepted_uids() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     let recorder = TypedEmailRecorder(tx);
     channel
-        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder), 1234)
         .await
         .unwrap();
     let Some(tinychannels_bus::ChannelIngress::Inbound(retried)) = rx.try_recv().ok() else {
@@ -1369,7 +1398,7 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
     let recorder = TypedEmailRecorder(tx);
     let error = channel
-        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder), 1234)
         .await
         .expect_err("a rejected IMAP STORE must fail the acknowledgement");
     assert!(error.to_string().contains("cannot mark seen"), "{error:#}");
@@ -1391,7 +1420,7 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
     let mut session = plain_session(&channel, port).await.unwrap();
     session.select("INBOX").await.unwrap();
     channel
-        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder))
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder), 1234)
         .await
         .unwrap();
     assert!(
@@ -1401,6 +1430,56 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
     let _ = session.logout().await;
     let retry_commands = server.await.unwrap().remove(0).join("\n");
     assert!(retry_commands.contains("UID STORE 7 +FLAGS (\\Seen)"));
+}
+
+#[tokio::test]
+async fn accepted_email_without_message_id_is_not_replayed_after_store_retry() {
+    let channel = imap_channel(&["*"], 30);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+    let recorder = TypedEmailRecorder(tx);
+    let (port, server) = fake_imap(vec![ConnScript {
+        searches: vec![vec![(7, ALICE_NO_MESSAGE_ID)]],
+        reject_store: true,
+        ..Default::default()
+    }])
+    .await;
+    let mut session = plain_session(&channel, port).await.unwrap();
+    session.select("INBOX").await.unwrap();
+    channel
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder), 1234)
+        .await
+        .expect_err("the first Seen acknowledgement is rejected");
+    let Some(tinychannels_bus::ChannelIngress::Inbound(first)) = rx.try_recv().ok() else {
+        panic!("the first ingress should have been accepted");
+    };
+    let expected_identity = "127.0.0.1:bot:INBOX:1234:7";
+    assert_eq!(
+        first.message_id,
+        format!(
+            "email:{}",
+            hex::encode(sha2::Sha256::digest(expected_identity))
+        )
+    );
+    drop(session);
+    let _ = server.await.unwrap();
+
+    let (port, server) = fake_imap(vec![ConnScript {
+        searches: vec![vec![(7, ALICE_NO_MESSAGE_ID)]],
+        ..Default::default()
+    }])
+    .await;
+    let mut session = plain_session(&channel, port).await.unwrap();
+    session.select("INBOX").await.unwrap();
+    channel
+        .process_unseen_to(&mut session, &EmailDelivery::Typed(&recorder), 1234)
+        .await
+        .unwrap();
+    assert!(
+        rx.try_recv().is_err(),
+        "retrying STORE must not deliver a message with no Message-ID twice"
+    );
+    drop(session);
+    let _ = server.await.unwrap();
 }
 
 struct BlockingTypedEmailSink(tokio::sync::Notify);
