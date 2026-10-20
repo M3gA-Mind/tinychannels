@@ -369,7 +369,9 @@ async fn mattermost_native_edit_and_delete_report_ambiguous_server_failures() {
 async fn mattermost_transport_failures_preserve_send_edit_delete_and_identity_semantics() {
     use crate::channel::{ChannelDelete, ChannelEdit, ChannelReaction, ChannelTypedSend};
     use crate::providers::native::NativeProvider;
-    use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef, MessageReceipt};
+    use tinychannels_bus::channel::{
+        ChannelRef, ConversationKind, ConversationRef, MessageReceipt,
+    };
     use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
