@@ -1180,6 +1180,61 @@ async fn bot_token_telegram_reactions_and_threads_never_reach_the_host_backend()
 }
 
 #[tokio::test]
+async fn configured_slack_reactions_use_native_web_api_without_managed_fallback() {
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/reactions.add"))
+        .and(header("authorization", "Bearer s"))
+        .and(body_json(serde_json::json!({
+            "channel": "C1",
+            "timestamp": "171.2",
+            "name": "thumbsup"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"ok": true})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (host, fixture, _server) = connected_host().await;
+    let mut backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    backend.slack_api_base = Some(server.uri());
+    let config = ChannelsConfig {
+        slack: Some(tinychannels::config::SlackConfig {
+            bot_token: "s".into(),
+            app_token: None,
+            channel_id: Some("C1".into()),
+            allowed_users: vec![],
+        }),
+        ..Default::default()
+    };
+
+    let result = backend
+        .send_reaction(
+            &config,
+            "slack",
+            serde_json::json!({
+                "channelId": "C1",
+                "messageId": "171.2",
+                "emoji": "👍"
+            }),
+        )
+        .await
+        .expect("configured Slack reaction should use the native adapter");
+    assert!(result.success);
+    assert!(fixture.0.lock().await.is_empty());
+    assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn bot_token_channels_without_native_port_fail_explicitly_not_via_host() {
     let (host, fixture, _server) = connected_host().await;
     let backend = HostBackend::new(
