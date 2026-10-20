@@ -5,8 +5,7 @@ use crate::channel::{
     ChannelTyping,
 };
 use crate::factory::{
-    build_yuanbao_channel_with_media_http_for_test,
-    build_yuanbao_channel_with_voice_http_for_test,
+    build_yuanbao_channel_with_media_http_for_test, build_yuanbao_channel_with_voice_http_for_test,
 };
 use crate::host::{
     ChannelHostBuilder, MediaRepository, MediaScope, MediaStoreRequest, StoredMedia,
@@ -239,10 +238,8 @@ impl Fixture {
                         let content = crate::providers::yuanbao::wire::get_bytes(&fields, 2);
                         let content_fields =
                             crate::providers::yuanbao::wire::parse_fields(&content).unwrap();
-                        let image = crate::providers::yuanbao::wire::get_repeated_bytes(
-                            &content_fields,
-                            8,
-                        );
+                        let image =
+                            crate::providers::yuanbao::wire::get_repeated_bytes(&content_fields, 8);
                         assert_eq!(image.len(), 1);
                         let image_fields =
                             crate::providers::yuanbao::wire::parse_fields(&image[0]).unwrap();
@@ -262,11 +259,10 @@ impl Fixture {
                             crate::providers::yuanbao::wire::get_varint(&image_fields, 4),
                             200
                         );
-                        assert!(!crate::providers::yuanbao::wire::get_string(
-                            &content_fields,
-                            2
-                        )
-                        .is_empty());
+                        assert!(
+                            !crate::providers::yuanbao::wire::get_string(&content_fields, 2)
+                                .is_empty()
+                        );
                         "image".to_owned()
                     }
                     "TIMFileElem" => {
@@ -912,6 +908,97 @@ async fn factory_built_yuanbao_passes_the_full_configured_conformance_matrix() {
         failed.is_empty(),
         "Yuanbao conformance failures: {failed:#?}"
     );
+    ChannelAdapter::stop(fixture.channel.as_ref())
+        .await
+        .expect("listener should stop cleanly");
+    if let Some(listener) = fixture.listener.lock().await.take() {
+        tokio::time::timeout(std::time::Duration::from_secs(3), listener)
+            .await
+            .expect("listener should exit after stop")
+            .expect("listener task should not panic")
+            .expect("listener should stop cleanly");
+    }
+}
+
+#[tokio::test]
+async fn factory_built_yuanbao_with_media_repository_passes_declared_media_matrix() {
+    let fixture = Fixture::start_with_media_repository().await;
+    let results = check_all_features(&fixture).await;
+    let failed = results
+        .iter()
+        .filter_map(|(feature, result)| {
+            result
+                .as_ref()
+                .err()
+                .map(|error| format!("{feature:?}: {error}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        failed.is_empty(),
+        "Yuanbao media-enabled conformance failures: {failed:#?}"
+    );
+
+    let repository = fixture
+        .media_repository
+        .as_ref()
+        .expect("media-enabled fixture installs its repository");
+    let scopes = repository.scopes.lock();
+    assert_eq!(
+        scopes.len(),
+        2,
+        "image and file each read scoped media once"
+    );
+    for scope in scopes.iter() {
+        assert_eq!(scope.channel, channel_ref());
+        assert_eq!(scope.conversation, group_ref());
+        assert_eq!(scope.turn_id, "yuanbao-conformance-turn");
+    }
+    drop(scopes);
+    assert_eq!(
+        *repository.uploaded.lock(),
+        vec![
+            matrix_png(320, 200),
+            b"%PDF-1.7 yuanbao conformance".to_vec()
+        ],
+        "actual COS PUT bodies must be the host-scoped stored bytes"
+    );
+
+    let cos_server = fixture
+        .cos_server
+        .as_ref()
+        .expect("media-enabled fixture starts a local COS server");
+    let requests = cos_server
+        .received_requests()
+        .await
+        .expect("local COS server should return captured requests");
+    assert_eq!(requests.len(), 4, "two credential and two upload requests");
+    let credential_requests = requests
+        .iter()
+        .filter(|request| request.method == wiremock::http::Method::POST)
+        .collect::<Vec<_>>();
+    assert_eq!(credential_requests.len(), 2);
+    for request in &credential_requests {
+        assert_eq!(request.url.path(), "/api/resource/genUploadInfo");
+        assert_eq!(request.headers["x-token"], "tok");
+        assert_eq!(request.headers["x-id"], BOT);
+        assert_eq!(request.headers["x-source"], "web");
+    }
+    let upload_requests = requests
+        .iter()
+        .filter(|request| request.method == wiremock::http::Method::PUT)
+        .collect::<Vec<_>>();
+    assert_eq!(upload_requests.len(), 2);
+    assert!(
+        upload_requests
+            .iter()
+            .all(|request| request.url.path() == "/up/yuanbao-media")
+    );
+    assert_eq!(upload_requests[0].headers["content-type"], "image/png");
+    assert_eq!(
+        upload_requests[1].headers["content-type"],
+        "application/pdf"
+    );
+
     ChannelAdapter::stop(fixture.channel.as_ref())
         .await
         .expect("listener should stop cleanly");

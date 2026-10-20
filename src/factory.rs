@@ -640,12 +640,8 @@ pub(crate) fn build_yuanbao_channel_with_voice_http_for_test(
     host: &Arc<dyn ChannelHost>,
     voice_http: reqwest::Client,
 ) -> Option<Arc<dyn LongTailNative>> {
-    let channel = build_yuanbao_channel(
-        config.yuanbao.as_ref()?,
-        Some(host),
-        Some(voice_http),
-        None,
-    )?;
+    let channel =
+        build_yuanbao_channel(config.yuanbao.as_ref()?, Some(host), Some(voice_http), None)?;
     Some(channel)
 }
 
