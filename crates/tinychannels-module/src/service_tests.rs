@@ -2834,24 +2834,53 @@ async fn inbound_voice_transcript_projects_to_legacy_text_and_preserves_typed_sc
         Some("topic-3")
     );
 
-    let mut incomplete = envelope.clone();
-    let ContentPart::VoiceNote { voice_note } = &mut incomplete.parts[1] else {
-        unreachable!("the voice note follows the caption");
-    };
-    voice_note.transcript.as_mut().unwrap().state = VoiceTranscriptState::Pending;
-    assert!(
-        service
-            .prepare_channel_inbound(PrepareChannelInboundRequest {
-                source: ChannelInboundSource::Envelope {
-                    envelope: incomplete,
-                    timestamp: 43,
-                },
-                namespace: "openhuman".into(),
-                session_policy: Default::default(),
-            })
-            .await
-            .is_err()
-    );
+    let invalid_transcripts = [
+        None,
+        Some(VoiceTranscript {
+            text: "transcription failed".into(),
+            language: Some("en".into()),
+            state: VoiceTranscriptState::Failed,
+            source: VoiceTranscriptSource::HostStt,
+        }),
+        Some(VoiceTranscript {
+            text: String::new(),
+            language: Some("en".into()),
+            state: VoiceTranscriptState::Complete,
+            source: VoiceTranscriptSource::HostStt,
+        }),
+        Some(VoiceTranscript {
+            text: "   \n".into(),
+            language: Some("en".into()),
+            state: VoiceTranscriptState::Complete,
+            source: VoiceTranscriptSource::HostStt,
+        }),
+        Some(VoiceTranscript {
+            text: "still processing".into(),
+            language: Some("en".into()),
+            state: VoiceTranscriptState::Pending,
+            source: VoiceTranscriptSource::HostStt,
+        }),
+    ];
+    for transcript in invalid_transcripts {
+        let mut incomplete = envelope.clone();
+        let ContentPart::VoiceNote { voice_note } = &mut incomplete.parts[1] else {
+            unreachable!("the voice note follows the caption");
+        };
+        voice_note.transcript = transcript;
+        assert!(
+            service
+                .prepare_channel_inbound(PrepareChannelInboundRequest {
+                    source: ChannelInboundSource::Envelope {
+                        envelope: incomplete,
+                        timestamp: 43,
+                    },
+                    namespace: "openhuman".into(),
+                    session_policy: Default::default(),
+                })
+                .await
+                .is_err()
+        );
+    }
     service.shutdown().await.unwrap();
 }
 
