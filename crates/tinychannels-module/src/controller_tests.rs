@@ -784,7 +784,7 @@ async fn managed_controller_and_progressive_paths_pass_shared_conformance_featur
             if matches!(request.as_ref(), tinychannels_bus::module_progressive::ProgressiveTransportRequest::Edit {
                 channel_ref: Some(channel), conversation: Some(conversation), text, ..
             } if channel.account_id.as_deref() == Some("mattermost:managed-fixture")
-                && conversation.id == "managed-room-1" && text.contains("managed edit"))
+                && conversation.id == "managed-room-1" && text == "managed draft finalized")
     )));
     fixture.shutdown(server).await;
 }
