@@ -5142,7 +5142,10 @@ async fn a_built_email_launch_starts_as_the_native_email_adapter() {
     let transcript = tokio::task::spawn_blocking(move || smtp_server.join().unwrap())
         .await
         .unwrap();
-    assert!(transcript.contains("RCPT TO:<alice@example.com>"), "{transcript}");
+    assert!(
+        transcript.contains("RCPT TO:<alice@example.com>"),
+        "{transcript}"
+    );
     assert!(transcript.contains("typed SMTP launch"), "{transcript}");
 
     let events = ModuleEvents(
@@ -5237,7 +5240,9 @@ fn email_module_smtp_server() -> (u16, std::thread::JoinHandle<String>) {
                     let _ = write.write_all(b"221 bye\r\n");
                     break;
                 }
-                (false, command) if command.starts_with("EHLO") => b"250-fake\r\n250 AUTH PLAIN\r\n",
+                (false, command) if command.starts_with("EHLO") => {
+                    b"250-fake\r\n250 AUTH PLAIN\r\n"
+                }
                 (false, command) if command.starts_with("AUTH") => b"235 authenticated\r\n",
                 _ => b"250 ok\r\n",
             };
