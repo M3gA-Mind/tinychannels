@@ -499,7 +499,7 @@ fn the_web_builder_wires_ports_and_refuses_cloud_shaped_stanzas() {
         .build();
     let channel = build_whatsapp_web_channel(&web(None, Some("label")), &wired_host).unwrap();
     assert!(
-        tinychannels_runtime::ChannelAdapter::declared_capabilities(channel.as_ref())
+        tinychannels_runtime::channel::ChannelAdapter::declared_capabilities(channel.as_ref())
             .content
             .image
             .outbound
