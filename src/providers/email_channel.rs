@@ -31,6 +31,8 @@ use rustls::{ClientConfig, RootCertStore};
 #[cfg(feature = "email")]
 use rustls_pki_types::DnsName;
 #[cfg(feature = "email")]
+use sha2::Digest;
+#[cfg(feature = "email")]
 use std::collections::HashSet;
 #[cfg(feature = "email")]
 use std::sync::Arc;
@@ -63,8 +65,6 @@ use tracing::info;
 #[cfg(feature = "email")]
 use tracing::{debug, error, warn};
 #[cfg(feature = "email")]
-use uuid::Uuid;
-
 #[cfg(feature = "email")]
 mod capabilities;
 #[cfg(feature = "email")]
@@ -334,6 +334,7 @@ impl EmailChannel {
     async fn fetch_unseen<S: ImapStream>(
         &self,
         session: &mut Session<S>,
+        uid_validity: u32,
     ) -> Result<Vec<ParsedEmail>> {
         // Search for unseen messages
         let uids = session.uid_search("UNSEEN").await?;
@@ -351,7 +352,7 @@ impl EmailChannel {
             .join(",");
 
         // Fetch message bodies
-        let messages = session.uid_fetch(&uid_set, "RFC822").await?;
+        let messages = session.uid_fetch(&uid_set, "(UID BODY.PEEK[])").await?;
         let messages: Vec<Fetch> = messages.try_collect().await?;
 
         for msg in messages {
@@ -365,8 +366,20 @@ impl EmailChannel {
                 let content = format!("Subject: {}\n\n{}", subject, body_text);
                 let msg_id = parsed
                     .message_id()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| format!("gen-{}", Uuid::new_v4()));
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| {
+                        let identity = format!(
+                            "{}:{}:{}:{}:{}",
+                            self.config.imap_host.to_ascii_lowercase(),
+                            self.config.username.to_ascii_lowercase(),
+                            self.config.imap_folder,
+                            uid_validity,
+                            uid
+                        );
+                        format!("email:{}", hex::encode(sha2::Sha256::digest(identity)))
+                    });
 
                 #[allow(clippy::cast_sign_loss)]
                 let ts = parsed
@@ -568,14 +581,19 @@ impl EmailChannel {
         let mut session = connect.await?;
 
         // Select the mailbox
-        session.select(&self.config.imap_folder).await?;
+        let uid_validity = session
+            .select(&self.config.imap_folder)
+            .await?
+            .uid_validity
+            .unwrap_or_default();
         info!(
             "Email IDLE listening on {} (instant push enabled)",
             self.config.imap_folder
         );
 
         // Check for existing unseen messages first
-        self.process_unseen_to(&mut session, delivery).await?;
+        self.process_unseen_to(&mut session, delivery, uid_validity)
+            .await?;
 
         loop {
             // Enter IDLE and wait for changes (consumes session, returns it via result)
@@ -583,12 +601,14 @@ impl EmailChannel {
                 Ok((IdleWaitResult::NewMail, returned_session)) => {
                     debug!("New mail notification received");
                     session = returned_session;
-                    self.process_unseen_to(&mut session, delivery).await?;
+                    self.process_unseen_to(&mut session, delivery, uid_validity)
+                        .await?;
                 }
                 Ok((IdleWaitResult::Timeout, returned_session)) => {
                     // Re-check for mail after IDLE timeout (defensive)
                     session = returned_session;
-                    self.process_unseen_to(&mut session, delivery).await?;
+                    self.process_unseen_to(&mut session, delivery, uid_validity)
+                        .await?;
                 }
                 Ok((IdleWaitResult::Interrupted, _)) => {
                     info!("IDLE interrupted, exiting");
@@ -610,7 +630,7 @@ impl EmailChannel {
         session: &mut Session<S>,
         tx: &mpsc::Sender<ChannelMessage>,
     ) -> Result<()> {
-        self.process_unseen_to(session, &EmailDelivery::Legacy(tx))
+        self.process_unseen_to(session, &EmailDelivery::Legacy(tx), 0)
             .await
     }
 
@@ -619,8 +639,9 @@ impl EmailChannel {
         &self,
         session: &mut Session<S>,
         delivery: &EmailDelivery<'_>,
+        uid_validity: u32,
     ) -> Result<()> {
-        let messages = self.fetch_unseen(session).await?;
+        let messages = self.fetch_unseen(session, uid_validity).await?;
 
         for email in messages {
             let uid = email._uid;
