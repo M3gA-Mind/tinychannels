@@ -195,6 +195,14 @@ impl NativeProvider for SignalChannel {
         vec![("voiceOut", "attachment")]
     }
 
+    async fn health_state(&self) -> &'static str {
+        if self.health_probe().await {
+            "healthy"
+        } else {
+            "unhealthy"
+        }
+    }
+
     async fn start_listener(
         &self,
         sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),

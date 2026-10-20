@@ -4347,20 +4347,40 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
         ))
         .mount(&server)
         .await;
+    Mock::given(method("GET"))
+        .and(path("/api/v1/check"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
     let instance = "signal:account-a".to_owned();
-    let channel = Arc::new(tinychannels::SignalChannel::new(
-        server.uri(),
-        "+15550000".into(),
-        None,
-        vec!["*".into()],
-        false,
-        false,
-    ));
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
-    let running = Running::start_native("Signal", channel, hooks, host, None, true);
+    let config = tinychannels_bus::ChannelsConfig {
+        signal: Some(tinychannels_bus::config::SignalConfig {
+            http_url: server.uri(),
+            account: "+15550000".into(),
+            group_id: None,
+            allowed_from: vec!["*".into()],
+            ignore_attachments: false,
+            ignore_stories: false,
+        }),
+        ..Default::default()
+    };
+    let launch = crate::native::build_native_v2(
+        "signal",
+        &config,
+        &_provider_host,
+        &tinychannels::factory::DefaultHttpClients,
+    )
+    .expect("the configured Signal account has a native launch");
+    let running = launch.start(hooks, host, None, true);
     let handle = running.adapter_handle();
+    assert!(
+        running.channel.is_none(),
+        "the typed Signal launch must not retain a legacy Channel object"
+    );
     assert_eq!(handle.mode, AdapterMode::SignalNativeV2);
     let descriptor = handle.descriptor();
     assert_eq!(descriptor.id, "signal");
@@ -4368,6 +4388,16 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
     assert_eq!(
         descriptor.metadata.get("adapterMode").map(String::as_str),
         Some("native-v2")
+    );
+    assert_eq!(
+        handle
+            .adapter
+            .status()
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
+        Some("healthy")
     );
 
     let channel_ref = tinychannels_bus::ChannelRef {
@@ -5070,8 +5100,8 @@ async fn a_built_native_launch_starts_on_the_ordered_queue() {
     let running = launch.start(hooks, host.clone(), None, true);
     assert_eq!(running.adapter_handle().mode, AdapterMode::SignalNativeV2);
     assert!(
-        running.channel.is_some(),
-        "Signal retains its legacy send compatibility path"
+        running.channel.is_none(),
+        "Signal typed launch must not retain the legacy Channel trait object"
     );
     running.stop().await.unwrap();
 }

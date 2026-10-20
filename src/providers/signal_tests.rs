@@ -1,4 +1,9 @@
 use super::*;
+use crate::channel::{ChannelAdapter, ChannelInboundSink, ChannelTyping};
+use crate::providers::native::NativeProvider;
+use async_trait::async_trait;
+use std::sync::Arc;
+use tokio::sync::mpsc;
 
 fn make_channel() -> SignalChannel {
     SignalChannel::new(
@@ -36,6 +41,31 @@ fn make_envelope(source_number: Option<&str>, message: Option<&str>) -> Envelope
         story_message: None,
         timestamp: Some(1_700_000_000_000),
         source_name: None,
+        ..Default::default()
+    }
+}
+
+fn typed_text_intent(recipient: &str, content: &str) -> tinychannels_bus::ChannelOutboundIntent {
+    let conversation_kind = if recipient.starts_with("group:") {
+        tinychannels_bus::ConversationKind::Group
+    } else {
+        tinychannels_bus::ConversationKind::Dm
+    };
+    tinychannels_bus::ChannelOutboundIntent {
+        channel_id: "signal".into(),
+        conversation_id: recipient.into(),
+        channel_ref: Some(tinychannels_bus::ChannelRef {
+            id: "signal".into(),
+            account_id: None,
+        }),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            kind: conversation_kind,
+            id: recipient.into(),
+            ..Default::default()
+        }),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: content.into(),
+        },
         ..Default::default()
     }
 }
@@ -98,7 +128,7 @@ fn empty_allowlist_denies_all() {
 #[test]
 fn name_returns_signal() {
     let ch = make_channel();
-    assert_eq!(ch.name(), "signal");
+    assert_eq!(NativeProvider::id(&ch), "signal");
 }
 
 #[test]
@@ -545,21 +575,30 @@ async fn rpc_routes_direct_and_group_messages_and_typing() {
                 .and(body_partial_json(serde_json::json!({
                     "jsonrpc": "2.0", "method": method_name, "params": params
                 })))
-                .respond_with(ResponseTemplate::new(201))
-                .expect(1)
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "result": {"timestamp": 1_700_000_000_123u64}
+                })))
+                .expect(
+                    if method_name == "sendTyping" && recipient == "group:team" {
+                        2
+                    } else {
+                        1
+                    },
+                )
                 .mount(&server)
                 .await;
             if method_name == "send" {
-                channel
-                    .send(&SendMessage::new("hello", recipient))
+                ChannelAdapter::send(&channel, typed_text_intent(recipient, "hello"))
                     .await
                     .unwrap();
             } else {
-                channel.start_typing(recipient).await.unwrap();
+                ChannelTyping::start_typing(&channel, recipient)
+                    .await
+                    .unwrap();
             }
         }
     }
-    channel.stop_typing("team").await.unwrap();
+    ChannelTyping::stop_typing(&channel, "team").await.unwrap();
     server.verify().await;
     let requests = server.received_requests().await.unwrap();
     for request in requests {
@@ -611,7 +650,7 @@ async fn rpc_reports_errors_and_handles_empty_and_result_responses() {
             .await;
         assert!(
             channel
-                .send(&SendMessage::new("hello", "+1111111111"))
+                .rpc_request("send", serde_json::json!({}))
                 .await
                 .unwrap_err()
                 .to_string()
@@ -625,10 +664,16 @@ async fn rpc_reports_errors_and_handles_empty_and_result_responses() {
             .respond_with(ResponseTemplate::new(status))
             .mount(&server)
             .await;
-        assert_eq!(channel.health_check().await, healthy);
+        assert_eq!(
+            NativeProvider::health_state(&channel).await,
+            if healthy { "healthy" } else { "unhealthy" }
+        );
     }
     let unavailable = mock_signal("http://127.0.0.1:0".into());
-    assert!(!unavailable.health_check().await);
+    assert_eq!(
+        NativeProvider::health_state(&unavailable).await,
+        "unhealthy"
+    );
     assert!(
         unavailable
             .rpc_request("send", serde_json::json!({}))
@@ -638,7 +683,7 @@ async fn rpc_reports_errors_and_handles_empty_and_result_responses() {
 }
 
 #[tokio::test]
-async fn sse_retries_failures_and_parses_multiline_events_before_receiver_shutdown() {
+async fn typed_sse_retries_failures_and_stops_after_accepted_ingress() {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -664,16 +709,45 @@ async fn sse_retries_failures_and_parses_multiline_events_before_receiver_shutdo
                 "data: {\"envelope\":{\"sourceNumber\":\"+1111111111\",\"dataMessage\":{\"message\":\"after reconnect\",\"timestamp\":2000}}}\n\n"
             ),
         })
-        .expect(3).mount(&server).await;
+        .expect(2).mount(&server).await;
+    struct StopAfterFirst {
+        channel: Arc<SignalChannel>,
+        tx: mpsc::Sender<tinychannels_bus::ChannelIngress>,
+    }
+    #[async_trait]
+    impl ChannelInboundSink for StopAfterFirst {
+        async fn push(
+            &self,
+            ingress: tinychannels_bus::ChannelIngress,
+        ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+            self.tx.send(ingress).await.map_err(|_| {
+                tinychannels_bus::channel::ChannelSendError {
+                    message: "test receiver closed".into(),
+                    ..Default::default()
+                }
+            })?;
+            NativeProvider::stop_listener(self.channel.as_ref()).await
+        }
+    }
+    let channel = Arc::new(channel);
     let (tx, mut rx) = mpsc::channel(1);
-    let listener = tokio::spawn(async move { channel.listen(tx).await });
+    let sink = Arc::new(StopAfterFirst {
+        channel: channel.clone(),
+        tx,
+    });
+    let listener_channel = channel.clone();
+    let listener = tokio::spawn(async move {
+        NativeProvider::start_listener(listener_channel.as_ref(), sink.as_ref()).await
+    });
     tokio::time::timeout(Duration::from_secs(10), async {
-        let message = rx.recv().await.unwrap();
-        assert_eq!(message.content, "trailing");
-        assert_eq!(message.timestamp, 1);
-        assert_eq!(message.sender_name.as_deref(), Some("Alice"));
-        assert_eq!(message.reply_target, "+1111111111");
-        drop(rx);
+        let message = match rx.recv().await.unwrap() {
+            tinychannels_bus::ChannelIngress::Inbound(message) => message,
+            other => panic!("expected typed inbound, got {other:?}"),
+        };
+        assert_eq!(message.text, "trailing");
+        assert_eq!(message.timestamp_unix_ms, Some(1000));
+        assert_eq!(message.sender.name.as_deref(), Some("Alice"));
+        assert_eq!(message.conversation.id, "+1111111111");
         listener.await.unwrap().unwrap();
         server.verify().await;
     })
