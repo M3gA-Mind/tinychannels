@@ -173,4 +173,3 @@ fn listener_error(message: &str) -> ChannelSendError {
         ..Default::default()
     }
 }
-

@@ -103,13 +103,13 @@ pub(crate) fn build_native_v2(
             let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
             NativeLaunch::long_tail("iMessage", adapter, LongTailListenerMode::Adapter)
         }),
-        "linq" => tinychannels::factory::build_linq_channel(config, host, http)
-            .map(|channel| {
-                let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
-                NativeLaunch::long_tail("Linq", adapter, LongTailListenerMode::Webhook)
-            }),
-        "email" => tinychannels::factory::build_email_channel(config, host)
-            .map(|channel| NativeLaunch::long_tail("Email", channel, LongTailListenerMode::Adapter)),
+        "linq" => tinychannels::factory::build_linq_channel(config, host, http).map(|channel| {
+            let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
+            NativeLaunch::long_tail("Linq", adapter, LongTailListenerMode::Webhook)
+        }),
+        "email" => tinychannels::factory::build_email_channel(config, host).map(|channel| {
+            NativeLaunch::long_tail("Email", channel, LongTailListenerMode::Adapter)
+        }),
         id => {
             let display = long_tail_display(id)?;
             let listener_mode = match id {

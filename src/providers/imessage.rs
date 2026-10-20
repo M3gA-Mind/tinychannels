@@ -21,8 +21,8 @@ use directories::UserDirs;
 use rusqlite::{Connection, OpenFlags};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 

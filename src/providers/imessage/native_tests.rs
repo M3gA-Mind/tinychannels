@@ -6,16 +6,16 @@ use crate::channel::{
 use crate::providers::imessage::fixtures::*;
 use crate::providers::native::fixtures::stored_media;
 use crate::traits::Channel;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
-use tokio::sync::{Notify, oneshot, watch};
 use tinychannels_bus::channel::{ChannelSendOutcome, MessageReceipt, SendErrorKind};
 use tinychannels_bus::{
     ChannelIngress, ChannelOutboundIntent, ChannelOutboundMessage, ContentPart, ConversationKind,
     ConversationRef, MediaKind, MediaReference, OutboundContentPart, OutboundPayload,
     OutboundVoice,
 };
+use tokio::sync::{Notify, oneshot, watch};
 
 #[derive(Default)]
 struct RecordingIngress {
@@ -164,16 +164,11 @@ async fn stopping_typed_listener_cancels_backpressure_and_releases_registration(
     let blocked = Arc::new(BlockingIngress::default());
     let channel = rig.channel.clone();
     let sink = blocked.clone();
-    let listener = tokio::spawn(async move { ChannelAdapter::start(&channel, sink.as_ref()).await });
+    let listener =
+        tokio::spawn(async move { ChannelAdapter::start(&channel, sink.as_ref()).await });
     tokio::time::timeout(Duration::from_secs(2), async {
         loop {
-            if rig
-                .channel
-                .listener_cursor
-                .lock()
-                .unwrap()
-                .is_some()
-            {
+            if rig.channel.listener_cursor.lock().unwrap().is_some() {
                 break;
             }
             tokio::task::yield_now().await;
@@ -194,7 +189,12 @@ async fn stopping_typed_listener_cancels_backpressure_and_releases_registration(
         .unwrap();
     assert!(rig.channel.listener_cancel.lock().unwrap().is_none());
     assert_eq!(
-        rig.channel.listener_cursor.lock().unwrap().unwrap().inbound_rowid,
+        rig.channel
+            .listener_cursor
+            .lock()
+            .unwrap()
+            .unwrap()
+            .inbound_rowid,
         0,
         "a cancelled push must not advance the accepted cursor"
     );
@@ -202,7 +202,8 @@ async fn stopping_typed_listener_cancels_backpressure_and_releases_registration(
     let recording = Arc::new(RecordingIngress::default());
     let channel = rig.channel.clone();
     let sink = recording.clone();
-    let restarted = tokio::spawn(async move { ChannelAdapter::start(&channel, sink.as_ref()).await });
+    let restarted =
+        tokio::spawn(async move { ChannelAdapter::start(&channel, sink.as_ref()).await });
     tokio::time::timeout(Duration::from_secs(2), recording.entered.notified())
         .await
         .expect("restart retries the message that was not accepted");
@@ -243,7 +244,10 @@ async fn typed_read_receipts_keep_the_recipient_conversation_scope() {
     });
     started.await.unwrap();
     rig.conn()
-        .execute("UPDATE message SET date_read = 700000000000000001 WHERE ROWID = 90", [])
+        .execute(
+            "UPDATE message SET date_read = 700000000000000001 WHERE ROWID = 90",
+            [],
+        )
         .unwrap();
     tokio::time::timeout(Duration::from_secs(2), recording.entered.notified())
         .await

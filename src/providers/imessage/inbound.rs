@@ -4,10 +4,10 @@
 use super::IMessageChannel;
 use super::db::{self, AttachmentRow, InboundRow, ReadRow};
 use super::native::{IMESSAGE_MAX_FILE_BYTES, IMESSAGE_MAX_VOICE_BYTES};
+use crate::providers::native::SeenReservationResult;
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, channel_event, media_of, publish, publish_event,
 };
-use crate::providers::native::SeenReservationResult;
 use crate::traits::ChannelMessage;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -381,7 +381,8 @@ impl IMessageChannel {
         let ingested = if row.attachments.is_empty() {
             Ingested::default()
         } else {
-            self.ingest_attachments(&row, &message_id, &conversation).await
+            self.ingest_attachments(&row, &message_id, &conversation)
+                .await
         };
         let parts = assemble(&text, None, ingested);
         if parts.is_empty() {
