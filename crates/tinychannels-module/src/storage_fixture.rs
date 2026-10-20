@@ -20,7 +20,8 @@ use tinystoragedrivers_types::{
     StorageError, Version, Versioned, WriteOp, WriteOptions, WriteResult,
 };
 
-/// One-shot faults and counters on the delivery records.
+/// Delivery faults and counters. Pending-write failures are one-shot; queue
+/// read failures remain active until explicitly cleared.
 #[derive(Debug)]
 pub(crate) struct Faults {
     pub(crate) fail_pending_write: FaultSwitch,
@@ -32,14 +33,14 @@ pub(crate) struct Faults {
 #[derive(Debug)]
 pub(crate) struct FaultSwitch {
     active: AtomicBool,
-    operation: &'static str,
+    one_shot: bool,
 }
 
 impl FaultSwitch {
-    fn new(operation: &'static str) -> Self {
+    fn new(one_shot: bool) -> Self {
         Self {
             active: AtomicBool::new(false),
-            operation,
+            one_shot,
         }
     }
 
@@ -51,8 +52,8 @@ impl FaultSwitch {
 impl Default for Faults {
     fn default() -> Self {
         Self {
-            fail_pending_write: FaultSwitch::new("documents.put_with"),
-            fail_queue_read: FaultSwitch::new("documents.query"),
+            fail_pending_write: FaultSwitch::new(true),
+            fail_queue_read: FaultSwitch::new(false),
             lose_result_reply: AtomicBool::new(false),
             pending_reads: AtomicUsize::new(0),
         }
@@ -237,16 +238,21 @@ impl ScopeSwitchDocs {
         Arc::clone(self.backend.for_scope(&scope).unwrap().documents())
     }
 
-    fn failing_inner(&self, switch: &FaultSwitch) -> Option<Failing<dyn DocumentStore>> {
-        if !switch.active.load(Ordering::SeqCst) {
+    fn failing_inner(
+        &self,
+        switch: &FaultSwitch,
+        operation: &'static str,
+    ) -> Option<Failing<dyn DocumentStore>> {
+        let active = if switch.one_shot {
+            switch.active.swap(false, Ordering::SeqCst)
+        } else {
+            switch.active.load(Ordering::SeqCst)
+        };
+        if !active {
             return None;
         }
         let plan = FaultPlan::new();
-        plan.fail_operation_nth(
-            switch.operation,
-            1,
-            tinystoragedrivers_types::ErrorKind::Backend,
-        );
+        plan.fail_operation_nth(operation, 1, tinystoragedrivers_types::ErrorKind::Backend);
         Some(Failing::with_plan(self.inner(), plan))
     }
 }
@@ -284,7 +290,10 @@ impl DocumentStore for ScopeSwitchDocs {
         precondition: Precondition,
         options: WriteOptions,
     ) -> Result<Version> {
-        let version = if let Some(failing) = self.failing_inner(&self.faults.fail_pending_write) {
+        let version = if collection == PENDING_COLLECTION
+            && let Some(failing) =
+                self.failing_inner(&self.faults.fail_pending_write, "documents.put_with")
+        {
             failing
                 .put_with(collection, id, doc, precondition, options)
                 .await?
@@ -313,7 +322,10 @@ impl DocumentStore for ScopeSwitchDocs {
         if collection == PENDING_COLLECTION {
             self.faults.pending_reads.fetch_add(1, Ordering::SeqCst);
         }
-        if let Some(failing) = self.failing_inner(&self.faults.fail_queue_read) {
+        if collection == PENDING_COLLECTION
+            && let Some(failing) =
+                self.failing_inner(&self.faults.fail_queue_read, "documents.query")
+        {
             failing.query(collection, query).await
         } else {
             self.inner().query(collection, query).await
@@ -321,7 +333,14 @@ impl DocumentStore for ScopeSwitchDocs {
     }
 
     async fn count(&self, collection: &str, filter: &Filter) -> Result<u64> {
-        self.inner().count(collection, filter).await
+        if collection == PENDING_COLLECTION
+            && let Some(failing) =
+                self.failing_inner(&self.faults.fail_queue_read, "documents.count")
+        {
+            failing.count(collection, filter).await
+        } else {
+            self.inner().count(collection, filter).await
+        }
     }
 
     async fn delete_where(&self, collection: &str, filter: &Filter) -> Result<u64> {
