@@ -1,4 +1,5 @@
 use super::*;
+use tinychannels::SendMessage;
 
 type ProviderMediaScopeCase = (
     &'static str,
@@ -1543,7 +1544,11 @@ async fn canceled_send_waiter_does_not_cancel_owned_send_or_shutdown_join() {
     let running = Running::start(channel, Arc::new(Hooks::default()), host);
     let send_waiter = tokio::spawn({
         let running = running.clone();
-        async move { running.send(SendMessage::new("body", "recipient")).await }
+        async move {
+            running
+                .send_typed(typed_test_message("fixture", "body", "recipient"))
+                .await
+        }
     });
     started_rx.await.unwrap();
     send_waiter.abort();
@@ -1621,7 +1626,11 @@ async fn provider_actor_orders_interactions_with_sends_and_rejects_after_stop() 
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     running
-        .send(SendMessage::new("ordinary", "room"))
+        .send_typed(typed_test_message(
+            "interaction-fixture",
+            "ordinary",
+            "room",
+        ))
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     let draft = running
@@ -2093,7 +2102,11 @@ async fn lost_send_worker_reply_distinguishes_dispatch_from_queueing() {
         });
         let waiter = tokio::spawn({
             let running = running.clone();
-            async move { running.send(SendMessage::new("body", "room")).await }
+            async move {
+                running
+                    .send_typed(typed_test_message("interaction-fixture", "body", "room"))
+                    .await
+            }
         });
         let command = commands.recv().await.unwrap();
         if dispatched {
@@ -5761,21 +5774,4 @@ async fn configured_lark_webhook_delivers_scoped_provider_identity_through_facto
     assert_eq!(inbound[0].1["sender"]["id"], "ou-alice");
     assert_eq!(inbound[0].1["conversation"]["id"], "oc-chat-a");
     assert_eq!(inbound[0].1["text"], "typed webhook");
-}
-
-#[test]
-fn legacy_send_surfaces_native_typed_send_outcome_errors() {
-    let error = tinychannels::channel::ChannelSendError {
-        message: "provider rejected send".into(),
-        ..Default::default()
-    };
-    let result = legacy_typed_send_completion(Ok(tinychannels_bus::channel::ChannelSendOutcome {
-        error: Some(error),
-        ..Default::default()
-    }));
-    assert!(matches!(
-        result,
-        Err(tinybus::Error::MethodFailed { message, .. })
-            if message == "provider rejected send"
-    ));
 }

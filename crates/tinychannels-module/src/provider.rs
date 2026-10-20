@@ -7,7 +7,7 @@ use std::time::Duration;
 use tinybus::{Error, Result};
 use tinychannels::channel::ChannelAdapter;
 use tinychannels::host::{LifecycleRegistry, ShutdownHook};
-use tinychannels::{Channel, ChannelHostBuilder, SendMessage};
+use tinychannels::{Channel, ChannelHostBuilder};
 use tinychannels_bus::{
     ChannelSupervisionPolicy, ChannelsConfig, HostEventPublication, HostTranscriptionRequest,
 };
@@ -22,7 +22,6 @@ impl<T> Drop for AbortOnDrop<T> {
 }
 
 enum ProviderOperation {
-    Send(SendMessage),
     SendTyped(tinychannels_bus::ChannelOutboundMessage),
     NativeDraft(
         Option<tinychannels_bus::channel::MessageReceipt>,
@@ -31,19 +30,26 @@ enum ProviderOperation {
     Interaction(tinychannels_bus::ChannelInteraction),
 }
 
-fn legacy_typed_send_completion(
-    result: std::result::Result<
-        tinychannels_bus::channel::ChannelSendOutcome,
-        tinychannels::channel::ChannelSendError,
-    >,
-) -> Result<tinychannels_bus::ChannelInteractionResult> {
-    match result {
-        Ok(outcome) => match outcome.error {
-            Some(error) => Err(Error::failed(error.message)),
-            None => Ok(tinychannels_bus::ChannelInteractionResult::Completed),
+#[cfg(test)]
+pub(crate) fn typed_test_message(
+    channel_id: &str,
+    text: &str,
+    conversation_id: &str,
+) -> tinychannels_bus::ChannelOutboundMessage {
+    let intent = tinychannels_bus::ChannelOutboundIntent {
+        idempotency_key: format!("test:{channel_id}:{conversation_id}:{text}"),
+        channel_id: channel_id.to_owned(),
+        conversation_id: conversation_id.to_owned(),
+        conversation_ref: Some(tinychannels_bus::ConversationRef {
+            id: conversation_id.to_owned(),
+            ..Default::default()
+        }),
+        payload: tinychannels_bus::OutboundPayload::Text {
+            text: text.to_owned(),
         },
-        Err(error) => Err(Error::failed(error.message)),
-    }
+        ..Default::default()
+    };
+    tinychannels_bus::ChannelOutboundMessage::from_intent(&intent)
 }
 
 struct TypingRefreshTask {
@@ -2018,28 +2024,6 @@ impl Running {
                     };
                     let _ = command.started.send(());
                     let result = match command.operation {
-                        ProviderOperation::Send(message) => {
-                            if let Some(native) = &worker_native {
-                                let intent =
-                                    tinychannels::channel::outbound_intent_from_send_message(
-                                        tinychannels_bus::provider_id(&worker_instance),
-                                        &message,
-                                    );
-                                let outbound =
-                                    tinychannels_bus::ChannelOutboundMessage::from_intent(&intent);
-                                legacy_typed_send_completion(
-                                    native.typed_send.send_typed(&outbound).await,
-                                )
-                            } else if let Some(channel) = &send_channel {
-                                channel
-                                    .send(&message)
-                                    .await
-                                    .map(|()| tinychannels_bus::ChannelInteractionResult::Completed)
-                                    .map_err(|error| Error::failed(error.to_string()))
-                            } else {
-                                Err(Error::failed("provider send port is unavailable"))
-                            }
-                        }
                         ProviderOperation::SendTyped(message) => {
                             let sent = if let Some(native) = &worker_native {
                                 match native.typed_send.send_typed(&message).await {
@@ -2237,15 +2221,6 @@ impl Running {
     pub(crate) fn is_finished(&self) -> bool {
         self.finished.load(Ordering::SeqCst)
     }
-    pub(crate) async fn send(
-        &self,
-        message: SendMessage,
-    ) -> std::result::Result<(), RunningSendError> {
-        self.submit(ProviderOperation::Send(message))
-            .await
-            .map(|_| ())
-    }
-
     pub(crate) async fn send_typed(
         &self,
         message: tinychannels_bus::ChannelOutboundMessage,

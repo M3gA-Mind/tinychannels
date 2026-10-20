@@ -11,7 +11,7 @@ use tinychannels::controllers::{
     DiscordLinkStartResult, DiscordPermissionCheckResult, TelegramLoginCheckResult,
     TelegramLoginStartResult,
 };
-use tinychannels::{ChannelsConfig, SendMessage};
+use tinychannels::{ChannelOutboundIntent, ChannelsConfig};
 use tinychannels_bus::{
     ChannelBackendRequest, ChannelBackendResult, ChannelControllerRequest, ChannelControllerResult,
 };
@@ -680,11 +680,10 @@ impl ChannelBackend for HostBackend {
         })
     }
 
-    async fn send_message(
+    async fn send_outbound_intent(
         &self,
         _config: &ChannelsConfig,
-        _channel: &str,
-        _message: SendMessage,
+        _intent: ChannelOutboundIntent,
     ) -> anyhow::Result<ChannelSendMessageResult> {
         Err(anyhow::anyhow!(
             "message sends use the module provider path"
