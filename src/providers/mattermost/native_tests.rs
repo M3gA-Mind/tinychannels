@@ -134,6 +134,233 @@ async fn configured_mattermost_reaction_uses_authenticated_native_v4_requests() 
 }
 
 #[tokio::test]
+async fn mattermost_reaction_removal_uses_the_post_reaction_route() {
+    use crate::channel::ChannelReaction;
+    use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
+    use wiremock::matchers::{header, method, path};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/users/me"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id":"bot-user-1"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/api/v4/users/bot-user-1/posts/post-42/reactions/thumbsup"))
+        .and(header("authorization", "Bearer test-token"))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let channel = channel(&server, Arc::new(StubMedia::default()));
+    ChannelReaction::send_reaction(
+        &channel,
+        &ChannelRef {
+            id: "mattermost".into(),
+            account_id: Some("account-1".into()),
+        },
+        &ConversationRef {
+            kind: ConversationKind::Channel,
+            id: "channel-1".into(),
+            ..Default::default()
+        },
+        "post-42",
+        &tinychannels_bus::channel::ChannelReaction {
+            value: "+1".into(),
+            custom_emoji_id: None,
+        },
+        true,
+    )
+    .await
+    .expect("reaction removal should use Mattermost's native route");
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn mattermost_rejects_invalid_reactions_before_any_http_request() {
+    use crate::channel::ChannelReaction;
+    use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
+
+    let server = MockServer::start().await;
+    let channel = channel(&server, Arc::new(StubMedia::default()));
+    let channel_ref = ChannelRef {
+        id: "mattermost".into(),
+        account_id: Some("account-1".into()),
+    };
+    let conversation = ConversationRef {
+        kind: ConversationKind::Channel,
+        id: "channel-1".into(),
+        ..Default::default()
+    };
+    for (post_id, reaction) in [
+        (
+            "",
+            ChannelReaction {
+                value: "thumbsup".into(),
+                custom_emoji_id: None,
+            },
+        ),
+        (
+            "post-1",
+            ChannelReaction {
+                value: "not an emoji".into(),
+                custom_emoji_id: None,
+            },
+        ),
+        (
+            "post-1",
+            ChannelReaction {
+                value: "thumbsup".into(),
+                custom_emoji_id: Some("custom-1".into()),
+            },
+        ),
+    ] {
+        let error = ChannelReaction::send_reaction(
+            &channel,
+            &channel_ref,
+            &conversation,
+            post_id,
+            &reaction,
+            false,
+        )
+        .await
+        .expect_err("invalid reaction input must be rejected");
+        assert_eq!(error.kind, SendErrorKind::BadFormat);
+        assert!(!error.sent_before_error);
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn mattermost_identity_json_errors_never_submit_a_reaction() {
+    use crate::channel::ChannelReaction;
+    use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
+    use wiremock::matchers::{method, path};
+
+    for body in ["not-json", "{}"] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let channel = channel(&server, Arc::new(StubMedia::default()));
+        let error = ChannelReaction::send_reaction(
+            &channel,
+            &ChannelRef {
+                id: "mattermost".into(),
+                account_id: Some("account-1".into()),
+            },
+            &ConversationRef {
+                kind: ConversationKind::Channel,
+                id: "channel-1".into(),
+                ..Default::default()
+            },
+            "post-1",
+            &ChannelReaction {
+                value: "thumbsup".into(),
+                custom_emoji_id: None,
+            },
+            false,
+        )
+        .await
+        .expect_err("invalid identity response must stop reaction delivery");
+        assert_eq!(error.kind, SendErrorKind::Unknown);
+        assert!(!error.sent_before_error);
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+}
+
+#[tokio::test]
+async fn mattermost_native_edit_and_delete_report_ambiguous_server_failures() {
+    use crate::channel::{ChannelDelete, ChannelEdit, ChannelTypedSend};
+    use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
+    use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
+    use wiremock::matchers::{method, path};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/posts"))
+        .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id":"post-1"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("PUT"))
+        .and(path("/api/v4/posts/post-1"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/api/v4/posts/post-1"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let channel = channel(&server, Arc::new(StubMedia::default()));
+    let original = ChannelTypedSend::send_typed(
+        &channel,
+        &ChannelOutboundMessage {
+            channel_id: "mattermost".into(),
+            conversation_id: "channel-1".into(),
+            channel_ref: Some(ChannelRef {
+                id: "mattermost".into(),
+                account_id: Some("account-1".into()),
+            }),
+            conversation_ref: Some(ConversationRef {
+                kind: ConversationKind::Channel,
+                id: "channel-1".into(),
+                ..Default::default()
+            }),
+            parts: vec![OutboundContentPart::Content {
+                part: ContentPart::Text {
+                    text: "before".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            ..Default::default()
+        },
+    )
+        .await
+        .unwrap();
+    let intent = ChannelOutboundIntent {
+        channel_id: "mattermost".into(),
+        conversation_id: "channel-1".into(),
+        channel_ref: Some(ChannelRef {
+            id: "mattermost".into(),
+            account_id: Some("account-1".into()),
+        }),
+        conversation_ref: Some(ConversationRef {
+            kind: ConversationKind::Channel,
+            id: "channel-1".into(),
+            ..Default::default()
+        }),
+        payload: OutboundPayload::Text {
+            text: "updated".into(),
+        },
+        ..Default::default()
+    };
+    let edit_error = ChannelEdit::edit(&channel, &original.receipt, intent)
+        .await
+        .expect_err("server error after edit submission is ambiguous");
+    assert_eq!(edit_error.kind, SendErrorKind::Unknown);
+    assert!(!edit_error.retryable);
+    assert!(edit_error.sent_before_error);
+
+    let delete_error = ChannelDelete::delete(&channel, &original.receipt)
+        .await
+        .expect_err("server error after delete submission is ambiguous");
+    assert_eq!(delete_error.kind, SendErrorKind::Unknown);
+    assert!(!delete_error.retryable);
+    assert!(delete_error.sent_before_error);
+    assert_eq!(server.received_requests().await.unwrap().len(), 4);
+}
+
+#[tokio::test]
 async fn mattermost_reaction_errors_distinguish_safe_retry_from_unknown_mutation() {
     use crate::channel::ChannelReaction;
     use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef, SendErrorKind};
