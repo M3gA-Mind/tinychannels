@@ -475,7 +475,9 @@ impl Channel for SignalChannel {
     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         self.listen_loop(Some(tx), None, None).await
     }
+}
 
+impl SignalChannel {
     async fn listen_typed(
         &self,
         sink: &(dyn ChannelInboundSink + Send + Sync),
@@ -639,7 +641,10 @@ impl Channel for SignalChannel {
             }
         }
     }
+}
 
+#[async_trait]
+impl Channel for SignalChannel {
     async fn health_check(&self) -> bool {
         let url = format!("{}/api/v1/check", self.http_url);
         let Ok(resp) = self
