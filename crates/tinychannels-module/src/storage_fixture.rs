@@ -42,8 +42,8 @@ impl FaultSwitch {
         }
     }
 
-    pub(crate) fn store(&self, value: bool, _ordering: Ordering) {
-        self.active.store(value, Ordering::SeqCst);
+    pub(crate) fn store(&self, value: bool, ordering: Ordering) {
+        self.active.store(value, ordering);
     }
 }
 
