@@ -4287,6 +4287,53 @@ async fn configured_slack_draft_dispatch_stamps_trusted_account_on_all_lifecycle
 }
 
 #[tokio::test]
+#[allow(deprecated)]
+async fn configured_telegram_draft_keeps_topic_and_legacy_reply_separate() {
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/bottest-token/sendMessage"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "result": {"message_id": 321, "chat": {"id": 100}}
+        })))
+        .mount(&server)
+        .await;
+    let channel = Arc::new(
+        tinychannels::TelegramChannel::new("test-token".into(), vec!["*".into()], false)
+            .with_streaming(tinychannels_bus::config::StreamMode::Partial, 0, true)
+            .with_api_base_for_test(server.uri()),
+    );
+    let native = NativePorts::telegram(channel);
+    let mut message = SendMessage::new("partial", "100:7");
+    message.thread_ts = Some("55".into());
+    let mut typing = TypingRefreshes::default();
+
+    let result = dispatch_interaction(
+        None,
+        Some(native),
+        "telegram:configured-account",
+        tinychannels_bus::ChannelInteraction::SendDraft { message },
+        &mut typing,
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        result,
+        tinychannels_bus::ChannelInteractionResult::Draft(Some(id)) if id == "321"
+    ));
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    let body: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["chat_id"], "100");
+    assert_eq!(body["message_thread_id"], "7");
+    assert_eq!(body["reply_to_message_id"], 55);
+}
+
+#[tokio::test]
 async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_queue() {
     use tinychannels_bus::{ChannelInteraction, ChannelOutboundIntent, OutboundPayload};
     use wiremock::matchers::{method, path};
