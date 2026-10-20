@@ -1324,7 +1324,11 @@ async fn the_mattermost_adapter_passes_the_full_conformance_matrix() {
         .find(|observation| observation.feature == Feature::Reactions)
         .expect("Mattermost reaction must have an actual wire observation");
     assert_eq!(reaction.operation, "reaction_send");
-    assert!(reaction.request["post_id"].as_str().is_some_and(|id| id.parse::<u64>().is_ok()));
+    assert!(
+        reaction.request["post_id"]
+            .as_str()
+            .is_some_and(|id| id.parse::<u64>().is_ok())
+    );
     assert_eq!(reaction.request["emoji_name"], "thumbsup");
     check_feature(&fixture, Feature::Edit)
         .await
@@ -1346,7 +1350,10 @@ async fn the_mattermost_adapter_passes_the_full_conformance_matrix() {
         .find(|observation| observation.feature == Feature::Delete)
         .expect("Mattermost delete must have an actual wire observation");
     assert_eq!(delete.operation, "delete");
-    assert_eq!(delete.request["path"], format!("/api/v4/posts/{}", delete.platform_message_ids[0]));
+    assert_eq!(
+        delete.request["path"],
+        format!("/api/v4/posts/{}", delete.platform_message_ids[0])
+    );
 }
 
 #[tokio::test]

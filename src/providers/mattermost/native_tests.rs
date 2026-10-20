@@ -135,7 +135,7 @@ async fn configured_mattermost_reaction_uses_authenticated_native_v4_requests() 
 
 #[tokio::test]
 async fn typed_edit_and_delete_use_the_provider_returned_post_id() {
-    use crate::channel::{ChannelAdapter, ChannelDelete, ChannelEdit, ChannelTypedSend};
+    use crate::channel::{ChannelDelete, ChannelEdit, ChannelTypedSend};
     use tinychannels_bus::channel::{ChannelRef, ConversationKind, ConversationRef};
     use tinychannels_bus::{ChannelOutboundIntent, OutboundPayload};
     use wiremock::matchers::{body_json, header, method, path};
@@ -160,7 +160,9 @@ async fn typed_edit_and_delete_use_the_provider_returned_post_id() {
     Mock::given(method("PUT"))
         .and(path("/api/v4/posts/post-edit-1"))
         .and(header("authorization", "Bearer test-token"))
-        .and(body_json(json!({"id": "post-edit-1", "message": "updated"})))
+        .and(body_json(
+            json!({"id": "post-edit-1", "message": "updated"}),
+        ))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "post-edit-1"})))
         .expect(1)
         .mount(&server)
@@ -190,7 +192,7 @@ async fn typed_edit_and_delete_use_the_provider_returned_post_id() {
         parts: vec![OutboundContentPart::Content {
             part: ContentPart::Text {
                 text: text.into(),
-                format: None,
+                markdown_dialect: None,
             },
         }],
         ..Default::default()
@@ -224,12 +226,10 @@ async fn typed_edit_and_delete_use_the_provider_returned_post_id() {
         Some("post-edit-1")
     );
 
-    let deletion_target = ChannelTypedSend::send_typed(
-        &channel,
-        &make_text("delete-target", "to delete"),
-    )
-    .await
-    .unwrap();
+    let deletion_target =
+        ChannelTypedSend::send_typed(&channel, &make_text("delete-target", "to delete"))
+            .await
+            .unwrap();
     ChannelDelete::delete(&channel, &deletion_target.receipt)
         .await
         .expect("typed delete should use the receipt returned by Mattermost");
