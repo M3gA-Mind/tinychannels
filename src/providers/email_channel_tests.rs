@@ -868,7 +868,7 @@ async fn listen_delivers_new_mail_and_reconnects_after_failures() {
         first_conn.contains(&format!("{prefix} 1,2 {suffix}"))
             || first_conn.contains(&format!("{prefix} 2,1 {suffix}"))
     };
-    assert!(either("UID FETCH", "UID BODY.PEEK[]"), "{first_conn}");
+    assert!(either("UID FETCH", "(UID BODY.PEEK[])"), "{first_conn}");
     assert!(
         first_conn.contains("UID STORE 1 +FLAGS (\\Seen)"),
         "{first_conn}"
