@@ -664,12 +664,10 @@ async fn legacy_drafts_post_then_edit_in_place() {
         .await
         .unwrap();
     assert_eq!(id.as_deref(), Some("3.3"));
-    channel
-        .update_draft("C1", "3.3", "draft more")
+    Channel::update_draft(&channel, "C1", "3.3", "draft more")
         .await
         .unwrap();
-    channel
-        .finalize_draft("C1", "3.3", "final", Some("1.0"))
+    Channel::finalize_draft(&channel, "C1", "3.3", "final", Some("1.0"))
         .await
         .unwrap();
     let updates = bodies(&server, "chat.update").await;
@@ -683,7 +681,7 @@ async fn legacy_drafts_post_then_edit_in_place() {
             .await
             .is_err()
     );
-    assert!(channel.update_draft("C1", "3.3", " ").await.is_err());
+    assert!(Channel::update_draft(&channel, "C1", "3.3", " ").await.is_err());
 }
 
 #[tokio::test]
