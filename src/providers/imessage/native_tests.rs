@@ -424,6 +424,79 @@ async fn typed_read_receipts_keep_the_recipient_conversation_scope() {
 }
 
 #[tokio::test]
+async fn typed_read_receipts_retry_a_rejected_row_sharing_the_accepted_timestamp() {
+    let rig = rig();
+    let conn = rig.conn();
+    conn.execute_batch(
+        "INSERT INTO message (ROWID, guid, handle_id, text, is_from_me, date, date_read) VALUES
+            (91, 'OUT91', 1, 'first', 1, 700000000000000000, 0),
+            (92, 'OUT92', 1, 'second', 1, 700000000000000000, 0);",
+    )
+    .unwrap();
+
+    let reject_second = Arc::new(RejectSecondIngress::default());
+    let (stop, cancellation) = watch::channel(false);
+    let (ready, started) = oneshot::channel();
+    let channel = rig.channel.clone();
+    let sink = reject_second.clone();
+    let listener = tokio::spawn(async move {
+        channel
+            .listen_typed_with_ready(sink.as_ref(), cancellation, ready)
+            .await
+    });
+    started.await.unwrap();
+    let conn = rig.conn();
+    conn.execute_batch(
+        "UPDATE message SET date_read = 700000000000000001 WHERE ROWID IN (91, 92);",
+    )
+    .unwrap();
+    let error = tokio::time::timeout(Duration::from_secs(2), listener)
+        .await
+        .expect("the listener reaches the rejected second receipt")
+        .unwrap()
+        .unwrap_err();
+    assert!(error.retryable);
+    {
+        let accepted = reject_second.accepted.lock().unwrap();
+        assert_eq!(accepted.len(), 1);
+        assert!(matches!(
+            &accepted[0],
+            ChannelIngress::Event(event)
+                if matches!(&event.event, ChannelEventKind::ReadReceipt { message_id, .. } if message_id == "OUT91")
+        ));
+    }
+
+    let recording = Arc::new(RecordingIngress::default());
+    let (stop_retry, cancellation) = watch::channel(false);
+    let (ready, started) = oneshot::channel();
+    let channel = rig.channel.clone();
+    let sink = recording.clone();
+    let retry = tokio::spawn(async move {
+        channel
+            .listen_typed_with_ready(sink.as_ref(), cancellation, ready)
+            .await
+    });
+    started.await.unwrap();
+    let retry_result = tokio::time::timeout(Duration::from_millis(200), recording.entered.notified()).await;
+    if retry_result.is_ok() {
+        stop_retry.send(true).unwrap();
+        retry.await.unwrap().unwrap();
+    } else {
+        stop_retry.send(true).unwrap();
+        retry.await.unwrap().unwrap();
+    }
+    assert!(retry_result.is_ok(), "the rejected tied-timestamp receipt is retried");
+    let delivered = recording.items.lock().unwrap();
+    assert_eq!(delivered.len(), 1);
+    assert!(matches!(
+        &delivered[0],
+        ChannelIngress::Event(event)
+            if matches!(&event.event, ChannelEventKind::ReadReceipt { message_id, .. } if message_id == "OUT92")
+    ));
+    let _ = stop.send(true);
+}
+
+#[tokio::test]
 async fn typed_read_receipts_respect_the_configured_recipient_allowlist() {
     let rig = rig();
     let mut restricted = rig.channel.clone();
