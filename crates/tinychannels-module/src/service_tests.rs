@@ -194,6 +194,78 @@ fn temporary_route_authority_requires_matching_configured_scope_and_prefers_live
 }
 
 #[tokio::test]
+async fn unstarted_module_object_uses_only_matching_configured_route_authority() {
+    use tinychannels_bus::module_control::{
+        ChannelControlRequest as Request, ChannelControlResult as Response,
+        ConfiguredControlChannel,
+    };
+    use tinychannels_bus::module_remote::{RemoteRoute, RemoteSessionScope};
+
+    let service = inbound_preparation_service().await;
+    let mut capabilities = tinychannels_bus::ChannelCapabilities::unknown();
+    capabilities.remote_control = true;
+    let configured = ConfiguredControlChannel {
+        name: "telegram:bot-a".into(),
+        capabilities,
+    };
+    let scope = RemoteSessionScope {
+        channel: tinychannels_bus::ChannelRef {
+            id: "telegram".into(),
+            account_id: Some("telegram:bot-a".into()),
+        },
+        conversation: tinychannels_bus::ConversationRef {
+            id: "chat-1".into(),
+            ..Default::default()
+        },
+        session_key: "trusted-session-key".into(),
+    };
+    let route_request = |scope: Option<RemoteSessionScope>| Request::Route {
+        workspace_dir: ".".into(),
+        message: Box::new(
+            serde_json::from_value(serde_json::json!({
+                "id": "message-1",
+                "sender": "sender-1",
+                "reply_target": "chat-1",
+                "content": "/help",
+                "channel": "telegram",
+                "timestamp": 1
+            }))
+            .unwrap(),
+        ),
+        route: RemoteRoute {
+            provider: "openai".into(),
+            model: "fixture-model".into(),
+        },
+        history_len: 0,
+        session_scope: scope.map(Box::new),
+        configured_channel: Some(Box::new(configured.clone())),
+        providers: vec![],
+    };
+
+    let valid = service
+        .prepare_channel_control(route_request(Some(scope.clone())))
+        .await
+        .unwrap();
+    assert!(matches!(
+        valid,
+        Response::Route {
+            reply: Some(_),
+            clear_history: false,
+            ..
+        }
+    ));
+
+    let mut wrong_account = scope;
+    wrong_account.channel.account_id = Some("telegram:bot-b".into());
+    let rejected = service
+        .prepare_channel_control(route_request(Some(wrong_account)))
+        .await
+        .unwrap();
+    assert!(matches!(rejected, Response::Route { reply: None, .. }));
+    service.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn shutdown_closes_web_turn_admission_before_clearing_projection_state() {
     let bus = tinybus::transport::memory::MemoryBus::new();
     tinybus::broker::Broker::new().spawn(bus.clone());
