@@ -7,14 +7,15 @@ use super::native::{IMESSAGE_MAX_FILE_BYTES, IMESSAGE_MAX_VOICE_BYTES};
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, channel_event, media_of, publish, publish_event,
 };
+use crate::providers::native::SeenReservationResult;
 use crate::traits::ChannelMessage;
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use tinychannels_bus::{
-    ChannelEventKind, ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef,
-    SenderRef,
+    ChannelEventKind, ChannelInboundEnvelope, ChannelIngress, ChannelRef, ConversationKind,
+    ConversationRef, SenderRef,
 };
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 fn imessage_ref() -> ChannelRef {
     ChannelRef {
@@ -297,6 +298,216 @@ impl IMessageChannel {
             sender_name: None,
         };
         tx.send(message).await.is_ok()
+    }
+
+    /// Dispatch an iMessage row through the typed module ingress. The dedupe
+    /// key is committed only after the configured module sink accepts it.
+    pub(super) async fn dispatch_row_typed(
+        &self,
+        row: InboundRow,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        cancellation: &mut watch::Receiver<bool>,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
+
+        if !self.is_contact_allowed(&row.sender) {
+            return Ok(());
+        }
+        if let Some((emoji, removed)) = db::tapback(row.associated_type) {
+            let Some(target) = row.associated_guid.as_deref().map(db::target_guid) else {
+                return Ok(());
+            };
+            let direction = if removed { "removed" } else { "added" };
+            let event_id = format!("imessage:reaction:{direction}:{}:{}", target, row.guid);
+            let reaction = tinychannels_bus::channel::ChannelReaction {
+                value: emoji.to_owned(),
+                custom_emoji_id: None,
+            };
+            let actor = SenderRef {
+                id: row.sender.clone(),
+                ..Default::default()
+            };
+            let kind = if removed {
+                ChannelEventKind::ReactionRemoved {
+                    message_id: target.to_owned(),
+                    provider_message_id: Some(target.to_owned()),
+                    actor,
+                    reaction,
+                }
+            } else {
+                ChannelEventKind::ReactionAdded {
+                    message_id: target.to_owned(),
+                    provider_message_id: Some(target.to_owned()),
+                    actor,
+                    reaction,
+                }
+            };
+            return self
+                .push_typed_ingress(
+                    sink,
+                    cancellation,
+                    event_id.clone(),
+                    ChannelIngress::Event(channel_event(
+                        "imessage",
+                        event_id,
+                        db::unix_ms(row.date),
+                        Some(Self::conversation_of(&row)),
+                        kind,
+                    )),
+                )
+                .await;
+        }
+
+        let message_id = if row.guid.is_empty() {
+            row.rowid.to_string()
+        } else {
+            row.guid.clone()
+        };
+        let reservation = match self.native.reserve_seen(format!("imessage:{message_id}")) {
+            SeenReservationResult::Accepted => return Ok(()),
+            SeenReservationResult::Pending => {
+                return Err(ChannelSendError {
+                    kind: SendErrorKind::Transient,
+                    message: "iMessage ingress for this event is still pending".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            SeenReservationResult::Reserved(reservation) => reservation,
+        };
+
+        let text = clean_text(row.text.as_deref());
+        let conversation = Self::conversation_of(&row);
+        let ingested = if row.attachments.is_empty() {
+            Ingested::default()
+        } else {
+            self.ingest_attachments(&row, &message_id, &conversation).await
+        };
+        let parts = assemble(&text, None, ingested);
+        if parts.is_empty() {
+            drop(reservation);
+            return Ok(());
+        }
+        let envelope = ChannelInboundEnvelope {
+            channel: imessage_ref(),
+            message_id: message_id.clone(),
+            reply_to_id: None,
+            timestamp_unix_ms: db::unix_ms(row.date),
+            conversation,
+            sender: SenderRef {
+                id: row.sender,
+                ..Default::default()
+            },
+            text,
+            media: media_of(&parts),
+            parts,
+            raw: Some(json!({"providerMessageId": row.guid})),
+            ..Default::default()
+        };
+        self.push_reserved(
+            sink,
+            cancellation,
+            reservation,
+            ChannelIngress::Inbound(envelope),
+        )
+        .await
+    }
+
+    /// Dispatch a read receipt through the same ordered sink and acknowledge
+    /// its dedupe key only after acceptance.
+    pub(super) async fn dispatch_read_typed(
+        &self,
+        row: ReadRow,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        cancellation: &mut watch::Receiver<bool>,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        let event_id = format!("imessage:read:{}", row.guid);
+        let event = channel_event(
+            "imessage",
+            event_id.clone(),
+            db::unix_ms(row.date_read),
+            Some(ConversationRef {
+                kind: ConversationKind::Dm,
+                id: row.recipient.clone(),
+                ..Default::default()
+            }),
+            ChannelEventKind::ReadReceipt {
+                message_id: row.guid,
+                actor: Some(SenderRef {
+                    id: row.recipient,
+                    ..Default::default()
+                }),
+                timestamp: db::unix_ms(row.date_read),
+            },
+        );
+        self.push_typed_ingress(
+            sink,
+            cancellation,
+            event_id.clone(),
+            ChannelIngress::Event(event),
+        )
+        .await
+    }
+
+    async fn push_typed_ingress(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        cancellation: &mut watch::Receiver<bool>,
+        key: String,
+        ingress: ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
+
+        match self.native.reserve_seen(key) {
+            SeenReservationResult::Accepted => Ok(()),
+            SeenReservationResult::Pending => Err(ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "iMessage ingress for this event is still pending".into(),
+                retryable: true,
+                ..Default::default()
+            }),
+            SeenReservationResult::Reserved(reservation) => {
+                self.push_reserved(sink, cancellation, reservation, ingress)
+                    .await
+            }
+        }
+    }
+
+    async fn push_reserved(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+        cancellation: &mut watch::Receiver<bool>,
+        reservation: crate::providers::native::SeenReservation,
+        ingress: ChannelIngress,
+    ) -> Result<(), tinychannels_bus::channel::ChannelSendError> {
+        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
+
+        let accepted = tokio::select! {
+            biased;
+            changed = cancellation.changed() => {
+                if changed.is_err() || *cancellation.borrow() {
+                    return Err(ChannelSendError {
+                        kind: SendErrorKind::Transient,
+                        message: "iMessage listener stopped during ingress delivery".into(),
+                        retryable: true,
+                        ..Default::default()
+                    });
+                }
+                false
+            }
+            result = sink.push(ingress) => result.is_ok(),
+        };
+        if accepted {
+            reservation.commit();
+            Ok(())
+        } else {
+            Err(ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "iMessage ingress sink rejected delivery".into(),
+                retryable: true,
+                ..Default::default()
+            })
+        }
     }
 
     /// Publish a read receipt for one of our messages.
