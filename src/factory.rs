@@ -601,7 +601,7 @@ fn build_long_tail_channel_inner(
 fn build_yuanbao_channel(
     config: &tinychannels_bus::config::YuanbaoConfig,
     host: Option<&Arc<dyn ChannelHost>>,
-    voice_http: Option<reqwest::Client>,
+    _voice_http: Option<reqwest::Client>,
 ) -> Option<Arc<dyn LongTailNative>> {
     let mut channel = match YuanbaoChannel::new(config.clone()) {
         Ok(channel) => channel,
@@ -622,7 +622,8 @@ fn build_yuanbao_channel(
     if let Some(events) = host.and_then(|host| host.events()) {
         channel = channel.with_events(events);
     }
-    if let Some(client) = voice_http {
+    #[cfg(test)]
+    if let Some(client) = _voice_http {
         channel = channel.with_voice_http_client(client);
     }
     Some(Arc::new(channel))
