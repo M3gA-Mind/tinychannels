@@ -11,11 +11,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tinychannels_bus::channel::{ChannelSendOutcome, MessageReceipt, SendErrorKind};
 use tinychannels_bus::{
-    ChannelIngress, ChannelOutboundIntent, ChannelOutboundMessage, ContentPart, ConversationKind,
-    ConversationRef, MediaKind, MediaReference, OutboundContentPart, OutboundPayload,
-    OutboundVoice,
+    ChannelEventKind, ChannelIngress, ChannelOutboundIntent, ChannelOutboundMessage, ContentPart,
+    ConversationKind, ConversationRef, MediaKind, MediaReference, OutboundContentPart,
+    OutboundPayload, OutboundVoice,
 };
 use tokio::sync::{Notify, oneshot, watch};
+
+const TYPED_PNG: &[u8] = b"png-bytes";
 
 #[derive(Default)]
 struct RecordingIngress {
@@ -333,7 +335,7 @@ async fn typed_dispatch_drops_disallowed_and_blank_messages() {
 #[tokio::test]
 async fn typed_attachments_use_the_scoped_media_ingest_path() {
     let rig = rig();
-    let file = rig.attachment("typed-photo.png", PNG);
+    let file = rig.attachment("typed-photo.png", TYPED_PNG);
     let row = rig.inbound(25, Some("look"), false, &[(&file, "image/png")]);
     let sink = RecordingIngress::default();
     let (_, mut cancellation) = watch::channel(false);
@@ -343,7 +345,7 @@ async fn typed_attachments_use_the_scoped_media_ingest_path() {
         .await
         .unwrap();
 
-    assert_eq!(rig.media.stored.lock().unwrap()[0].bytes, PNG);
+    assert_eq!(rig.media.stored.lock().unwrap()[0].bytes, TYPED_PNG);
     let items = sink.items.lock().unwrap();
     assert!(matches!(
         &items[0],
@@ -411,7 +413,7 @@ async fn typed_ingress_does_not_acknowledge_a_pending_reservation() {
     let key = "imessage:IN3".to_owned();
     let reservation = match rig.channel.native.reserve_seen(key) {
         crate::providers::native::SeenReservationResult::Reserved(reservation) => reservation,
-        other => panic!("expected a new reservation, got {other:?}"),
+        _ => panic!("expected a new reservation"),
     };
     let sink = RecordingIngress::default();
     let (_, mut cancellation) = watch::channel(false);
