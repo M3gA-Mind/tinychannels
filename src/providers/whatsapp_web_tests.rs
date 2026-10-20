@@ -947,21 +947,22 @@ fn a_sender_user_already_in_e164_is_not_double_prefixed() {
 }
 
 #[cfg(feature = "whatsapp-web")]
-struct FixedStorage(Result<Arc<dyn tinystoragedrivers_core::DocumentStore>, &'static str>);
+struct FixedStorage(Result<Arc<dyn tinystoragedrivers_api::DocumentStore>, &'static str>);
 
 #[cfg(feature = "whatsapp-web")]
 #[async_trait]
 impl crate::host::StorageProvider for FixedStorage {
-    async fn documents(&self) -> anyhow::Result<Arc<dyn tinystoragedrivers_core::DocumentStore>> {
+    async fn documents(&self) -> anyhow::Result<Arc<dyn tinystoragedrivers_api::DocumentStore>> {
         self.0.clone().map_err(|message| anyhow::anyhow!(message))
     }
 }
 
 #[cfg(feature = "whatsapp-web")]
-fn memory_docs() -> Arc<dyn tinystoragedrivers_core::DocumentStore> {
-    use tinystoragedrivers_core::StorageBackend;
-    let storage = tinystoragedrivers_core::MemoryStorage::new()
-        .for_scope(&tinystoragedrivers_core::Scope::local())
+fn memory_docs() -> Arc<dyn tinystoragedrivers_api::DocumentStore> {
+    use tinystoragedrivers_api::StorageBackend;
+    let backend = tinystoragedrivers_testkit::MemoryBackend::new();
+    let storage = backend
+        .for_scope(&tinystoragedrivers_types::Scope::new("tenant:whatsapp-tests").unwrap())
         .unwrap();
     Arc::clone(storage.documents())
 }

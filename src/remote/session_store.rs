@@ -23,9 +23,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use serde::Deserialize;
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, Key, Precondition, WriteOptions,
-};
+use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
+use tinystoragedrivers_types::{ErrorKind, Precondition, Version, WriteOptions};
 
 use crate::storage::schema::{self, SCHEMA_VERSION};
 
@@ -49,11 +48,11 @@ struct LegacyStoreFile {
     bindings: HashMap<String, ChatBinding>,
 }
 
-/// Document id for one chat on one channel: [`Key::of`] over
+/// Document id for one chat on one channel: the v1-compatible encoding over
 /// `[channel, reply_target]`, so the same chat id on two providers never
 /// collides and a target holding `:` or `/` stays one unambiguous key.
 pub fn chat_key(channel: &str, reply_target: &str) -> String {
-    Key::of([channel, reply_target]).map_or_else(
+    crate::storage::key::of([channel, reply_target]).map_or_else(
         // Two parts always make a key; the fallback only keeps this infallible.
         |_| format!("{channel}/{reply_target}"),
         |key| key.as_str().to_owned(),
@@ -99,12 +98,12 @@ impl RemoteSessionStore {
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("host storage is unavailable"))?;
         self.ready
-            .get_or_init(|| async {
-                for name in [BINDINGS_COLLECTION, BUSY_COLLECTION, META_COLLECTION] {
-                    crate::storage::ensure_collection(docs, CollectionSpec::new(name)).await;
-                }
+            .get_or_try_init(|| async {
+                crate::storage::prepare(docs)
+                    .await
+                    .map_err(|error| anyhow::anyhow!(crate::storage::describe(&error)))
             })
-            .await;
+            .await?;
         Ok(docs)
     }
 
@@ -254,11 +253,7 @@ impl RemoteSessionStore {
             {
                 Ok(_) => imported += 1,
                 Err(error)
-                    if matches!(
-                        error.kind(),
-                        tinystoragedrivers_core::ErrorKind::Conflict
-                            | tinystoragedrivers_core::ErrorKind::AlreadyExists
-                    ) => {}
+                    if matches!(error.kind(), ErrorKind::Conflict | ErrorKind::AlreadyExists) => {}
                 Err(error) => return Err(anyhow::anyhow!(crate::storage::describe(&error))),
             }
         }
@@ -277,10 +272,7 @@ impl RemoteSessionStore {
         )
         .await
         .or_else(|error| match error.kind() {
-            tinystoragedrivers_core::ErrorKind::Conflict
-            | tinystoragedrivers_core::ErrorKind::AlreadyExists => {
-                Ok(tinystoragedrivers_core::Version(0))
-            }
+            ErrorKind::Conflict | ErrorKind::AlreadyExists => Ok(Version(0)),
             _ => Err(anyhow::anyhow!(crate::storage::describe(&error))),
         })?;
         tracing::info!(

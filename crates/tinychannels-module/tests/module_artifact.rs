@@ -8,9 +8,10 @@ use tinychannels::relay::{CapabilityDescriptor, ConnectorToGatewayFrame, Gateway
 use tinychannels_bus::module_email::EmailSendRequest;
 use tinychannels_bus::module_relay::RelayReservation;
 use tinychannels_bus::{ChannelOutboundIntent, ChannelsConfig, OutboundPayload, SendMessage};
-use tinystoragedrivers_busproxy::{PerCallerEndpoint, serve};
-use tinystoragedrivers_client::StorageServer;
-use tinystoragedrivers_core::{DocumentStoreExt, MemoryStorage, Query, Scope, StorageBackend};
+use tinystoragedrivers_api::{DocumentStoreExt, StorageBackend};
+use tinystoragedrivers_busproxy::{PerCallerEndpoint, StorageServer, serve};
+use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_types::{Query, Scope};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -190,10 +191,12 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
 
     // Delivery records live in the host's storage, which the module reaches over
     // the storage bus; serve an in-memory backend for it.
-    let storage = MemoryStorage::new();
-    let served_backend = storage.clone();
+    let storage = Arc::new(MemoryBackend::new());
+    let served_backend = Arc::clone(&storage);
     let endpoint = PerCallerEndpoint::new(move |_sender| {
-        let scoped = served_backend.for_scope(&Scope::local()).ok()?;
+        let scoped = served_backend
+            .for_scope(&Scope::new("tenant:module-artifact").ok()?)
+            .ok()?;
         Some(StorageServer::new(scoped))
     });
     let _storage_host = serve(&connection, Arc::new(endpoint)).await.unwrap();
@@ -346,7 +349,9 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
         assert!(host.1.lock().await.pending.is_empty());
     }
     // ...it writes both scopes' required deliveries to the host's storage.
-    let docs = storage.for_scope(&Scope::local()).unwrap();
+    let docs = storage
+        .for_scope(&Scope::new("tenant:module-artifact").unwrap())
+        .unwrap();
     let mut pending: Vec<String> = docs
         .documents()
         .query_all(
@@ -697,7 +702,7 @@ async fn compiled_artifact_exposes_confidential_controller_proxy_and_websocket_l
     );
     assert!(
         storage
-            .for_scope(&Scope::local())
+            .for_scope(&Scope::new("tenant:module-artifact").unwrap())
             .unwrap()
             .documents()
             .get(

@@ -16,8 +16,9 @@
 //! Depend on `tinychannels-bus` alone if you only need to *name* channel types
 //! — an envelope in an event enum or the config schema.
 //! That costs serde and little else. Depend on this crate when you need to
-//! actually open a socket, which pulls `reqwest`, `rusqlite`, `rustls` and
-//! `tokio-tungstenite`.
+//! actually open a socket, which pulls `reqwest`, `rustls` and
+//! `tokio-tungstenite`. The read-only iMessage system-database provider is
+//! optional behind the `imessage` feature and is the only user of `rusqlite`.
 
 // Re-export the WebSocket transport crate so downstream consumers (and their
 // tests that exercise provider WS seams) can construct version-matched
@@ -53,10 +54,12 @@ pub mod storage;
 pub use backend::{ChannelBackend, ChannelManager};
 pub use factory::{ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels};
 pub use host::{ChannelHost, ChannelHostBuilder, HostCapabilities, NoopHost, ProviderContext};
+#[cfg(feature = "imessage")]
+pub use providers::IMessageChannel;
 pub use providers::{
-    CliChannel, DingTalkChannel, DiscordChannel, IMessageChannel, IrcChannel, IrcChannelConfig,
-    LinqChannel, MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel,
-    WhatsAppChannel, WhatsAppWebChannel, YuanbaoChannel,
+    CliChannel, DingTalkChannel, DiscordChannel, IrcChannel, IrcChannelConfig, LinqChannel,
+    MattermostChannel, QQChannel, SignalChannel, SlackChannel, TelegramChannel, WhatsAppChannel,
+    WhatsAppWebChannel, YuanbaoChannel,
 };
 pub use tinychannels_bus::{
     BUS_NAME, CONTRACT_VERSION, ChannelAuthMode, ChannelBackendRequest, ChannelBackendResult,

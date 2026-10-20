@@ -16,10 +16,8 @@ pub(super) struct Request {
 
 pub(super) struct HttpsServer {
     pub client: reqwest::Client,
-    pub requests: Arc<Mutex<Vec<Request>>>,
-    /// Loopback address the fixture listens on, for clients that need to
-    /// resolve hosts outside the bundled certificate's names.
     pub address: std::net::SocketAddr,
+    pub requests: Arc<Mutex<Vec<Request>>>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -50,6 +48,8 @@ impl HttpsServer {
             "api.dingtalk.com",
             "bots.qq.com",
             "api.sgroup.qq.com",
+            "open.feishu.cn",
+            "open.larksuite.com",
         ] {
             builder = builder.resolve(host, address);
         }
@@ -112,8 +112,8 @@ impl HttpsServer {
         });
         Self {
             client,
-            requests,
             address,
+            requests,
             task,
         }
     }

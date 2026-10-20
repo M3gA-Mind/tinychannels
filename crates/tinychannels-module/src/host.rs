@@ -123,7 +123,7 @@ pub struct HostChannels {
     object_path: Arc<str>,
     /// The host's storage objects, connected on first use and then shared by
     /// every clone.
-    storage: Arc<Mutex<Option<tinystoragedrivers_core::ScopedStorage>>>,
+    storage: Arc<Mutex<Option<tinystoragedrivers_api::Storage>>>,
 }
 impl std::fmt::Debug for HostChannels {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -307,23 +307,21 @@ impl HostChannels {
     /// serving storage later is picked up by the next call.
     pub(crate) async fn storage(
         &self,
-    ) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::ScopedStorage> {
-        use tinystoragedrivers_core::StorageBackend;
+    ) -> tinystoragedrivers_types::Result<tinystoragedrivers_api::Storage> {
         let mut slot = self.storage.lock().await;
         if let Some(scoped) = slot.as_ref() {
             return Ok(scoped.clone());
         }
-        let bus = tinystoragedrivers_busproxy::connect_storage(self.connection.clone()).await?;
-        let scoped = bus.for_scope(&tinystoragedrivers_busproxy::module_scope_label())?;
-        *slot = Some(scoped.clone());
-        Ok(scoped)
+        let storage = tinystoragedrivers_busproxy::connect_storage(self.connection.clone()).await?;
+        *slot = Some(storage.clone());
+        Ok(storage)
     }
 
     /// The scoped document store, for the delivery, remote-session and
     /// WhatsApp session records.
     pub(crate) async fn documents(
         &self,
-    ) -> tinystoragedrivers_core::Result<Arc<dyn tinystoragedrivers_core::DocumentStore>> {
+    ) -> tinystoragedrivers_types::Result<Arc<dyn tinystoragedrivers_api::DocumentStore>> {
         Ok(Arc::clone(self.storage().await?.documents()))
     }
 

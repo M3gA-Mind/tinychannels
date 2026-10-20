@@ -31,10 +31,8 @@ use async_trait::async_trait;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tinystoragedrivers_core::{
-    CollectionSpec, DocumentStore, DocumentStoreExt, Filter, Key, Precondition, Query,
-    StorageError, WriteOptions,
-};
+use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
+use tinystoragedrivers_types::{Filter, Precondition, Query, StorageError, WriteOptions};
 
 use super::schema::{self, SCHEMA_VERSION};
 use wacore::store::InMemoryBackend;
@@ -108,14 +106,7 @@ impl DocumentWhatsAppBackend {
     /// # Errors
     /// The store cannot be read, or a persisted record is unreadable.
     pub async fn open(docs: Arc<dyn DocumentStore>, session_path: &str) -> StoreResult<Self> {
-        for name in COLLECTIONS {
-            if let Err(error) = docs.ensure_collection(&CollectionSpec::new(name)).await {
-                tracing::debug!(
-                    "{LOG_PREFIX} ensure_collection {name} not applied: {:?}",
-                    error.kind()
-                );
-            }
-        }
+        crate::storage::prepare(&docs).await.map_err(store_err)?;
         let backend = Self {
             inner: InMemoryBackend::new(),
             docs,
@@ -126,9 +117,9 @@ impl DocumentWhatsAppBackend {
         Ok(backend)
     }
 
-    /// `Key::of([account, key])`, so an address holding `:` or `/` stays unambiguous.
+    /// The v1-compatible composite encoding of account and key.
     fn id(&self, key: &str) -> String {
-        Key::of([self.account.as_str(), key]).map_or_else(
+        crate::storage::key::of([self.account.as_str(), key]).map_or_else(
             |_| format!("{}/{key}", self.account),
             |k| k.as_str().to_owned(),
         )

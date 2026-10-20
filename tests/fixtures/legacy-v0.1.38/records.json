@@ -1,0 +1,87 @@
+{
+  "channels.delivery_failed": [
+    {
+      "body": {
+        "enqueued_ms": 1700000000456,
+        "intent": {
+          "channel_id": "telegram",
+          "conversation_id": "room-42",
+          "durability": "required",
+          "idempotency_key": "fixture-failed-1",
+          "payload": {
+            "kind": "text",
+            "text": "failed public writer fixture"
+          },
+          "reply_to_id": null,
+          "thread_id": null
+        },
+        "retry_count": 0
+      },
+      "created_ms": 1792525438787,
+      "expires_ms": null,
+      "id": "fixture-failed-1",
+      "schema": 2
+    }
+  ],
+  "channels.delivery_pending": [
+    {
+      "body": {
+        "enqueued_ms": 1700000000123,
+        "intent": {
+          "channel_id": "telegram",
+          "conversation_id": "room-42",
+          "durability": "required",
+          "idempotency_key": "fixture-pending-1",
+          "payload": {
+            "kind": "text",
+            "text": "legacy public writer fixture"
+          },
+          "reply_to_id": null,
+          "thread_id": "thread-9"
+        },
+        "retry_count": 0
+      },
+      "created_ms": 1792525438787,
+      "expires_ms": null,
+      "id": "fixture-pending-1",
+      "schema": 2
+    }
+  ],
+  "channels.delivery_results": [
+    {
+      "body": {
+        "completed_ms": 1792525438787,
+        "id": "fixture-result-1",
+        "intent_fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      },
+      "created_ms": 1792525438787,
+      "expires_ms": 1792611838787,
+      "id": "fixture-result-1",
+      "schema": 2
+    }
+  ],
+  "channels.remote_bindings": [
+    {
+      "body": {
+        "sender_key": "telegram_bot_room:42",
+        "thread_id": "thread-9",
+        "title": "Fixture chat"
+      },
+      "created_ms": 1792525438787,
+      "expires_ms": null,
+      "id": "telegram/room:42",
+      "schema": 2
+    }
+  ],
+  "channels.remote_busy": [
+    {
+      "body": {
+        "busy": true
+      },
+      "created_ms": 1792525438787,
+      "expires_ms": null,
+      "id": "telegram/room:42",
+      "schema": 2
+    }
+  ]
+}

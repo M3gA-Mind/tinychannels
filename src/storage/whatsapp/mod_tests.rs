@@ -1,13 +1,18 @@
 use super::*;
 use bytes::Bytes;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_api::StorageBackend;
+use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_types::Scope;
 use wacore::store::PersistenceManager;
 use wacore::store::traits::{
     AppStateSyncKey, AppSyncStore, Backend, LidPnMappingEntry, ProtocolStore, SignalStore,
 };
 
 fn docs() -> Arc<dyn DocumentStore> {
-    let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+    let backend = MemoryBackend::new();
+    let storage = backend
+        .for_scope(&Scope::new("tenant:whatsapp-tests").unwrap())
+        .unwrap();
     Arc::clone(storage.documents())
 }
 

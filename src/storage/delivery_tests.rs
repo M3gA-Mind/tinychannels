@@ -1,9 +1,14 @@
 use super::*;
 use tinychannels_bus::ChannelOutboundIntent;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_api::StorageBackend;
+use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_types::{CollectionSpec, Scope};
 
 fn docs() -> Arc<dyn DocumentStore> {
-    let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+    let backend = MemoryBackend::new();
+    let storage = backend
+        .for_scope(&Scope::new("tenant:delivery-tests").unwrap())
+        .unwrap();
     Arc::clone(storage.documents())
 }
 
@@ -235,20 +240,20 @@ async fn a_storage_outage_is_a_store_error_not_a_missing_record() {
     struct Down;
     #[async_trait]
     impl DocumentStore for Down {
-        fn capabilities(&self) -> tinystoragedrivers_core::Capabilities {
-            tinystoragedrivers_core::Capabilities::none()
+        fn capabilities(&self) -> tinystoragedrivers_types::Capabilities {
+            tinystoragedrivers_types::Capabilities::none()
         }
         async fn ensure_collection(
             &self,
             _: &CollectionSpec,
-        ) -> tinystoragedrivers_core::Result<()> {
+        ) -> tinystoragedrivers_types::Result<()> {
             Err(StorageError::unavailable("down"))
         }
         async fn get(
             &self,
             _: &str,
             _: &str,
-        ) -> tinystoragedrivers_core::Result<Option<tinystoragedrivers_core::Versioned<Value>>>
+        ) -> tinystoragedrivers_types::Result<Option<tinystoragedrivers_types::Versioned<Value>>>
         {
             Err(StorageError::unavailable("down"))
         }
@@ -258,7 +263,7 @@ async fn a_storage_outage_is_a_store_error_not_a_missing_record() {
             _: &str,
             _: Value,
             _: Precondition,
-        ) -> tinystoragedrivers_core::Result<tinystoragedrivers_core::Version> {
+        ) -> tinystoragedrivers_types::Result<tinystoragedrivers_types::Version> {
             Err(StorageError::unavailable("down"))
         }
         async fn delete(
@@ -266,22 +271,22 @@ async fn a_storage_outage_is_a_store_error_not_a_missing_record() {
             _: &str,
             _: &str,
             _: Precondition,
-        ) -> tinystoragedrivers_core::Result<bool> {
+        ) -> tinystoragedrivers_types::Result<bool> {
             Err(StorageError::unavailable("down"))
         }
         async fn query(
             &self,
             _: &str,
             _: &Query,
-        ) -> tinystoragedrivers_core::Result<
-            tinystoragedrivers_core::Page<tinystoragedrivers_core::Versioned<Value>>,
+        ) -> tinystoragedrivers_types::Result<
+            tinystoragedrivers_types::Page<tinystoragedrivers_types::Versioned<Value>>,
         > {
             Err(StorageError::unavailable("down"))
         }
-        async fn count(&self, _: &str, _: &Filter) -> tinystoragedrivers_core::Result<u64> {
+        async fn count(&self, _: &str, _: &Filter) -> tinystoragedrivers_types::Result<u64> {
             Err(StorageError::unavailable("down"))
         }
-        async fn delete_where(&self, _: &str, _: &Filter) -> tinystoragedrivers_core::Result<u64> {
+        async fn delete_where(&self, _: &str, _: &Filter) -> tinystoragedrivers_types::Result<u64> {
             Err(StorageError::unavailable("down"))
         }
         async fn claim(
@@ -290,11 +295,11 @@ async fn a_storage_outage_is_a_store_error_not_a_missing_record() {
             _: &Filter,
             _: &[Sort],
             _: &Value,
-        ) -> tinystoragedrivers_core::Result<Option<tinystoragedrivers_core::Versioned<Value>>>
+        ) -> tinystoragedrivers_types::Result<Option<tinystoragedrivers_types::Versioned<Value>>>
         {
             Err(StorageError::unavailable("down"))
         }
-        async fn drop_collection(&self, _: &str) -> tinystoragedrivers_core::Result<()> {
+        async fn drop_collection(&self, _: &str) -> tinystoragedrivers_types::Result<()> {
             Err(StorageError::unavailable("down"))
         }
     }

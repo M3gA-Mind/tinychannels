@@ -6,7 +6,9 @@ use std::sync::Mutex;
 use super::session_store::{BINDINGS_COLLECTION, BUSY_COLLECTION};
 use super::session_store::{RemoteSessionStore, chat_key};
 use super::*;
-use tinystoragedrivers_core::{MemoryStorage, Scope, StorageBackend};
+use tinystoragedrivers_api::StorageBackend;
+use tinystoragedrivers_testkit::MemoryBackend;
+use tinystoragedrivers_types::Scope;
 
 #[derive(Default)]
 struct FakeHost {
@@ -56,7 +58,10 @@ impl RemoteControlHost for FakeHost {
 }
 
 fn store() -> RemoteSessionStore {
-    let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+    let backend = MemoryBackend::new();
+    let storage = backend
+        .for_scope(&Scope::new("tenant:remote-tests").unwrap())
+        .unwrap();
     RemoteSessionStore::new(std::sync::Arc::clone(storage.documents()))
 }
 
@@ -443,7 +448,10 @@ async fn marking_a_turn_on_unavailable_storage_is_advisory_and_never_panics() {
 
 #[tokio::test]
 async fn bindings_and_busy_flags_are_stored_in_the_v2_shape_under_key_ids() {
-    let storage = MemoryStorage::new().for_scope(&Scope::local()).unwrap();
+    let backend = MemoryBackend::new();
+    let storage = backend
+        .for_scope(&Scope::new("tenant:remote-tests").unwrap())
+        .unwrap();
     let docs = std::sync::Arc::clone(storage.documents());
     let sessions = RemoteSessionStore::new(std::sync::Arc::clone(&docs));
     sessions

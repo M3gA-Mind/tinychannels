@@ -6,6 +6,7 @@ pub mod discord;
 pub mod email_channel;
 #[cfg(feature = "email")]
 pub mod email_verify;
+#[cfg(feature = "imessage")]
 pub mod imessage;
 pub mod irc;
 #[cfg(feature = "lark")]
@@ -27,6 +28,7 @@ pub use discord::DiscordChannel;
 pub use email_channel::EmailChannel;
 #[cfg(feature = "email")]
 pub use email_verify::verify_email_credentials;
+#[cfg(feature = "imessage")]
 pub use imessage::IMessageChannel;
 pub use irc::{IrcChannel, IrcChannelConfig};
 #[cfg(feature = "lark")]
