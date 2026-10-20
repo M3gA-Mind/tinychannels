@@ -114,9 +114,10 @@ async fn released_v0138_public_writer_records_open_and_read_through_current_stor
     let result_expiry_ms = fixture["channels.delivery_results"][0]["expires_ms"]
         .as_i64()
         .expect("fixture result expiry");
-    let connection = tinystoragedrivers_document::memory::MemoryConnection::with_clock(
-        Arc::new(move || u64::try_from(result_expiry_ms - 1).unwrap()),
-    );
+    let connection =
+        tinystoragedrivers_document::memory::MemoryConnection::with_clock(Arc::new(move || {
+            u64::try_from(result_expiry_ms - 1).unwrap()
+        }));
     let storage = connection.for_scope(Scope::new("tenant:released-writer-fixture").unwrap());
     let docs = storage.documents();
 
@@ -277,7 +278,8 @@ async fn target_readback_failure_keeps_source_for_safe_retry() {
 #[derive(Debug)]
 struct GrowOnFirstSourceQuery {
     inner: Arc<dyn DocumentStore>,
-    inserted: std::sync::atomic::AtomicBool,
+    inserted: std::sync::atomic::AtomicUsize,
+    max_insertions: usize,
 }
 
 #[async_trait::async_trait]
@@ -339,16 +341,16 @@ impl DocumentStore for GrowOnFirstSourceQuery {
         query: &Query,
     ) -> std::result::Result<Page<Versioned<Value>>, StorageError> {
         let page = self.inner.query(collection, query).await?;
-        if collection == "channels_delivery_pending"
-            && !self
-                .inserted
-                .swap(true, std::sync::atomic::Ordering::SeqCst)
-        {
+        let insertion = self
+            .inserted
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if collection == "channels_delivery_pending" && insertion < self.max_insertions {
+            let id = format!("late-op-{insertion}");
             self.inner
                 .put_with(
                     collection,
-                    "late-op",
-                    legacy_delivery("late-op"),
+                    &id,
+                    legacy_delivery(&id),
                     Precondition::Absent,
                     WriteOptions::new().schema(1),
                 )
@@ -401,7 +403,8 @@ async fn prepare_rechecks_source_after_a_snapshot_grows() {
     .await;
     let growing: Arc<dyn DocumentStore> = Arc::new(GrowOnFirstSourceQuery {
         inner: Arc::clone(&inner),
-        inserted: std::sync::atomic::AtomicBool::new(false),
+        inserted: std::sync::atomic::AtomicUsize::new(0),
+        max_insertions: 1,
     });
 
     crate::storage::prepare(&growing).await.unwrap();
@@ -415,14 +418,58 @@ async fn prepare_rechecks_source_after_a_snapshot_grows() {
     );
     assert!(
         inner
-            .get(DELIVERY_PENDING, "late-op")
+            .get(DELIVERY_PENDING, "late-op-0")
             .await
             .unwrap()
             .is_some()
     );
     assert!(
         inner
-            .get("channels_delivery_pending", "late-op")
+            .get("channels_delivery_pending", "late-op-0")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn prepare_refuses_to_mark_complete_if_source_keeps_growing() {
+    let (_backend, storage) = storage().await;
+    let inner = storage.documents().clone();
+    seed(
+        inner.as_ref(),
+        "channels_delivery_pending",
+        "first-op",
+        legacy_delivery("first-op"),
+    )
+    .await;
+    let growing: Arc<dyn DocumentStore> = Arc::new(GrowOnFirstSourceQuery {
+        inner: Arc::clone(&inner),
+        inserted: std::sync::atomic::AtomicUsize::new(0),
+        max_insertions: 4,
+    });
+
+    let error = crate::storage::prepare(&growing).await.unwrap_err();
+
+    assert_eq!(error.kind(), ErrorKind::Conflict);
+    assert!(
+        inner
+            .get("channels_delivery_pending", "late-op-2")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        inner
+            .get(DELIVERY_PENDING, "late-op-2")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let marker = key::of(["tinychannels", "delivery-pending-v2"]).unwrap();
+    assert!(
+        inner
+            .get(MIGRATIONS, marker.as_str())
             .await
             .unwrap()
             .is_none()
