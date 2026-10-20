@@ -244,7 +244,7 @@ macro_rules! impl_long_tail_adapter {
                 $crate::providers::long_tail::LongTail::declared(self)
             }
             fn proactive_target(&self) -> Option<String> {
-                $crate::traits::Channel::proactive_target(self)
+                $crate::providers::long_tail::LongTail::proactive_target(self)
             }
             async fn start(
                 &self,
