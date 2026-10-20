@@ -25,6 +25,17 @@ struct RejectOnceTypedSink {
     accepted: std::sync::Mutex<Vec<ChannelIngress>>,
 }
 
+#[derive(Default)]
+struct RecordingTypedSink(std::sync::Mutex<Vec<ChannelIngress>>);
+
+#[async_trait]
+impl crate::channel::ChannelInboundSink for RecordingTypedSink {
+    async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
+        self.0.lock().unwrap().push(ingress);
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl crate::channel::ChannelInboundSink for RejectOnceTypedSink {
     async fn push(&self, ingress: ChannelIngress) -> Result<(), crate::channel::ChannelSendError> {
@@ -423,7 +434,7 @@ async fn rejected_events_are_delivered_on_retry_before_dedup_commits() {
     let server = mock_daemon(b"").await;
     let channel = channel_for(&server);
     let rejecting = RejectingTypedSink;
-    let accepting = RejectOnceTypedSink::default();
+    let accepting = RecordingTypedSink::default();
     let cases = [
         data_envelope(json!({"message": "retry", "timestamp": 1_700_000_001_001u64})),
         data_envelope(json!({
@@ -451,7 +462,7 @@ async fn rejected_events_are_delivered_on_retry_before_dedup_commits() {
         assert!(channel.dispatch_typed_envelope(&envelope, &accepting).await);
     }
 
-    assert_eq!(accepting.accepted.lock().unwrap().len(), 4);
+    assert_eq!(accepting.0.lock().unwrap().len(), 4);
 }
 
 #[tokio::test]
@@ -466,7 +477,10 @@ async fn cancelled_blocked_delivery_can_be_retried() {
     }));
     let dispatch_channel = channel.clone();
     let dispatch_envelope = envelope;
-    let retry_envelope = dispatch_envelope.clone();
+    let retry_envelope = data_envelope(json!({
+        "message": "retry after cancellation",
+        "timestamp": 1_700_000_001_101u64,
+    }));
     let dispatch_sink = blocked.clone();
     let dispatch = tokio::spawn(async move {
         dispatch_channel
@@ -480,7 +494,7 @@ async fn cancelled_blocked_delivery_can_be_retried() {
     cancel_tx.send(true).unwrap();
     assert_eq!(dispatch.await.unwrap().unwrap(), None);
 
-    let accepting = RejectOnceTypedSink::default();
+    let accepting = RecordingTypedSink::default();
     assert!(channel.dispatch_typed_envelope(&retry_envelope, &accepting).await);
-    assert_eq!(accepting.accepted.lock().unwrap().len(), 1);
+    assert_eq!(accepting.0.lock().unwrap().len(), 1);
 }
