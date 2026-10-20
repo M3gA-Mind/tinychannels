@@ -35,6 +35,8 @@ struct TelegramWireFixture {
     request_cursor: std::sync::Mutex<usize>,
     scope: tinychannels_conformance::ExpectedScope,
     events: Arc<TelegramConformanceEvents>,
+    voice: Arc<TelegramConformanceVoice>,
+    transcriber: Arc<TelegramConformanceTranscriber>,
 }
 
 #[derive(Default)]
@@ -334,6 +336,9 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
         if feature == tinychannels_conformance::ConformanceFeature::InboundReactions {
             // Telegram supplies no configured-account identifier in its
             // inbound reaction update; the event scope reflects that wire DTO.
+            scope.channel.account_id = None;
+        }
+        if feature == tinychannels_conformance::ConformanceFeature::VoiceIn {
             scope.channel.account_id = None;
         }
         scope
