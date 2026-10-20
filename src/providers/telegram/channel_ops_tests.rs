@@ -51,6 +51,52 @@ fn unsupported_fixture_operation() -> tinychannels_bus::channel::ChannelSendErro
     }
 }
 
+impl TelegramWireFixture {
+    async fn record_operation(
+        &self,
+        feature: tinychannels_conformance::ConformanceFeature,
+        operation: &str,
+        receipt: Option<tinychannels_bus::channel::MessageReceipt>,
+    ) {
+        let mut requests = self.server.received_requests().await.unwrap_or_default();
+        let mut cursor = self.request_cursor.lock().unwrap();
+        let request_end = requests.len();
+        requests = requests.drain(*cursor..).collect();
+        *cursor = request_end;
+        for request in requests {
+            let body: serde_json::Value = serde_json::from_slice(&request.body).unwrap_or_default();
+            let Some(chat) = body.get("chat_id").and_then(serde_json::Value::as_i64) else {
+                continue;
+            };
+            let id = receipt
+                .as_ref()
+                .map(|r| r.platform_message_ids.clone())
+                .unwrap_or_default();
+            self.observations.lock().unwrap().push(
+                tinychannels_conformance::WireObservation {
+                    feature,
+                    operation: operation.into(),
+                    channel: self.scope.channel.clone(),
+                    conversation: tinychannels_bus::ConversationRef {
+                        kind: tinychannels_bus::ConversationKind::Dm,
+                        id: chat.to_string(),
+                        ..Default::default()
+                    },
+                    reply_to_id: body
+                        .get("reply_to_message_id")
+                        .map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())),
+                    thread_id: body
+                        .get("message_thread_id")
+                        .map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())),
+                    payload_kinds: vec!["text".into()],
+                    platform_message_ids: id,
+                    request: body,
+                },
+            );
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
     fn adapter(&self) -> &dyn tinychannels_runtime::channel::ChannelAdapter {
@@ -67,7 +113,6 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
         }
         if feature == tinychannels_conformance::ConformanceFeature::ThreadAddressing {
             scope.thread_id = Some("77".into());
-            scope.conversation.thread_id = Some("77".into());
         }
         scope
     }
