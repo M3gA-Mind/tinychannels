@@ -30,7 +30,7 @@ use tinychannels_bus::module_delivery::{
 };
 use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
 use tinystoragedrivers_types::{
-    EXPIRES_FIELD, ErrorKind, Filter, Key, Precondition, Query, Sort, StorageError, Versioned,
+    EXPIRES_FIELD, ErrorKind, Filter, Precondition, Query, Sort, StorageError, Versioned,
     WriteOptions,
 };
 
@@ -124,10 +124,10 @@ fn validate_entry(entry: &QueuedDelivery) -> Result<(), DeliveryQueueError> {
     Ok(())
 }
 
-/// The document id of a delivery: [`Key::of`] over its idempotency key.
+/// The document id of a delivery: the v1-compatible key encoding.
 fn doc_id(id: &str) -> Result<String, DeliveryQueueError> {
     validate_id(id)?;
-    Key::of([id])
+    crate::storage::key::of([id])
         .map(|key| key.as_str().to_owned())
         .map_err(|_| invalid("delivery id is invalid"))
 }
@@ -211,7 +211,7 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
     async fn load_pending(&self, id: &str) -> Result<Option<QueuedDelivery>, DeliveryQueueError> {
         let id = doc_id(id)?;
         self.docs()
-            .await
+            .await?
             .get(PENDING_COLLECTION, &id)
             .await
             .map_err(store_error)?
@@ -223,7 +223,7 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
         let query = Query::all().sort(Sort::asc("enqueued_ms"));
         let found = self
             .docs()
-            .await
+            .await?
             .query_all(PENDING_COLLECTION, &query)
             .await
             .map_err(store_error)?;
@@ -236,7 +236,7 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
     async fn remove_pending(&self, id: &str) -> Result<(), DeliveryQueueError> {
         let id = doc_id(id)?;
         self.docs()
-            .await
+            .await?
             .delete(PENDING_COLLECTION, &id, Precondition::None)
             .await
             .map(|_| ())
@@ -248,7 +248,7 @@ impl DeliveryQueueStore for DocumentDeliveryStore {
         let doc = encode_entry(&entry)?;
         let id = doc_id(&entry.id)?;
         self.docs()
-            .await
+            .await?
             .put_with(
                 FAILED_COLLECTION,
                 &id,
@@ -267,7 +267,7 @@ impl DeliveryResultStore for DocumentDeliveryStore {
     async fn load_failed(&self, id: &str) -> Result<Option<QueuedDelivery>, DeliveryQueueError> {
         let id = doc_id(id)?;
         self.docs()
-            .await
+            .await?
             .get(FAILED_COLLECTION, &id)
             .await
             .map_err(store_error)?
@@ -283,7 +283,7 @@ impl DeliveryResultStore for DocumentDeliveryStore {
         // A result past its `expires_ms` reads as absent.
         let Some(found) = self
             .docs()
-            .await
+            .await?
             .get(RESULTS_COLLECTION, &id)
             .await
             .map_err(store_error)?

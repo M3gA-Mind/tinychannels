@@ -2,7 +2,7 @@ use super::*;
 use tinychannels_bus::ChannelOutboundIntent;
 use tinystoragedrivers_api::StorageBackend;
 use tinystoragedrivers_testkit::MemoryBackend;
-use tinystoragedrivers_types::Scope;
+use tinystoragedrivers_types::{CollectionSpec, Scope};
 
 fn docs() -> Arc<dyn DocumentStore> {
     let backend = MemoryBackend::new();

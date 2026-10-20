@@ -2603,6 +2603,7 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "chrono",
+ "data-encoding",
  "directories",
  "futures",
  "futures-util",

@@ -32,7 +32,7 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
-use tinystoragedrivers_types::{Filter, Key, Precondition, Query, StorageError, WriteOptions};
+use tinystoragedrivers_types::{Filter, Precondition, Query, StorageError, WriteOptions};
 
 use super::schema::{self, SCHEMA_VERSION};
 use wacore::store::InMemoryBackend;
@@ -117,9 +117,9 @@ impl DocumentWhatsAppBackend {
         Ok(backend)
     }
 
-    /// `Key::of([account, key])`, so an address holding `:` or `/` stays unambiguous.
+    /// The v1-compatible composite encoding of account and key.
     fn id(&self, key: &str) -> String {
-        Key::of([self.account.as_str(), key]).map_or_else(
+        crate::storage::key::of([self.account.as_str(), key]).map_or_else(
             |_| format!("{}/{key}", self.account),
             |k| k.as_str().to_owned(),
         )

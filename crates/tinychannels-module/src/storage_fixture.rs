@@ -48,8 +48,11 @@ impl FaultSwitch {
     pub(crate) fn store(&self, value: bool, _ordering: Ordering) {
         self.active.store(value, Ordering::SeqCst);
         if value {
-            self.plan
-                .fail_operation_nth(self.operation, 1, tinystoragedrivers_types::ErrorKind::Backend);
+            self.plan.fail_operation_nth(
+                self.operation,
+                1,
+                tinystoragedrivers_types::ErrorKind::Backend,
+            );
         } else {
             self.plan.clear();
         }
@@ -113,11 +116,14 @@ impl StorageHost {
             let local = backend
                 .for_scope(&Scope::new("tenant:fixture").ok()?)
                 .ok()?;
-            let docs = Arc::new(Failing::with_plan(Arc::new(ScopeSwitchDocs {
-                backend,
-                faults,
-                current,
-            }), bound.1.plan.clone()));
+            let docs = Arc::new(Failing::with_plan(
+                Arc::new(ScopeSwitchDocs {
+                    backend,
+                    faults,
+                    current,
+                }),
+                bound.1.plan.clone(),
+            ));
             Some(StorageServer::new(Storage::new(
                 docs,
                 Arc::clone(local.streams()),
@@ -240,7 +246,7 @@ impl StorageHost {
 /// The documents of whichever scope the host currently binds, with faults.
 #[derive(Debug)]
 struct ScopeSwitchDocs {
-    backend: MemoryStorage,
+    backend: MemoryBackend,
     faults: Arc<Faults>,
     current: Arc<Mutex<String>>,
 }

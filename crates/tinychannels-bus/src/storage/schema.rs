@@ -17,6 +17,8 @@ pub const REMOTE_BINDINGS: &str = "channels.remote_bindings";
 pub const REMOTE_BUSY: &str = "channels.remote_busy";
 /// The one-time legacy import marker.
 pub const REMOTE_META: &str = "channels.remote_meta";
+/// Owner-local progress for TinyChannels' storage migrations.
+pub const MIGRATIONS: &str = "channels.migrations";
 /// The linked device record.
 pub const WHATSAPP_DEVICE: &str = "channels.whatsapp_device";
 /// Signal identity keys.
@@ -47,13 +49,14 @@ pub const WHATSAPP_COLLECTIONS: [&str; 8] = [
 ];
 
 /// Every collection owned by TinyChannels, in declaration order.
-pub const COLLECTIONS: [&str; 14] = [
+pub const COLLECTIONS: [&str; 15] = [
     DELIVERY_PENDING,
     DELIVERY_FAILED,
     DELIVERY_RESULTS,
     REMOTE_BINDINGS,
     REMOTE_BUSY,
     REMOTE_META,
+    MIGRATIONS,
     WHATSAPP_DEVICE,
     WHATSAPP_IDENTITY,
     WHATSAPP_SESSION,

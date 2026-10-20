@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use serde::Deserialize;
 use tinystoragedrivers_api::{DocumentStore, DocumentStoreExt};
-use tinystoragedrivers_types::{ErrorKind, Key, Precondition, Version, WriteOptions};
+use tinystoragedrivers_types::{ErrorKind, Precondition, Version, WriteOptions};
 
 use crate::storage::schema::{self, SCHEMA_VERSION};
 
@@ -48,11 +48,11 @@ struct LegacyStoreFile {
     bindings: HashMap<String, ChatBinding>,
 }
 
-/// Document id for one chat on one channel: [`Key::of`] over
+/// Document id for one chat on one channel: the v1-compatible encoding over
 /// `[channel, reply_target]`, so the same chat id on two providers never
 /// collides and a target holding `:` or `/` stays one unambiguous key.
 pub fn chat_key(channel: &str, reply_target: &str) -> String {
-    Key::of([channel, reply_target]).map_or_else(
+    crate::storage::key::of([channel, reply_target]).map_or_else(
         // Two parts always make a key; the fallback only keeps this infallible.
         |_| format!("{channel}/{reply_target}"),
         |key| key.as_str().to_owned(),

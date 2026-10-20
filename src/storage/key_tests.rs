@@ -2,9 +2,15 @@ use super::*;
 
 #[test]
 fn composite_keys_keep_the_v1_escape_and_unicode_bytes() {
-    assert_eq!(of(["a/b", "100%", "x\0y"]).unwrap().as_str(), "a%2Fb/100%25/x%00y");
+    assert_eq!(
+        of(["a/b", "100%", "x\0y"]).unwrap().as_str(),
+        "a%2Fb/100%25/x%00y"
+    );
     assert_eq!(of(["~abc", "~def"]).unwrap().as_str(), "%7Eabc/~def");
-    assert_eq!(of(["héllo", "日本語", "🦀/🦀"]).unwrap().as_str(), "héllo/日本語/🦀%2F🦀");
+    assert_eq!(
+        of(["héllo", "日本語", "🦀/🦀"]).unwrap().as_str(),
+        "héllo/日本語/🦀%2F🦀"
+    );
 }
 
 #[test]
