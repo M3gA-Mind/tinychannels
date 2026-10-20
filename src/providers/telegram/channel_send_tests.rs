@@ -1,6 +1,7 @@
 use super::*;
 use crate::providers::telegram::fixtures::*;
 use crate::providers::telegram::text::TELEGRAM_MAX_MESSAGE_LENGTH;
+use crate::traits::{Channel, SendMessage};
 use std::sync::Arc;
 use wiremock::matchers::{body_partial_json, method, path};
 use wiremock::{Mock, ResponseTemplate};
