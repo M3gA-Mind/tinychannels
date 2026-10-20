@@ -424,6 +424,27 @@ async fn typed_read_receipts_keep_the_recipient_conversation_scope() {
 }
 
 #[tokio::test]
+async fn typed_read_receipts_respect_the_configured_recipient_allowlist() {
+    let rig = rig();
+    let mut restricted = rig.channel.clone();
+    restricted.allowed_contacts = vec!["+19999999999".into()];
+    let sink = RecordingIngress::default();
+    let (_stop, mut cancellation) = watch::channel(false);
+    let row = db::ReadRow {
+        guid: "SENT-DENIED".into(),
+        recipient: PEER.into(),
+        date_read: 700_000_000_000_000_000,
+    };
+
+    restricted
+        .dispatch_read_typed(row, &sink, &mut cancellation)
+        .await
+        .unwrap();
+
+    assert!(sink.items.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn typed_ingress_does_not_acknowledge_a_pending_reservation() {
     let rig = rig();
     let row = rig.inbound(3, Some("pending"), false, &[]);
