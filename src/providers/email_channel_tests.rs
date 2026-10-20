@@ -1303,14 +1303,15 @@ async fn rejected_typed_mail_is_retried_without_replaying_accepted_uids() {
         .await
         .expect_err("a rejected typed ingress must stop this delivery pass");
     assert!(error.downcast_ref::<InboundSinkRejected>().is_some());
-    let accepted = rejecting.accepted.lock().unwrap();
-    assert_eq!(accepted.len(), 1);
-    assert!(matches!(
-        &accepted[0],
-        tinychannels_bus::ChannelIngress::Inbound(envelope)
-            if envelope.message_id == "a1@example.com"
-    ));
-    drop(accepted);
+    {
+        let accepted = rejecting.accepted.lock().unwrap();
+        assert_eq!(accepted.len(), 1);
+        assert!(matches!(
+            &accepted[0],
+            tinychannels_bus::ChannelIngress::Inbound(envelope)
+                if envelope.message_id == "a1@example.com"
+        ));
+    }
     assert_eq!(channel.seen_messages.lock().await.len(), 1);
     let _ = session.logout().await;
     let commands = server.await.unwrap().remove(0).join("\n");
