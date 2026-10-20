@@ -4683,12 +4683,15 @@ async fn configured_running_discord_uses_native_v2_and_the_mock_gateway() {
         .with_transcriber(provider_host.transcriber().unwrap()),
     );
     let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
-    let launch = crate::native::NativeLaunch::long_tail(
+    let running = crate::provider::Running::start_long_tail(
         "Discord",
         adapter,
+        hooks,
+        host,
+        None,
+        false,
         crate::provider::LongTailListenerMode::Adapter,
     );
-    let running = launch.start(hooks, host, None, false);
     assert!(
         running.channel.is_none(),
         "configured Discord v2 launch must not retain the legacy Channel transport"

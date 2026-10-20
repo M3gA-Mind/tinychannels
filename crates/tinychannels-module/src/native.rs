@@ -41,7 +41,7 @@ impl NativeLaunch {
     }
 
     /// A long-tail text provider held as its trait object.
-    pub(crate) fn long_tail(
+    fn long_tail(
         provider: &'static str,
         channel: Arc<dyn tinychannels::LongTailNative>,
         listener_mode: LongTailListenerMode,
