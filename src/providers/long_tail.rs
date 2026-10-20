@@ -209,6 +209,20 @@ async fn send_text_typed<T: LongTail + ?Sized>(
             ..Default::default()
         });
     }
+    let capabilities = provider.declared();
+    if message.reply_to_id.is_some() && !capabilities.addressing.reply_to_id {
+        return Err(unsupported::<T>("reply addressing"));
+    }
+    let has_thread = message.thread_id.is_some()
+        || message
+            .conversation_ref
+            .as_ref()
+            .is_some_and(|conversation| {
+                conversation.thread_id.is_some() || conversation.topic_id.is_some()
+            });
+    if has_thread && !capabilities.addressing.thread_id {
+        return Err(unsupported::<T>("thread addressing"));
+    }
     // Only plain text is representable; anything richer is refused before any
     // request is made.
     let mut legacy = message

@@ -43,6 +43,7 @@ impl ChannelAdapter for FixtureAdapter {
 struct Fixture {
     adapter: FixtureAdapter,
     scope: ExpectedScope,
+    requires_receipt: bool,
     result: Result<Option<ChannelSendOutcome>, ChannelSendError>,
     observations: Vec<WireObservation>,
 }
@@ -55,6 +56,10 @@ impl AdapterFixture for Fixture {
 
     fn expected_scope(&self, _: ConformanceFeature) -> ExpectedScope {
         self.scope.clone()
+    }
+
+    fn receipt_required(&self, _: ConformanceFeature) -> bool {
+        self.requires_receipt
     }
 
     fn clear_observations(&self) {}
@@ -125,12 +130,64 @@ fn fixture(feature: ConformanceFeature) -> Fixture {
             reply_to_id: None,
             thread_id: None,
         },
+        requires_receipt: true,
         result: Ok(Some(ChannelSendOutcome {
             receipt,
             error: None,
         })),
         observations: vec![observation],
     }
+}
+
+#[tokio::test]
+async fn receiptless_platform_send_requires_real_wire_evidence_without_fabricated_ids() {
+    let mut fixture = fixture(ConformanceFeature::Text);
+    fixture.requires_receipt = false;
+    fixture.result = Ok(Some(ChannelSendOutcome::default()));
+    fixture.observations[0].platform_message_ids.clear();
+
+    assert!(
+        check_feature(&fixture, ConformanceFeature::Text)
+            .await
+            .is_ok()
+    );
+
+    fixture.observations.clear();
+    assert!(
+        check_feature(&fixture, ConformanceFeature::Text)
+            .await
+            .unwrap_err()
+            .contains("no matching wire observation")
+    );
+}
+
+#[tokio::test]
+async fn receiptless_platform_rejects_mis_scoped_optional_receipts() {
+    let mut fixture = fixture(ConformanceFeature::Text);
+    fixture.requires_receipt = false;
+    fixture.result = Ok(Some(ChannelSendOutcome {
+        receipt: MessageReceipt {
+            channel: Some(ChannelRef {
+                id: "another-channel".into(),
+                account_id: Some("telegram:account-a".into()),
+            }),
+            conversation: Some(fixture.scope.conversation.clone()),
+            platform_message_ids: vec!["321".into()],
+            parts: vec![MessageReceiptPart {
+                platform_message_id: "321".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        error: None,
+    }));
+
+    assert!(
+        check_feature(&fixture, ConformanceFeature::Text)
+            .await
+            .unwrap_err()
+            .contains("mis-scoped or incomplete optional receipt")
+    );
 }
 
 fn declare_feature(fixture: &mut Fixture, feature: ConformanceFeature) {
