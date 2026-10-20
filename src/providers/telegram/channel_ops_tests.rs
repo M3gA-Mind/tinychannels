@@ -69,6 +69,57 @@ fn rich_part(part: tinychannels_bus::ContentPart) -> tinychannels_bus::OutboundP
     }
 }
 
+fn conformance_media(kind: tinychannels_bus::MediaKind, name: &str) -> tinychannels_bus::MediaReference {
+    tinychannels_bus::MediaReference {
+        opaque_id: Some(format!("telegram-{name}")),
+        kind,
+        ..Default::default()
+    }
+}
+
+struct TelegramConformanceMedia;
+
+#[async_trait::async_trait]
+impl crate::host::MediaRepository for TelegramConformanceMedia {
+    async fn store_media(
+        &self,
+        _request: crate::host::MediaStoreRequest,
+    ) -> anyhow::Result<tinychannels_bus::MediaReference> {
+        anyhow::bail!("outbound-only Telegram conformance media store")
+    }
+
+    async fn read_media(
+        &self,
+        scope: crate::host::MediaScope,
+        opaque_id: String,
+        _max_bytes: u64,
+    ) -> anyhow::Result<crate::host::StoredMedia> {
+        assert_eq!(scope.configured_instance, "telegram-conformance");
+        assert_eq!(scope.channel.id, "telegram");
+        assert_eq!(scope.channel.account_id.as_deref(), Some("telegram-conformance"));
+        assert_eq!(scope.conversation.id, "100");
+        assert_eq!(scope.turn_id, "conformance-turn");
+        let (kind, content_type, file_name, bytes) = match opaque_id.as_str() {
+            "telegram-Image" => (tinychannels_bus::MediaKind::Image, "image/png", "image.png", BASE64.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/5f8AAAAASUVORK5CYII=")?),
+            "telegram-Video" => (tinychannels_bus::MediaKind::Video, "video/mp4", "video.mp4", b"video fixture".to_vec()),
+            "telegram-Audio" => (tinychannels_bus::MediaKind::Audio, "audio/mpeg", "audio.mp3", valid_mp3_frame()),
+            "telegram-Document" => (tinychannels_bus::MediaKind::Document, "application/pdf", "document.pdf", b"%PDF conformance".to_vec()),
+            "telegram-Sticker" => (tinychannels_bus::MediaKind::Image, "image/webp", "sticker.webp", include_bytes!("fixtures/sticker-512.webp").to_vec()),
+            _ => anyhow::bail!("unexpected Telegram conformance media id"),
+        };
+        Ok(crate::host::StoredMedia {
+            media: tinychannels_bus::MediaReference {
+                opaque_id: Some(opaque_id),
+                kind,
+                ..Default::default()
+            },
+            content_type: content_type.into(),
+            file_name: Some(file_name.into()),
+            bytes,
+        })
+    }
+}
+
 fn unsupported_fixture_operation() -> tinychannels_bus::channel::ChannelSendError {
     tinychannels_bus::channel::ChannelSendError {
         kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
@@ -314,6 +365,36 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                     text: "hello-kit".into(),
                 }
             }
+            Feature::Image => rich_part(tinychannels_bus::ContentPart::Image {
+                media: conformance_media(tinychannels_bus::MediaKind::Image, "Image"),
+                caption: None,
+                alt_text: None,
+            }),
+            Feature::Video => rich_part(tinychannels_bus::ContentPart::Video {
+                media: conformance_media(tinychannels_bus::MediaKind::Video, "Video"),
+                caption: None,
+                duration_ms: Some(1_000),
+                thumbnail: None,
+            }),
+            Feature::Audio => rich_part(tinychannels_bus::ContentPart::Audio {
+                media: conformance_media(tinychannels_bus::MediaKind::Audio, "Audio"),
+                codec: Some("mp3".into()),
+                duration_ms: Some(1_000),
+                title: None,
+                transcript: None,
+            }),
+            Feature::File => rich_part(tinychannels_bus::ContentPart::File {
+                media: conformance_media(tinychannels_bus::MediaKind::Document, "Document"),
+                file_name: Some("document.pdf".into()),
+                caption: None,
+            }),
+            Feature::Sticker => rich_part(tinychannels_bus::ContentPart::Sticker {
+                media: conformance_media(tinychannels_bus::MediaKind::Image, "Sticker"),
+                pack_id: None,
+                sticker_id: None,
+                emoji: Some("👍".into()),
+                alt_text: None,
+            }),
             Feature::Location => rich_part(tinychannels_bus::ContentPart::Location {
                 latitude: 25.0,
                 longitude: 55.0,
