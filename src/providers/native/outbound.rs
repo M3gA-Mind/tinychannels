@@ -215,6 +215,19 @@ pub(crate) async fn plan<P: NativeProvider + ?Sized>(
                         )));
                     }
                 };
+                let capabilities = provider.declared_capabilities();
+                let declared = match kind {
+                    MediaKind::Image => capabilities.content.image.outbound,
+                    MediaKind::Video => capabilities.content.video.outbound,
+                    MediaKind::Audio => capabilities.content.audio.outbound,
+                    MediaKind::Document => capabilities.content.file.outbound,
+                    MediaKind::Unknown => false,
+                };
+                if !declared {
+                    return Err(unsupported(&format!(
+                        "{display} does not support outbound {name} media"
+                    )));
+                }
                 let repository = provider.media_repository().ok_or_else(|| {
                     unsupported(&format!("{display} media needs scoped host storage"))
                 })?;
