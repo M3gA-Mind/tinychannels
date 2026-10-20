@@ -340,6 +340,14 @@ impl IrcChannel {
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("IRC not connected"))?;
 
+        Self::send_text_connected(writer, recipient, text).await
+    }
+
+    async fn send_text_connected(
+        writer: &mut WriteHalf,
+        recipient: &str,
+        text: &str,
+    ) -> anyhow::Result<()> {
         // Calculate safe payload size:
         // 512 - sender prefix (~64 bytes for :nick!user@host) - "PRIVMSG " - target - " :" - "\r\n"
         let overhead = SENDER_PREFIX_RESERVE + 10 + recipient.len() + 2;
@@ -792,7 +800,20 @@ impl crate::providers::long_tail::LongTail for IrcChannel {
             .map_or(message.conversation_id.as_str(), |conversation| {
                 conversation.id.as_str()
             });
-        self.send_text(recipient, &text).await.map_err(|error| {
+
+        let mut guard = self.writer.lock().await;
+        let Some(writer) = guard.as_mut() else {
+            return Err(ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: "IRC is not connected".into(),
+                retryable: true,
+                sent_before_error: false,
+                ..Default::default()
+            });
+        };
+        Self::send_text_connected(writer, recipient, &text)
+            .await
+            .map_err(|error| {
             tracing::debug!(%error, "[irc] typed send failed");
             ChannelSendError {
                 kind: SendErrorKind::Unknown,
