@@ -1302,6 +1302,145 @@ async fn configured_slack_reactions_use_native_web_api_without_managed_fallback(
 }
 
 #[tokio::test]
+async fn configured_mattermost_reactions_use_native_v4_without_managed_fallback() {
+    use wiremock::matchers::{body_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/users/me"))
+        .and(header("authorization", "Bearer mm-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "id": "bot-user",
+            "username": "fixture-bot"
+        })))
+        .expect(3)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/reactions"))
+        .and(header("authorization", "Bearer mm-token"))
+        .and(body_json(serde_json::json!({
+            "user_id": "bot-user",
+            "post_id": "post-1",
+            "emoji_name": "+1"
+        })))
+        .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+            "user_id": "bot-user",
+            "post_id": "post-1",
+            "emoji_name": "+1"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("DELETE"))
+        .and(path("/api/v4/users/bot-user/posts/post-1/reactions/tada"))
+        .and(header("authorization", "Bearer mm-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "status": "OK"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/api/v4/reactions"))
+        .and(header("authorization", "Bearer mm-token"))
+        .and(body_json(serde_json::json!({
+            "user_id": "bot-user",
+            "post_id": "post-2",
+            "emoji_name": "eyes"
+        })))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "id": "api.context.permissions.app_error",
+            "message": "permission denied"
+        })))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let (host, fixture, _server) = connected_host().await;
+    let backend = HostBackend::new(
+        host.clone(),
+        Arc::new(FakeDiscordApi::default()),
+        Arc::new(NativeEmailVerifier),
+        None,
+    );
+    let config = ChannelsConfig {
+        mattermost: Some(tinychannels::config::MattermostConfig {
+            url: server.uri(),
+            bot_token: "mm-token".into(),
+            channel_id: Some("channel-1".into()),
+            allowed_users: vec![],
+            thread_replies: None,
+            mention_only: None,
+        }),
+        ..Default::default()
+    };
+
+    let added = backend
+        .send_reaction(
+            &config,
+            "mattermost",
+            serde_json::json!({
+                "channelId": "channel-1",
+                "messageId": "post-1",
+                "emoji": "👍"
+            }),
+        )
+        .await
+        .expect("Mattermost add reaction should use its native v4 API");
+    assert!(added.success);
+    let removed = backend
+        .send_reaction(
+            &config,
+            "mattermost",
+            serde_json::json!({
+                "channelId": "channel-1",
+                "messageId": "post-1",
+                "emoji": ":tada:",
+                "remove": true
+            }),
+        )
+        .await
+        .expect("Mattermost remove reaction should use its native v4 API");
+    assert!(removed.success);
+    let api_error = backend
+        .send_reaction(
+            &config,
+            "mattermost",
+            serde_json::json!({
+                "channelId": "channel-1",
+                "messageId": "post-2",
+                "emoji": "eyes"
+            }),
+        )
+        .await
+        .expect_err("native API rejection must be returned to the caller");
+    assert!(api_error.to_string().contains("HTTP 403"));
+
+    let before_invalid = server.received_requests().await.unwrap().len();
+    assert!(backend
+        .send_reaction(&config, "mattermost", serde_json::json!({}))
+        .await
+        .is_err());
+    assert_eq!(server.received_requests().await.unwrap().len(), before_invalid);
+    let create_thread = backend
+        .create_thread(&config, "mattermost", "not a root post")
+        .await
+        .expect_err("Mattermost generic thread creation remains unsupported");
+    assert!(create_thread.to_string().contains("no native thread create"));
+    let list_threads = backend
+        .list_threads(&config, "mattermost", None)
+        .await
+        .expect_err("Mattermost generic thread listing remains unsupported");
+    assert!(list_threads.to_string().contains("no native thread list"));
+
+    assert_eq!(before_invalid, 6, "only native identity and operation calls were made");
+    assert!(fixture.0.lock().await.is_empty(), "no managed fallback is allowed");
+    host.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn slack_threads_without_native_port_fail_explicitly_not_via_host() {
     let (host, fixture, _server) = connected_host().await;
     let backend = HostBackend::new(

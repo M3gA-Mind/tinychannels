@@ -22,6 +22,7 @@ use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tinychannels_bus::channel::{
@@ -242,6 +243,8 @@ struct LongTailFixture {
     dingtalk_stream: Option<DingTalkStream>,
     /// Message ids the mock returned, in response order.
     response_ids: Arc<Mutex<Vec<String>>>,
+    /// Conversation facts associated with post IDs created by the mock wire.
+    post_scopes: Arc<Mutex<HashMap<String, (String, Option<String>)>>>,
     observed: Mutex<Vec<WireObservation>>,
 }
 
@@ -255,15 +258,55 @@ impl LongTailFixture {
         }
         let server = MockServer::start().await;
         let response_ids = Arc::new(Mutex::new(Vec::new()));
+        let post_scopes = Arc::new(Mutex::new(HashMap::new()));
         let counter = Arc::new(AtomicU64::new(7000));
         let ids = response_ids.clone();
+        let scopes = post_scopes.clone();
         Mock::given(method("POST"))
             .and(path("/api/v4/posts"))
-            .respond_with(move |_: &Request| {
+            .respond_with(move |request: &Request| {
                 let id = counter.fetch_add(1, Ordering::SeqCst).to_string();
                 ids.lock().push(id.clone());
+                let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
+                scopes.lock().insert(
+                    id.clone(),
+                    (
+                        body["channel_id"].as_str().unwrap_or_default().to_owned(),
+                        body["root_id"].as_str().map(str::to_owned),
+                    ),
+                );
                 ResponseTemplate::new(201).set_body_json(json!({"id": id}))
             })
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v4/users/me"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "conformance-bot",
+                "username": "fixture-bot"
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/v4/reactions"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({"id": "reaction-1"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path_regex(
+                r"^/api/v4/users/conformance-bot/posts/[0-9]+/reactions/thumbsup$",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "OK"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("PUT"))
+            .and(path_regex(r"^/api/v4/posts/[0-9]+$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"id": "updated"})))
+            .mount(&server)
+            .await;
+        Mock::given(method("DELETE"))
+            .and(path_regex(r"^/api/v4/posts/[0-9]+$"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"status": "OK"})))
             .mount(&server)
             .await;
         Mock::given(method("POST"))
@@ -301,6 +344,7 @@ impl LongTailFixture {
             fixed_server: None,
             dingtalk_stream: None,
             response_ids,
+            post_scopes,
             observed: Mutex::new(Vec::new()),
         }
     }
@@ -472,6 +516,7 @@ impl LongTailFixture {
             fixed_server: Some(server),
             dingtalk_stream: Some(DingTalkStream { listener, stream }),
             response_ids,
+            post_scopes: Arc::default(),
             observed: Mutex::new(Vec::new()),
         }
     }
@@ -485,6 +530,7 @@ impl LongTailFixture {
             fixed_server: None,
             dingtalk_stream: None,
             response_ids: Arc::default(),
+            post_scopes: Arc::default(),
             observed: Mutex::new(Vec::new()),
         }
     }
