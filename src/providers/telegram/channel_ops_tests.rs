@@ -540,6 +540,66 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             self.record_operation(feature, "delete", None).await;
             return Ok(None);
         }
+        if feature == Feature::StreamingDraft {
+            let draft_intent = |id: &str, text: &str| tinychannels_bus::ChannelOutboundIntent {
+                idempotency_key: id.into(),
+                channel_id: "telegram".into(),
+                conversation_id: "100".into(),
+                channel_ref: Some(self.scope.channel.clone()),
+                conversation_ref: Some(self.scope.conversation.clone()),
+                turn_id: Some("conformance-turn".into()),
+                payload: tinychannels_bus::OutboundPayload::Text { text: text.into() },
+                ..Default::default()
+            };
+            let created = tinychannels_runtime::channel::ChannelStreamingDraft::upsert_draft(
+                self.channel.as_ref(),
+                None,
+                draft_intent("draft-create", "conformance draft"),
+            )
+            .await?;
+            self.record_operation(feature, "draft_create", Some(created.clone()))
+                .await;
+
+            let updated = tinychannels_runtime::channel::ChannelStreamingDraft::upsert_draft(
+                self.channel.as_ref(),
+                Some(&created),
+                draft_intent("draft-update", "conformance draft updated"),
+            )
+            .await?;
+            self.record_operation(feature, "draft_update", Some(updated.clone()))
+                .await;
+
+            let finalized = tinychannels_runtime::channel::ChannelEdit::edit(
+                self.channel.as_ref(),
+                &updated,
+                draft_intent("draft-finalize", "conformance draft final"),
+            )
+            .await?;
+            self.record_operation(feature, "draft_finalize", Some(finalized.clone()))
+                .await;
+
+            let abandoned = tinychannels_runtime::channel::ChannelStreamingDraft::upsert_draft(
+                self.channel.as_ref(),
+                None,
+                draft_intent("draft-cleanup", "conformance abandoned draft"),
+            )
+            .await?;
+            let request_count = self
+                .server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .len();
+            *self.request_cursor.lock().unwrap() = request_count;
+            tinychannels_runtime::channel::ChannelDelete::delete(self.channel.as_ref(), &abandoned)
+                .await?;
+            self.record_operation(feature, "draft_cancel_cleanup", None)
+                .await;
+            return Ok(Some(tinychannels_bus::channel::ChannelSendOutcome {
+                receipt: finalized,
+                error: None,
+            }));
+        }
         if feature == Feature::InboundReactions {
             self.capture_configured_ingress().await?;
             let captured = self
@@ -3227,7 +3287,7 @@ async fn configured_telegram_adapter_passes_mock_wire_conformance() {
             bot_token: TOKEN.into(),
             chat_id: Some("100".into()),
             allowed_users: vec!["*".into()],
-            stream_mode: crate::config::StreamMode::Off,
+            stream_mode: crate::config::StreamMode::Partial,
             draft_update_interval_ms: 1_000,
             silent_streaming: false,
             mention_only: false,
