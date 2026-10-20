@@ -278,6 +278,52 @@ async fn target_readback_failure_keeps_source_for_safe_retry() {
     );
 }
 
+#[tokio::test]
+async fn malformed_owner_marker_refuses_to_skip_a_migration() {
+    let (_backend, storage) = storage().await;
+    let docs = storage.documents().clone();
+    let marker_id = key::of(["tinychannels", "delivery-pending-v2"]).unwrap();
+    docs.ensure_collection(&CollectionSpec::new(MIGRATIONS))
+        .await
+        .unwrap();
+    docs.put(
+        MIGRATIONS,
+        marker_id.as_str(),
+        json!({"owner": OWNER, "step": "delivery-pending-v2", "done": true}),
+        Precondition::Absent,
+    )
+    .await
+    .unwrap();
+
+    let error = crate::storage::prepare(&docs).await.unwrap_err();
+
+    assert_eq!(error.kind(), ErrorKind::Conflict);
+    assert!(error.to_string().contains("marker is malformed"));
+}
+
+#[tokio::test]
+async fn marker_conflict_without_a_durable_marker_keeps_open_incomplete() {
+    let (_backend, storage) = storage().await;
+    let docs = storage.documents().clone();
+    let faults = FaultPlan::new();
+    // The first plain put is the owner's completion marker, after all source
+    // rows have been checked. A conflict without a readable matching marker
+    // must not let prepare report success.
+    faults.fail_operation_nth("documents.put", 1, ErrorKind::Conflict);
+    let failing: Arc<dyn DocumentStore> = Arc::new(Failing::with_plan(Arc::clone(&docs), faults));
+
+    let error = crate::storage::prepare(&failing).await.unwrap_err();
+
+    assert_eq!(error.kind(), ErrorKind::Conflict);
+    let marker_id = key::of(["tinychannels", "delivery-pending-v2"]).unwrap();
+    assert!(
+        docs.get(MIGRATIONS, marker_id.as_str())
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
 #[derive(Debug)]
 struct GrowOnFirstSourceQuery {
     inner: Arc<dyn DocumentStore>,
