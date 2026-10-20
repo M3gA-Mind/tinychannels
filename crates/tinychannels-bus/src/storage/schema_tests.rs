@@ -16,10 +16,14 @@ fn the_schema_composes_and_declares_every_collection_as_module_scoped() {
             } else {
                 SCHEMA_VERSION
             };
-            assert!(matches!(
-                item,
-                Item::Collection { version, .. } if *version == expected_version
-            ), "{}", item.name());
+            assert!(
+                matches!(
+                    item,
+                    Item::Collection { version, .. } if *version == expected_version
+                ),
+                "{}",
+                item.name()
+            );
             item.name()
         })
         .collect();
