@@ -2416,7 +2416,11 @@ async fn outbound_only_worker_sends_and_joins_without_polling_webhook_listener()
         host.clone(),
     );
     running
-        .send(SendMessage::new("fixture", "recipient"))
+        .send_typed(crate::provider::typed_test_message(
+            "fixture",
+            "fixture",
+            "recipient",
+        ))
         .await
         .unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(received.recv().await.unwrap().content, "fixture");
@@ -2425,7 +2429,11 @@ async fn outbound_only_worker_sends_and_joins_without_polling_webhook_listener()
     assert!(running.is_finished());
     assert!(
         running
-            .send(SendMessage::new("closed", "recipient"))
+            .send_typed(crate::provider::typed_test_message(
+                "fixture",
+                "closed",
+                "recipient",
+            ))
             .await
             .is_err()
     );

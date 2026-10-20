@@ -89,37 +89,6 @@ impl ChannelBackend for RecordingBackend {
         })
     }
 
-    async fn send_message(
-        &self,
-        _config: &ChannelsConfig,
-        channel: &str,
-        message: SendMessage,
-    ) -> anyhow::Result<ChannelSendMessageResult> {
-        Ok(ChannelSendMessageResult {
-            message_id: Some("msg-1".into()),
-            raw: Some(serde_json::json!({
-            "channel": channel,
-            "content": message.content,
-            })),
-            ..Default::default()
-        })
-    }
-
-    async fn send_message_value(
-        &self,
-        _config: &ChannelsConfig,
-        channel: &str,
-        message: Value,
-    ) -> anyhow::Result<ChannelSendMessageResult> {
-        Ok(ChannelSendMessageResult {
-            raw: Some(serde_json::json!({
-                "channel": channel,
-                "message": message,
-            })),
-            ..Default::default()
-        })
-    }
-
     async fn send_outbound_intent(
         &self,
         _config: &ChannelsConfig,
@@ -129,7 +98,7 @@ impl ChannelBackend for RecordingBackend {
             raw: Some(serde_json::json!({
                 "channel": intent.channel_id,
                 "idempotencyKey": intent.idempotency_key,
-                "message": legacy_message_value_from_outbound_intent(&intent),
+                "payload": intent.payload,
             })),
             ..Default::default()
         })
@@ -504,43 +473,6 @@ async fn status_validates_filtered_channel_before_delegating() {
 }
 
 #[tokio::test]
-async fn send_message_delegates_to_backend_with_config() {
-    let manager = ChannelManager::new(ChannelsConfig::default(), RecordingBackend::default());
-    let out = manager
-        .send_message("telegram", SendMessage::new("hello", "alice"))
-        .await
-        .unwrap();
-    let raw = out.raw.expect("raw send payload");
-    assert_eq!(raw["channel"], "telegram");
-    assert_eq!(raw["message"]["content"], "hello");
-    assert_eq!(raw["message"]["recipient"], "alice");
-    assert_eq!(raw["message"]["idempotencyKey"], raw["idempotencyKey"]);
-}
-
-#[tokio::test]
-async fn send_message_value_delegates_raw_payload_to_backend() {
-    let manager = ChannelManager::new(ChannelsConfig::default(), RecordingBackend::default());
-    let out = manager
-        .send_message_value(
-            "telegram",
-            serde_json::json!({"text": "hello", "photoUrl": "https://example.test/a.png"}),
-        )
-        .await
-        .unwrap();
-    let raw = out.raw.expect("raw send payload");
-    assert_eq!(raw["channel"], "telegram");
-    assert_eq!(raw["message"]["text"], "hello");
-    assert_eq!(raw["message"]["photoUrl"], "https://example.test/a.png");
-    assert_eq!(raw["message"]["idempotencyKey"], raw["idempotencyKey"]);
-    assert!(
-        raw["idempotencyKey"]
-            .as_str()
-            .expect("idempotency key")
-            .starts_with("legacy-send:telegram:")
-    );
-}
-
-#[tokio::test]
 async fn disconnect_delegates_to_backend_with_memory_flag() {
     let manager = ChannelManager::new(ChannelsConfig::default(), RecordingBackend::default());
     let out = manager
@@ -703,8 +635,14 @@ async fn manager_preserves_saved_config_and_prepared_credentials() {
 #[tokio::test]
 async fn manager_forwards_explicit_outbound_intent_without_replacing_its_key() {
     let manager = ChannelManager::new(ChannelsConfig::default(), RecordingBackend::default());
-    let mut intent =
-        outbound_intent_from_send_message("telegram", &SendMessage::new("hello", "alice"));
+    let mut intent = ChannelOutboundIntent {
+        channel_id: "telegram".into(),
+        conversation_id: "alice".into(),
+        payload: crate::channel::OutboundPayload::Text {
+            text: "hello".into(),
+        },
+        ..Default::default()
+    };
     intent.idempotency_key = "caller-key".into();
     let raw = manager
         .send_outbound_intent(intent)
@@ -714,5 +652,5 @@ async fn manager_forwards_explicit_outbound_intent_without_replacing_its_key() {
         .unwrap();
     assert_eq!(raw["idempotencyKey"], "caller-key");
     assert_eq!(raw["channel"], "telegram");
-    assert_eq!(raw["message"]["content"], "hello");
+    assert_eq!(raw["payload"]["text"], "hello");
 }
