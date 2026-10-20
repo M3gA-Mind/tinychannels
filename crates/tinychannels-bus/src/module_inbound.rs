@@ -50,7 +50,10 @@ pub struct PrepareChannelInboundRequest {
     pub namespace: String,
     pub session_policy: SessionKeyPolicy,
     /// Existing callers remain text-only unless they explicitly opt in.
-    #[serde(default, skip_serializing_if = "ChannelInboundPreparationMode::is_legacy_text")]
+    #[serde(
+        default,
+        skip_serializing_if = "ChannelInboundPreparationMode::is_legacy_text"
+    )]
     pub preparation_mode: ChannelInboundPreparationMode,
 }
 

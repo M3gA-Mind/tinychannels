@@ -23,7 +23,10 @@ fn inbound_vocabulary_preserves_optional_sender_and_existing_message_wire_shape(
     assert_eq!(serde_json::to_value(restored).unwrap(), wire);
 
     let mut legacy_wire = wire.clone();
-    legacy_wire.as_object_mut().unwrap().remove("preparation_mode");
+    legacy_wire
+        .as_object_mut()
+        .unwrap()
+        .remove("preparation_mode");
     let restored: PrepareChannelInboundRequest = serde_json::from_value(legacy_wire).unwrap();
     assert_eq!(
         restored.preparation_mode,
