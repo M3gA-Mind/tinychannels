@@ -2745,8 +2745,8 @@ async fn inbound_voice_transcript_projects_to_legacy_text_and_preserves_typed_sc
     use tinychannels_bus::module_inbound::{ChannelInboundSource, PrepareChannelInboundRequest};
     use tinychannels_bus::{
         ChannelInboundEnvelope, ChannelRef, ContentPart, ConversationKind, ConversationRef,
-        MediaKind, MediaReference, SenderRef, VoiceNote, VoiceTranscript,
-        VoiceTranscriptSource, VoiceTranscriptState,
+        MediaKind, MediaReference, SenderRef, VoiceNote, VoiceTranscript, VoiceTranscriptSource,
+        VoiceTranscriptState,
     };
 
     let service = inbound_preparation_service().await;
@@ -2766,22 +2766,44 @@ async fn inbound_voice_transcript_projects_to_legacy_text_and_preserves_typed_sc
             id: "alice".into(),
             ..Default::default()
         },
-        parts: vec![ContentPart::VoiceNote {
-            voice_note: VoiceNote {
-                media: MediaReference {
-                    opaque_id: Some("voice-media-ref".into()),
-                    kind: MediaKind::Audio,
+        parts: vec![
+            ContentPart::Text {
+                text: "caption".into(),
+                markdown_dialect: None,
+            },
+            ContentPart::VoiceNote {
+                voice_note: VoiceNote {
+                    media: MediaReference {
+                        opaque_id: Some("voice-media-ref".into()),
+                        kind: MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    transcript: Some(VoiceTranscript {
+                        text: "turn left at the next street".into(),
+                        language: Some("en".into()),
+                        state: VoiceTranscriptState::Complete,
+                        source: VoiceTranscriptSource::HostStt,
+                    }),
                     ..Default::default()
                 },
-                transcript: Some(VoiceTranscript {
-                    text: "turn left at the next street".into(),
-                    language: Some("en".into()),
-                    state: VoiceTranscriptState::Complete,
-                    source: VoiceTranscriptSource::HostStt,
-                }),
-                ..Default::default()
             },
-        }],
+            ContentPart::VoiceNote {
+                voice_note: VoiceNote {
+                    media: MediaReference {
+                        opaque_id: Some("voice-media-ref-2".into()),
+                        kind: MediaKind::Audio,
+                        ..Default::default()
+                    },
+                    transcript: Some(VoiceTranscript {
+                        text: "then stop".into(),
+                        language: Some("en".into()),
+                        state: VoiceTranscriptState::Complete,
+                        source: VoiceTranscriptSource::Provider,
+                    }),
+                    ..Default::default()
+                },
+            },
+        ],
         ..Default::default()
     };
 
@@ -2797,11 +2819,39 @@ async fn inbound_voice_transcript_projects_to_legacy_text_and_preserves_typed_sc
         .await
         .expect("a completed voice transcript is valid legacy turn text");
 
-    assert_eq!(prepared.message.content, "turn left at the next street");
+    assert_eq!(
+        prepared.message.content,
+        "caption\nturn left at the next street\nthen stop"
+    );
     assert_eq!(prepared.envelope, envelope);
     assert_eq!(prepared.thread_id, "channel:telegram/alice/chat-7");
-    assert_eq!(prepared.envelope.channel.account_id.as_deref(), Some("telegram:bot-a"));
-    assert_eq!(prepared.envelope.conversation.topic_id.as_deref(), Some("topic-3"));
+    assert_eq!(
+        prepared.envelope.channel.account_id.as_deref(),
+        Some("telegram:bot-a")
+    );
+    assert_eq!(
+        prepared.envelope.conversation.topic_id.as_deref(),
+        Some("topic-3")
+    );
+
+    let mut incomplete = envelope.clone();
+    let ContentPart::VoiceNote { voice_note } = &mut incomplete.parts[1] else {
+        unreachable!("the voice note follows the caption");
+    };
+    voice_note.transcript.as_mut().unwrap().state = VoiceTranscriptState::Pending;
+    assert!(
+        service
+            .prepare_channel_inbound(PrepareChannelInboundRequest {
+                source: ChannelInboundSource::Envelope {
+                    envelope: incomplete,
+                    timestamp: 43,
+                },
+                namespace: "openhuman".into(),
+                session_policy: Default::default(),
+            })
+            .await
+            .is_err()
+    );
     service.shutdown().await.unwrap();
 }
 
