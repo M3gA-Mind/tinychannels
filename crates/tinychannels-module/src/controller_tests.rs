@@ -76,7 +76,7 @@ impl BackendFixture {
                         ..
                     } => Ok(ChannelBackendResult::ProgressiveTransport(Box::new(
                         Response::Success(serde_json::json!({
-                            "message_id": "managed-edited-1",
+                            "message_id": "managed-message-1",
                             "channel": channel_ref,
                             "conversation": conversation,
                         })),
@@ -662,13 +662,24 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                 }) {
                     return Err(tinychannels_bus::channel::ChannelSendError::default());
                 }
-                self.replies
-                    .execute(ProgressiveCommand::Finish {
+                let finalized = self
+                    .replies
+                    .execute(ProgressiveCommand::FeedOutput {
                         handle: handle.clone(),
-                        text: "managed draft finalized".into(),
+                        events: vec![ChannelOutputEvent::FinalMessage {
+                            text: "managed draft finalized".into(),
+                            parts: Vec::new(),
+                            receipt: None,
+                        }],
                     })
                     .await
                     .map_err(|_| tinychannels_bus::channel::ChannelSendError::default())?;
+                let ProgressiveResult::DeliveryOutcome { outcome } = finalized else {
+                    return Err(tinychannels_bus::channel::ChannelSendError::default());
+                };
+                if outcome.error.is_some() {
+                    return Err(outcome.error.clone().unwrap());
+                }
                 let requests = self.backend.0.lock().await.clone();
                 let responses = self.backend.1.lock().await.clone();
                 let index = requests
@@ -708,6 +719,14 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                     .to_owned();
                 let channel = channel_ref.clone().ok_or_default()?;
                 let conversation = conversation.clone().ok_or_default()?;
+                if outcome.receipt.channel.as_ref() != Some(&channel)
+                    || outcome.receipt.conversation.as_ref() != Some(&conversation)
+                    || outcome.receipt.primary_platform_message_id.as_deref()
+                        != Some(returned_id.as_str())
+                    || outcome.receipt.platform_message_ids != [returned_id.clone()]
+                {
+                    return Err(tinychannels_bus::channel::ChannelSendError::default());
+                }
                 self.record(
                     feature,
                     "edit",
@@ -716,20 +735,8 @@ impl tinychannels_conformance::ConformanceFixture for ManagedConformanceFixture 
                     vec![returned_id.clone()],
                     serde_json::json!({"request": request, "response": response}),
                 );
-                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
-                outcome.receipt.channel = Some(channel);
-                outcome.receipt.conversation = Some(conversation);
-                outcome.receipt.primary_platform_message_id = Some(returned_id.clone());
-                outcome.receipt.platform_message_ids = vec![returned_id.clone()];
-                outcome
-                    .receipt
-                    .parts
-                    .push(tinychannels_bus::channel::MessageReceiptPart {
-                        platform_message_id: returned_id,
-                        ..Default::default()
-                    });
-                outcome.receipt.idempotency_key = Some(message_id.clone());
-                Ok(Some(outcome))
+                let _ = message_id;
+                Ok(Some(*outcome))
             }
             _ => Err(tinychannels_bus::channel::ChannelSendError::default()),
         }
