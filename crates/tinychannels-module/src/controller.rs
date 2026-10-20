@@ -754,6 +754,37 @@ impl ChannelBackend for HostBackend {
                 ..Default::default()
             });
         }
+        if let Some(slack) = self.slack_native(config, channel)? {
+            let request = tinychannels::providers::discord::DiscordReactionRequest::from_value(
+                &reaction,
+            )
+            .map_err(anyhow::Error::msg)?;
+            let reaction = tinychannels_bus::channel::ChannelReaction {
+                value: request.emoji.unwrap_or_default(),
+                custom_emoji_id: request.custom_emoji_id,
+            };
+            tinychannels::channel::ChannelReaction::send_reaction(
+                &slack,
+                &tinychannels_bus::channel::ChannelRef {
+                    id: "slack".into(),
+                    account_id: None,
+                },
+                    &tinychannels_bus::channel::ConversationRef {
+                        kind: tinychannels_bus::ConversationKind::Channel,
+                        id: request.channel_id,
+                        ..Default::default()
+                    },
+                    &request.message_id,
+                    &reaction,
+                    request.remove,
+            )
+                .await
+                .map_err(|error| anyhow::anyhow!(error.message))?;
+            return Ok(ChannelReactionResult {
+                success: true,
+                ..Default::default()
+            });
+        }
         Self::reject_unported(config, channel, "reaction")?;
         match self
             .invoke(ChannelBackendRequest::SendReaction {
