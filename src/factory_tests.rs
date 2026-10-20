@@ -134,15 +134,14 @@ fn yuanbao_factory_capabilities_include_only_installed_host_services() {
     };
     let host: Arc<dyn ChannelHost> = ChannelHostBuilder::new()
         .voice_media_store(Arc::new(StubVoice::default()))
-        .transcriber(Arc::new(crate::providers::native::fixtures::StubTranscriber::default()))
+        .transcriber(Arc::new(
+            crate::providers::native::fixtures::StubTranscriber::default(),
+        ))
         .build();
 
-    let adapter = build_yuanbao_channel_with_voice_http_for_test(
-        &config,
-        &host,
-        reqwest::Client::new(),
-    )
-    .expect("the configured Yuanbao stanza builds through the factory");
+    let adapter =
+        build_yuanbao_channel_with_voice_http_for_test(&config, &host, reqwest::Client::new())
+            .expect("the configured Yuanbao stanza builds through the factory");
     let descriptor = adapter.descriptor();
     let capabilities = adapter.declared_capabilities();
 
@@ -151,7 +150,13 @@ fn yuanbao_factory_capabilities_include_only_installed_host_services() {
     assert!(capabilities.content.text.outbound);
     assert!(capabilities.addressing.reply_to_id);
     assert!(!capabilities.addressing.thread_id);
-    assert!(capabilities.actions.supported.iter().any(|action| action == "typing"));
+    assert!(
+        capabilities
+            .actions
+            .supported
+            .iter()
+            .any(|action| action == "typing")
+    );
     assert!(capabilities.voice_in.supported);
     assert!(capabilities.content.image.outbound == false);
     assert!(capabilities.content.file.outbound == false);
