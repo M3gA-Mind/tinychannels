@@ -268,6 +268,13 @@ async fn typed_gateway_delivers_the_original_rich_ingress_to_its_sink() {
         let heartbeat = ws.next().await.unwrap().unwrap();
         assert_eq!(serde_json::from_str::<serde_json::Value>(&heartbeat.to_string()).unwrap(), json!({"op": 1, "d": 11}));
         ws.send(Message::Text(
+            json!({"op": 0, "s": 11, "t": "THREAD_CREATE", "d": {
+                "id": crate::providers::discord::support::THREAD,
+                "type": 11,
+                "parent_id": crate::providers::discord::support::CHANNEL
+            }}).to_string().into(),
+        )).await.unwrap();
+        ws.send(Message::Text(
             json!({
                 "op": 0, "s": 12, "t": "MESSAGE_CREATE", "d": {
                     "id": "1111111111111111111",
