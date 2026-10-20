@@ -2426,6 +2426,7 @@ async fn configured_running_telegram_adapter_passes_real_mock_wire_conformance()
             .with_api_base_for_test(server.uri()),
     );
     let running = Running::start_telegram(channel, hooks, host, None, false);
+    assert!(running.channel.is_none(), "Telegram uses its typed adapter ports directly");
     let handle = running.adapter_handle();
     let repository = provider_host
         .media_repository()
@@ -2834,6 +2835,7 @@ async fn configured_telegram_native_optional_ports_share_ordered_queue_and_rejec
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_telegram(channel, hooks, host, None, true);
+    assert!(running.channel.is_none(), "Telegram uses its typed adapter ports directly");
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::TelegramNativeV2);
 
@@ -3032,6 +3034,7 @@ async fn configured_telegram_callback_ingress_enforces_allowlist_and_preserves_s
             .with_api_base_for_test(server.uri()),
     );
     let running = Running::start_telegram(channel, hooks, host, None, false);
+    assert!(running.channel.is_none(), "Telegram uses its typed adapter ports directly");
 
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -3643,6 +3646,7 @@ async fn configured_telegram_native_adapter_owns_polling_typing_drafts_and_scope
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_telegram(channel, hooks, host, None, true);
+    assert!(running.channel.is_none(), "Telegram uses its typed adapter ports directly");
     let handle = running.adapter_handle();
     let native = handle.native.as_ref().unwrap().clone();
 
