@@ -240,6 +240,7 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
             return Ok(None);
         }
         if feature == Feature::InboundReactions {
+            self.events.events.lock().unwrap().clear();
             let update = serde_json::json!({
                 "update_id": 901,
                 "message_reaction": {
@@ -257,13 +258,16 @@ impl tinychannels_conformance::AdapterFixture for TelegramWireFixture {
                 #[allow(deprecated)]
                 tinychannels_runtime::traits::Channel::listen(channel.as_ref(), tx).await
             });
-            let event = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                self.events.notified.notified(),
-            )
+            tokio::time::timeout(std::time::Duration::from_secs(2), async {
+                loop {
+                    self.events.notified.notified().await;
+                    if !self.events.events.lock().unwrap().is_empty() {
+                        break;
+                    }
+                }
+            })
             .await
             .map_err(|_| unsupported_fixture_operation())?;
-            let _ = event;
             listener.abort();
             let requests = self.server.received_requests().await.unwrap_or_default();
             let request = requests
