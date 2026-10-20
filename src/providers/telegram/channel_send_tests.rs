@@ -165,7 +165,7 @@ async fn send_text_chunks_retries_without_markdown_when_markdown_rejected() {
 }
 
 #[tokio::test]
-async fn send_text_chunks_short_message_retries_plain_preserving_thread_and_reply() {
+async fn channel_send_short_message_retries_plain_preserving_thread_and_reply() {
     let server = mock_api().await;
     Mock::given(method("POST"))
         .and(path(api_path("sendMessage")))
@@ -179,7 +179,7 @@ async fn send_text_chunks_short_message_retries_plain_preserving_thread_and_repl
     mount_post(&server, "sendMessage", ok()).await;
     let ch = channel_for(&server, &["*"]);
 
-    ch.send_text_chunks("**markdown fallback**", "100", Some("3"), Some(5))
+    ch.send(&SendMessage::new("**markdown fallback**", "100:3").in_thread(Some("5".into())))
         .await
         .unwrap();
 
