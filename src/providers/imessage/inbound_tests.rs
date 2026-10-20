@@ -1,6 +1,5 @@
 use super::*;
 use crate::providers::imessage::fixtures::*;
-use crate::traits::Channel as _;
 use std::time::Duration;
 use tinychannels_bus::{ChannelEventKind, ContentPart};
 
