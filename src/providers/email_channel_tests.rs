@@ -887,7 +887,7 @@ async fn processing_stops_when_the_receiver_is_gone() {
     session.select("INBOX").await.unwrap();
     channel.process_unseen(&mut session, &tx).await.unwrap();
     assert!(channel.seen_messages.lock().await.is_empty());
-    drop(session);
+    let _ = session.logout().await;
     let transcripts = server.await.unwrap();
     assert!(!transcripts[0].iter().any(|l| l.contains("UID STORE")));
 }
@@ -1378,7 +1378,7 @@ async fn accepted_email_retries_only_failed_seen_acknowledgement() {
     assert_eq!(accepted.message_id, "a1@example.com");
     assert!(rx.try_recv().is_err());
     assert_eq!(channel.seen_messages.lock().await.len(), 1);
-    let _ = session.logout().await;
+    drop(session);
     let failed_commands = server.await.unwrap().remove(0).join("\n");
     assert!(failed_commands.contains("UID STORE 7 +FLAGS (\\Seen)"));
 
