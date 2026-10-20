@@ -88,6 +88,15 @@ pub(crate) struct SeenReservation {
     active: bool,
 }
 
+pub(crate) enum SeenReservationResult {
+    /// The event was already accepted and can be safely suppressed.
+    Accepted,
+    /// Another dispatch owns the key, but has not been accepted yet.
+    Pending,
+    /// This dispatch owns the key until it commits or is dropped.
+    Reserved(SeenReservation),
+}
+
 impl SeenReservation {
     pub(crate) fn commit(mut self) {
         let mut state = self.seen.lock();
@@ -127,12 +136,15 @@ impl HostPorts {
     /// Reserve a key while an ingress write is in progress. Only a completed
     /// write calls [`SeenReservation::commit`]; cancellation and rejection
     /// release the reservation through `Drop`.
-    pub(crate) fn reserve_seen(&self, key: String) -> Option<SeenReservation> {
+    pub(crate) fn reserve_seen(&self, key: String) -> SeenReservationResult {
         let mut state = self.seen.lock();
-        if state.accepted.contains(&key) || !state.pending.insert(key.clone()) {
-            return None;
+        if state.accepted.contains(&key) {
+            return SeenReservationResult::Accepted;
         }
-        Some(SeenReservation {
+        if !state.pending.insert(key.clone()) {
+            return SeenReservationResult::Pending;
+        }
+        SeenReservationResult::Reserved(SeenReservation {
             seen: Arc::clone(&self.seen),
             key,
             active: true,

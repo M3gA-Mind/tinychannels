@@ -8,7 +8,7 @@ use crate::channel::ChannelInboundSink;
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, channel_event, media_of, publish, publish_event,
 };
-use crate::providers::native::SeenReservation;
+use crate::providers::native::{SeenReservation, SeenReservationResult};
 use crate::traits::ChannelMessage;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -60,7 +60,7 @@ impl SignalChannel {
         }
     }
 
-    fn reserve_seen(&self, key: String) -> Option<SeenReservation> {
+    fn reserve_seen(&self, key: String) -> SeenReservationResult {
         self.native.reserve_seen(key)
     }
 
@@ -188,8 +188,10 @@ impl SignalChannel {
             "signal:reaction:{direction}:{target_ts}:{}:{}",
             accepted.sender, accepted.timestamp
         );
-        let Some(reservation) = self.reserve_seen(event_id.clone()) else {
-            return true;
+        let reservation = match self.reserve_seen(event_id.clone()) {
+            SeenReservationResult::Accepted => return true,
+            SeenReservationResult::Pending => return false,
+            SeenReservationResult::Reserved(reservation) => reservation,
         };
         let message_id = format!("sig_{target_ts}");
         let provider_message_id = Some(target_ts.to_string());
@@ -282,8 +284,10 @@ impl SignalChannel {
                 Some(Self::conversation_of(&sender)),
                 kind,
             );
-            let Some(reservation) = self.reserve_seen(event_id) else {
-                continue;
+            let reservation = match self.reserve_seen(event_id) {
+                SeenReservationResult::Accepted => continue,
+                SeenReservationResult::Pending => return false,
+                SeenReservationResult::Reserved(reservation) => reservation,
             };
             if !self
                 .publish_typed(sink, tinychannels_bus::ChannelIngress::Event(event))
@@ -307,8 +311,10 @@ impl SignalChannel {
             return true;
         };
         let event_id = format!("signal:delete:{stamp}:{}", accepted.sender);
-        let Some(reservation) = self.reserve_seen(event_id.clone()) else {
-            return true;
+        let reservation = match self.reserve_seen(event_id.clone()) {
+            SeenReservationResult::Accepted => return true,
+            SeenReservationResult::Pending => return false,
+            SeenReservationResult::Reserved(reservation) => reservation,
         };
         let _ = envelope;
         let event = channel_event(
@@ -416,8 +422,10 @@ impl SignalChannel {
             return true;
         }
         let text = data.message.as_deref().unwrap_or_default();
-        let Some(reservation) = self.reserve_seen(format!("{}:{}", accepted.sender, accepted.timestamp)) else {
-            return true;
+        let reservation = match self.reserve_seen(format!("{}:{}", accepted.sender, accepted.timestamp)) {
+            SeenReservationResult::Accepted => return true,
+            SeenReservationResult::Pending => return false,
+            SeenReservationResult::Reserved(reservation) => reservation,
         };
         let message_id = format!("sig_{}", accepted.timestamp);
         let conversation = Self::conversation_of(&accepted.target);

@@ -495,6 +495,14 @@ async fn cancelled_blocked_delivery_can_be_retried() {
     tokio::time::timeout(std::time::Duration::from_secs(2), blocked.started.notified())
         .await
         .expect("listener must reach the blocked sink");
+    let concurrent = RecordingTypedSink::default();
+    assert!(
+        !channel
+            .dispatch_typed_envelope(&retry_envelope, &concurrent)
+            .await,
+        "a duplicate must not be acknowledged while the first push is pending"
+    );
+    assert!(concurrent.0.lock().unwrap().is_empty());
     cancel_tx.send(true).unwrap();
     assert_eq!(dispatch.await.unwrap().unwrap(), None);
 
