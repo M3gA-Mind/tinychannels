@@ -103,8 +103,10 @@ pub(crate) fn build_native_v2(
                 NativeLaunch::long_tail("Signal", adapter, LongTailListenerMode::Adapter)
             })
         }
-        "imessage" => tinychannels::factory::build_imessage_channel(config, host)
-            .map(|channel| NativeLaunch::with_legacy("iMessage", channel)),
+        "imessage" => tinychannels::factory::build_imessage_channel(config, host).map(|channel| {
+            let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
+            NativeLaunch::long_tail("iMessage", adapter, LongTailListenerMode::Adapter)
+        }),
         "linq" => tinychannels::factory::build_linq_channel(config, host, http).map(|channel| {
             let adapter: Arc<dyn tinychannels::LongTailNative> = channel;
             NativeLaunch::long_tail("Linq", adapter, LongTailListenerMode::Webhook)

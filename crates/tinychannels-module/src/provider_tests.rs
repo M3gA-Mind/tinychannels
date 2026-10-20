@@ -5125,6 +5125,10 @@ async fn a_built_imessage_launch_starts_as_the_native_imessage_adapter() {
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::IMessageNativeV2);
     assert_eq!(handle.descriptor().id, "imessage");
+    assert!(
+        running.channel.is_none(),
+        "configured iMessage launch must use its typed listener without retaining Channel"
+    );
     running.stop().await.unwrap();
 }
 

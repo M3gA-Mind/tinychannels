@@ -8,7 +8,7 @@
 //! and the app must not depend on the module's implementation, so each keeps
 //! its own small reader over the same documented schema.
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// Seconds between the Unix epoch and the Apple epoch (2001-01-01).
 const APPLE_EPOCH_OFFSET_SECS: i64 = 978_307_200;
@@ -41,6 +41,7 @@ pub(crate) struct InboundRow {
 /// One of our messages the recipient has read.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ReadRow {
+    pub(crate) rowid: i64,
     pub(crate) guid: String,
     pub(crate) recipient: String,
     pub(crate) date_read: i64,
@@ -60,10 +61,11 @@ const ATTACHMENTS_SQL: &str = "SELECT a.filename, a.mime_type, a.transfer_name, 
      FROM attachment a JOIN message_attachment_join j ON j.attachment_id = a.ROWID \
      WHERE j.message_id = ?1 ORDER BY a.ROWID ASC";
 
-const READ_SQL: &str = "SELECT m.guid, h.id, m.date_read \
+const READ_SQL: &str = "SELECT m.ROWID, m.guid, h.id, m.date_read \
      FROM message m JOIN handle h ON m.handle_id = h.ROWID \
-     WHERE m.is_from_me = 1 AND m.date_read > ?1 \
-     ORDER BY m.date_read ASC LIMIT 20";
+     WHERE m.is_from_me = 1 AND m.date_read > 0 \
+       AND (m.date_read > ?1 OR (m.date_read = ?1 AND m.ROWID > ?2)) \
+     ORDER BY m.date_read ASC, m.ROWID ASC LIMIT 20";
 
 /// Inbound messages newer than `since_rowid`, oldest first, at most 20.
 pub(crate) fn inbound_since(
@@ -113,14 +115,37 @@ pub(crate) fn max_date_read(conn: &Connection) -> anyhow::Result<i64> {
     Ok(value.unwrap_or(0))
 }
 
+/// The newest read receipt cursor, ordered by `(date_read, ROWID)`.
+pub(crate) fn max_read_cursor(conn: &Connection) -> anyhow::Result<(i64, i64)> {
+    let cursor = conn
+        .query_row(
+            "SELECT date_read, ROWID FROM message WHERE is_from_me = 1 AND date_read > 0 \
+             ORDER BY date_read DESC, ROWID DESC LIMIT 1",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    Ok(cursor.unwrap_or((0, 0)))
+}
+
 /// Our sent messages read after `since`, oldest read first.
 pub(crate) fn read_since(conn: &Connection, since: i64) -> anyhow::Result<Vec<ReadRow>> {
+    read_since_cursor(conn, since, i64::MAX)
+}
+
+/// Our sent messages after a composite receipt cursor, oldest first.
+pub(crate) fn read_since_cursor(
+    conn: &Connection,
+    since_date: i64,
+    since_rowid: i64,
+) -> anyhow::Result<Vec<ReadRow>> {
     let mut stmt = conn.prepare(READ_SQL)?;
-    let rows = stmt.query_map([since], |row| {
+    let rows = stmt.query_map([since_date, since_rowid], |row| {
         Ok(ReadRow {
-            guid: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
-            recipient: row.get(1)?,
-            date_read: row.get(2)?,
+            rowid: row.get(0)?,
+            guid: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+            recipient: row.get(2)?,
+            date_read: row.get(3)?,
         })
     })?;
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
