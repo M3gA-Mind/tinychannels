@@ -212,9 +212,11 @@ impl Fixture {
         let reply_to_id = crate::providers::yuanbao::wire::get_string(&fields, 7);
         let elements = crate::providers::yuanbao::wire::get_repeated_bytes(&fields, 6);
         let expected_text = match feature {
-            Feature::Text => "conformance",
-            Feature::ReplyAddressing => "reply",
-            _ => panic!("send recorder only accepts text features"),
+            Feature::Text => Some("conformance"),
+            Feature::ReplyAddressing => Some("reply"),
+            Feature::Image => Some("image caption"),
+            Feature::File => Some("file caption"),
+            _ => None,
         };
         let payload_kinds = elements
             .iter()
@@ -227,10 +229,64 @@ impl Fixture {
                             crate::providers::yuanbao::wire::parse_fields(&content).unwrap();
                         assert_eq!(
                             crate::providers::yuanbao::wire::get_string(&content_fields, 1),
-                            expected_text,
+                            expected_text.expect("text element requires the expected caption"),
                             "captured Yuanbao text must match the outgoing intent"
                         );
                         "text".to_owned()
+                    }
+                    "TIMImageElem" => {
+                        assert_eq!(feature, Feature::Image);
+                        let content = crate::providers::yuanbao::wire::get_bytes(&fields, 2);
+                        let content_fields =
+                            crate::providers::yuanbao::wire::parse_fields(&content).unwrap();
+                        let image = crate::providers::yuanbao::wire::get_repeated_bytes(
+                            &content_fields,
+                            8,
+                        );
+                        assert_eq!(image.len(), 1);
+                        let image_fields =
+                            crate::providers::yuanbao::wire::parse_fields(&image[0]).unwrap();
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_string(&image_fields, 5),
+                            "https://cdn.example/yuanbao-uploaded"
+                        );
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_varint(&image_fields, 2),
+                            matrix_png(320, 200).len() as u64
+                        );
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_varint(&image_fields, 3),
+                            320
+                        );
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_varint(&image_fields, 4),
+                            200
+                        );
+                        assert!(!crate::providers::yuanbao::wire::get_string(
+                            &content_fields,
+                            2
+                        )
+                        .is_empty());
+                        "image".to_owned()
+                    }
+                    "TIMFileElem" => {
+                        assert_eq!(feature, Feature::File);
+                        let content = crate::providers::yuanbao::wire::get_bytes(&fields, 2);
+                        let content_fields =
+                            crate::providers::yuanbao::wire::parse_fields(&content).unwrap();
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_string(&content_fields, 10),
+                            "https://cdn.example/yuanbao-uploaded"
+                        );
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_string(&content_fields, 12),
+                            "conformance.pdf"
+                        );
+                        assert_eq!(
+                            crate::providers::yuanbao::wire::get_varint(&content_fields, 11),
+                            b"%PDF-1.7 yuanbao conformance".len() as u64
+                        );
+                        "file".to_owned()
                     }
                     other => other.to_owned(),
                 }
@@ -608,11 +664,11 @@ impl AdapterFixture for Fixture {
             }
             Feature::VoiceIn => self.voice_in().await,
             Feature::Image => {
-                self.refuse_send(
+                self.send_and_record(
                     feature,
                     content(ContentPart::Image {
                         media: media(MediaKind::Image),
-                        caption: None,
+                        caption: Some("image caption".into()),
                         alt_text: None,
                     }),
                 )
@@ -644,12 +700,12 @@ impl AdapterFixture for Fixture {
                 .await
             }
             Feature::File => {
-                self.refuse_send(
+                self.send_and_record(
                     feature,
                     content(ContentPart::File {
                         media: media(MediaKind::Document),
                         file_name: Some("fixture.pdf".into()),
-                        caption: None,
+                        caption: Some("file caption".into()),
                     }),
                 )
                 .await
