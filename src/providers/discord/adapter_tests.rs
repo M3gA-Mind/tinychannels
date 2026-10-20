@@ -397,7 +397,7 @@ async fn blocked_typed_delivery_does_not_stop_gateway_heartbeat_handling() {
         request_rx.await.unwrap();
         ws.send(Message::Text(json!({"op": 1, "s": 21}).to_string().into())).await.unwrap();
         let received = tokio::time::timeout(std::time::Duration::from_secs(2), ws.next()).await;
-        let responded = received.ok().and_then(Result::ok).is_some_and(|frame| {
+        let responded = received.ok().flatten().and_then(Result::ok).is_some_and(|frame| {
             serde_json::from_str::<serde_json::Value>(&frame.to_string())
                 .is_ok_and(|value| value == json!({"op": 1, "d": 21}))
         });
