@@ -170,15 +170,16 @@ impl ApprovalSurface {
         );
         match channel.send(intent).await {
             Ok(outcome) if outcome.error.is_none() => SurfaceOutcome::Sent,
-            Ok(outcome) => SurfaceOutcome::SendFailed(anyhow::Error::new(
-                outcome.error.expect("guarded above"),
+            Ok(outcome) => SurfaceOutcome::SendFailed(anyhow::anyhow!(
+                outcome.error.expect("guarded above").message
             )),
             Err(err) => {
                 tracing::warn!(
                     "{LOG_PREFIX} failed to send approval prompt channel={channel_name} \
-                     request_id={request_id} tool={tool_name}: {err}"
+                     request_id={request_id} tool={tool_name}: {}",
+                    err.message
                 );
-                SurfaceOutcome::SendFailed(err)
+                SurfaceOutcome::SendFailed(anyhow::anyhow!(err.message))
             }
         }
     }
