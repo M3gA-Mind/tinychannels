@@ -437,6 +437,19 @@ async fn typed_send_without_connection_is_retryable_before_dispatch() {
 }
 
 #[test]
+fn typed_write_failure_is_uncertain_after_dispatch_may_have_started() {
+    let error = IrcChannel::typed_send_failure(anyhow::anyhow!("socket write failed"));
+
+    assert_eq!(
+        error.kind,
+        tinychannels_bus::channel::SendErrorKind::Unknown
+    );
+    assert!(!error.retryable);
+    assert!(error.sent_before_error);
+    assert_eq!(error.message, "IRC send failed");
+}
+
+#[test]
 fn parse_prefix_without_command_returns_none() {
     assert!(IrcMessage::parse(":server.example ").is_none());
     assert!(IrcMessage::parse(":server.example").is_none());

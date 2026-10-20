@@ -358,6 +358,18 @@ impl IrcChannel {
         Ok(())
     }
 
+    fn typed_send_failure(error: anyhow::Error) -> tinychannels_bus::channel::ChannelSendError {
+        use tinychannels_bus::channel::{ChannelSendError, SendErrorKind};
+
+        tracing::debug!(%error, "[irc] typed send failed");
+        ChannelSendError {
+            kind: SendErrorKind::Unknown,
+            message: "IRC send failed".into(),
+            sent_before_error: true,
+            ..Default::default()
+        }
+    }
+
     async fn listen_owned(
         &self,
         ingress: IrcIngress<'_>,
@@ -813,15 +825,7 @@ impl crate::providers::long_tail::LongTail for IrcChannel {
         };
         Self::send_text_connected(writer, recipient, &text)
             .await
-            .map_err(|error| {
-                tracing::debug!(%error, "[irc] typed send failed");
-                ChannelSendError {
-                    kind: SendErrorKind::Unknown,
-                    message: "IRC send failed".into(),
-                    sent_before_error: true,
-                    ..Default::default()
-                }
-            })?;
+            .map_err(Self::typed_send_failure)?;
         Ok(tinychannels_bus::channel::ChannelSendOutcome::default())
     }
 
