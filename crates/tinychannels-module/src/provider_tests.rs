@@ -4348,19 +4348,33 @@ async fn configured_signal_native_adapter_routes_every_port_through_the_ordered_
         .mount(&server)
         .await;
     let instance = "signal:account-a".to_owned();
-    let channel = Arc::new(tinychannels::SignalChannel::new(
-        server.uri(),
-        "+15550000".into(),
-        None,
-        vec!["*".into()],
-        false,
-        false,
-    ));
     let hooks = Arc::new(Hooks::default());
     let (host, _callbacks, _server_connection, _storage) = ingress_fixture().await;
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
-    let running = Running::start_native("Signal", channel, hooks, host, None, true);
+    let config = tinychannels_bus::ChannelsConfig {
+        signal: Some(tinychannels_bus::config::SignalConfig {
+            http_url: server.uri(),
+            account: "+15550000".into(),
+            group_id: None,
+            allowed_from: vec!["*".into()],
+            ignore_attachments: false,
+            ignore_stories: false,
+        }),
+        ..Default::default()
+    };
+    let launch = crate::native::build_native_v2(
+        "signal",
+        &config,
+        &_provider_host,
+        &tinychannels::factory::DefaultHttpClients,
+    )
+    .expect("the configured Signal account has a native launch");
+    let running = launch.start(hooks, host, None, true);
     let handle = running.adapter_handle();
+    assert!(
+        running.channel.is_none(),
+        "the typed Signal launch must not retain a legacy Channel object"
+    );
     assert_eq!(handle.mode, AdapterMode::SignalNativeV2);
     let descriptor = handle.descriptor();
     assert_eq!(descriptor.id, "signal");
