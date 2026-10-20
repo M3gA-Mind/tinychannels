@@ -475,6 +475,41 @@ impl Channel for SignalChannel {
     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
         self.listen_loop(Some(tx), None, None).await
     }
+
+    async fn health_check(&self) -> bool {
+        let url = format!("{}/api/v1/check", self.http_url);
+        let Ok(resp) = self
+            .http_client()
+            .get(&url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+        else {
+            return false;
+        };
+        resp.status().is_success()
+    }
+
+    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
+        let params = match Self::parse_recipient_target(recipient) {
+            RecipientTarget::Direct(number) => serde_json::json!({
+                "recipient": [number],
+                "account": &self.account,
+            }),
+            RecipientTarget::Group(group_id) => serde_json::json!({
+                "groupId": group_id,
+                "account": &self.account,
+            }),
+        };
+        self.rpc_request("sendTyping", params).await?;
+        Ok(())
+    }
+
+    async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
+        // signal-cli doesn't have a stop-typing RPC; typing indicators
+        // auto-expire after ~15s on the client side.
+        Ok(())
+    }
 }
 
 impl SignalChannel {
@@ -640,44 +675,6 @@ impl SignalChannel {
                 return Ok(());
             }
         }
-    }
-}
-
-#[async_trait]
-impl Channel for SignalChannel {
-    async fn health_check(&self) -> bool {
-        let url = format!("{}/api/v1/check", self.http_url);
-        let Ok(resp) = self
-            .http_client()
-            .get(&url)
-            .timeout(Duration::from_secs(10))
-            .send()
-            .await
-        else {
-            return false;
-        };
-        resp.status().is_success()
-    }
-
-    async fn start_typing(&self, recipient: &str) -> anyhow::Result<()> {
-        let params = match Self::parse_recipient_target(recipient) {
-            RecipientTarget::Direct(number) => serde_json::json!({
-                "recipient": [number],
-                "account": &self.account,
-            }),
-            RecipientTarget::Group(group_id) => serde_json::json!({
-                "groupId": group_id,
-                "account": &self.account,
-            }),
-        };
-        self.rpc_request("sendTyping", params).await?;
-        Ok(())
-    }
-
-    async fn stop_typing(&self, _recipient: &str) -> anyhow::Result<()> {
-        // signal-cli doesn't have a stop-typing RPC; typing indicators
-        // auto-expire after ~15s on the client side.
-        Ok(())
     }
 }
 
