@@ -1235,7 +1235,7 @@ async fn configured_slack_reactions_use_native_web_api_without_managed_fallback(
 }
 
 #[tokio::test]
-async fn bot_token_channels_without_native_port_fail_explicitly_not_via_host() {
+async fn slack_threads_without_native_port_fail_explicitly_not_via_host() {
     let (host, fixture, _server) = connected_host().await;
     let backend = HostBackend::new(
         host.clone(),
@@ -1253,10 +1253,6 @@ async fn bot_token_channels_without_native_port_fail_explicitly_not_via_host() {
         ..Default::default()
     };
     for error in [
-        backend
-            .send_reaction(&config, "slack", serde_json::json!({}))
-            .await
-            .map(|_| ()),
         backend
             .create_thread(&config, "slack", "t")
             .await

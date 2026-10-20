@@ -755,10 +755,9 @@ impl ChannelBackend for HostBackend {
             });
         }
         if let Some(slack) = self.slack_native(config, channel)? {
-            let request = tinychannels::providers::discord::DiscordReactionRequest::from_value(
-                &reaction,
-            )
-            .map_err(anyhow::Error::msg)?;
+            let request =
+                tinychannels::providers::discord::DiscordReactionRequest::from_value(&reaction)
+                    .map_err(anyhow::Error::msg)?;
             let reaction = tinychannels_bus::channel::ChannelReaction {
                 value: request.emoji.unwrap_or_default(),
                 custom_emoji_id: request.custom_emoji_id,
