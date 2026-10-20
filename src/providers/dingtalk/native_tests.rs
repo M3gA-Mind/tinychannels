@@ -44,6 +44,24 @@ fn target(kind: ConversationKind, id: &str) -> Target {
     }
 }
 
+#[test]
+fn unsupported_attachment_types_are_reported_as_unsupported() {
+    let error = validate_file(&FileStep {
+        #[cfg(feature = "lark")]
+        kind: tinychannels_bus::MediaKind::Image,
+        mime: "image/png".into(),
+        name: "diagram.png".into(),
+        bytes: b"image".to_vec(),
+        caption: None,
+        duration_ms: None,
+    })
+    .expect_err("DingTalk App Bot does not send images through its file operation");
+
+    assert!(error.unsupported);
+    assert!(!error.retryable);
+    assert!(!error.sent_before_error);
+}
+
 #[tokio::test]
 async fn direct_send_uses_staff_id_and_provider_receipt() {
     use crate::providers::http_test_support::HttpsServer;
