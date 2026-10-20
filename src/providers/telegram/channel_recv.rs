@@ -964,6 +964,7 @@ impl TelegramChannel {
             .get("message_thread_id")
             .and_then(serde_json::Value::as_i64)
             .map(|id| id.to_string());
+        let thread_id = topic_id.clone();
         let result = store
             .store_voice(crate::host::VoiceMediaRequest {
                 audio_base64: BASE64.encode(&bytes),
@@ -995,7 +996,7 @@ impl TelegramChannel {
                             _ => tinychannels_bus::ConversationKind::Unknown,
                         },
                         id: chat_id,
-                        thread_id: None,
+                        thread_id,
                         topic_id,
                         ..Default::default()
                     },
