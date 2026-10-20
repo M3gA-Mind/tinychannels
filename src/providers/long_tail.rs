@@ -182,7 +182,7 @@ pub(crate) fn unsupported<T: LongTail + ?Sized>(operation: &str) -> ChannelSendE
     }
 }
 
-fn check_channel<T: LongTail + ?Sized>(
+pub(super) fn check_channel<T: LongTail + ?Sized>(
     channel_id: &str,
     channel_ref: Option<&tinychannels_bus::ChannelRef>,
 ) -> Result<(), ChannelSendError> {
