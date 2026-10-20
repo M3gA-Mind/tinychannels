@@ -14,7 +14,9 @@ transcripts survive replay. A failed or unavailable STT callback marks the
 transcript unavailable without removing the stored audio.
 
 The blob key is restricted to `channels/media/`; metadata lives in
-`channels_media_metadata`. The module validates the complete stored scope on
+`channels.media_metadata`. The bus schema declares the exact no-index
+collection spec used by the module store, and the module validates the
+complete stored scope on
 every read and applies content-type, byte-size, and digest checks. Pending
 writes and deletions retain durable state for cleanup retries. OpenHuman's
 host adapter must grant only that blob prefix and metadata collection through
