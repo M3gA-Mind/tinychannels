@@ -56,6 +56,19 @@ fn draft_intent(
             text: message.content.clone(),
         };
     }
+    if descriptor.id == "telegram" {
+        // The frozen Telegram DTO uses `recipient` for chat/topic routing and
+        // `thread_ts` for the parent message. The generic converter cannot
+        // distinguish those provider-specific meanings, so normalize them at
+        // this compatibility boundary before the typed adapter sees them.
+        if intent.reply_to_id.is_none() {
+            intent.reply_to_id = message.thread_ts.clone();
+        }
+        intent.thread_id = None;
+        if let Some(conversation) = intent.conversation_ref.as_mut() {
+            conversation.thread_id = None;
+        }
+    }
     intent
 }
 

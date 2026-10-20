@@ -3116,12 +3116,9 @@ impl crate::channel::ChannelStreamingDraft for TelegramChannel {
         let text = telegram_draft_text(&intent)?;
         let conversation = telegram_draft_conversation(&intent)?;
         let mut message = SendMessage::new(text, telegram_draft_recipient(&conversation));
-        // The legacy draft API carries the parent provider message through
-        // `thread_ts`; typed intents separate that from channel thread scope.
-        message.thread_ts = intent
-            .reply_to_id
-            .clone()
-            .or_else(|| intent.thread_id.clone());
+        // Typed thread scope routes to the topic; only reply_to_id identifies
+        // a parent provider message.
+        message.thread_ts = intent.reply_to_id.clone();
         let Some(message_id) = self
             .send_draft_provider(&message)
             .await
@@ -3155,10 +3152,7 @@ impl crate::channel::ChannelStreamingDraft for TelegramChannel {
             &telegram_draft_recipient(&conversation),
             draft_id,
             &text,
-            intent
-                .reply_to_id
-                .as_deref()
-                .or(intent.thread_id.as_deref()),
+            intent.reply_to_id.as_deref(),
         )
         .await
         .map_err(|error| typed_interaction_error(error, "draft finalization"))
