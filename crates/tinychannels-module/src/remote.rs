@@ -7,7 +7,7 @@ use tinychannels::remote::session_store::RemoteSessionStore;
 use tinychannels::remote::{RemoteCommandContext, RemoteControlHost};
 use tinychannels_bus::module_remote::{
     NewRemoteThread, RemoteHostRequest, RemoteHostResult, RemoteOperation, RemoteOperationResult,
-    RemoteRoute, RemoteThreadSummary,
+    RemoteRoute, RemoteSessionScope, RemoteThreadSummary,
 };
 use tinychannels_bus::{ChannelBackendRequest, ChannelBackendResult};
 
@@ -42,12 +42,9 @@ impl RemoteControlHost for Host {
     fn history_len(&self, _sender_key: &str) -> usize {
         self.history_len
     }
-    fn clear_history(&self, _sender_key: &str) {
-        unreachable!("module remote history clearing uses the awaited callback");
-    }
-    async fn clear_history_async(&self, sender_key: &str) -> anyhow::Result<()> {
+    async fn clear_history_async(&self, scope: &RemoteSessionScope) -> anyhow::Result<()> {
         self.completed(RemoteHostRequest::ClearHistory {
-            sender_key: sender_key.into(),
+            session_scope: scope.clone(),
         })
         .await
     }
@@ -99,6 +96,7 @@ async fn sessions(callback: &HostChannels, workspace: &std::path::Path) -> Remot
 pub(crate) async fn execute(
     callback: &HostChannels,
     request: RemoteOperation,
+    capabilities: tinychannels_bus::ChannelCapabilities,
 ) -> Result<RemoteOperationResult> {
     if serde_json::to_vec(&request).map_or(true, |bytes| {
         bytes.len() > tinychannels_bus::module_runtime::PREPARATION_MESSAGE_BYTES
@@ -113,7 +111,7 @@ pub(crate) async fn execute(
             busy,
         } => {
             let workspace = workspace(workspace_dir)?;
-            if tinychannels::capabilities_for(&channel).remote_control {
+            if capabilities.remote_control {
                 let store = sessions(callback, &workspace).await;
                 tinychannels::remote::mark_turn(&store, &channel, &reply_target, busy).await;
             }
@@ -124,9 +122,10 @@ pub(crate) async fn execute(
             message,
             route,
             history_len,
+            session_scope,
         } => {
             let workspace = workspace(workspace_dir)?;
-            let command = tinychannels::capabilities_for(&message.channel)
+            let command = capabilities
                 .remote_control
                 .then(|| tinychannels::remote::parse_remote_command(&message.content))
                 .flatten();
@@ -137,6 +136,7 @@ pub(crate) async fn execute(
                         channel: message.channel.clone(),
                         reply_target: message.reply_target.clone(),
                         sender_key: tinychannels::context::conversation_history_key(&message),
+                        session_scope: session_scope.clone(),
                         sessions: sessions(callback, &workspace).await,
                     };
                     Some(

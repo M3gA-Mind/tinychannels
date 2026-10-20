@@ -3,6 +3,9 @@
 
 use super::*;
 use std::time::Duration;
+use tinychannels_conformance::{
+    AdapterFixture, ConformanceFeature, ExpectedScope, WireObservation, check_all_features,
+};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
@@ -83,6 +86,19 @@ impl Peer {
         line.trim_end_matches(['\r', '\n']).to_string()
     }
 
+    async fn is_closed(&mut self) -> bool {
+        let mut line = String::new();
+        match tokio::time::timeout(GUARD, self.reader.read_line(&mut line))
+            .await
+            .expect("peer should observe listener cleanup")
+        {
+            Ok(0) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => true,
+            Ok(_) => false,
+            Err(error) => panic!("unexpected TLS peer read error: {error}"),
+        }
+    }
+
     async fn expect(&mut self, want: &str) {
         assert_eq!(self.next_line().await, want);
     }
@@ -107,6 +123,561 @@ async fn recv(rx: &mut mpsc::Receiver<ChannelMessage>) -> ChannelMessage {
         .await
         .unwrap()
         .expect("listener dropped its sender")
+}
+
+#[derive(Clone)]
+struct InboundSink(mpsc::UnboundedSender<tinychannels_bus::ChannelIngress>);
+
+#[async_trait::async_trait]
+impl crate::channel::ChannelInboundSink for InboundSink {
+    async fn push(
+        &self,
+        ingress: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        self.0
+            .send(ingress)
+            .map_err(|_| crate::channel::ChannelSendError {
+                kind: crate::channel::SendErrorKind::Transient,
+                message: "test sink closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+    }
+}
+
+struct IrcConformanceFixture {
+    channel: Arc<dyn crate::LongTailNative>,
+    peer: tokio::sync::Mutex<Peer>,
+    observations: std::sync::Mutex<Vec<WireObservation>>,
+}
+
+#[async_trait::async_trait]
+impl AdapterFixture for IrcConformanceFixture {
+    fn adapter(&self) -> &dyn crate::channel::ChannelAdapter {
+        self.channel.as_ref()
+    }
+
+    fn expected_scope(&self, _: ConformanceFeature) -> ExpectedScope {
+        ExpectedScope {
+            channel: tinychannels_bus::ChannelRef {
+                id: "irc".into(),
+                account_id: None,
+            },
+            conversation: tinychannels_bus::ConversationRef {
+                kind: tinychannels_bus::ConversationKind::Channel,
+                id: "#ops".into(),
+                ..Default::default()
+            },
+            reply_to_id: None,
+            thread_id: None,
+        }
+    }
+
+    fn receipt_required(&self, _: ConformanceFeature) -> bool {
+        false
+    }
+
+    fn clear_observations(&self) {
+        self.observations.lock().unwrap().clear();
+    }
+
+    fn observations(&self) -> Vec<WireObservation> {
+        self.observations.lock().unwrap().clone()
+    }
+
+    async fn exercise(
+        &self,
+        feature: ConformanceFeature,
+    ) -> Result<
+        Option<tinychannels_bus::channel::ChannelSendOutcome>,
+        tinychannels_bus::channel::ChannelSendError,
+    > {
+        let expected = self.expected_scope(feature);
+        let intent = |payload| {
+            let mut intent = tinychannels_bus::ChannelOutboundIntent {
+                idempotency_key: "irc-conformance".into(),
+                channel_id: "irc".into(),
+                conversation_id: "#ops".into(),
+                channel_ref: Some(expected.channel.clone()),
+                conversation_ref: Some(expected.conversation.clone()),
+                payload,
+                ..Default::default()
+            };
+            if feature == ConformanceFeature::ReplyAddressing {
+                intent.reply_to_id = Some("parent-message".into());
+            }
+            if feature == ConformanceFeature::ThreadAddressing {
+                intent.thread_id = Some("thread-channel".into());
+            }
+            intent
+        };
+        use tinychannels_bus::{ContentPart, MediaKind, MediaReference, OutboundContentPart};
+        let rich = |part| tinychannels_bus::OutboundPayload::Parts {
+            parts: vec![OutboundContentPart::Content { part }],
+        };
+        let media = |kind| MediaReference {
+            opaque_id: Some(format!("irc-{kind:?}")),
+            kind,
+            ..Default::default()
+        };
+        let text = || tinychannels_bus::OutboundPayload::Text {
+            text: "conformance".into(),
+        };
+
+        if feature == ConformanceFeature::Text {
+            let outcome =
+                crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent(text())).await?;
+            let line = self.peer.lock().await.next_line().await;
+            assert_eq!(line, "PRIVMSG #ops :conformance");
+            self.observations.lock().unwrap().push(WireObservation {
+                feature,
+                operation: "send".into(),
+                channel: expected.channel,
+                conversation: expected.conversation,
+                reply_to_id: None,
+                thread_id: None,
+                payload_kinds: vec!["text".into()],
+                platform_message_ids: Vec::new(),
+                request: serde_json::json!({"line": line}),
+            });
+            return Ok(Some(outcome));
+        }
+
+        match feature {
+            ConformanceFeature::Typing => {
+                crate::channel::ChannelTyping::start_typing(self.channel.as_ref(), "#ops").await?;
+            }
+            ConformanceFeature::Reactions => {
+                crate::channel::ChannelReaction::send_reaction(
+                    self.channel.as_ref(),
+                    &expected.channel,
+                    &expected.conversation,
+                    "message-1",
+                    &tinychannels_bus::channel::ChannelReaction::default(),
+                    false,
+                )
+                .await?;
+            }
+            ConformanceFeature::Edit => {
+                crate::channel::ChannelEdit::edit(
+                    self.channel.as_ref(),
+                    &tinychannels_bus::channel::MessageReceipt::default(),
+                    intent(text()),
+                )
+                .await?;
+            }
+            ConformanceFeature::Delete => {
+                crate::channel::ChannelDelete::delete(
+                    self.channel.as_ref(),
+                    &tinychannels_bus::channel::MessageReceipt::default(),
+                )
+                .await?;
+            }
+            ConformanceFeature::StreamingDraft => {
+                crate::channel::ChannelStreamingDraft::upsert_draft(
+                    self.channel.as_ref(),
+                    None,
+                    intent(text()),
+                )
+                .await?;
+            }
+            ConformanceFeature::VoiceIn
+            | ConformanceFeature::InboundReactions
+            | ConformanceFeature::ReadReceipts => {
+                return Err(tinychannels_bus::channel::ChannelSendError {
+                    kind: tinychannels_bus::channel::SendErrorKind::BadFormat,
+                    message: "IRC has no inbound operation for this feature".into(),
+                    unsupported: true,
+                    ..Default::default()
+                });
+            }
+            feature => {
+                let payload = match feature {
+                    ConformanceFeature::Text
+                    | ConformanceFeature::ReplyAddressing
+                    | ConformanceFeature::ThreadAddressing => text(),
+                    ConformanceFeature::Image => rich(ContentPart::Image {
+                        media: media(MediaKind::Image),
+                        caption: None,
+                        alt_text: None,
+                    }),
+                    ConformanceFeature::Video => rich(ContentPart::Video {
+                        media: media(MediaKind::Video),
+                        caption: None,
+                        duration_ms: None,
+                        thumbnail: None,
+                    }),
+                    ConformanceFeature::Audio => rich(ContentPart::Audio {
+                        media: media(MediaKind::Audio),
+                        codec: None,
+                        duration_ms: None,
+                        title: None,
+                        transcript: None,
+                    }),
+                    ConformanceFeature::File => rich(ContentPart::File {
+                        media: media(MediaKind::Document),
+                        file_name: None,
+                        caption: None,
+                    }),
+                    ConformanceFeature::Sticker => rich(ContentPart::Sticker {
+                        media: media(MediaKind::Image),
+                        pack_id: None,
+                        sticker_id: None,
+                        emoji: None,
+                        alt_text: None,
+                    }),
+                    ConformanceFeature::Location => rich(ContentPart::Location {
+                        latitude: 1.0,
+                        longitude: 2.0,
+                        label: None,
+                        address: None,
+                        accuracy_meters: None,
+                        live_until_unix_ms: None,
+                    }),
+                    ConformanceFeature::Contact => rich(ContentPart::Contact {
+                        display_name: "Conformance".into(),
+                        phone_numbers: Vec::new(),
+                        emails: Vec::new(),
+                        organization: None,
+                    }),
+                    ConformanceFeature::Buttons => rich(ContentPart::Buttons {
+                        rows: vec![vec![tinychannels_bus::ButtonAction {
+                            id: "action".into(),
+                            label: "Go".into(),
+                            style: None,
+                            disabled: false,
+                        }]],
+                    }),
+                    ConformanceFeature::Poll => rich(ContentPart::Poll {
+                        question: "Question".into(),
+                        options: vec!["Yes".into()],
+                        multiple_choice: false,
+                        closes_at_unix_ms: None,
+                        provider_poll_id: None,
+                    }),
+                    ConformanceFeature::Presentation => rich(ContentPart::Presentation {
+                        blocks: serde_json::json!({"kind": "approval"}),
+                    }),
+                    ConformanceFeature::NativeData => {
+                        tinychannels_bus::OutboundPayload::NativeChannelData {
+                            data: serde_json::json!({"action": "create_thread"}),
+                        }
+                    }
+                    ConformanceFeature::VoiceOut => tinychannels_bus::OutboundPayload::Voice {
+                        voice: tinychannels_bus::OutboundVoice::Media {
+                            media: media(MediaKind::Audio),
+                            audio_base64: None,
+                            codec: Some("ogg_opus".into()),
+                            duration_ms: Some(1000),
+                            waveform: None,
+                        },
+                    },
+                    ConformanceFeature::VoiceSynthesis => {
+                        tinychannels_bus::OutboundPayload::Voice {
+                            voice: tinychannels_bus::OutboundVoice::Synthesize {
+                                text: "speak".into(),
+                                voice: None,
+                            },
+                        }
+                    }
+                    _ => unreachable!("handled as an optional operation above"),
+                };
+                let outcome =
+                    crate::channel::ChannelAdapter::send(self.channel.as_ref(), intent(payload))
+                        .await?;
+                return Ok(Some(outcome));
+            }
+        }
+        Ok(None)
+    }
+}
+
+#[tokio::test]
+async fn shared_conformance_checks_irc_text_against_a_real_peer_without_fabricated_receipts() {
+    let (listener, port) = bind().await;
+    let acceptor = acceptor(false);
+    let config = tinychannels_bus::ChannelsConfig {
+        irc: Some(tinychannels_bus::config::IrcConfig {
+            server: "127.0.0.1".into(),
+            port,
+            nickname: "bot".into(),
+            username: Some("botuser".into()),
+            channels: vec![],
+            allowed_users: vec!["*".into()],
+            server_password: None,
+            nickserv_password: None,
+            sasl_password: None,
+            verify_tls: Some(false),
+        }),
+        ..Default::default()
+    };
+    let channel = crate::factory::build_long_tail_channel(
+        &config,
+        &crate::factory::DefaultHttpClients,
+        "irc",
+    )
+    .expect("configured IRC adapter from the production factory");
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let mut start = tokio::spawn({
+        let channel = channel.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+    let mut peer = tokio::select! {
+        result = &mut start => panic!("IRC adapter start returned before accepting a peer: {result:?}"),
+        peer = Peer::accept(&listener, &acceptor) => peer,
+    };
+    peer.expect("NICK bot").await;
+    peer.expect("USER botuser 0 * :OpenHuman").await;
+    peer.say(":srv 001 bot :Welcome").await;
+
+    let fixture = IrcConformanceFixture {
+        channel: channel.clone(),
+        peer: tokio::sync::Mutex::new(peer),
+        observations: std::sync::Mutex::new(Vec::new()),
+    };
+    let results = check_all_features(&fixture).await;
+    assert_eq!(results.len(), ConformanceFeature::ALL.len());
+    let failures = results
+        .iter()
+        .filter_map(|(feature, result)| {
+            result
+                .as_ref()
+                .err()
+                .map(|error| format!("{feature:?}: {error}"))
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        failures.is_empty(),
+        "IRC conformance failures: {failures:#?}"
+    );
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, start)
+        .await
+        .expect("stop must join the public listener")
+        .expect("listener task must not panic")
+        .expect("listener must stop cleanly");
+}
+
+struct RejectingSink;
+
+#[async_trait::async_trait]
+impl crate::channel::ChannelInboundSink for RejectingSink {
+    async fn push(
+        &self,
+        _: tinychannels_bus::ChannelIngress,
+    ) -> Result<(), crate::channel::ChannelSendError> {
+        Err(crate::channel::ChannelSendError {
+            kind: crate::channel::SendErrorKind::Transient,
+            message: "private sink failure detail".into(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn public_adapter_start_owns_typed_listener_until_stop_joins_it() {
+    let (listener, port) = bind().await;
+    let acceptor = acceptor(false);
+    let channel = Arc::new(IrcChannel::new(IrcChannelConfig {
+        channels: vec!["#ops".into()],
+        allowed_users: vec!["alice".into()],
+        ..config(port)
+    }));
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let mut start = tokio::spawn({
+        let channel = channel.clone();
+        let sink = sink.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+    // `start` must establish and own its listener instead of returning as the
+    // current adapter macro does. Racing the real TLS peer against completion
+    // avoids relying on scheduler timing or an arbitrary startup delay.
+    let mut peer = tokio::select! {
+        result = &mut start => panic!("IRC adapter start returned before accepting a peer: {result:?}"),
+        peer = Peer::accept(&listener, &acceptor) => peer,
+    };
+    peer.expect("NICK bot").await;
+    peer.expect("USER botuser 0 * :OpenHuman").await;
+    peer.say(":srv 001 bot :Welcome").await;
+    peer.expect("JOIN #ops").await;
+
+    peer.say(":mallory!m@host PRIVMSG #ops :denied").await;
+    peer.say(":alice!a@host PRIVMSG #ops :hello native listener")
+        .await;
+    let ingress = tokio::time::timeout(GUARD, rx.recv())
+        .await
+        .expect("public start should publish admitted IRC messages")
+        .expect("public start should keep the supplied sink connected");
+    let tinychannels_bus::ChannelIngress::Inbound(envelope) = ingress else {
+        panic!("IRC message should use the inbound envelope route");
+    };
+    assert_eq!(envelope.channel.id, "irc");
+    assert_eq!(
+        envelope.conversation.kind,
+        tinychannels_bus::ConversationKind::Channel
+    );
+    assert_eq!(envelope.conversation.id, "#ops");
+    assert_eq!(envelope.sender.id, "alice");
+    assert!(envelope.message_id.starts_with("irc_"));
+    assert!(envelope.text.contains("hello native listener"));
+    assert!(
+        rx.try_recv().is_err(),
+        "denied senders must not reach the sink"
+    );
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, start)
+        .await
+        .expect("stop must join the public listener")
+        .expect("listener task must not panic")
+        .expect("listener must stop cleanly");
+    let final_line = peer.next_line().await;
+    if final_line.starts_with("QUIT ") {
+        assert!(
+            peer.next_line().await.is_empty(),
+            "QUIT must close the IRC socket"
+        );
+    } else {
+        assert!(final_line.is_empty(), "stop must close the IRC socket");
+    }
+}
+
+#[tokio::test]
+async fn public_adapter_cleans_up_after_sink_failure_and_can_restart() {
+    let (listener, port) = bind().await;
+    let acceptor = acceptor(false);
+    let channel = Arc::new(IrcChannel::new(IrcChannelConfig {
+        channels: vec!["#ops".into()],
+        allowed_users: vec!["alice".into()],
+        ..config(port)
+    }));
+    let mut start = tokio::spawn({
+        let channel = channel.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &RejectingSink).await }
+    });
+    let mut peer = tokio::select! {
+        result = &mut start => panic!("IRC start returned before accepting a peer: {result:?}"),
+        peer = Peer::accept(&listener, &acceptor) => peer,
+    };
+    peer.expect("NICK bot").await;
+    peer.expect("USER botuser 0 * :OpenHuman").await;
+    peer.say(":srv 001 bot :Welcome").await;
+    peer.expect("JOIN #ops").await;
+    peer.say(":alice!a@host PRIVMSG #ops :reject this event")
+        .await;
+
+    let error = tokio::time::timeout(GUARD, &mut start)
+        .await
+        .expect("a failing event sink should stop the listener")
+        .expect("listener task must not panic")
+        .expect_err("the typed sink rejected the admitted event");
+    assert_eq!(error.kind, crate::channel::SendErrorKind::Transient);
+    assert!(error.retryable);
+    assert_eq!(error.message, "IRC listener stopped");
+    assert!(!error.message.contains("private sink failure detail"));
+    assert!(
+        peer.is_closed().await,
+        "the failed listener must close its socket"
+    );
+
+    // A second start on the same adapter proves the failed run released its
+    // single-listener registration and dropped the old writer.
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let mut restarted = tokio::spawn({
+        let channel = channel.clone();
+        let sink = sink.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+    let mut peer = tokio::select! {
+        result = &mut restarted => panic!("restarted listener returned before accepting a peer: {result:?}"),
+        peer = Peer::accept(&listener, &acceptor) => peer,
+    };
+    peer.expect("NICK bot").await;
+    peer.expect("USER botuser 0 * :OpenHuman").await;
+    peer.say(":srv 001 bot :Welcome").await;
+    peer.expect("JOIN #ops").await;
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, restarted)
+        .await
+        .expect("stop must join the restarted listener")
+        .expect("listener task must not panic")
+        .expect("restarted listener must stop cleanly");
+}
+
+#[tokio::test]
+async fn public_adapter_stop_cancels_tls_handshake_and_releases_listener() {
+    let (listener, port) = bind().await;
+    let channel = Arc::new(IrcChannel::new(config(port)));
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let mut start = tokio::spawn({
+        let channel = channel.clone();
+        let sink = sink.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+    let (_socket, _) = tokio::time::timeout(GUARD, listener.accept())
+        .await
+        .expect("listener should establish TCP before the TLS handshake")
+        .unwrap();
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, &mut start)
+        .await
+        .expect("stop must cancel an in-progress TLS handshake")
+        .expect("listener task must not panic")
+        .expect("listener cancellation should be clean");
+    let registration = channel
+        .begin_listener()
+        .expect("cancellation must release single-listener ownership");
+    drop(registration);
+    channel.end_listener();
+}
+
+#[tokio::test]
+async fn public_adapter_rejects_a_second_concurrent_listener() {
+    let (listener, port) = bind().await;
+    let acceptor = acceptor(false);
+    let channel = Arc::new(IrcChannel::new(config(port)));
+    let (tx, _rx) = mpsc::unbounded_channel();
+    let sink = InboundSink(tx);
+    let mut start = tokio::spawn({
+        let channel = channel.clone();
+        let sink = sink.clone();
+        async move { crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await }
+    });
+    let _peer = Peer::accept(&listener, &acceptor).await;
+    let (legacy_tx, _legacy_rx) = mpsc::channel(1);
+    let legacy = channel
+        .listen(legacy_tx)
+        .await
+        .expect_err("legacy and native starts must share one listener owner");
+    assert!(legacy.to_string().contains("already running"));
+    let second = crate::channel::ChannelAdapter::start(channel.as_ref(), &sink).await;
+    let error = second.expect_err("the provider must have one listener owner");
+    assert!(
+        !error.retryable,
+        "concurrent listener conflict is not transient"
+    );
+
+    crate::channel::ChannelAdapter::stop(channel.as_ref())
+        .await
+        .unwrap();
+    tokio::time::timeout(GUARD, &mut start)
+        .await
+        .expect("stop must join the first listener")
+        .expect("listener task must not panic")
+        .expect("listener cancellation should be clean");
 }
 
 #[tokio::test]

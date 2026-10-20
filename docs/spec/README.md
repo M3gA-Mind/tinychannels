@@ -1,5 +1,10 @@
 # TinyChannels Specification
 
+> **Current contract:** [Channel Contract v2](contract-v2.md) is the normative
+> target for content, events, addressing, receipts, capabilities, and migration.
+> The OpenClaw/Hermes audit and execution plan below are historical research and
+> implementation context; follow v2 when their proposals conflict.
+
 TinyChannels provides pluggable channel and messaging primitives used by
 OpenHuman to communicate between channel surfaces and harness runtimes.
 
@@ -27,12 +32,17 @@ state remain outside this crate until they can be split behind transport traits.
 
 ## Research and Porting Specs
 
+- [Channel Contract v2](contract-v2.md) — normative target and v21-to-v22
+  compatibility plan.
+- [Harness progress output](progress-output.md) — canonical progress events,
+  module operations, delivery results, and the TinyAgents conformance map.
+- [Web adapter](web-adapter.md) — the in-app chat as a channel: inbound
+  normalization, `WebChannelEvent` projection, and the host event sink.
 - [OpenClaw and Hermes channel porting](openclaw-hermes-channel-porting.md) —
-  source-level audit of both upstreams (verified against pinned 2026-07-04
-  checkouts) and the proposed TinyChannels contract.
+  historical source-level audit of both upstreams (verified against pinned
+  2026-07-04 checkouts).
 - [TinyChannels execution plan](tinychannels-execution-plan.md) — the phased
-  implementation plan: current-state gap matrix, known bugs, module plan,
-  and test-migration/fixture catalog.
+  historical implementation plan and test-migration/fixture catalog.
 
 ## Compiled provider supervision
 

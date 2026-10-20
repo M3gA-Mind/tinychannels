@@ -1,0 +1,17 @@
+[package]
+name = "tinychannels-conformance"
+version.workspace = true
+edition = "2024"
+license = "GPL-3.0-only"
+description = "Reusable behavioral conformance helpers for TinyChannels adapters."
+repository = "https://github.com/tinyhumansai/tinychannels"
+publish = false
+
+[dependencies]
+async-trait = "0.1"
+tinychannels-bus = { path = "../tinychannels-bus" }
+tinychannels-runtime = { path = "../tinychannels-runtime" }
+serde_json = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

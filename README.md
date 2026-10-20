@@ -15,11 +15,45 @@ schema, connection metadata, route helpers, and backend delegation layer used to
 connect channel surfaces to OpenHuman harnesses without coupling this crate to
 the OpenHuman application crate.
 
+> **Channel contract:** the normative v2 target and migration rules are in
+> [docs/spec/contract-v2.md](docs/spec/contract-v2.md). This README describes
+> the current crate and implementation; it does not define the v2 wire
+> contract.
+
 Configured provider discovery, legacy intent normalization, and external-webhook
 outbound startup are confidential module operations. The catalog returns provider
 facts without listening; outbound-only startup preserves Linq and WhatsApp Cloud
-sends while keeping their ingress explicitly external. Existing listener start
-methods retain their refusal when no webhook ingress is available.
+sends while keeping their ingress explicitly external. Linq webhooks work like
+WhatsApp Cloud's: the host forwards each raw POST through `DeliverWebhook` with
+`t=<X-Webhook-Timestamp>,v1=<X-Webhook-Signature>` as the signature, and the
+module verifies it against the configured `webhook_secret` (a channel without
+one refuses every delivery) before it downloads media and publishes typed
+envelopes.
+
+WhatsApp Cloud webhooks are the exception: the host serves the HTTP route, but
+the module owns everything that decides whether a POST is believed. The host
+forwards the raw body and the `X-Hub-Signature-256` header through the
+`DeliverWebhook` channel interaction (and the `hub.*` subscription handshake
+through `VerifyWebhook`). The module checks the HMAC against the exact bytes with
+the configured `app_secret` (a verify token is not a POST signature, and a
+channel without an app secret refuses every delivery), binds the delivery to the
+configured `phone_number_id`, bounds the body, suppresses Meta's redeliveries,
+downloads and persists attachments through the host's scoped media ports, and
+publishes typed envelopes and events on the ordered ingress path. A refused
+delivery fails with `ai.tinyhumans.tinychannels.Error.WebhookRejected` (answer
+with a client error); a failure after authentication fails with
+`...Error.WebhookFailed` (answer with a retryable error so Meta redelivers).
+
+Both WhatsApp adapters are native v2: text, image, video, audio, document,
+sticker, location and contact cards in both directions; push-to-talk voice notes
+in (stored, then transcribed by the module) and out (OGG/Opus, with WhatsApp's
+waveform on Web); reactions both ways; quoted replies; read receipts (outbound
+`MarkRead`, inbound delivered/read events); typing. WhatsApp Web additionally
+edits and unsends. Buttons, polls, presentations, native data, thread
+addressing and streaming drafts are reported as unsupported rather than faked.
+WhatsApp Web scopes durable media by the linked account's JID, learned from the
+session once it is linked and withdrawn permanently if the session later reports
+a different account.
 
 Inbound preparation and hosted identity projection are confidential module
 operations. They return stable history, thread, client, and session keys using
@@ -149,12 +183,20 @@ cargo test --features email,lark
   Legacy `SendEmail` remains available for small requests; larger attachments
   use the confidential `BeginEmailUpload` / `AppendEmailUploadChunk` /
   `SendEmailUpload` protocol, with bounded chunks and a replayable terminal
-  result keyed by the opaque upload handle.
+  result keyed by the opaque upload handle. The confidential web-output
+  operations `BeginWebTurn`, `ProjectWebOutput`, and `EndWebTurn` give each
+  host-owned turn a bounded module-side projection state and opaque handle;
+  the module stamps ordered sequence numbers and timestamps, then closes state
+  on terminal output or explicit end. The host retains authoritative tenant
+  and profile routing stamps.
 - `src/lib.rs` exports the crate surface and re-exports the contract.
 - `src/providers/` holds the provider transports.
 - `src/delivery/` holds the durable outbound queue and `progressive/`, the
-  streaming reply driver (draft, thinking and filler bubbles) over a
-  host-supplied `ProgressiveSender`. The reply splitter
+  shared turn-progress engine (event projection, draft/edit or configured-limit
+  segmentation, typed content, receipt retention, and ephemeral cleanup) over
+  a host-supplied `ProgressiveSender`. See
+  [`src/delivery/progressive/README.md`](src/delivery/progressive/README.md).
+  The legacy reply splitter
   (`segment_for_delivery`) lives in `tinychannels-runtime` (`delivery::segment`) and
   is re-exported here.
 - `src/remote/` implements `/status`, `/sessions`, `/new` and `/help` for every

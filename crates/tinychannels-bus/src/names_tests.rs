@@ -44,6 +44,9 @@ fn every_declared_member_appears_in_its_method_table() {
         methods::PREPARE_CHANNEL_CONTROL,
         methods::START_RUNTIME_WITH_DISPATCH,
         methods::PREPARE_RUNTIME_COMMAND,
+        methods::BEGIN_WEB_TURN,
+        methods::PROJECT_WEB_OUTPUT,
+        methods::END_WEB_TURN,
     ] {
         assert!(METHODS.contains(&m), "{m} missing from METHODS");
     }
@@ -55,6 +58,7 @@ fn every_declared_member_appears_in_its_method_table() {
         host_methods::PUBLISH_EVENT,
         host_methods::DISPATCH_CONTROLLER_BACKEND,
         host_methods::PROCESS_INBOUND,
+        host_methods::DELIVER_EVENT,
     ] {
         assert!(HOST_METHODS.contains(&m), "{m} missing from HOST_METHODS");
     }
@@ -72,10 +76,14 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::CHANNEL_STATUS,
         ]
     );
-    assert_eq!(METHODS.len(), 35);
+    assert_eq!(METHODS.len(), 47);
+    assert_eq!(METHODS[7], methods::START_RELAY_V2);
+    assert_eq!(METHODS[10], methods::RELAY_CAPABILITIES_V2);
     assert_eq!(
-        &METHODS[13..],
+        &METHODS[13..37],
         &[
+            methods::SEND_CHANNEL_INTENT,
+            methods::SEND_EMAIL,
             methods::BEGIN_EMAIL_UPLOAD,
             methods::APPEND_EMAIL_UPLOAD_CHUNK,
             methods::SEND_EMAIL_UPLOAD,
@@ -98,6 +106,26 @@ fn additive_method_table_preserves_legacy_order_and_lists_all_new_members() {
             methods::PREPARE_CHANNEL_CONTROL,
             methods::START_RUNTIME_WITH_DISPATCH,
             methods::PREPARE_RUNTIME_COMMAND,
+        ]
+    );
+    assert_eq!(
+        &METHODS[37..41],
+        &[
+            methods::BEGIN_MEDIA_UPLOAD,
+            methods::APPEND_MEDIA_UPLOAD_CHUNK,
+            methods::FINISH_MEDIA_UPLOAD,
+            methods::ABORT_MEDIA_UPLOAD,
+        ]
+    );
+    assert_eq!(
+        &METHODS[41..],
+        &[
+            methods::BEGIN_MEDIA_READ,
+            methods::READ_MEDIA_CHUNK,
+            methods::ABORT_MEDIA_READ,
+            methods::BEGIN_WEB_TURN,
+            methods::PROJECT_WEB_OUTPUT,
+            methods::END_WEB_TURN,
         ]
     );
 }

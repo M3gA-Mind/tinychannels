@@ -5,6 +5,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// Original provider data, preserving the normalized envelope when available.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "the legacy and envelope variants preserve the established serialized request shape"
+)]
 #[derive(Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ChannelInboundSource {

@@ -2,7 +2,105 @@
 
 use crate::text::truncate_with_ellipsis;
 use crate::traits::ChannelMessage;
-pub use tinychannels_bus::context::*;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+pub use tinychannels_bus::context::ChannelRouteSelection;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+impl ChatMessage {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".into(),
+            content: content.into(),
+        }
+    }
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: "assistant".into(),
+            content: content.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemoryEntry {
+    pub key: String,
+    pub content: String,
+    pub score: Option<f64>,
+}
+
+pub const MAX_CHANNEL_HISTORY: usize = 50;
+pub const DEFAULT_CHANNEL_INITIAL_BACKOFF_SECS: u64 = 2;
+pub const DEFAULT_CHANNEL_MAX_BACKOFF_SECS: u64 = 60;
+pub const MIN_CHANNEL_MESSAGE_TIMEOUT_SECS: u64 = 30;
+pub const CHANNEL_MESSAGE_TIMEOUT_SECS: u64 = 300;
+pub const CHANNEL_PARALLELISM_PER_CHANNEL: usize = 4;
+pub const CHANNEL_MIN_IN_FLIGHT_MESSAGES: usize = 8;
+pub const CHANNEL_MAX_IN_FLIGHT_MESSAGES: usize = 64;
+pub const CHANNEL_TYPING_REFRESH_INTERVAL_SECS: u64 = 4;
+pub const MEMORY_CONTEXT_MAX_ENTRIES: usize = 4;
+pub const MEMORY_CONTEXT_ENTRY_MAX_CHARS: usize = 800;
+pub const MEMORY_CONTEXT_MAX_CHARS: usize = 4_000;
+pub const CHANNEL_HISTORY_COMPACT_KEEP_MESSAGES: usize = 12;
+pub const CHANNEL_HISTORY_COMPACT_CONTENT_CHARS: usize = 600;
+
+pub type ConversationHistoryMap = Arc<Mutex<HashMap<String, Vec<ChatMessage>>>>;
+
+fn truncate_chars_with_ellipsis(input: &str, max_chars: usize) -> String {
+    let mut iter = input.chars();
+    let mut out = String::new();
+    for _ in 0..max_chars {
+        let Some(ch) = iter.next() else {
+            return input.to_string();
+        };
+        out.push(ch);
+    }
+    if iter.next().is_some() {
+        out.push('…');
+    }
+    out
+}
+
+pub fn compact_history(turns: &mut Vec<ChatMessage>) -> bool {
+    if turns.is_empty() {
+        return false;
+    }
+    let keep_from = turns
+        .len()
+        .saturating_sub(CHANNEL_HISTORY_COMPACT_KEEP_MESSAGES);
+    let mut compacted = turns[keep_from..].to_vec();
+    for turn in &mut compacted {
+        if turn.content.chars().count() > CHANNEL_HISTORY_COMPACT_CONTENT_CHARS {
+            turn.content =
+                truncate_chars_with_ellipsis(&turn.content, CHANNEL_HISTORY_COMPACT_CONTENT_CHARS);
+        }
+    }
+    *turns = compacted;
+    true
+}
+
+pub fn clear_sender_history(histories: &ConversationHistoryMap, sender_key: &str) {
+    histories
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(sender_key);
+}
+
+pub fn compact_sender_history(histories: &ConversationHistoryMap, sender_key: &str) -> bool {
+    let mut histories = histories.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(turns) = histories.get_mut(sender_key) else {
+        return false;
+    };
+    compact_history(turns)
+}
+
+pub fn worker_crash_message(error: &dyn std::fmt::Display) -> String {
+    format!("Channel message worker crashed: {error}")
+}
 
 #[async_trait::async_trait]
 pub trait Memory: Send + Sync {
@@ -45,7 +143,7 @@ pub fn conversation_history_key_parts(
         .join("_");
     // Some providers (Telegram topics) use thread_ts as a reply target, not as
     // a distinct conversation boundary.
-    if crate::capabilities::capabilities_for(channel).history_key_ignores_thread {
+    if legacy_v21_history_key_ignores_thread(channel) {
         return base_key;
     }
     if let Some(thread_ts) = thread_ts {
@@ -58,6 +156,13 @@ pub fn conversation_history_key_parts(
         }
     }
     base_key
+}
+
+/// Whether the frozen v21 history key treated a Telegram topic as a reply
+/// target instead of a separate conversation. This is migration behavior, not
+/// current provider capability discovery.
+pub fn legacy_v21_history_key_ignores_thread(channel: &str) -> bool {
+    matches!(tinychannels_bus::provider_id(channel), "tg" | "telegram")
 }
 
 pub fn should_skip_memory_context_entry(key: &str, content: &str) -> bool {

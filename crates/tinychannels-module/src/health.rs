@@ -1,4 +1,3 @@
-use std::sync::Arc;
 use std::time::Duration;
 
 /// Validate a per-provider budget without allowing an unbounded native call.
@@ -13,16 +12,31 @@ pub(crate) fn health_budget(milliseconds: u64) -> tinybus::Result<Duration> {
 
 /// Execute provider checks without starting any provider listener.
 pub(crate) async fn check_providers(
-    channels: &[Arc<dyn tinychannels::Channel>],
+    channels: &[tinychannels::factory::BuiltChannel],
     budget: Duration,
 ) -> Vec<tinychannels_bus::ChannelHealthReport> {
-    tinychannels::runtime::check_channels_health(channels, budget)
-        .await
-        .into_iter()
-        .map(|(channel, state)| tinychannels_bus::ChannelHealthReport { channel, state })
-        .collect()
+    let mut reports = Vec::with_capacity(channels.len());
+    for channel in channels {
+        let name = channel.name();
+        let state = match tokio::time::timeout(budget, channel.adapter().status()).await {
+            Err(_) => tinychannels_bus::ChannelHealthState::Timeout,
+            Ok(Ok(snapshot)) if snapshot.health_state.as_deref() == Some("healthy") => {
+                tinychannels_bus::ChannelHealthState::Healthy
+            }
+            _ => tinychannels_bus::ChannelHealthState::Unhealthy,
+        };
+        reports.push(tinychannels_bus::ChannelHealthReport {
+            channel: name,
+            state,
+        });
+    }
+    reports
 }
 
 #[cfg(test)]
 #[path = "health_tests.rs"]
+#[allow(
+    deprecated,
+    reason = "provider test doubles still implement the v21 trait seam"
+)]
 mod tests;

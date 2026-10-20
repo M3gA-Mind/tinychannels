@@ -68,4 +68,10 @@ case "$(uname -s)" in
   *) echo "verify-module.sh requires a Unix runner" >&2; exit 1 ;;
 esac
 test -f "$work/modules.toml"
-TINYCHANNELS_MODULE_ARTIFACT="$library" cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test module_artifact --test routing_artifact --test runtime_artifact -- --ignored
+# The module loader admits one dynamically loaded module per test process, so
+# each module-artifact case needs its own process. Keep routing/runtime targets
+# in their own integration-test processes as well.
+TINYCHANNELS_MODULE_ARTIFACT="$library" cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test module_artifact compiled_artifact_exposes_confidential_controller_proxy_and_websocket_lifecycle -- --ignored
+TINYCHANNELS_MODULE_ARTIFACT="$library" cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test module_artifact compiled_artifact_ingests_scoped_media_and_sends_its_opaque_reference -- --ignored
+TINYCHANNELS_MODULE_ARTIFACT="$library" cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test module_artifact compiled_artifact_authenticates_whatsapp_cloud_webhooks_and_runs_native_v2 -- --ignored
+TINYCHANNELS_MODULE_ARTIFACT="$library" cargo test --locked --release --manifest-path Cargo.toml --package tinychannels-module --test routing_artifact --test runtime_artifact -- --ignored

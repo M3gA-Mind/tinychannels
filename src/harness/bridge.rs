@@ -1,4 +1,7 @@
-//! Capability-driven bridge from harness output events to outbound intents.
+//! Legacy capability-driven bridge from harness output events to outbound intents.
+//!
+//! Progressive module dispatch uses `delivery::progressive`; this bridge remains
+//! a compatibility projection for callers that already own channel intents.
 
 use crate::channel::{
     ChannelOutboundIntent, ChannelPresentationCapabilities, ChannelStaticCapabilities,
@@ -6,6 +9,7 @@ use crate::channel::{
 };
 use crate::harness::types::{ChannelOutputEvent, ChannelTurn};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 
 /// Translation knobs for harness output delivery.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -13,6 +17,9 @@ pub struct BridgeTranslationOptions {
     pub draft_throttle_ms: u64,
     pub flood_backoff_ms: u64,
     pub durability: DeliveryDurability,
+    /// Monotonic sequence within the source turn. Replays of one event must
+    /// reuse this value; distinct events must not.
+    pub event_sequence: u64,
 }
 
 impl Default for BridgeTranslationOptions {
@@ -21,6 +28,7 @@ impl Default for BridgeTranslationOptions {
             draft_throttle_ms: 750,
             flood_backoff_ms: 3000,
             durability: DeliveryDurability::BestEffort,
+            event_sequence: 0,
         }
     }
 }
@@ -32,9 +40,9 @@ pub fn translate_output_event(
     static_capabilities: &ChannelStaticCapabilities,
     presentation: &ChannelPresentationCapabilities,
     options: BridgeTranslationOptions,
-) -> Vec<ChannelOutboundIntent> {
+) -> Result<Vec<ChannelOutboundIntent>, serde_json::Error> {
     let payload = match event {
-        ChannelOutputEvent::TextDelta { text } => {
+        ChannelOutputEvent::TextDelta { text, .. } => {
             if presentation.supports_edit && !static_capabilities.block_streaming {
                 OutboundPayload::NativeChannelData {
                     data: json!({
@@ -49,7 +57,22 @@ pub fn translate_output_event(
                 OutboundPayload::Text { text }
             }
         }
-        ChannelOutputEvent::FinalMessage { text } => OutboundPayload::Text { text },
+        ChannelOutputEvent::FinalMessage {
+            text, mut parts, ..
+        } => {
+            if parts.is_empty() && !text.is_empty() {
+                parts.insert(
+                    0,
+                    tinychannels_bus::OutboundContentPart::Content {
+                        part: tinychannels_bus::ContentPart::Text {
+                            text,
+                            markdown_dialect: None,
+                        },
+                    },
+                );
+            }
+            OutboundPayload::Parts { parts }
+        }
         ChannelOutputEvent::ToolProgress { label, message } => OutboundPayload::Text {
             text: match message {
                 Some(message) => format!("{label}: {message}"),
@@ -77,36 +100,101 @@ pub fn translate_output_event(
             }
         }
         ChannelOutputEvent::Clarification { prompt } => OutboundPayload::Text { text: prompt },
-        ChannelOutputEvent::Media { text, media } => OutboundPayload::Media {
-            text,
-            media_urls: media
-                .into_iter()
-                .filter_map(|item| item.url.or(item.path))
-                .collect(),
-        },
+        ChannelOutputEvent::Media { text, parts } => {
+            let mut content = Vec::new();
+            if let Some(text) = text.filter(|text| !text.is_empty()) {
+                content.push(tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text,
+                        markdown_dialect: None,
+                    },
+                });
+            }
+            content.extend(
+                parts
+                    .into_iter()
+                    .map(|part| tinychannels_bus::OutboundContentPart::Content { part }),
+            );
+            OutboundPayload::Parts { parts: content }
+        }
+        ChannelOutputEvent::VoiceNote { text, voice } => {
+            let mut parts = Vec::new();
+            if let Some(text) = text.or_else(|| {
+                voice
+                    .transcript
+                    .as_ref()
+                    .map(|transcript| transcript.text.clone())
+            }) {
+                parts.push(tinychannels_bus::OutboundContentPart::Content {
+                    part: tinychannels_bus::ContentPart::Text {
+                        text,
+                        markdown_dialect: None,
+                    },
+                });
+            }
+            parts.push(tinychannels_bus::OutboundContentPart::Voice {
+                voice: tinychannels_bus::OutboundVoice::Media {
+                    media: voice.media,
+                    audio_base64: None,
+                    codec: voice.codec,
+                    duration_ms: voice.duration_ms,
+                    waveform: voice.waveform,
+                },
+            });
+            OutboundPayload::Parts { parts }
+        }
         ChannelOutputEvent::Cancellation { reason } => OutboundPayload::Text {
             text: reason.unwrap_or_else(|| "Cancelled.".to_string()),
         },
-        ChannelOutputEvent::Lifecycle { event } => OutboundPayload::NativeChannelData {
-            data: json!({ "lifecycle": event }),
+        ChannelOutputEvent::Lifecycle {
+            stage,
+            message,
+            iteration,
+            max_iterations,
+            stop,
+        } => OutboundPayload::NativeChannelData {
+            data: {
+                let mut lifecycle = serde_json::Map::new();
+                lifecycle.insert("stage".into(), json!(stage));
+                if let Some(message) = message {
+                    lifecycle.insert("message".into(), json!(message));
+                }
+                if let Some(iteration) = iteration {
+                    lifecycle.insert("iteration".into(), json!(iteration));
+                }
+                if let Some(max_iterations) = max_iterations {
+                    lifecycle.insert("maxIterations".into(), json!(max_iterations));
+                }
+                if let Some(stop) = stop {
+                    lifecycle.insert("stop".into(), json!(stop));
+                }
+                json!({"lifecycle": lifecycle})
+            },
         },
         ChannelOutputEvent::Native { data } => OutboundPayload::NativeChannelData { data },
+        event => OutboundPayload::NativeChannelData {
+            data: serde_json::to_value(event)?,
+        },
     };
 
-    vec![ChannelOutboundIntent {
-        idempotency_key: format!("{}:{}", turn.id, intent_suffix(&payload)),
+    let scope = serde_json::to_vec(&(
+        &turn.envelope.channel,
+        &turn.envelope.conversation,
+        options.event_sequence,
+    ))?;
+    let scoped_key = hex::encode(Sha256::digest(scope));
+    Ok(vec![ChannelOutboundIntent {
+        idempotency_key: format!("{}:{}", turn.id, scoped_key),
         channel_id: turn.envelope.channel.id.clone(),
         conversation_id: turn.envelope.conversation.id.clone(),
+        channel_ref: Some(turn.envelope.channel.clone()),
+        conversation_ref: Some(turn.envelope.conversation.clone()),
         reply_to_id: Some(turn.envelope.message_id.clone()).filter(|id| !id.is_empty()),
-        thread_id: turn
-            .envelope
-            .conversation
-            .topic_id
-            .clone()
-            .or_else(|| turn.envelope.conversation.thread_id.clone()),
+        thread_id: turn.envelope.conversation.thread_id.clone(),
+        turn_id: Some(turn.id.clone()),
         durability: options.durability,
         payload,
-    }]
+    }])
 }
 
 fn supports_native_approval(
@@ -117,16 +205,4 @@ fn supports_native_approval(
         .max_actions
         .is_some_and(|max| max >= choice_count)
         && presentation.max_actions_per_row.unwrap_or(1) > 0
-}
-
-fn intent_suffix(payload: &OutboundPayload) -> &'static str {
-    match payload {
-        OutboundPayload::Text { .. } => "text",
-        OutboundPayload::Media { .. } => "media",
-        OutboundPayload::Voice { .. } => "voice",
-        OutboundPayload::Files { .. } => "files",
-        OutboundPayload::Poll { .. } => "poll",
-        OutboundPayload::PresentationBlocks { .. } => "presentation",
-        OutboundPayload::NativeChannelData { .. } => "native",
-    }
 }

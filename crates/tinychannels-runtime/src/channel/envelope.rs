@@ -53,6 +53,15 @@ fn aligned_strings(values: Vec<Option<String>>) -> Option<Vec<String>> {
 /// Project the legacy host `ChannelMessage` shape into a normalized inbound
 /// envelope without inferring provider-specific conversation kind.
 pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInboundEnvelope {
+    // v21 providers used Unix seconds while a few newer providers already
+    // supplied milliseconds. Values below this year-5138 boundary are
+    // unambiguously seconds for contemporary channel timestamps.
+    const MILLIS_THRESHOLD: u64 = 100_000_000_000;
+    let timestamp_unix_ms = Some(if msg.timestamp < MILLIS_THRESHOLD {
+        msg.timestamp.saturating_mul(1000)
+    } else {
+        msg.timestamp
+    });
     let thread_ts = msg
         .thread_ts
         .as_deref()
@@ -61,10 +70,12 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
         .map(str::to_owned);
 
     let provider = msg.channel.split(':').next().unwrap_or_default();
-    let (thread_id, topic_id) = if matches!(provider, "telegram" | "tg") {
+    let (thread_id, topic_id) = if matches!(provider, "telegram" | "tg") && msg.topic_id.is_none() {
+        // v21 Telegram populated `thread_ts` for its topic. Preserve that
+        // historical interpretation only when the v22 topic field is absent.
         (None, thread_ts)
     } else {
-        (thread_ts, None)
+        (thread_ts, msg.topic_id.clone())
     };
 
     ChannelInboundEnvelope {
@@ -73,6 +84,8 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
             account_id: None,
         },
         message_id: msg.id.clone(),
+        reply_to_id: msg.reply_to_id.clone(),
+        timestamp_unix_ms,
         conversation: ConversationRef {
             id: msg.reply_target.clone(),
             thread_id,
@@ -85,6 +98,10 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
             ..Default::default()
         },
         text: msg.content.clone(),
+        parts: vec![ContentPart::Text {
+            text: msg.content.clone(),
+            markdown_dialect: None,
+        }],
         ..Default::default()
     }
 }
@@ -94,19 +111,29 @@ pub fn inbound_envelope_from_legacy_message(msg: &ChannelMessage) -> ChannelInbo
 pub fn legacy_message_from_inbound_envelope(
     envelope: &ChannelInboundEnvelope,
     timestamp: u64,
-) -> ChannelMessage {
-    ChannelMessage {
+) -> anyhow::Result<ChannelMessage> {
+    let content = if envelope.parts.is_empty() {
+        envelope.text.clone()
+    } else {
+        let mut text = Vec::with_capacity(envelope.parts.len());
+        for part in &envelope.parts {
+            match part {
+                ContentPart::Text { text: value, .. } => text.push(value.as_str()),
+                _ => anyhow::bail!("legacy message cannot represent non-text inbound content"),
+            }
+        }
+        text.join("\n")
+    };
+    Ok(ChannelMessage {
         id: envelope.message_id.clone(),
         sender: envelope.sender.id.clone(),
         reply_target: envelope.conversation.id.clone(),
-        content: envelope.text.clone(),
+        content,
         channel: envelope.channel.id.clone(),
         timestamp,
-        thread_ts: envelope
-            .conversation
-            .topic_id
-            .clone()
-            .or_else(|| envelope.conversation.thread_id.clone()),
+        thread_ts: envelope.conversation.thread_id.clone(),
+        topic_id: envelope.conversation.topic_id.clone(),
+        reply_to_id: envelope.reply_to_id.clone(),
         sender_name: envelope.sender.name.clone(),
-    }
+    })
 }

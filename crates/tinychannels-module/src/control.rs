@@ -6,7 +6,11 @@ use tinychannels_bus::module_control::{
 };
 use tinychannels_bus::module_remote::RemoteOperation;
 
-pub(crate) async fn prepare(host: &HostChannels, request: Request) -> Result<Response> {
+pub(crate) async fn prepare(
+    host: &HostChannels,
+    request: Request,
+    instance_capabilities: tinychannels_bus::ChannelCapabilities,
+) -> Result<Response> {
     if serde_json::to_vec(&request).map_or(true, |bytes| {
         bytes.len() > tinychannels_bus::module_runtime::PREPARATION_MESSAGE_BYTES
     }) {
@@ -34,8 +38,9 @@ pub(crate) async fn prepare(host: &HostChannels, request: Request) -> Result<Res
         Request::Overflow { message } => Response::Overflow(
             tinychannels::context::is_context_window_overflow_message(&message),
         ),
-        Request::Capabilities { channel } => {
-            Response::Capabilities(tinychannels::capabilities_for(&channel))
+        Request::Capabilities { .. } => Response::Capabilities((&instance_capabilities).into()),
+        Request::CapabilitiesV2 { .. } => {
+            Response::CapabilitiesV2(Box::new(instance_capabilities.clone()))
         }
         Request::Acknowledgment { content } => Response::Acknowledgment(
             tinychannels::runtime::select_acknowledgment_reaction(&content).to_owned(),
@@ -52,6 +57,7 @@ pub(crate) async fn prepare(host: &HostChannels, request: Request) -> Result<Res
             message,
             route,
             history_len,
+            session_scope,
             providers,
         } => {
             let remote = crate::remote::execute(
@@ -61,7 +67,9 @@ pub(crate) async fn prepare(host: &HostChannels, request: Request) -> Result<Res
                     message: (*message).clone(),
                     route: route.clone(),
                     history_len,
+                    session_scope: session_scope.map(|scope| *scope),
                 },
+                instance_capabilities.clone(),
             )
             .await?;
             if remote.reply.is_some() {

@@ -1,4 +1,6 @@
 use super::*;
+use futures_util::{SinkExt, StreamExt};
+use tokio_tungstenite::tungstenite::Message;
 
 fn discord_units(text: &str) -> usize {
     text.encode_utf16().count()
@@ -727,10 +729,27 @@ async fn health_check_reflects_users_me_status() {
         }),
     );
     let base = spawn_http(app).await;
-    assert!(channel_at(&base, None).health_check().await);
+    let healthy = channel_at(&base, None);
+    assert!(healthy.health_check().await);
+    assert_eq!(
+        crate::channel::ChannelAdapter::status(&healthy)
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
+        Some("healthy")
+    );
     let bad = DiscordChannel::new("wrong".into(), None, None, vec![], false, false)
         .with_api_base(base.clone());
     assert!(!bad.health_check().await);
+    assert_eq!(
+        crate::channel::ChannelAdapter::status(&bad)
+            .await
+            .unwrap()
+            .health_state
+            .as_deref(),
+        Some("unhealthy")
+    );
     // Unreachable endpoint → false rather than an error.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let dead = format!("http://{}", listener.local_addr().unwrap());
@@ -795,7 +814,7 @@ where
         let identify = next_json(&mut ws).await;
         assert_eq!(identify["op"], 2);
         assert_eq!(identify["d"]["token"], BOT_TOKEN);
-        assert_eq!(identify["d"]["intents"], 37377);
+        assert_eq!(identify["d"]["intents"], 46593);
         // The heartbeat timer fires immediately, before any sequence is known.
         assert_eq!(next_json(&mut ws).await, json!({"op": 1, "d": null}));
         script(ws).await;

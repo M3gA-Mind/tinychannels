@@ -14,9 +14,11 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::capabilities::capabilities_for;
+use crate::channel::ChannelAdapter;
 use crate::context::conversation_history_key_parts;
-use crate::traits::{Channel, ChannelSendExt, SendMessage};
+use tinychannels_bus::channel::{
+    ChannelOutboundIntent, ChannelRef, ConversationKind, ConversationRef, OutboundPayload,
+};
 
 const LOG_PREFIX: &str = "[channel-approval]";
 
@@ -64,13 +66,13 @@ pub enum SurfaceOutcome {
 
 /// Routes approval prompts back to the chat each conversation came from.
 pub struct ApprovalSurface {
-    channels_by_name: Arc<HashMap<String, Arc<dyn Channel>>>,
+    channels_by_name: Arc<HashMap<String, Arc<dyn ChannelAdapter>>>,
     reply_index: Mutex<HashMap<String, ReplyContext>>,
 }
 
 impl ApprovalSurface {
-    /// A surface over the runtime's channels, keyed by [`Channel::name`].
-    pub fn new(channels_by_name: Arc<HashMap<String, Arc<dyn Channel>>>) -> Self {
+    /// A surface over the runtime's channels, keyed by each adapter descriptor id.
+    pub fn new(channels_by_name: Arc<HashMap<String, Arc<dyn ChannelAdapter>>>) -> Self {
         Self {
             channels_by_name,
             reply_index: Mutex::new(HashMap::new()),
@@ -86,7 +88,11 @@ impl ApprovalSurface {
         reply_target: &str,
         thread_ts: Option<&str>,
     ) {
-        if !capabilities_for(channel).chat_approvals {
+        if !self
+            .channels_by_name
+            .get(channel)
+            .is_some_and(|provider| provider.declared_capabilities().chat_approvals)
+        {
             return;
         }
         let key = conversation_history_key_parts(channel, sender, reply_target, thread_ts);
@@ -118,9 +124,6 @@ impl ApprovalSurface {
             channel: channel_name,
             ..
         } = prompt;
-        if !capabilities_for(channel_name).chat_approvals {
-            return SurfaceOutcome::Unsupported;
-        }
         let Some(reply_ctx) = self.reply_context(thread_id) else {
             tracing::warn!(
                 "{LOG_PREFIX} no reply context recorded for channel={channel_name} \
@@ -136,22 +139,47 @@ impl ApprovalSurface {
             );
             return SurfaceOutcome::ChannelNotRegistered;
         };
+        let descriptor = channel.descriptor();
+        if !channel.declared_capabilities().chat_approvals {
+            return SurfaceOutcome::Unsupported;
+        }
 
         let body = format_approval_prompt(tool_name, &prompt.action_summary);
-        let send = SendMessage::new(body, &reply_ctx.reply_target).in_thread(reply_ctx.thread_ts);
+        let intent = ChannelOutboundIntent {
+            idempotency_key: format!("approval:{}", prompt.request_id),
+            channel_id: descriptor.id.clone(),
+            conversation_id: reply_ctx.reply_target.clone(),
+            channel_ref: Some(ChannelRef {
+                id: descriptor.id,
+                account_id: descriptor.account_id,
+            }),
+            conversation_ref: Some(ConversationRef {
+                kind: ConversationKind::Unknown,
+                id: reply_ctx.reply_target.clone(),
+                thread_id: reply_ctx.thread_ts.clone(),
+                ..Default::default()
+            }),
+            thread_id: reply_ctx.thread_ts,
+            payload: OutboundPayload::Text { text: body },
+            ..Default::default()
+        };
         tracing::info!(
             "{LOG_PREFIX} surfacing approval prompt channel={channel_name} request_id={request_id} \
              tool={tool_name} thread_id={thread_id} reply_target={}",
             reply_ctx.reply_target
         );
-        match channel.send_with_outbound_intent(&send).await {
-            Ok(()) => SurfaceOutcome::Sent,
+        match channel.send(intent).await {
+            Ok(outcome) if outcome.error.is_none() => SurfaceOutcome::Sent,
+            Ok(outcome) => SurfaceOutcome::SendFailed(anyhow::anyhow!(
+                outcome.error.expect("guarded above").message
+            )),
             Err(err) => {
                 tracing::warn!(
                     "{LOG_PREFIX} failed to send approval prompt channel={channel_name} \
-                     request_id={request_id} tool={tool_name}: {err}"
+                     request_id={request_id} tool={tool_name}: {}",
+                    err.message
                 );
-                SurfaceOutcome::SendFailed(err)
+                SurfaceOutcome::SendFailed(anyhow::anyhow!(err.message))
             }
         }
     }

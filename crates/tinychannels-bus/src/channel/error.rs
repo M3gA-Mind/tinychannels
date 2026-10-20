@@ -24,7 +24,11 @@ pub enum SendErrorKind {
 pub struct ChannelSendError {
     pub kind: SendErrorKind,
     pub message: String,
+    /// True only when the adapter intentionally does not expose this operation.
+    pub unsupported: bool,
     pub retryable: bool,
+    /// Provider I/O may have reached the remote service despite the error.
+    pub sent_before_error: bool,
     pub retry_after: Option<f64>,
     pub chat_level_not_found: bool,
     pub continuation_message_ids: Vec<String>,
@@ -36,7 +40,9 @@ impl Default for ChannelSendError {
         Self {
             kind: SendErrorKind::Unknown,
             message: String::new(),
+            unsupported: false,
             retryable: false,
+            sent_before_error: false,
             retry_after: None,
             chat_level_not_found: false,
             continuation_message_ids: Vec::new(),

@@ -35,6 +35,11 @@ use std::collections::HashSet;
 #[cfg(feature = "email")]
 use std::sync::Arc;
 #[cfg(feature = "email")]
+use std::sync::{
+    Mutex as StdMutex,
+    atomic::{AtomicU64, Ordering},
+};
+#[cfg(feature = "email")]
 use std::time::Duration;
 #[cfg(feature = "email")]
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -47,6 +52,8 @@ use tokio::sync::Mutex;
 #[cfg(feature = "email")]
 use tokio::sync::mpsc;
 #[cfg(feature = "email")]
+use tokio::sync::watch;
+#[cfg(feature = "email")]
 use tokio::time::{sleep, timeout};
 #[cfg(feature = "email")]
 use tokio_rustls::TlsConnector;
@@ -58,10 +65,23 @@ use tracing::{debug, error, warn};
 #[cfg(feature = "email")]
 use uuid::Uuid;
 
+#[cfg(feature = "email")]
+mod capabilities;
+#[cfg(feature = "email")]
+mod inbound;
+#[cfg(feature = "email")]
+mod native;
+
+#[cfg(feature = "email")]
+use crate::channel::{ChannelInboundSink, ChannelSendError};
 pub use crate::config::EmailConfig;
+#[cfg(feature = "email")]
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::providers::mail::{ImapCredentials, MailSecret, SmtpCredentials, SmtpSecurity};
 #[cfg(feature = "email")]
 use crate::providers::mail::{LettreMailSender, MailCredentials, MailSender, OutboundEmail};
+#[cfg(feature = "email")]
+use crate::providers::native::HostPorts as NativeState;
 #[cfg(feature = "email")]
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 
@@ -93,7 +113,50 @@ pub struct EmailChannel {
     reconnect_backoff: Duration,
     #[cfg(feature = "email")]
     max_reconnect_backoff: Duration,
+    /// Host ports for the v2 adapter surface.
+    #[cfg(feature = "email")]
+    native: NativeState,
+    /// Subjects of inbound mail by message id, so a reply keeps its thread subject.
+    #[cfg(feature = "email")]
+    subjects: native::Subjects,
+    #[cfg(feature = "email")]
+    listener_cancel: ListenerCancellationSlot,
+    #[cfg(feature = "email")]
+    listener_generation: Arc<AtomicU64>,
 }
+
+#[cfg(feature = "email")]
+type ListenerCancellationSlot = Arc<StdMutex<Option<(u64, watch::Sender<bool>)>>>;
+
+#[cfg(feature = "email")]
+struct ListenerRegistration {
+    slot: ListenerCancellationSlot,
+    generation: u64,
+}
+
+#[cfg(feature = "email")]
+impl Drop for ListenerRegistration {
+    fn drop(&mut self) {
+        let mut active = self.slot.lock().unwrap_or_else(|error| error.into_inner());
+        if active
+            .as_ref()
+            .is_some_and(|(generation, _)| *generation == self.generation)
+        {
+            *active = None;
+        }
+    }
+}
+
+#[cfg(feature = "email")]
+enum EmailDelivery<'a> {
+    Legacy(&'a mpsc::Sender<ChannelMessage>),
+    Typed(&'a (dyn ChannelInboundSink + Send + Sync)),
+}
+
+#[cfg(feature = "email")]
+#[derive(Debug, thiserror::Error)]
+#[error("Email inbound sink rejected an event")]
+struct InboundSinkRejected;
 
 impl EmailChannel {
     pub fn new(config: EmailConfig) -> Self {
@@ -105,7 +168,51 @@ impl EmailChannel {
             reconnect_backoff: Duration::from_secs(1),
             #[cfg(feature = "email")]
             max_reconnect_backoff: Duration::from_secs(60),
+            #[cfg(feature = "email")]
+            native: NativeState::default(),
+            #[cfg(feature = "email")]
+            subjects: native::Subjects::default(),
+            #[cfg(feature = "email")]
+            listener_cancel: Arc::new(StdMutex::new(None)),
+            #[cfg(feature = "email")]
+            listener_generation: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Scoped media storage; enables typed attachments in both directions.
+    #[cfg(feature = "email")]
+    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    /// Durable voice storage; enables voice attachments in both directions.
+    #[cfg(feature = "email")]
+    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
+    }
+
+    /// Host speech-to-text for inbound voice attachments.
+    #[cfg(feature = "email")]
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.native.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Enable shared final-turn synthesis when the host provides TTS, a codec
+    /// and durable voice storage.
+    #[cfg(feature = "email")]
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.native.voice_synthesis = enabled;
+        self
+    }
+
+    /// Ordered ingress for typed inbound messages.
+    #[cfg(feature = "email")]
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.native.events = Some(events);
+        self
     }
 
     /// Check if a sender email is in the allowlist
@@ -179,8 +286,7 @@ impl EmailChannel {
                 && ct.ctype() == "text"
                 && let Ok(text) = std::str::from_utf8(part.contents())
             {
-                let name = MimeHeaders::attachment_name(part).unwrap_or("file");
-                return format!("[Attachment: {}]\n{}", name, text);
+                return text.to_string();
             }
         }
         "(no readable content)".to_string()
@@ -293,17 +399,9 @@ impl EmailChannel {
                     sender,
                     content,
                     timestamp: ts,
+                    raw: body.to_vec(),
                 });
             }
-        }
-
-        // Mark fetched messages as seen
-        if !results.is_empty() {
-            let _ = session
-                .uid_store(&uid_set, "+FLAGS (\\Seen)")
-                .await?
-                .try_collect::<Vec<_>>()
-                .await;
         }
 
         Ok(results)
@@ -358,6 +456,54 @@ impl EmailChannel {
             .await
     }
 
+    #[cfg(feature = "email")]
+    async fn listen_typed_with<S, F, Fut>(
+        &self,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+        connect: F,
+    ) -> std::result::Result<(), ChannelSendError>
+    where
+        S: ImapStream,
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<Session<S>>>,
+    {
+        let (cancel, mut cancellation) = watch::channel(false);
+        let generation = self
+            .listener_generation
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1);
+        {
+            let mut active = self
+                .listener_cancel
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            if active.is_some() {
+                return Err(ChannelSendError {
+                    message: "Email listener is already running".into(),
+                    retryable: true,
+                    ..Default::default()
+                });
+            }
+            *active = Some((generation, cancel));
+        }
+        let _registration = ListenerRegistration {
+            slot: self.listener_cancel.clone(),
+            generation,
+        };
+
+        let result = tokio::select! {
+            biased;
+            _ = cancellation.wait_for(|stopped| *stopped) => Ok(()),
+            result = self.listen_with_reconnect_to(EmailDelivery::Typed(sink), connect) => result,
+        };
+        result.map_err(|_| ChannelSendError {
+            kind: tinychannels_bus::channel::SendErrorKind::Transient,
+            message: "Email listener stopped after an inbound delivery error".into(),
+            retryable: true,
+            ..Default::default()
+        })
+    }
+
     /// The reconnect loop over any session source, so it is testable without
     /// a TLS server.
     #[cfg(feature = "email")]
@@ -371,14 +517,32 @@ impl EmailChannel {
         F: Fn() -> Fut,
         Fut: std::future::Future<Output = Result<Session<S>>>,
     {
+        self.listen_with_reconnect_to(EmailDelivery::Legacy(tx), connect)
+            .await
+    }
+
+    #[cfg(feature = "email")]
+    async fn listen_with_reconnect_to<S, F, Fut>(
+        &self,
+        delivery: EmailDelivery<'_>,
+        connect: F,
+    ) -> Result<()>
+    where
+        S: ImapStream,
+        F: Fn() -> Fut,
+        Fut: std::future::Future<Output = Result<Session<S>>>,
+    {
         let mut backoff = self.reconnect_backoff;
         let max_backoff = self.max_reconnect_backoff;
 
         loop {
-            match self.run_idle_session(tx, connect()).await {
+            match self.run_idle_session(&delivery, connect()).await {
                 Ok(()) => {
                     // Clean exit (channel closed)
                     return Ok(());
+                }
+                Err(error) if error.downcast_ref::<InboundSinkRejected>().is_some() => {
+                    return Err(error);
                 }
                 Err(e) => {
                     error!(
@@ -397,7 +561,7 @@ impl EmailChannel {
     #[cfg(feature = "email")]
     async fn run_idle_session<S: ImapStream>(
         &self,
-        tx: &mpsc::Sender<ChannelMessage>,
+        delivery: &EmailDelivery<'_>,
         connect: impl std::future::Future<Output = Result<Session<S>>>,
     ) -> Result<()> {
         // Connect and authenticate
@@ -411,7 +575,7 @@ impl EmailChannel {
         );
 
         // Check for existing unseen messages first
-        self.process_unseen(&mut session, tx).await?;
+        self.process_unseen_to(&mut session, delivery).await?;
 
         loop {
             // Enter IDLE and wait for changes (consumes session, returns it via result)
@@ -419,12 +583,12 @@ impl EmailChannel {
                 Ok((IdleWaitResult::NewMail, returned_session)) => {
                     debug!("New mail notification received");
                     session = returned_session;
-                    self.process_unseen(&mut session, tx).await?;
+                    self.process_unseen_to(&mut session, delivery).await?;
                 }
                 Ok((IdleWaitResult::Timeout, returned_session)) => {
                     // Re-check for mail after IDLE timeout (defensive)
                     session = returned_session;
-                    self.process_unseen(&mut session, tx).await?;
+                    self.process_unseen_to(&mut session, delivery).await?;
                 }
                 Ok((IdleWaitResult::Interrupted, _)) => {
                     info!("IDLE interrupted, exiting");
@@ -440,45 +604,66 @@ impl EmailChannel {
 
     /// Fetch unseen messages and send to channel
     #[cfg(feature = "email")]
+    #[cfg(test)]
     async fn process_unseen<S: ImapStream>(
         &self,
         session: &mut Session<S>,
         tx: &mpsc::Sender<ChannelMessage>,
     ) -> Result<()> {
+        self.process_unseen_to(session, &EmailDelivery::Legacy(tx))
+            .await
+    }
+
+    #[cfg(feature = "email")]
+    async fn process_unseen_to<S: ImapStream>(
+        &self,
+        session: &mut Session<S>,
+        delivery: &EmailDelivery<'_>,
+    ) -> Result<()> {
         let messages = self.fetch_unseen(session).await?;
 
         for email in messages {
+            let uid = email._uid;
+            let message_id = email.msg_id.clone();
             // Check allowlist
             if !self.is_sender_allowed(&email.sender) {
                 warn!("Blocked email from {}", email.sender);
+                self.mark_uid_seen(session, uid).await?;
                 continue;
             }
 
-            let is_new = {
-                let mut seen = self.seen_messages.lock().await;
-                seen.insert(email.msg_id.clone())
-            };
-            if !is_new {
+            if self.seen_messages.lock().await.contains(&email.msg_id) {
+                self.mark_uid_seen(session, uid).await?;
                 continue;
             }
 
-            let msg = ChannelMessage {
-                id: email.msg_id,
-                reply_target: email.sender.clone(),
-                sender: email.sender,
-                content: email.content,
-                channel: "email".to_string(),
-                timestamp: email.timestamp,
-                thread_ts: None,
-                sender_name: None,
+            let accepted = match delivery {
+                EmailDelivery::Legacy(tx) => self.dispatch_email(email, tx).await,
+                EmailDelivery::Typed(sink) => {
+                    self.dispatch_typed_email(&email, *sink).await?;
+                    true
+                }
             };
-
-            if tx.send(msg).await.is_err() {
+            if !accepted {
                 // Channel closed, exit cleanly
                 return Ok(());
             }
+
+            self.seen_messages.lock().await.insert(message_id);
+            self.mark_uid_seen(session, uid).await?;
         }
 
+        Ok(())
+    }
+
+    #[cfg(feature = "email")]
+    async fn mark_uid_seen<S: ImapStream>(&self, session: &mut Session<S>, uid: u32) -> Result<()> {
+        if uid == 0 {
+            return Ok(());
+        }
+        session
+            .run_command_and_check_ok(format!("UID STORE {uid} +FLAGS (\\Seen)"))
+            .await?;
         Ok(())
     }
 
@@ -585,6 +770,8 @@ struct ParsedEmail {
     sender: String,
     content: String,
     timestamp: u64,
+    /// The RFC 822 bytes, for the typed inbound path.
+    raw: Vec<u8>,
 }
 
 /// Result from waiting on IDLE
@@ -614,6 +801,19 @@ impl Channel for EmailChannel {
         "email"
     }
 
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.declared()
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> Result<crate::channel::ChannelSendOutcome> {
+        crate::providers::native::outbound::send_typed(self, message)
+            .await
+            .map_err(crate::providers::native::to_anyhow)
+    }
+
     async fn send(&self, message: &SendMessage) -> Result<()> {
         // Use explicit subject if provided, otherwise fall back to legacy parsing or default
         let (subject, body) = if let Some(ref subj) = message.subject {
@@ -636,6 +836,7 @@ impl Channel for EmailChannel {
             subject: subject.to_string(),
             body: body.to_string(),
             attachments: Vec::new(),
+            headers: Default::default(),
         };
         LettreMailSender::new()
             .send(&MailCredentials::Smtp(self.smtp_credentials()), &email)
@@ -684,6 +885,17 @@ impl EmailChannel {
         }
     }
 }
+
+#[cfg(feature = "email")]
+crate::providers::native::native_v2_adapter!(EmailChannel);
+
+#[cfg(all(test, feature = "email"))]
+#[path = "email_channel/fixtures_tests.rs"]
+mod fixtures;
+
+#[cfg(all(test, feature = "email"))]
+#[path = "email_channel/conformance_tests.rs"]
+mod conformance;
 
 #[cfg(all(test, feature = "email"))]
 #[path = "email_channel_tests.rs"]

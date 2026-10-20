@@ -1,6 +1,7 @@
 use super::*;
 use crate::relay::{AuthenticatedRelayInboundEvent, PassthroughForward};
 use async_trait::async_trait;
+use std::future::Future;
 use tokio::sync::mpsc;
 
 struct TestIo {
@@ -124,6 +125,39 @@ async fn timed_out_operations_remove_waiters_and_closed_handshake_fails() {
     );
     transport.start_reader().await;
     assert!(transport.reader.lock().await.is_none());
+}
+
+#[tokio::test]
+async fn reconnect_stays_closed_while_cached_capabilities_are_invalidated() {
+    let (io, _tx) = TestIo::new(false, None);
+    let transport = transport(io);
+    let identity = RelayIdentity {
+        platform: "discord".into(),
+        bot_id: "bot".into(),
+    };
+    transport.state.closed.store(true, Ordering::SeqCst);
+    transport
+        .state
+        .capabilities_v2
+        .lock()
+        .await
+        .insert(identity, tinychannels_bus::ChannelCapabilities::unknown());
+    let cache = transport.state.capabilities_v2.lock().await;
+
+    let mut preparing = Box::pin(transport.prepare_connect());
+    let reached_cache_lock =
+        std::future::poll_fn(|cx| std::task::Poll::Ready(preparing.as_mut().poll(cx).is_pending()))
+            .await;
+    assert!(reached_cache_lock);
+    assert!(
+        transport.is_closed(),
+        "a reconnect must not expose stale cached facts"
+    );
+
+    drop(cache);
+    preparing.await;
+    assert!(!transport.is_closed());
+    assert!(transport.capabilities_v2().await.is_empty());
 }
 
 #[tokio::test]

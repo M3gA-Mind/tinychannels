@@ -14,45 +14,52 @@ pub fn build_session_key(
     policy: SessionKeyPolicy,
 ) -> String {
     let namespace = normalize_namespace(namespace);
-    let account = channel.account_id.as_deref().unwrap_or("default");
-    let chat_type = conversation.kind.as_session_segment();
-    let mut parts = vec![
-        encode_identity_component(namespace, &[':', '%']),
-        encode_identity_component(&channel.id, &[':', '%']),
-        encode_identity_component(account, &[':', '%']),
-        encode_identity_component(chat_type, &[':', '%']),
-        encode_identity_component(&conversation.id, &[':', '%']),
-    ];
-
-    if let Some(scope_id) = conversation.scope_id.as_deref().filter(|s| !s.is_empty()) {
-        parts.insert(4, encode_identity_component(scope_id, &[':', '%']));
-    }
-
-    let thread = conversation
-        .topic_id
-        .as_deref()
-        .and_then(nonempty)
-        .or_else(|| conversation.thread_id.as_deref().and_then(nonempty));
-    if let Some(thread) = thread {
-        parts.push(encode_identity_component(thread, &[':', '%']));
-    }
-
     let participant = sender
         .alt_ids
         .first()
         .map(String::as_str)
         .filter(|s| !s.is_empty())
         .or_else(|| (!sender.id.is_empty()).then_some(sender.id.as_str()));
-    let isolate_user = match conversation.kind {
+    let has_thread_address = conversation.topic_id.is_some() || conversation.thread_id.is_some();
+    let isolate_participant = match conversation.kind {
         ConversationKind::Dm => false,
-        _ if thread.is_some() => policy.thread_sessions_per_user,
+        _ if has_thread_address => policy.thread_sessions_per_user,
         _ => policy.group_sessions_per_user,
     };
-    if isolate_user && let Some(participant) = participant {
-        parts.push(encode_identity_component(participant, &[':', '%']));
-    }
 
-    parts.join(":")
+    let mut key = String::from("v22");
+    append_session_key_field(&mut key, "namespace", Some(namespace));
+    append_session_key_field(&mut key, "channel", Some(&channel.id));
+    append_session_key_field(&mut key, "account", channel.account_id.as_deref());
+    append_session_key_field(
+        &mut key,
+        "kind",
+        Some(conversation.kind.as_session_segment()),
+    );
+    append_session_key_field(&mut key, "scope", conversation.scope_id.as_deref());
+    append_session_key_field(&mut key, "conversation", Some(&conversation.id));
+    append_session_key_field(&mut key, "parent", conversation.parent_id.as_deref());
+    append_session_key_field(&mut key, "topic", conversation.topic_id.as_deref());
+    append_session_key_field(&mut key, "thread", conversation.thread_id.as_deref());
+    append_session_key_field(
+        &mut key,
+        "participant",
+        isolate_participant.then_some(participant).flatten(),
+    );
+    key
+}
+
+fn append_session_key_field(key: &mut String, tag: &str, value: Option<&str>) {
+    use std::fmt::Write as _;
+
+    write!(key, "|{tag}=").expect("writing to a String cannot fail");
+    match value {
+        Some(value) => {
+            write!(key, "p{}:", value.len()).expect("writing to a String cannot fail");
+            key.push_str(value);
+        }
+        None => key.push('a'),
+    }
 }
 
 /// Build a deterministic TinyChannels session key from a normalized inbound envelope.
@@ -76,7 +83,7 @@ pub fn conversation_history_key_candidates(msg: &ChannelMessage) -> LegacySessio
     // data written before current identity keys began escaping separators.
     let base_key = format!("{}_{}_{}", msg.channel, msg.sender, msg.reply_target);
     let conversation_history_key =
-        if crate::capabilities::capabilities_for(&msg.channel).history_key_ignores_thread {
+        if crate::context::legacy_v21_history_key_ignores_thread(&msg.channel) {
             base_key
         } else if let Some(thread_ts) = msg
             .thread_ts
@@ -163,3 +170,7 @@ fn nonempty(value: &str) -> Option<&str> {
     let value = value.trim();
     (!value.is_empty()).then_some(value)
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;

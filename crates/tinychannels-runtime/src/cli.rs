@@ -44,7 +44,9 @@ async fn forward_lines<R: AsyncBufRead + Unpin>(
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
+            reply_to_id: None,
             thread_ts: None,
+            topic_id: None,
             sender_name: None,
         };
         if tx.send(msg).await.is_err() {

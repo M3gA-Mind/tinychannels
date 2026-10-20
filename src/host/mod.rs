@@ -36,16 +36,28 @@
 //! ignores the `host` on its [`ProviderContext`].
 
 mod dispatch;
+mod media;
 mod noop;
 mod services;
+mod voice;
 
 pub use dispatch::{DispatchOptions, DispatchRequest, TurnDispatcher, TurnHandle};
+pub(crate) use media::is_allowed_content_type;
+pub use media::{
+    MediaMetadata, MediaScope, MediaStoreRequest, MediaStreamRequest, ScopedMediaStore, StoredMedia,
+};
 pub use noop::{ChannelHostBuilder, NoopHost};
 pub use services::{
     AllowlistStore, ApprovalAsk, ApprovalDecision, ApprovalGate, ConversationMessage,
-    ConversationStore, EventSink, LifecycleRegistry, ReactionDecision, ReactionGate, ReactionQuery,
-    RunEventAppend, RunLedger, RunTelemetry, RunUpsert, ShutdownHook, SpeechRequest, SpeechResult,
-    SpeechSynthesizer, StorageProvider, Transcriber, TranscriptionRequest, TranscriptionResult,
+    ConversationStore, EventSink, LifecycleRegistry, MediaRepository, ReactionDecision,
+    ReactionGate, ReactionQuery, RunEventAppend, RunLedger, RunTelemetry, RunUpsert, ShutdownHook,
+    SpeechRequest, SpeechResult, SpeechSynthesizer, StorageProvider, Transcriber,
+    TranscriptionRequest, TranscriptionResult, VoiceCodec, VoiceCodecRequest, VoiceCodecResult,
+    VoiceMediaRequest, VoiceMediaStore,
+};
+pub use voice::{
+    PreparedVoiceReply, VoiceEnrichmentStatus, VoiceReplyConstraints, VoiceReplyMode,
+    enrich_voice_note, prepare_voice_reply, should_synthesize_reply,
 };
 
 use crate::config::ChannelsConfig;
@@ -65,6 +77,8 @@ pub struct HostCapabilities {
     pub turn_dispatch: bool,
     pub stt: bool,
     pub tts: bool,
+    pub voice_media_store: bool,
+    pub media_repository: bool,
     pub approvals: bool,
     pub reaction_gate: bool,
     pub conversation_store: bool,
@@ -82,6 +96,8 @@ impl HostCapabilities {
         turn_dispatch: false,
         stt: false,
         tts: false,
+        voice_media_store: false,
+        media_repository: false,
         approvals: false,
         reaction_gate: false,
         conversation_store: false,
@@ -99,6 +115,8 @@ impl HostCapabilities {
             turn_dispatch: host.dispatcher().is_some(),
             stt: host.transcriber().is_some(),
             tts: host.synthesizer().is_some(),
+            voice_media_store: host.voice_media_store().is_some(),
+            media_repository: host.media_repository().is_some(),
             approvals: host.approvals().is_some(),
             reaction_gate: host.reactions().is_some(),
             conversation_store: host.conversations().is_some(),
@@ -135,6 +153,18 @@ pub trait ChannelHost: Send + Sync {
     }
     /// Text-to-speech for spoken replies.
     fn synthesizer(&self) -> Option<Arc<dyn SpeechSynthesizer>> {
+        None
+    }
+    /// Durable voice media storage for normalized inbound and outbound parts.
+    fn voice_media_store(&self) -> Option<Arc<dyn VoiceMediaStore>> {
+        None
+    }
+    /// Durable shared media storage for typed channel attachments.
+    fn media_repository(&self) -> Option<Arc<dyn MediaRepository>> {
+        None
+    }
+    /// Codec operations implemented by the loaded TinyVoice module.
+    fn voice_codec(&self) -> Option<Arc<dyn VoiceCodec>> {
         None
     }
     /// Human-in-the-loop approval gate.
@@ -181,6 +211,8 @@ pub trait ChannelHost: Send + Sync {
             turn_dispatch: self.dispatcher().is_some(),
             stt: self.transcriber().is_some(),
             tts: self.synthesizer().is_some(),
+            voice_media_store: self.voice_media_store().is_some(),
+            media_repository: self.media_repository().is_some(),
             approvals: self.approvals().is_some(),
             reaction_gate: self.reactions().is_some(),
             conversation_store: self.conversations().is_some(),

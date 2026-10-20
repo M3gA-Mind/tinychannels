@@ -1,5 +1,9 @@
 # Roadmap
 
+> **Superseded:** the channel contract and migration direction are defined in
+> [docs/spec/contract-v2.md](docs/spec/contract-v2.md). This initial scaffold
+> roadmap is historical and is not the current implementation roadmap.
+
 TinyChannels starts as a blank scaffold. The roadmap favors small, well-tested
 modules that build toward a production-grade channel communication layer for
 OpenHuman.

@@ -1,13 +1,33 @@
+//! Signal on the v2 adapter contract, over signal-cli's daemon JSON-RPC and SSE.
+//!
+//! Beyond text, the adapter ingests and sends attachments and voice notes,
+//! reactions, typing, edits and remote deletes, and surfaces read and delivery
+//! receipts as events. Inbound attachment bytes come from signal-cli's
+//! `getAttachment` JSON-RPC method (base64 `data`); outbound attachments are
+//! `data:` URIs in the `send` call's `attachments` array. Signal has no
+//! separate voice-note send flag in signal-cli, so outbound voice is an audio
+//! attachment (descriptor metadata `voiceOut=attachment`), while inbound audio
+//! flagged `voiceNote` becomes a typed voice note.
+
+mod capabilities;
+mod inbound;
+mod native;
+
+use crate::channel::ChannelInboundSink;
+use crate::host::{EventSink, MediaRepository, Transcriber, VoiceMediaStore};
 use crate::traits::{Channel, ChannelMessage, SendMessage};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
+use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
 const GROUP_TARGET_PREFIX: &str = "group:";
+type ListenerCancellationSlot = Arc<std::sync::Mutex<Option<(u64, watch::Sender<bool>)>>>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum RecipientTarget {
@@ -29,7 +49,29 @@ pub struct SignalChannel {
     ignore_attachments: bool,
     ignore_stories: bool,
     http_client: Client,
+    native: NativeState,
+    listener_cancel: ListenerCancellationSlot,
+    listener_generation: Arc<AtomicU64>,
 }
+
+pub(super) struct ListenerRegistration {
+    slot: ListenerCancellationSlot,
+    generation: u64,
+}
+
+impl Drop for ListenerRegistration {
+    fn drop(&mut self) {
+        let mut active = self.slot.lock().unwrap_or_else(|error| error.into_inner());
+        if active
+            .as_ref()
+            .is_some_and(|(generation, _)| *generation == self.generation)
+        {
+            *active = None;
+        }
+    }
+}
+
+use crate::providers::native::HostPorts as NativeState;
 
 // signal-cli SSE event JSON shapes.
 
@@ -39,7 +81,7 @@ struct SseEnvelope {
     envelope: Option<Envelope>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct Envelope {
     #[serde(default)]
     source: Option<String>,
@@ -54,9 +96,11 @@ struct Envelope {
     story_message: Option<serde_json::Value>,
     #[serde(default)]
     timestamp: Option<u64>,
+    #[serde(rename = "receiptMessage", default)]
+    receipt_message: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct DataMessage {
     #[serde(default)]
     message: Option<String>,
@@ -66,6 +110,10 @@ struct DataMessage {
     group_info: Option<GroupInfo>,
     #[serde(default)]
     attachments: Option<Vec<serde_json::Value>>,
+    #[serde(default)]
+    reaction: Option<serde_json::Value>,
+    #[serde(rename = "remoteDelete", default)]
+    remote_delete: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -96,6 +144,9 @@ impl SignalChannel {
             ignore_attachments,
             ignore_stories,
             http_client,
+            native: NativeState::default(),
+            listener_cancel: Arc::new(std::sync::Mutex::new(None)),
+            listener_generation: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -117,7 +168,41 @@ impl SignalChannel {
             ignore_attachments,
             ignore_stories,
             http_client,
+            native: NativeState::default(),
+            listener_cancel: Arc::new(std::sync::Mutex::new(None)),
+            listener_generation: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Scoped media storage; enables typed attachments in both directions.
+    pub fn with_media_repository(mut self, repository: Arc<dyn MediaRepository>) -> Self {
+        self.native.media_repository = Some(repository);
+        self
+    }
+
+    /// Durable voice storage; enables voice notes in both directions.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn VoiceMediaStore>) -> Self {
+        self.native.voice_media_store = Some(store);
+        self
+    }
+
+    /// Host speech-to-text for inbound voice notes.
+    pub fn with_transcriber(mut self, transcriber: Arc<dyn Transcriber>) -> Self {
+        self.native.transcriber = Some(transcriber);
+        self
+    }
+
+    /// Enable shared final-turn synthesis when the host provides TTS, a codec
+    /// and durable voice storage.
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.native.voice_synthesis = enabled;
+        self
+    }
+
+    /// Ordered ingress for typed inbound messages and lifecycle events.
+    pub fn with_events(mut self, events: Arc<dyn EventSink>) -> Self {
+        self.native.events = Some(events);
+        self
     }
 
     fn http_client(&self) -> Client {
@@ -293,6 +378,8 @@ impl SignalChannel {
             content: text.to_string(),
             channel: "signal".to_string(),
             timestamp: timestamp / 1000, // millis to secs.
+            topic_id: None,
+            reply_to_id: None,
             thread_ts: None,
             sender_name: envelope
                 .source_name
@@ -304,10 +391,89 @@ impl SignalChannel {
     }
 }
 
+async fn sleep_or_cancel(cancellation: &mut Option<watch::Receiver<bool>>, seconds: u64) -> bool {
+    if let Some(cancel) = cancellation.as_mut() {
+        tokio::select! {
+            biased;
+            _ = cancel.wait_for(|value| *value) => false,
+            _ = tokio::time::sleep(Duration::from_secs(seconds)) => true,
+        }
+    } else {
+        tokio::time::sleep(Duration::from_secs(seconds)).await;
+        true
+    }
+}
+
 #[async_trait]
 impl Channel for SignalChannel {
     fn name(&self) -> &str {
         "signal"
+    }
+
+    fn capabilities(&self) -> tinychannels_bus::ChannelCapabilities {
+        self.declared()
+    }
+
+    fn supports_remote_control(&self) -> bool {
+        true
+    }
+    fn supports_chat_approvals(&self) -> bool {
+        true
+    }
+    fn supports_reactions(&self) -> bool {
+        true
+    }
+    fn supports_edit(&self) -> bool {
+        true
+    }
+    fn supports_reply_to_id(&self) -> bool {
+        true
+    }
+
+    async fn send_typed_with_receipt(
+        &self,
+        message: &tinychannels_bus::ChannelOutboundMessage,
+    ) -> anyhow::Result<crate::channel::ChannelSendOutcome> {
+        super::native::outbound::send_typed(self, message)
+            .await
+            .map_err(super::native::to_anyhow)
+    }
+
+    async fn send_reaction(
+        &self,
+        conversation: &tinychannels_bus::channel::ConversationRef,
+        provider_message_id: &str,
+        reaction: &tinychannels_bus::channel::ChannelReaction,
+        remove: bool,
+    ) -> anyhow::Result<()> {
+        super::native::NativeProvider::react(
+            self,
+            conversation,
+            provider_message_id,
+            reaction,
+            remove,
+        )
+        .await
+        .map_err(super::native::to_anyhow)
+    }
+
+    async fn edit_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+        intent: &tinychannels_bus::ChannelOutboundIntent,
+    ) -> anyhow::Result<tinychannels_bus::channel::MessageReceipt> {
+        super::native::edit(self, receipt, intent)
+            .await
+            .map_err(super::native::to_anyhow)
+    }
+
+    async fn delete_message(
+        &self,
+        receipt: &tinychannels_bus::channel::MessageReceipt,
+    ) -> anyhow::Result<()> {
+        super::native::delete(self, receipt)
+            .await
+            .map_err(super::native::to_anyhow)
     }
 
     async fn send(&self, message: &SendMessage) -> anyhow::Result<()> {
@@ -329,120 +495,7 @@ impl Channel for SignalChannel {
     }
 
     async fn listen(&self, tx: mpsc::Sender<ChannelMessage>) -> anyhow::Result<()> {
-        let mut url = reqwest::Url::parse(&format!("{}/api/v1/events", self.http_url))?;
-        url.query_pairs_mut().append_pair("account", &self.account);
-
-        tracing::info!("Signal channel listening via SSE on {}...", self.http_url);
-
-        let mut retry_delay_secs = 2u64;
-        let max_delay_secs = 60u64;
-
-        loop {
-            let resp = self
-                .http_client()
-                .get(url.clone())
-                .header("Accept", "text/event-stream")
-                .send()
-                .await;
-
-            let resp = match resp {
-                Ok(r) if r.status().is_success() => r,
-                Ok(r) => {
-                    let status = r.status();
-                    let body = r.text().await.unwrap_or_default();
-                    tracing::warn!("Signal SSE returned {status}: {body}");
-                    tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay_secs)).await;
-                    retry_delay_secs = (retry_delay_secs * 2).min(max_delay_secs);
-                    continue;
-                }
-                Err(e) => {
-                    tracing::warn!("Signal SSE connect error: {e}, retrying...");
-                    tokio::time::sleep(tokio::time::Duration::from_secs(retry_delay_secs)).await;
-                    retry_delay_secs = (retry_delay_secs * 2).min(max_delay_secs);
-                    continue;
-                }
-            };
-
-            retry_delay_secs = 2;
-
-            let mut bytes_stream = resp.bytes_stream();
-            let mut buffer = String::new();
-            let mut current_data = String::new();
-
-            while let Some(chunk) = bytes_stream.next().await {
-                let chunk = match chunk {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::debug!("Signal SSE chunk error, reconnecting: {e}");
-                        break;
-                    }
-                };
-
-                let text = match String::from_utf8(chunk.to_vec()) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        tracing::debug!("Signal SSE invalid UTF-8, skipping chunk: {}", e);
-                        continue;
-                    }
-                };
-
-                buffer.push_str(&text);
-
-                while let Some(newline_pos) = buffer.find('\n') {
-                    let line = buffer[..newline_pos].trim_end_matches('\r').to_string();
-                    buffer = buffer[newline_pos + 1..].to_string();
-
-                    // Skip SSE comments (keepalive)
-                    if line.starts_with(':') {
-                        continue;
-                    }
-
-                    if line.is_empty() {
-                        // Empty line = event boundary, dispatch accumulated data
-                        if !current_data.is_empty() {
-                            match serde_json::from_str::<SseEnvelope>(&current_data) {
-                                Ok(sse) => {
-                                    if let Some(ref envelope) = sse.envelope
-                                        && let Some(msg) = self.process_envelope(envelope)
-                                        && tx.send(msg).await.is_err()
-                                    {
-                                        return Ok(());
-                                    }
-                                }
-                                Err(e) => {
-                                    tracing::debug!("Signal SSE parse skip: {e}");
-                                }
-                            }
-                            current_data.clear();
-                        }
-                    } else if let Some(data) = line.strip_prefix("data:") {
-                        if !current_data.is_empty() {
-                            current_data.push('\n');
-                        }
-                        current_data.push_str(data.trim_start());
-                    }
-                    // Ignore "event:", "id:", "retry:" lines
-                }
-            }
-
-            if !current_data.is_empty() {
-                match serde_json::from_str::<SseEnvelope>(&current_data) {
-                    Ok(sse) => {
-                        if let Some(ref envelope) = sse.envelope
-                            && let Some(msg) = self.process_envelope(envelope)
-                        {
-                            let _ = tx.send(msg).await;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::debug!("Signal SSE trailing parse skip: {e}");
-                    }
-                }
-            }
-
-            tracing::debug!("Signal SSE stream ended, reconnecting...");
-            tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        }
+        self.listen_loop(Some(tx), None, None).await
     }
 
     async fn health_check(&self) -> bool {
@@ -480,6 +533,223 @@ impl Channel for SignalChannel {
         Ok(())
     }
 }
+
+impl SignalChannel {
+    async fn dispatch_sse_envelope(
+        &self,
+        envelope: &Envelope,
+        tx: Option<&mpsc::Sender<ChannelMessage>>,
+        sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+        cancellation: &mut Option<watch::Receiver<bool>>,
+    ) -> anyhow::Result<Option<bool>> {
+        if let Some(sink) = sink {
+            if let Some(cancellation) = cancellation.as_mut() {
+                return self
+                    .dispatch_typed_until_cancel(envelope, sink, cancellation)
+                    .await;
+            }
+            return Ok(Some(self.dispatch_typed_envelope(envelope, sink).await));
+        }
+        Ok(match tx {
+            Some(tx) => Some(self.dispatch_envelope(envelope, tx).await),
+            None => Some(false),
+        })
+    }
+
+    async fn listen_typed(
+        &self,
+        sink: &(dyn ChannelInboundSink + Send + Sync),
+        cancellation: watch::Receiver<bool>,
+    ) -> anyhow::Result<()> {
+        self.listen_loop(None, Some(sink), Some(cancellation)).await
+    }
+
+    async fn listen_loop(
+        &self,
+        tx: Option<mpsc::Sender<ChannelMessage>>,
+        sink: Option<&(dyn ChannelInboundSink + Send + Sync)>,
+        mut cancellation: Option<watch::Receiver<bool>>,
+    ) -> anyhow::Result<()> {
+        let mut url = reqwest::Url::parse(&format!("{}/api/v1/events", self.http_url))?;
+        url.query_pairs_mut().append_pair("account", &self.account);
+
+        tracing::info!("Signal channel listening via SSE on {}...", self.http_url);
+
+        let mut retry_delay_secs = 2u64;
+        let max_delay_secs = 60u64;
+
+        loop {
+            if cancellation.as_ref().is_some_and(|cancel| *cancel.borrow()) {
+                return Ok(());
+            }
+            let request = self
+                .http_client()
+                .get(url.clone())
+                .header("Accept", "text/event-stream")
+                .send();
+            let resp = if let Some(cancel) = cancellation.as_mut() {
+                tokio::select! {
+                    biased;
+                    _ = cancel.wait_for(|value| *value) => return Ok(()),
+                    response = request => response,
+                }
+            } else {
+                request.await
+            };
+
+            let resp = match resp {
+                Ok(r) if r.status().is_success() => r,
+                Ok(r) => {
+                    let status = r.status();
+                    let body = if let Some(cancel) = cancellation.as_mut() {
+                        tokio::select! {
+                            biased;
+                            _ = cancel.wait_for(|value| *value) => return Ok(()),
+                            body = r.text() => body.unwrap_or_default(),
+                        }
+                    } else {
+                        r.text().await.unwrap_or_default()
+                    };
+                    tracing::warn!("Signal SSE returned {status}: {body}");
+                    if !sleep_or_cancel(&mut cancellation, retry_delay_secs).await {
+                        return Ok(());
+                    }
+                    retry_delay_secs = (retry_delay_secs * 2).min(max_delay_secs);
+                    continue;
+                }
+                Err(e) => {
+                    tracing::warn!("Signal SSE connect error: {e}, retrying...");
+                    if !sleep_or_cancel(&mut cancellation, retry_delay_secs).await {
+                        return Ok(());
+                    }
+                    retry_delay_secs = (retry_delay_secs * 2).min(max_delay_secs);
+                    continue;
+                }
+            };
+
+            retry_delay_secs = 2;
+
+            let mut bytes_stream = resp.bytes_stream();
+            let mut buffer = String::new();
+            let mut current_data = String::new();
+
+            loop {
+                let next_chunk = if let Some(cancel) = cancellation.as_mut() {
+                    tokio::select! {
+                        biased;
+                        _ = cancel.wait_for(|value| *value) => return Ok(()),
+                        chunk = bytes_stream.next() => chunk,
+                    }
+                } else {
+                    bytes_stream.next().await
+                };
+                let Some(chunk) = next_chunk else {
+                    break;
+                };
+                let chunk = match chunk {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::debug!("Signal SSE chunk error, reconnecting: {e}");
+                        break;
+                    }
+                };
+
+                let text = match String::from_utf8(chunk.to_vec()) {
+                    Ok(t) => t,
+                    Err(e) => {
+                        tracing::debug!("Signal SSE invalid UTF-8, skipping chunk: {}", e);
+                        continue;
+                    }
+                };
+
+                buffer.push_str(&text);
+
+                while let Some(newline_pos) = buffer.find('\n') {
+                    let line = buffer[..newline_pos].trim_end_matches('\r').to_string();
+                    buffer = buffer[newline_pos + 1..].to_string();
+
+                    // Skip SSE comments (keepalive)
+                    if line.starts_with(':') {
+                        continue;
+                    }
+
+                    if line.is_empty() {
+                        // Empty line = event boundary, dispatch accumulated data
+                        if !current_data.is_empty() {
+                            match serde_json::from_str::<SseEnvelope>(&current_data) {
+                                Ok(sse) => {
+                                    if let Some(ref envelope) = sse.envelope {
+                                        match self
+                                            .dispatch_sse_envelope(
+                                                envelope,
+                                                tx.as_ref(),
+                                                sink,
+                                                &mut cancellation,
+                                            )
+                                            .await?
+                                        {
+                                            Some(true) => {}
+                                            Some(false) | None => return Ok(()),
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::debug!("Signal SSE parse skip: {e}");
+                                }
+                            }
+                            current_data.clear();
+                        }
+                    } else if let Some(data) = line.strip_prefix("data:") {
+                        if !current_data.is_empty() {
+                            current_data.push('\n');
+                        }
+                        current_data.push_str(data.trim_start());
+                    }
+                    // Ignore "event:", "id:", "retry:" lines
+                }
+            }
+
+            if !current_data.is_empty() {
+                match serde_json::from_str::<SseEnvelope>(&current_data) {
+                    Ok(sse) => {
+                        if let Some(ref envelope) = sse.envelope {
+                            match self
+                                .dispatch_sse_envelope(
+                                    envelope,
+                                    tx.as_ref(),
+                                    sink,
+                                    &mut cancellation,
+                                )
+                                .await?
+                            {
+                                Some(true) => {}
+                                Some(false) | None => return Ok(()),
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("Signal SSE trailing parse skip: {e}");
+                    }
+                }
+            }
+
+            tracing::debug!("Signal SSE stream ended, reconnecting...");
+            if !sleep_or_cancel(&mut cancellation, 2).await {
+                return Ok(());
+            }
+        }
+    }
+}
+
+super::native::native_v2_adapter!(SignalChannel);
+
+#[cfg(test)]
+#[path = "signal/fixtures_tests.rs"]
+mod fixtures;
+
+#[cfg(test)]
+#[path = "signal/conformance_tests.rs"]
+mod conformance;
 
 #[cfg(test)]
 #[path = "signal_tests.rs"]

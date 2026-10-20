@@ -54,6 +54,9 @@ impl TelegramChannel {
             pairing,
             client: reqwest::Client::new(),
             transcriber: None,
+            voice_media_store: None,
+            media_repository: None,
+            voice_synthesis: false,
             allowlist: None,
             events: None,
             stream_mode: StreamMode::Off,
@@ -110,6 +113,24 @@ impl TelegramChannel {
         self
     }
 
+    /// Inject host-owned persistence for normalized voice media.
+    pub fn with_voice_media_store(mut self, store: Arc<dyn crate::host::VoiceMediaStore>) -> Self {
+        self.voice_media_store = Some(store);
+        self
+    }
+
+    pub fn with_media_repository(mut self, store: Arc<dyn crate::host::MediaRepository>) -> Self {
+        self.media_repository = Some(store);
+        self
+    }
+
+    /// Enable shared final-turn synthesis when the module host provides TTS,
+    /// TinyVoice codec operations, and durable scoped media storage.
+    pub fn with_voice_synthesis(mut self, enabled: bool) -> Self {
+        self.voice_synthesis = enabled;
+        self
+    }
+
     /// Inject a persisted allowlist store so first-run bind/pairing promotions
     /// survive restarts. Without it, allowlisting is runtime-only.
     pub fn with_allowlist(mut self, allowlist: Arc<dyn crate::host::AllowlistStore>) -> Self {
@@ -162,6 +183,13 @@ impl TelegramChannel {
     #[cfg(test)]
     pub(crate) fn set_api_base_for_tests(&mut self, base: impl Into<String>) {
         self.api_base = base.into();
+    }
+
+    /// Point a test-support build at a local mock Bot API server.
+    #[cfg(feature = "test-support")]
+    pub fn with_api_base_for_test(mut self, base: impl Into<String>) -> Self {
+        self.api_base = base.into();
+        self
     }
 
     pub(crate) fn pairing_code_active(&self) -> bool {

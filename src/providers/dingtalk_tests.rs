@@ -316,3 +316,374 @@ async fn stream_listener_acknowledges_pings_routes_chats_and_stores_reply_webhoo
         Some("https://example.test/private")
     );
 }
+
+#[tokio::test]
+async fn stream_file_callback_downloads_and_publishes_typed_ingress_once() {
+    use super::super::http_test_support::HttpsServer;
+    use crate::providers::native::fixtures::{RecordingEvents, StubMedia};
+    use serde_json::json;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = HttpsServer::start_with_bytes(
+        move |request| match (request.method.as_str(), request.target.as_str()) {
+            ("POST", "/v1.0/gateway/connections/open") => (
+                200,
+                json!({"endpoint": format!("ws://{address}/"), "ticket": "test-ticket"})
+                    .to_string()
+                    .into_bytes(),
+            ),
+            ("POST", "/v1.0/oauth2/accessToken") => (
+                200,
+                json!({"accessToken": "app-token"}).to_string().into_bytes(),
+            ),
+            ("POST", "/v1.0/robot/messageFiles/download") => {
+                assert_eq!(request.body["robotCode"], "robot-7");
+                assert_eq!(request.body["downloadCode"], "temporary-download-code");
+                (
+                    200,
+                    json!({"downloadUrl": "https://api.dingtalk.com/media/file"})
+                        .to_string()
+                        .into_bytes(),
+                )
+            }
+            ("GET", "/media/file") => (200, b"provider-file-bytes".to_vec()),
+            _ => (404, Vec::new()),
+        },
+        "application/pdf",
+    )
+    .await;
+    let media = Arc::new(StubMedia::default());
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = Arc::new(
+        DingTalkChannel::with_http_client(
+            "id".into(),
+            "secret".into(),
+            vec!["alice".into()],
+            server.client.clone(),
+        )
+        .with_attachment_http_client(server.client.clone())
+        .with_media_repository(media.clone())
+        .with_events(events.clone()),
+    );
+    let websocket = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        #[allow(clippy::result_large_err)]
+        let mut ws = tokio_tungstenite::accept_hdr_async(
+            socket,
+            |_request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                Ok(response)
+            },
+        )
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            json!({
+                "type": "CALLBACK",
+                "headers": {"messageId": "stream-frame-17"},
+                "data": {
+                    "msgId": "provider-message-42",
+                    "msgtype": "file",
+                    "robotCode": "robot-7",
+                    "senderStaffId": "alice",
+                    "senderId": "union-alice",
+                    "conversationType": "2",
+                    "conversationId": "open-conversation-9",
+                    "content": {
+                        "downloadCode": "temporary-download-code",
+                        "fileName": "report.pdf"
+                    }
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(3), ws.next())
+            .await
+            .expect("file callback should be acknowledged after typed ingress")
+            .unwrap()
+            .unwrap();
+        let ack: serde_json::Value = serde_json::from_str(&response.to_string()).unwrap();
+        assert_eq!(ack["code"], 200);
+        assert_eq!(ack["headers"]["messageId"], "stream-frame-17");
+        ws.close(None).await.unwrap();
+    });
+    let (tx, mut legacy) = tokio::sync::mpsc::channel(1);
+    let listening_channel = channel.clone();
+    let listening = tokio::spawn(async move { listening_channel.listen(tx).await });
+
+    websocket.await.unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), listening)
+            .await
+            .expect("closing the Stream fixture should end listen")
+            .unwrap()
+            .is_err()
+    );
+    let ingress = events.inbound();
+    assert_eq!(ingress.len(), 1);
+    assert_eq!(ingress[0].message_id, "provider-message-42");
+    assert_eq!(ingress[0].conversation.id, "open-conversation-9");
+    assert_eq!(ingress[0].sender.id, "alice");
+    assert!(matches!(
+        &ingress[0].parts[0],
+        tinychannels_bus::ContentPart::File {
+            file_name: Some(name),
+            ..
+        } if name == "report.pdf"
+    ));
+    assert!(
+        legacy.try_recv().is_err(),
+        "typed acceptance must not duplicate via legacy ingress"
+    );
+    let stored = media.stored.lock().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].bytes, b"provider-file-bytes");
+    assert_eq!(
+        stored[0].metadata.scope.conversation.id,
+        "open-conversation-9"
+    );
+    let requests = server.requests.lock().unwrap();
+    assert!(requests.iter().any(|request| {
+        request.method == "POST" && request.target == "/v1.0/robot/messageFiles/download"
+    }));
+}
+
+#[tokio::test]
+async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
+    use super::super::http_test_support::HttpsServer;
+    use crate::providers::native::fixtures::{RecordingEvents, StubVoice};
+    use base64::Engine as _;
+    use serde_json::json;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = HttpsServer::start_with_bytes(
+        move |request| match (request.method.as_str(), request.target.as_str()) {
+            ("POST", "/v1.0/gateway/connections/open") => (
+                200,
+                json!({"endpoint": format!("ws://{address}/"), "ticket": "test-ticket"})
+                    .to_string()
+                    .into_bytes(),
+            ),
+            ("POST", "/v1.0/oauth2/accessToken") => (
+                200,
+                json!({"accessToken": "app-token"}).to_string().into_bytes(),
+            ),
+            ("POST", "/v1.0/robot/messageFiles/download") => {
+                assert_eq!(request.body["robotCode"], "robot-audio");
+                assert_eq!(request.body["downloadCode"], "voice-download-code");
+                (
+                    200,
+                    json!({"downloadUrl": "https://api.dingtalk.com/media/voice"})
+                        .to_string()
+                        .into_bytes(),
+                )
+            }
+            ("GET", "/media/voice") => (
+                200,
+                include_bytes!("telegram/fixtures/sine-ogg-opus.ogg").to_vec(),
+            ),
+            _ => panic!("unexpected DingTalk request: {request:?}"),
+        },
+        "audio/ogg",
+    )
+    .await;
+    let voice = Arc::new(StubVoice::default());
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = Arc::new(
+        DingTalkChannel::with_http_client(
+            "id".into(),
+            "secret".into(),
+            vec!["staff-a".into()],
+            server.client.clone(),
+        )
+        .with_attachment_http_client(server.client.clone())
+        .with_voice_media_store(voice.clone())
+        .with_events(events.clone()),
+    );
+    assert!(channel.capabilities().voice_in.supported);
+
+    let websocket = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        #[allow(clippy::result_large_err)]
+        let mut ws = tokio_tungstenite::accept_hdr_async(
+            socket,
+            |_request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                Ok(response)
+            },
+        )
+        .await
+        .unwrap();
+        let data = json!({
+            "msgId": "voice-message-8",
+            "msgtype": "audio",
+            "robotCode": "robot-audio",
+            "senderStaffId": "staff-a",
+            "conversationType": "1",
+            "conversationId": "dm-a",
+            "content": {
+                "downloadCode": "voice-download-code",
+                "recognition": "turn left"
+            }
+        });
+        ws.send(Message::Text(
+            json!({"type":"CALLBACK", "headers":{"messageId":"voice-frame-8"}, "data":data.clone()})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let response = tokio::time::timeout(std::time::Duration::from_secs(3), ws.next())
+            .await
+            .expect("audio callback should be acknowledged after typed ingress")
+            .unwrap()
+            .unwrap();
+        let ack: serde_json::Value = serde_json::from_str(&response.to_string()).unwrap();
+        assert_eq!(ack["code"], 200);
+        assert_eq!(ack["headers"]["messageId"], "voice-frame-8");
+        ws.send(Message::Text(
+            json!({"type":"CALLBACK", "headers":{"messageId":"voice-frame-9"}, "data":data})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+        let duplicate_ack = tokio::time::timeout(std::time::Duration::from_secs(3), ws.next())
+            .await
+            .expect("a duplicate provider event must be acknowledged")
+            .unwrap()
+            .unwrap();
+        let duplicate_ack: serde_json::Value =
+            serde_json::from_str(&duplicate_ack.to_string()).unwrap();
+        assert_eq!(duplicate_ack["code"], 200);
+        assert_eq!(duplicate_ack["headers"]["messageId"], "voice-frame-9");
+        ws.close(None).await.unwrap();
+    });
+    let (tx, mut legacy) = tokio::sync::mpsc::channel(1);
+    let listening_channel = channel.clone();
+    let listening = tokio::spawn(async move { listening_channel.listen(tx).await });
+
+    websocket.await.unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), listening)
+            .await
+            .expect("closing the Stream fixture should end listen")
+            .unwrap()
+            .is_err()
+    );
+    let inbound = events.inbound();
+    assert_eq!(inbound.len(), 1);
+    assert_eq!(inbound[0].message_id, "voice-message-8");
+    assert_eq!(inbound[0].conversation.id, "dm-a");
+    let [tinychannels_bus::ContentPart::VoiceNote { voice_note }] = inbound[0].parts.as_slice()
+    else {
+        panic!("DingTalk audio must be accepted as typed voice content");
+    };
+    assert_eq!(voice_note.transcript.as_ref().unwrap().text, "turn left");
+    assert_eq!(
+        voice_note.transcript.as_ref().unwrap().source,
+        tinychannels_bus::VoiceTranscriptSource::Provider
+    );
+    assert!(legacy.try_recv().is_err());
+
+    let stored = voice.stored.lock().unwrap();
+    assert_eq!(stored.len(), 1);
+    assert_eq!(stored[0].mime_type, "audio/ogg");
+    assert_eq!(
+        stored[0].duration_ms, None,
+        "the official callback fixture supplies no duration"
+    );
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(&stored[0].audio_base64)
+            .unwrap(),
+        include_bytes!("telegram/fixtures/sine-ogg-opus.ogg")
+    );
+}
+
+#[tokio::test]
+async fn unauthorized_attachment_callback_is_not_downloaded_or_published() {
+    use super::super::http_test_support::HttpsServer;
+    use crate::providers::native::fixtures::{RecordingEvents, StubMedia};
+    use serde_json::json;
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = HttpsServer::start_with_bytes(
+        move |request| match (request.method.as_str(), request.target.as_str()) {
+            ("POST", "/v1.0/gateway/connections/open") => (
+                200,
+                json!({"endpoint": format!("ws://{address}/"), "ticket": "test-ticket"})
+                    .to_string()
+                    .into_bytes(),
+            ),
+            _ => panic!("unauthorized attachment must not cause HTTP requests: {request:?}"),
+        },
+        "application/json",
+    )
+    .await;
+    let media = Arc::new(StubMedia::default());
+    let events = Arc::new(RecordingEvents::delivering());
+    let channel = Arc::new(
+        DingTalkChannel::with_http_client(
+            "id".into(),
+            "secret".into(),
+            vec!["alice".into()],
+            server.client.clone(),
+        )
+        .with_attachment_http_client(server.client.clone())
+        .with_media_repository(media.clone())
+        .with_events(events.clone()),
+    );
+    let websocket = tokio::spawn(async move {
+        let (socket, _) = listener.accept().await.unwrap();
+        #[allow(clippy::result_large_err)]
+        let mut ws = tokio_tungstenite::accept_hdr_async(
+            socket,
+            |_request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
+                Ok(response)
+            },
+        )
+        .await
+        .unwrap();
+        ws.send(Message::Text(
+            json!({
+                "type": "CALLBACK",
+                "headers": {"messageId": "unauthorized-frame"},
+                "data": {
+                    "msgId": "unauthorized-provider-message",
+                    "msgtype": "file",
+                    "robotCode": "robot-7",
+                    "senderStaffId": "mallory",
+                    "conversationType": "2",
+                    "conversationId": "open-conversation-9",
+                    "content": {"downloadCode": "secret-download-code", "fileName": "report.pdf"}
+                }
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+        ws.close(None).await.unwrap();
+    });
+    let (tx, _legacy) = tokio::sync::mpsc::channel(1);
+    let listening_channel = channel.clone();
+    let listening = tokio::spawn(async move { listening_channel.listen(tx).await });
+    websocket.await.unwrap();
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_secs(3), listening)
+            .await
+            .expect("closing the fixture should end listen")
+            .unwrap()
+            .is_err()
+    );
+    assert!(events.inbound().is_empty());
+    assert!(media.stored.lock().unwrap().is_empty());
+    let requests = server.requests.lock().unwrap();
+    assert_eq!(requests.len(), 1, "only gateway registration is expected");
+    assert_eq!(requests[0].target, "/v1.0/gateway/connections/open");
+}

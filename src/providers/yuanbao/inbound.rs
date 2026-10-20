@@ -147,6 +147,11 @@ impl DedupCache {
             }
         }
     }
+
+    fn remove(&mut self, id: &str) {
+        self.index.remove(id);
+        self.order.retain(|(cached, _)| cached != id);
+    }
 }
 
 // ───── Individual inbound stages ────────────────────────────────────
@@ -308,7 +313,18 @@ impl Middleware for PlaceholderFilterMw {
     async fn process(&self, _s: &PipelineState, c: &mut PipelineCtx) -> MwResult {
         let trimmed = c.text.trim();
         let is_placeholder = trimmed == "[image]" || trimmed == "[file]" || trimmed == "[图片]";
-        if (trimmed.is_empty() || is_placeholder) && c.image_urls.is_empty() {
+        let has_downloadable_sound = c.msg.msg_body.iter().any(|element| {
+            element.msg_type == tim::SOUND
+                && element
+                    .msg_content
+                    .url
+                    .as_deref()
+                    .is_some_and(|url| !url.trim().is_empty())
+        });
+        if (trimmed.is_empty() || is_placeholder)
+            && c.image_urls.is_empty()
+            && !has_downloadable_sound
+        {
             return MwResult::Skip("placeholder_filter");
         }
         MwResult::Continue
@@ -462,6 +478,28 @@ impl InboundPipeline {
         Self { state, stages }
     }
 
+    /// Release an inbound id after native media delivery fails, allowing a
+    /// provider redelivery to retry while preserving dedupe during processing.
+    pub async fn release_message(&self, message_id: &str) {
+        if !message_id.is_empty() {
+            self.state.dedup.write().await.remove(message_id);
+        }
+    }
+
+    /// Check the accepted-message cache without reserving the id. Native
+    /// listeners call this before processing and record it only after their
+    /// typed sink accepts publication.
+    pub async fn has_seen_message(&self, message_id: &str) -> bool {
+        self.state.dedup.read().await.index.contains(message_id)
+    }
+
+    /// Record a message after a typed ingress sink has accepted it.
+    pub async fn mark_message_seen(&self, message_id: &str) {
+        if !message_id.is_empty() {
+            self.state.dedup.write().await.check_and_insert(message_id);
+        }
+    }
+
     /// Decode a biz push body, run it through every stage, return the outcome.
     ///
     /// The yuanbao gateway may push the biz body as either protobuf
@@ -471,6 +509,16 @@ impl InboundPipeline {
     /// as protobuf. Mirrors plugin gateway.ts::wsPushToInboundMessage
     /// (l. 288), which tries protobuf first and falls back to JSON.
     pub async fn process(&self, biz_body: &[u8]) -> PipelineOutcome {
+        self.process_inner(biz_body, true).await
+    }
+
+    /// Process a message without consuming its dedupe slot. Used by the
+    /// native typed path so a rejected host publication can be retried.
+    pub async fn process_uncommitted(&self, biz_body: &[u8]) -> PipelineOutcome {
+        self.process_inner(biz_body, false).await
+    }
+
+    async fn process_inner(&self, biz_body: &[u8], deduplicate: bool) -> PipelineOutcome {
         let is_json = biz_body
             .iter()
             .find(|b| !b.is_ascii_whitespace())
@@ -498,6 +546,9 @@ impl InboundPipeline {
             kind: MessageKind::Text,
         };
         for stage in &self.stages {
+            if !deduplicate && stage.name() == "dedup" {
+                continue;
+            }
             match stage.process(&self.state, &mut ctx).await {
                 MwResult::Continue => {
                     trace!("[yuanbao:inbound] {} pass", stage.name());

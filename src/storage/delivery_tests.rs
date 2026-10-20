@@ -12,6 +12,9 @@ fn intent(id: &str, text: &str) -> ChannelOutboundIntent {
         idempotency_key: id.into(),
         channel_id: "telegram".into(),
         conversation_id: "room".into(),
+        channel_ref: None,
+        conversation_ref: None,
+        turn_id: None,
         durability: tinychannels_bus::DeliveryDurability::Required,
         payload: crate::OutboundPayload::Text { text: text.into() },
         ..Default::default()
@@ -27,6 +30,7 @@ fn result(id: &str, completed_at: u64) -> DeliveryTerminalResult {
         id: id.into(),
         intent_fingerprint: "a".repeat(64),
         completed_at_unix_ms: completed_at,
+        receipt: None,
     }
 }
 

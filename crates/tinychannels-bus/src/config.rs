@@ -12,9 +12,7 @@ pub struct ChannelsConfig {
     pub discord: Option<DiscordConfig>,
     pub slack: Option<SlackConfig>,
     pub mattermost: Option<MattermostConfig>,
-    pub webhook: Option<WebhookConfig>,
     pub imessage: Option<IMessageConfig>,
-    pub matrix: Option<MatrixConfig>,
     pub signal: Option<SignalConfig>,
     pub whatsapp: Option<WhatsAppConfig>,
     pub linq: Option<LinqConfig>,
@@ -54,9 +52,7 @@ impl Default for ChannelsConfig {
             discord: None,
             slack: None,
             mattermost: None,
-            webhook: None,
             imessage: None,
-            matrix: None,
             signal: None,
             whatsapp: None,
             linq: None,
@@ -181,26 +177,8 @@ pub struct MattermostConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct WebhookConfig {
-    pub port: u16,
-    pub secret: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct IMessageConfig {
     pub allowed_contacts: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub struct MatrixConfig {
-    pub homeserver: String,
-    pub access_token: String,
-    #[serde(default)]
-    pub user_id: Option<String>,
-    #[serde(default)]
-    pub device_id: Option<String>,
-    pub room_id: String,
-    pub allowed_users: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -314,6 +292,10 @@ pub struct LinqConfig {
     pub from_phone: String,
     #[serde(default)]
     pub allowed_senders: Vec<String>,
+    /// The secret Linq signs webhook deliveries with. Deliveries are refused
+    /// until it is set.
+    #[serde(default)]
+    pub webhook_secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]

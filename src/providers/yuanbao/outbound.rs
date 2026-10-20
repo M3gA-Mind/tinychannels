@@ -94,6 +94,11 @@ impl OutboundSender {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_test_cos_endpoint(&mut self, endpoint: String) {
+        self.cos_endpoint = Some(endpoint);
+    }
+
     /// Resolve the `from_account` to put on the next outbound frame.
     /// Prefers the server-issued `bot_id` cached after sign-token / auth-bind
     /// — matches hermes-agent `_bot_id = token_data["bot_id"]` (yuanbao.py:400).
@@ -209,6 +214,117 @@ impl OutboundSender {
     ) -> Result<String, YuanbaoError> {
         let body = build_file_msg_body(url, file_name, None, size);
         self.send_body(recipient, body, None).await
+    }
+
+    /// Upload host-validated bytes to COS and send them using Yuanbao's native
+    /// image or file message element. The caller owns size/type validation.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_media_bytes(
+        &self,
+        recipient: &str,
+        bytes: &[u8],
+        filename: &str,
+        mime_type: &str,
+        app_key: &str,
+        bot_id: &str,
+        token: &str,
+        api_domain: &str,
+        route_env: &str,
+        ref_msg_id: Option<&str>,
+    ) -> Result<String, YuanbaoError> {
+        let body = self
+            .prepare_media_body(
+                bytes, filename, mime_type, app_key, bot_id, token, api_domain, route_env,
+            )
+            .await?;
+        self.send_body(recipient, body, ref_msg_id).await
+    }
+
+    /// Upload bytes and build the native message element without sending it.
+    /// Keeping this stage separate lets adapters report an upload failure as
+    /// definitely not delivered, then mark only the final message request as
+    /// an uncertain outcome.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prepare_media_body(
+        &self,
+        bytes: &[u8],
+        filename: &str,
+        mime_type: &str,
+        app_key: &str,
+        bot_id: &str,
+        token: &str,
+        api_domain: &str,
+        route_env: &str,
+    ) -> Result<Vec<MsgBodyElement>, YuanbaoError> {
+        self.prepare_media_body_with_caption(
+            bytes, filename, mime_type, app_key, bot_id, token, api_domain, route_env, None,
+        )
+        .await
+    }
+
+    /// As [`Self::prepare_media_body`], with optional text accompanying the
+    /// uploaded element in the same Yuanbao message.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn prepare_media_body_with_caption(
+        &self,
+        bytes: &[u8],
+        filename: &str,
+        mime_type: &str,
+        app_key: &str,
+        bot_id: &str,
+        token: &str,
+        api_domain: &str,
+        route_env: &str,
+        caption: Option<&str>,
+    ) -> Result<Vec<MsgBodyElement>, YuanbaoError> {
+        if bytes.is_empty() {
+            return Err(YuanbaoError::Media("empty upload".into()));
+        }
+        let creds = get_cos_credentials(
+            &self.http, api_domain, app_key, bot_id, token, route_env, filename,
+        )
+        .await?;
+        let upload = upload_to_cos_via(
+            &self.http,
+            &creds,
+            bytes,
+            filename,
+            mime_type.to_owned(),
+            self.cos_endpoint.as_deref(),
+        )
+        .await?;
+        let body = if mime_type.starts_with("image/") {
+            build_image_msg_body(
+                &upload.url,
+                Some(&upload.uuid),
+                Some(filename),
+                upload.size as u32,
+                upload.width,
+                upload.height,
+                mime_type,
+            )
+        } else {
+            build_file_msg_body(
+                &upload.url,
+                filename,
+                Some(&upload.uuid),
+                upload.size as u32,
+            )
+        };
+        let mut body = body;
+        if let Some(caption) = caption.filter(|caption| !caption.trim().is_empty()) {
+            body.insert(
+                0,
+                MsgBodyElement {
+                    msg_type: "TIMTextElem".into(),
+                    msg_content: super::types::MsgContent {
+                        text: Some(caption.to_owned()),
+                        ..Default::default()
+                    },
+                },
+            );
+        }
+        Ok(body)
     }
 
     /// Send a pre-built `msg_body`. Waits up to `DEFAULT_SEND_TIMEOUT_SECS`

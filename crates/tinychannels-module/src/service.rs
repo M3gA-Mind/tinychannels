@@ -1,7 +1,8 @@
 //! The TinyBus service boundary for the channel surface.
 //!
 //! One object, `/ai/tinyhumans/tinychannels/Channels`, preserving its original
-//! five methods and adding typed intent, relay lifecycle, and shutdown members:
+//! five methods and adding typed intent, relay lifecycle, web projection, and
+//! shutdown members:
 //!
 //! ```text
 //! StartChannel(name, ChannelsConfig) -> ()
@@ -13,6 +14,9 @@
 //! StartChannelSupervised(name, config, proxy, policy) -> ()
 //! ChannelController(request) -> ChannelControllerResult
 //! SendChannelIntent(name, intent)     -> ChannelSendMessageResult
+//! BeginWebTurn(context, scope)        -> WebTurnHandle
+//! ProjectWebOutput(handle, event)     -> WebOutputEvents
+//! EndWebTurn(handle)                  -> ()
 //! ```
 //!
 //! # This module is stateful, unlike the document one
@@ -22,6 +26,9 @@
 //! listen loop that outlives every call. So this object keeps a registry of
 //! running providers, and `StopChannel` is not optional politeness: without it
 //! a provider's task and socket leak until the process exits.
+//! Web projection state is also module-owned and bounded. Each explicit begin
+//! creates a fresh opaque handle and sequence stream; terminal output closes it
+//! automatically, while the host ends nonterminal turns with `EndWebTurn`.
 //!
 //! # Config arrives per call, not at load
 //!
@@ -39,7 +46,7 @@ use std::sync::Arc;
 use tinychannels::config::WhatsAppConfigExt as _;
 
 use crate::delivery::HostDeliveryStore;
-use crate::provider::{Hooks, Running, RunningSendError};
+use crate::provider::{Hooks, Running};
 use crate::relay::Relays;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tinybus::{Connection, Error as BusError, Result as BusResult};
@@ -51,6 +58,7 @@ use tinychannels::delivery::{
 };
 use tinychannels::factory::{
     ConfiguredHttpClients, DefaultHttpClients, HttpClientFactory, build_channels,
+    build_slack_channel, build_telegram_channel,
 };
 use tinychannels::host::ChannelHost;
 use tinychannels_bus::ChannelControllerRequest;
@@ -69,12 +77,12 @@ use tokio::task::JoinHandle;
 
 use crate::email::EmailSender;
 use crate::host::HostChannels;
+use crate::media::MediaUploads;
 
 const UNKNOWN_CHANNEL_ERROR: &str = "ai.tinyhumans.tinychannels.Error.UnknownChannel";
 const ALREADY_RUNNING_ERROR: &str = "ai.tinyhumans.tinychannels.Error.AlreadyRunning";
 const NOT_CONFIGURED_ERROR: &str = "ai.tinyhumans.tinychannels.Error.NotConfigured";
 const SEND_FAILED_ERROR: &str = "ai.tinyhumans.tinychannels.Error.SendFailed";
-const NO_INGRESS_ERROR: &str = "ai.tinyhumans.tinychannels.Error.NoWebhookIngress";
 
 /// Whether `name`, as configured, receives inbound traffic through a webhook
 /// this module cannot serve. See the refusal in `start_channel` for why.
@@ -87,18 +95,100 @@ fn is_webhook_backed(name: &str, config: &ChannelsConfig) -> bool {
                 .is_some_and(|wa| wa.backend_type() == "cloud"))
 }
 
+/// The concrete WhatsApp adapter a configuration selects. The two backends
+/// share one provider name, so only the shape of the stanza separates them.
+enum WhatsAppNative {
+    Cloud(Arc<tinychannels::WhatsAppChannel>),
+    Web(Arc<tinychannels::WhatsAppWebChannel>),
+}
+
+impl WhatsAppNative {
+    fn select(
+        name: &str,
+        config: &ChannelsConfig,
+        host: &Arc<dyn ChannelHost>,
+        http: &dyn HttpClientFactory,
+    ) -> Option<Self> {
+        if tinychannels_bus::provider_id(name) != "whatsapp" {
+            return None;
+        }
+        match config.whatsapp.as_ref()?.backend_type() {
+            "cloud" => {
+                tinychannels::build_whatsapp_cloud_channel(config, host, http).map(Self::Cloud)
+            }
+            "web" => tinychannels::build_whatsapp_web_channel(config, host).map(Self::Web),
+            _ => None,
+        }
+    }
+
+    /// Web learns its account from the linked session; bind the media scope to it.
+    fn bind_media_authority(&self, scope: &crate::provider::MediaScope) {
+        if let Self::Web(channel) = self {
+            scope.bind_source(channel.clone());
+        }
+    }
+
+    fn start(
+        self,
+        hooks: Arc<Hooks>,
+        host: HostChannels,
+        supervision: Option<tinychannels_bus::ChannelSupervisionPolicy>,
+        outbound_only: bool,
+    ) -> Arc<Running> {
+        match self {
+            Self::Cloud(channel) => {
+                Running::start_native("WhatsApp", channel, hooks, host, supervision, outbound_only)
+            }
+            Self::Web(channel) => {
+                Running::start_native("WhatsApp", channel, hooks, host, supervision, outbound_only)
+            }
+        }
+    }
+}
+
+async fn configured_capabilities(
+    running: &Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    name: &str,
+) -> tinychannels_bus::ChannelCapabilities {
+    let running = running.lock().await;
+    running
+        .get(name)
+        .or_else(|| running.get(tinychannels_bus::provider_id(name)))
+        .map(crate::interaction::configured_adapter_capabilities)
+        .unwrap_or_else(tinychannels_bus::ChannelCapabilities::unknown)
+}
+
 /// The served object.
 pub(crate) struct Channels {
     pub(crate) host: HostChannels,
     email: EmailSender,
+    media_uploads: Arc<MediaUploads>,
+    media_reads: Arc<crate::media::MediaReads>,
     progressive: Arc<crate::progressive::Replies>,
     /// Shared with each listener task so it can retire its own entry.
     pub(crate) running: Arc<Mutex<HashMap<String, Arc<Running>>>>,
+    provider_activations: Mutex<HashMap<String, ProviderActivation>>,
     relays: Arc<Relays>,
     pub(crate) terminal: AtomicBool,
     runtimes: Option<Arc<crate::runtime::Runtimes>>,
     shutdown_task: Mutex<Option<JoinHandle<BusResult<()>>>>,
     delivery_admission: Arc<Mutex<()>>,
+    web_turns: Mutex<crate::web_output::WebTurnRegistry>,
+}
+
+#[derive(Clone, Debug)]
+struct ProviderActivation {
+    generation: String,
+    media_account_scope: crate::provider::MediaScope,
+}
+
+/// Two activations are the same when they are the same provider generation.
+/// The media scope is read live from the provider on every use, so a scope that
+/// changed mid-session fails the next media operation rather than this check.
+impl PartialEq for ProviderActivation {
+    fn eq(&self, other: &Self) -> bool {
+        self.generation == other.generation
+    }
 }
 
 struct ModuleDeliveryHandler {
@@ -108,17 +198,43 @@ struct ModuleDeliveryHandler {
 
 impl Channels {
     pub(crate) fn new(host: HostChannels, runtimes: Option<Arc<crate::runtime::Runtimes>>) -> Self {
+        let running = Arc::new(Mutex::new(HashMap::new()));
         Self {
-            progressive: Arc::new(crate::progressive::Replies::new(host.clone())),
+            progressive: Arc::new(crate::progressive::Replies::new(
+                host.clone(),
+                running.clone(),
+            )),
             relays: Arc::new(Relays::new(host.clone())),
             host,
             email: EmailSender::new(),
-            running: Arc::new(Mutex::new(HashMap::new())),
+            media_uploads: Arc::new(MediaUploads::default()),
+            media_reads: Arc::new(crate::media::MediaReads::default()),
+            running,
+            provider_activations: Mutex::new(HashMap::new()),
             terminal: AtomicBool::new(false),
             runtimes,
             shutdown_task: Mutex::new(None),
             delivery_admission: Arc::new(Mutex::new(())),
+            web_turns: Mutex::new(crate::web_output::WebTurnRegistry::default()),
         }
+    }
+
+    async fn media_activation(&self, instance: &str) -> BusResult<ProviderActivation> {
+        // Keep the running provider and its immutable account binding paired
+        // with the same generation while lifecycle transitions hold this lock.
+        let running = self.running.lock().await;
+        if running
+            .get(instance)
+            .is_none_or(|provider| provider.is_finished())
+        {
+            return Err(BusError::failed("media provider instance is not running"));
+        }
+        self.provider_activations
+            .lock()
+            .await
+            .get(instance)
+            .cloned()
+            .ok_or_else(|| BusError::failed("media provider activation is unavailable"))
     }
 
     async fn start_channel_inner(
@@ -147,24 +263,43 @@ impl Channels {
         }
 
         let hooks = Arc::new(Hooks::default());
-        let owner_host: Arc<dyn ChannelHost> = hooks.host(self.host.clone());
-        let built = build_channels(&config, &owner_host, http);
-        let channel = built
-            .into_iter()
-            .find(|candidate| candidate.name() == name)
-            .ok_or_else(|| BusError::MethodFailed {
+        let media_account_scope = crate::provider::MediaScope::fixed(
+            crate::provider::configured_media_account_scope(&name, &config),
+        );
+        let owner_host: Arc<dyn ChannelHost> =
+            hooks.host(self.host.clone(), name.clone(), media_account_scope.clone());
+        let telegram = if tinychannels_bus::provider_id(&name) == "telegram" {
+            build_telegram_channel(&config, &owner_host, http)
+        } else {
+            None
+        };
+        let slack = if tinychannels_bus::provider_id(&name) == "slack" {
+            build_slack_channel(&config, &owner_host, http)
+        } else {
+            None
+        };
+        let whatsapp = WhatsAppNative::select(&name, &config, &owner_host, http);
+        let native = if whatsapp.is_none() {
+            crate::native::build_native_v2(&name, &config, &owner_host, http)
+        } else {
+            None
+        };
+        if native
+            .as_ref()
+            .is_some_and(|launch| launch.provider_id != tinychannels_bus::provider_id(&name))
+        {
+            return Err(BusError::failed(
+                "native adapter factory returned a mismatched provider identity",
+            ));
+        }
+        if let Some(whatsapp) = &whatsapp {
+            // A linked session, not its mutable label, is the media authority.
+            whatsapp.bind_media_authority(&media_account_scope);
+        }
+        if telegram.is_none() && slack.is_none() && whatsapp.is_none() && native.is_none() {
+            return Err(BusError::MethodFailed {
                 name: NOT_CONFIGURED_ERROR.to_owned(),
                 message: format!("channel {name} is not present in the supplied config"),
-            })?;
-
-        if is_webhook_backed(&name, &config) && !outbound_only {
-            return Err(BusError::MethodFailed {
-                name: NO_INGRESS_ERROR.to_owned(),
-                message: format!(
-                    "channel {name} receives inbound traffic through an external webhook, \
-                     and this module has no ingress for it; run this provider in-process \
-                     or serve its webhook host-side"
-                ),
             });
         }
 
@@ -173,12 +308,34 @@ impl Channels {
                 "outbound-only startup requires an external-webhook provider",
             ));
         }
-        let provider = match supervision {
-            Some(policy) => Running::start_supervised(channel, hooks, self.host.clone(), policy),
-            None if outbound_only => Running::start_outbound(channel, hooks, self.host.clone()),
-            None => Running::start(channel, hooks, self.host.clone()),
+        let provider = if let Some(telegram) = telegram {
+            Running::start_telegram(
+                telegram,
+                hooks,
+                self.host.clone(),
+                supervision,
+                outbound_only,
+            )
+        } else if let Some(slack) = slack {
+            Running::start_slack(slack, hooks, self.host.clone(), supervision, outbound_only)
+        } else if let Some(native) = whatsapp {
+            native.start(hooks, self.host.clone(), supervision, outbound_only)
+        } else if let Some(native) = native {
+            native.start(hooks, self.host.clone(), supervision, outbound_only)
+        } else {
+            return Err(BusError::MethodFailed {
+                name: NOT_CONFIGURED_ERROR.to_owned(),
+                message: format!("channel {name} has no native adapter"),
+            });
         };
         running.insert(name.clone(), provider);
+        self.provider_activations.lock().await.insert(
+            name.clone(),
+            ProviderActivation {
+                generation: uuid::Uuid::new_v4().simple().to_string(),
+                media_account_scope,
+            },
+        );
         drop(running);
         finish_start_admission(
             &self.host,
@@ -199,6 +356,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 error: "delivery payload could not be encoded".into(),
                 sent_before_error: false,
                 permanent: Some(true),
+                receipt: None,
             });
         };
         let running = self.running.lock().await;
@@ -211,37 +369,49 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
                 error: "delivery target is unavailable".into(),
                 sent_before_error: false,
                 permanent: None,
+                receipt: None,
             });
         };
         drop(running);
 
-        let Ok(message) = intent_to_legacy_message(&entry.intent) else {
-            return Err(DeliveryAttemptFailure {
-                error: "delivery payload could not be encoded".into(),
-                sent_before_error: false,
-                permanent: Some(true),
-            });
+        let adapter = provider.adapter_handle();
+        let outcome = match adapter.send(entry.intent.clone()).await {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                return Err(DeliveryAttemptFailure {
+                    error: error.message,
+                    sent_before_error: error.sent_before_error,
+                    permanent: Some(!error.retryable),
+                    receipt: None,
+                });
+            }
         };
-        if let Err(error) = provider.send(message).await {
+        if let Some(error) = outcome.error {
             return Err(DeliveryAttemptFailure {
-                error: "provider send failed".into(),
-                sent_before_error: matches!(error, RunningSendError::AfterDispatch(_)),
-                permanent: None,
+                error: error.message,
+                sent_before_error: error.sent_before_error
+                    || !outcome.receipt.platform_message_ids.is_empty(),
+                permanent: Some(!error.retryable),
+                receipt: Some(outcome.receipt),
             });
         }
         let result = tinychannels_bus::DeliveryTerminalResult {
             id: entry.id.clone(),
             intent_fingerprint,
             completed_at_unix_ms: now_unix_ms(),
+            receipt: Some(outcome.receipt.clone()),
         };
         if self.store.save_result(result).await.is_err() {
             return Err(DeliveryAttemptFailure {
                 error: "terminal delivery result could not be persisted".into(),
                 sent_before_error: true,
                 permanent: None,
+                receipt: Some(outcome.receipt),
             });
         }
-        Ok(DeliveryAttemptSuccess::default())
+        Ok(DeliveryAttemptSuccess {
+            receipt: Some(outcome.receipt),
+        })
     }
 
     async fn reconcile_unknown_send(
@@ -260,7 +430,7 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
             ));
         }
         Ok(Some(UnknownSendReconciliation::Sent {
-            receipt: tinychannels::channel::MessageReceipt::default(),
+            receipt: Box::new(result.receipt.unwrap_or_default()),
             message_id: None,
         }))
     }
@@ -272,6 +442,38 @@ impl DeliveryQueueHandler for ModuleDeliveryHandler {
 )]
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.Channels")]
 impl Channels {
+    /// Begin an isolated stateful projection stream for one web turn.
+    #[tinybus(confidential)]
+    async fn begin_web_turn(
+        &self,
+        request: tinychannels_bus::BeginWebTurn,
+    ) -> BusResult<tinychannels_bus::WebTurnHandle> {
+        let mut web_turns = self.web_turns.lock().await;
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        web_turns.begin(request)
+    }
+
+    /// Project one canonical output and return its ordered web wire events.
+    #[tinybus(confidential)]
+    async fn project_web_output(
+        &self,
+        request: tinychannels_bus::ProjectWebOutput,
+    ) -> BusResult<tinychannels_bus::WebOutputEvents> {
+        let mut web_turns = self.web_turns.lock().await;
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        web_turns.project(request)
+    }
+
+    /// End a projection turn; terminal events may already have closed it.
+    #[tinybus(confidential)]
+    async fn end_web_turn(&self, request: tinychannels_bus::EndWebTurn) -> BusResult<()> {
+        self.web_turns.lock().await.end(request)
+    }
+
     /// Reserve an inert identity-scoped runtime and immutable callback paths.
     #[tinybus(confidential)]
     async fn reserve_runtime(&self) -> BusResult<tinychannels_bus::ChannelRuntimeReservation> {
@@ -375,19 +577,25 @@ impl Channels {
         let host: Arc<dyn ChannelHost> = Arc::new(tinychannels::NoopHost);
         Ok(build_channels(&config, &host, &http)
             .into_iter()
-            .map(|channel| ConfiguredChannelInfo {
-                name: channel.name().to_owned(),
-                ingress: if is_webhook_backed(channel.name(), &config) {
-                    ChannelIngressKind::ExternalWebhook
-                } else {
-                    ChannelIngressKind::Listener
-                },
-                interaction: tinychannels_bus::ChannelInteractionInfo {
-                    capabilities: channel.capabilities(),
-                    proactive_target: channel.proactive_target(),
-                    supports_reactions: channel.supports_reactions(),
-                    supports_draft_updates: channel.supports_draft_updates(),
-                },
+            .map(|channel| {
+                let name = channel.name();
+                ConfiguredChannelInfo {
+                    name: name.clone(),
+                    ingress: if is_webhook_backed(&name, &config) {
+                        ChannelIngressKind::ExternalWebhook
+                    } else {
+                        ChannelIngressKind::Listener
+                    },
+                    interaction: tinychannels_bus::ChannelInteractionInfoV2 {
+                        capabilities: {
+                            let mut capabilities = channel.capabilities();
+                            capabilities.account.configured = Some(true);
+                            capabilities.account.enabled = Some(true);
+                            capabilities.account.proactive_target = channel.proactive_target();
+                            capabilities
+                        },
+                    },
+                }
             })
             .collect())
     }
@@ -416,7 +624,18 @@ impl Channels {
         if self.terminal.load(Ordering::Acquire) {
             return Err(BusError::failed("channel module is shutting down"));
         }
-        crate::control::prepare(&self.host, request).await
+        let name = match &request {
+            tinychannels_bus::module_control::ChannelControlRequest::Capabilities { channel }
+            | tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 { channel } => {
+                channel.as_str()
+            }
+            tinychannels_bus::module_control::ChannelControlRequest::Route { message, .. } => {
+                message.channel.as_str()
+            }
+            _ => "",
+        };
+        let capabilities = configured_capabilities(&self.running, name).await;
+        crate::control::prepare(&self.host, request, capabilities).await
     }
 
     /// Parse and execute remote chat commands inside the channel module.
@@ -429,7 +648,16 @@ impl Channels {
         if self.terminal.load(Ordering::Acquire) {
             return Err(BusError::failed("channel module is shutting down"));
         }
-        crate::remote::execute(&self.host, request).await
+        let name = match &request {
+            tinychannels_bus::module_remote::RemoteOperation::Execute { message, .. } => {
+                message.channel.as_str()
+            }
+            tinychannels_bus::module_remote::RemoteOperation::MarkTurn { channel, .. } => {
+                channel.as_str()
+            }
+        };
+        let capabilities = configured_capabilities(&self.running, name).await;
+        crate::remote::execute(&self.host, request, capabilities).await
     }
 
     /// Drive progressive delivery without exposing its state to the host.
@@ -531,7 +759,8 @@ impl Channels {
                 envelope,
                 timestamp,
             } => (
-                tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp),
+                tinychannels::legacy_message_from_inbound_envelope(&envelope, timestamp)
+                    .map_err(|error| BusError::failed(error.to_string()))?,
                 envelope,
             ),
         };
@@ -617,12 +846,28 @@ impl Channels {
         {
             return Err(BusError::failed("channel message exceeds its limit"));
         }
-        let intent = match request {
+        let (intent, legacy_message) = match request {
             ChannelMessagePreparation::Legacy(message) => {
-                tinychannels::outbound_intent_from_legacy_message(channel, message)
+                let intent = tinychannels::outbound_intent_from_legacy_message(channel, message);
+                let legacy_message =
+                    tinychannels::legacy_message_value_from_outbound_intent(&intent);
+                (intent, legacy_message)
             }
             ChannelMessagePreparation::Typed(message) => {
-                tinychannels::outbound_intent_from_send_message(channel, &message)
+                let mut intent = tinychannels::outbound_intent_from_send_message(channel, &message);
+                // Keep the legacy JSON projection and its deterministic key for
+                // existing callers, but do not label a typed SendMessage as
+                // arbitrary provider-native data. V22 providers consume this
+                // compatibility input as canonical text. Subject-bearing
+                // messages keep their legacy payload for mail-style providers.
+                let legacy_message =
+                    tinychannels::legacy_message_value_from_outbound_intent(&intent);
+                if message.subject.is_none() {
+                    intent.payload = tinychannels_bus::OutboundPayload::Text {
+                        text: message.content,
+                    };
+                }
+                (intent, legacy_message)
             }
             ChannelMessagePreparation::Intent(intent) => {
                 if intent.channel_id != channel {
@@ -630,11 +875,13 @@ impl Channels {
                         "intent destination does not match channel",
                     ));
                 }
-                intent
+                let legacy_message =
+                    tinychannels::legacy_message_value_from_outbound_intent(&intent);
+                (intent, legacy_message)
             }
         };
         Ok(PreparedChannelIntent {
-            legacy_message: tinychannels::legacy_message_value_from_outbound_intent(&intent),
+            legacy_message,
             intent,
         })
     }
@@ -701,6 +948,8 @@ impl Channels {
                 .is_some_and(|current| Arc::ptr_eq(current, &entry))
             {
                 running.remove(&name);
+                self.provider_activations.lock().await.remove(&name);
+                self.media_reads.invalidate_instance(&name).await;
             }
             result?;
         }
@@ -756,6 +1005,13 @@ impl Channels {
                 name: UNKNOWN_CHANNEL_ERROR.to_owned(),
                 message: "requested channel is not running".into(),
             })?;
+        if matches!(
+            request.interaction,
+            tinychannels_bus::ChannelInteraction::DeliverWebhook { .. }
+                | tinychannels_bus::ChannelInteraction::VerifyWebhook { .. }
+        ) {
+            return entry.webhook(request.interaction).await;
+        }
         entry
             .interact(request.interaction)
             .await
@@ -778,6 +1034,14 @@ impl Channels {
         if intent.channel_id != name {
             return Err(BusError::failed("intent channel does not match provider"));
         }
+        if tinychannels_bus::ChannelOutboundMessage::from_intent(&intent)
+            .parts
+            .is_empty()
+        {
+            return Err(BusError::failed(
+                "outbound intent must contain at least one content part",
+            ));
+        }
         if intent.durability == tinychannels::DeliveryDurability::Required {
             return self.send_required_intent(intent).await;
         }
@@ -797,17 +1061,23 @@ impl Channels {
                     message: format!("channel {name} is not running"),
                 })?
         };
-        entry
-            .send(
-                intent_to_legacy_message(&intent)
-                    .map_err(|_| BusError::failed("could not encode channel intent"))?,
-            )
+        let adapter = entry.adapter_handle();
+        let outcome = adapter
+            .send(intent)
             .await
             .map_err(|error| BusError::MethodFailed {
                 name: SEND_FAILED_ERROR.to_owned(),
-                message: error.to_string(),
+                message: error.message,
             })?;
-        Ok(ChannelSendMessageResult::default())
+        let has_provider_receipt = outcome.receipt.primary_platform_message_id.is_some()
+            || !outcome.receipt.platform_message_ids.is_empty()
+            || !outcome.receipt.parts.is_empty();
+        Ok(ChannelSendMessageResult {
+            message_id: outcome.receipt.primary_platform_message_id.clone(),
+            receipt: has_provider_receipt.then_some(outcome.receipt),
+            error: outcome.error,
+            raw: None,
+        })
     }
 
     async fn send_required_intent(
@@ -852,7 +1122,7 @@ impl Channels {
                     .await
                     .map_err(delivery_store_error)?;
             }
-            return Ok(ChannelSendMessageResult::default());
+            return Ok(required_delivery_result(result.receipt));
         }
         if let Some(failed) = store.load_failed(&id).await.map_err(delivery_store_error)? {
             return if failed.intent == intent {
@@ -906,7 +1176,7 @@ impl Channels {
                     .await
                     .map_err(delivery_store_error)?;
             }
-            return Ok(ChannelSendMessageResult::default());
+            return Ok(required_delivery_result(result.receipt));
         }
         let still_pending = store
             .load_pending(&id)
@@ -924,7 +1194,12 @@ impl Channels {
                 "required delivery remains pending or failed",
             ));
         }
-        Ok(ChannelSendMessageResult::default())
+        let result = store
+            .load_result(&id)
+            .await
+            .map_err(delivery_store_error)?
+            .ok_or_else(|| BusError::failed("required delivery result was not persisted"))?;
+        Ok(required_delivery_result(result.receipt))
     }
 
     /// Send SMTP mail without requiring an active IMAP listener.
@@ -944,6 +1219,186 @@ impl Channels {
             return Err(BusError::failed("module is shutting down"));
         }
         self.email.begin_upload(request).await
+    }
+
+    /// Begin bounded media ingestion for one active configured provider.
+    #[tinybus(confidential)]
+    async fn begin_media_upload(
+        &self,
+        request: tinychannels_bus::MediaUploadBegin,
+    ) -> BusResult<tinychannels_bus::MediaUploadHandle> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let activation = self.media_activation(&request.instance).await?;
+        if activation.media_account_scope.current().is_none() {
+            return Err(BusError::failed(
+                "configured account has no stable media identity",
+            ));
+        }
+        self.media_uploads
+            .begin(request, activation.generation)
+            .await
+    }
+
+    /// Append one ordered, retry-safe media chunk over confidential TinyBus.
+    #[tinybus(confidential)]
+    async fn append_media_upload_chunk(
+        &self,
+        chunk: tinychannels_bus::MediaUploadChunk,
+    ) -> BusResult<u32> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_uploads.binding_handle(&chunk.handle).await?;
+        if self.media_activation(&instance).await?.generation != activation {
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
+        }
+        self.media_uploads.append(chunk).await
+    }
+
+    /// Persist a complete upload as an opaque scoped media reference.
+    #[tinybus(confidential)]
+    async fn finish_media_upload(
+        &self,
+        request: tinychannels_bus::MediaUploadFinish,
+    ) -> BusResult<tinychannels_bus::MediaUploadResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_uploads.binding(&request).await?;
+        let current = self.media_activation(&instance).await?;
+        if current.generation != activation {
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
+        }
+        let repository = Arc::new(crate::provider::ModuleMediaRepository(
+            self.host.clone(),
+            instance,
+            current.media_account_scope,
+        ));
+        self.media_uploads
+            .clone()
+            .finish(request, activation, repository)
+            .await
+    }
+
+    /// Abort buffered media without writing a durable record.
+    #[tinybus(confidential)]
+    async fn abort_media_upload(
+        &self,
+        request: tinychannels_bus::MediaUploadFinish,
+    ) -> BusResult<()> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_uploads.binding(&request).await?;
+        if self.media_activation(&instance).await?.generation != activation {
+            return Err(BusError::failed(
+                "media upload belongs to another provider activation",
+            ));
+        }
+        self.media_uploads.abort(request).await
+    }
+
+    /// Resolve one scoped media reference into a short-lived confidential read.
+    #[tinybus(confidential)]
+    async fn begin_media_read(
+        &self,
+        request: tinychannels_bus::MediaReadBegin,
+    ) -> BusResult<tinychannels_bus::MediaReadInfo> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let activation = self.media_activation(&request.instance).await?;
+        if activation.media_account_scope.current().is_none() {
+            return Err(BusError::failed(
+                "configured account has no stable media identity",
+            ));
+        }
+        if request.scope.conversation.id.trim().is_empty()
+            || request.scope.turn_id.trim().is_empty()
+            || request.media.opaque_id.as_deref().is_none_or(str::is_empty)
+            || request.max_bytes == 0
+            || request.max_bytes > tinychannels_bus::module_media::MEDIA_UPLOAD_MAX_BYTES as u64
+        {
+            return Err(BusError::failed("media resolution request is invalid"));
+        }
+        let encoded = serde_json::to_vec(&request)
+            .map_err(|_| BusError::failed("media resolution request is invalid"))?;
+        if encoded.len() > tinychannels_bus::module_media::MEDIA_UPLOAD_BEGIN_MAX_BYTES {
+            return Err(BusError::failed(
+                "media resolution request exceeds its limit",
+            ));
+        }
+        let instance = request.instance.clone();
+        let repository = crate::provider::ModuleMediaRepository(
+            self.host.clone(),
+            instance.clone(),
+            activation.media_account_scope.clone(),
+        );
+        let media_id = request
+            .media
+            .opaque_id
+            .clone()
+            .ok_or_else(|| BusError::failed("media resolution request is invalid"))?;
+        let scope = request.scope.clone();
+        let max_bytes = request.max_bytes;
+        self.media_reads
+            .resolve(
+                request,
+                activation.generation.clone(),
+                || async move {
+                <crate::provider::ModuleMediaRepository as tinychannels::host::MediaRepository>::read_media(
+                    &repository,
+                    scope,
+                    media_id,
+                    max_bytes,
+                )
+                .await
+                .map_err(|_| BusError::failed("media could not be resolved"))
+                },
+                || async {
+                    !self.terminal.load(Ordering::SeqCst)
+                        && matches!(
+                            self.media_activation(&instance).await,
+                            Ok(current) if current == activation
+                        )
+                },
+            )
+            .await
+    }
+
+    /// Return one bounded chunk over confidential TinyBus method-reply framing.
+    #[tinybus(confidential)]
+    async fn read_media_chunk(
+        &self,
+        request: tinychannels_bus::MediaReadChunk,
+    ) -> BusResult<tinychannels_bus::MediaReadChunkResult> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_reads.binding(&request.handle).await?;
+        if self.media_activation(&instance).await?.generation != activation {
+            return Err(BusError::failed("media read belongs to another activation"));
+        }
+        self.media_reads.chunk(request).await
+    }
+
+    /// Release a resolved media read and its temporary byte buffer.
+    #[tinybus(confidential)]
+    async fn abort_media_read(&self, request: tinychannels_bus::MediaReadFinish) -> BusResult<()> {
+        if self.terminal.load(Ordering::SeqCst) {
+            return Err(BusError::failed("module is shutting down"));
+        }
+        let (instance, activation) = self.media_reads.binding(&request.0).await?;
+        if self.media_activation(&instance).await?.generation != activation {
+            return Err(BusError::failed("media read belongs to another activation"));
+        }
+        self.media_reads.abort(request).await
     }
 
     /// Append an ordered, retry-safe confidential attachment chunk.
@@ -987,17 +1442,20 @@ impl Channels {
 
     /// Whether `name` is running, and whether the provider reports itself healthy.
     async fn channel_status(&self, name: String) -> BusResult<String> {
-        let channel = {
+        let provider = {
             let running = self.running.lock().await;
             running
                 .get(&name)
                 .filter(|entry| !entry.is_finished())
-                .map(|entry| Arc::clone(&entry.channel))
+                .cloned()
         };
-        let Some(channel) = channel else {
+        let Some(provider) = provider else {
             return Ok("stopped".to_owned());
         };
-        Ok(if channel.health_check().await {
+        let healthy = tinychannels::channel::ChannelAdapter::status(provider.as_ref())
+            .await
+            .is_ok_and(|snapshot| snapshot.health_state.as_deref() == Some("healthy"));
+        Ok(if healthy {
             "connected".to_owned()
         } else {
             "unhealthy".to_owned()
@@ -1016,6 +1474,15 @@ impl Channels {
     ) -> BusResult<tinychannels::relay::CapabilityDescriptor> {
         self.relays.start(id, config).await
     }
+    /// Start a relay through the canonical v2 per-identity capability handshake.
+    #[tinybus(confidential)]
+    async fn start_relay_v2(
+        &self,
+        id: RelayReservation,
+        config: RelayRuntimeConfig,
+    ) -> BusResult<tinychannels_bus::module_relay::RelayCapabilitiesV2> {
+        self.relays.start_v2(id, config).await
+    }
     /// Cancel pending startup and join relay/reconnect/native callback work.
     async fn stop_relay(&self, id: RelayReservation) -> BusResult<()> {
         self.relays.stop(id).await
@@ -1023,6 +1490,14 @@ impl Channels {
     /// Report safe lifecycle facts without URL, identities or credentials.
     async fn relay_status(&self, id: RelayReservation) -> BusResult<RelayStatus> {
         self.relays.status(id).await
+    }
+    /// Return identity-correlated v2 capabilities negotiated for this reservation.
+    #[tinybus(confidential)]
+    async fn relay_capabilities_v2(
+        &self,
+        id: RelayReservation,
+    ) -> BusResult<Option<tinychannels_bus::module_relay::RelayCapabilitiesV2>> {
+        self.relays.capabilities_v2(id).await
     }
     /// Enqueue one bounded, ordered relay intent.
     async fn send_relay_intent(
@@ -1035,6 +1510,7 @@ impl Channels {
     /// Freeze operations and join all native providers, relay and callbacks.
     pub(crate) async fn shutdown(&self) -> BusResult<()> {
         self.terminal.store(true, Ordering::SeqCst);
+        self.web_turns.lock().await.clear();
         self.relays.freeze();
         // Fence and stop identity-scoped children before draining the legacy
         // service resources, but do not let one failed child skip cleanup of
@@ -1201,27 +1677,22 @@ async fn setup(connection: Connection) -> BusResult<()> {
     Ok(())
 }
 
-fn intent_to_legacy_message(
-    intent: &ChannelOutboundIntent,
-) -> Result<SendMessage, serde_json::Error> {
-    let value = tinychannels::legacy_message_value_from_outbound_intent(intent);
-    let content = match &intent.payload {
-        tinychannels::OutboundPayload::Text { text } => text.clone(),
-        _ => serde_json::to_string(&value)?,
-    };
-    Ok(SendMessage {
-        content,
-        recipient: intent.conversation_id.clone(),
-        subject: None,
-        thread_ts: intent.thread_id.clone(),
-        idempotency_key: Some(intent.idempotency_key.clone()),
-    })
-}
-
 fn intent_fingerprint(intent: &ChannelOutboundIntent) -> Result<String, serde_json::Error> {
     use sha2::Digest as _;
     let encoded = serde_json::to_vec(intent)?;
     Ok(hex::encode(sha2::Sha256::digest(encoded)))
+}
+
+fn required_delivery_result(
+    receipt: Option<tinychannels_bus::channel::MessageReceipt>,
+) -> ChannelSendMessageResult {
+    let receipt = receipt.unwrap_or_default();
+    ChannelSendMessageResult {
+        message_id: receipt.primary_platform_message_id.clone(),
+        receipt: Some(receipt),
+        error: None,
+        raw: None,
+    }
 }
 
 fn now_unix_ms() -> u64 {
@@ -1251,34 +1722,23 @@ fn delivery_store_error(error: DeliveryQueueError) -> BusError {
     reason = "generated C ABI symbols are documented by the TinyBus module SDK"
 )]
 pub(crate) mod exports {
-    tinybus_module::module_export_optional_static! {
-        setup = super::setup,
-        worker_threads = 4,
-        provides = ["ai.tinyhumans.tinychannels.Channels"],
-        methods = [
-            "StartChannel",
-            "StopChannel",
-            "SendMessage",
-            "ListChannels",
-            "ChannelStatus",
-            "ReserveRelay", "StartRelay", "StopRelay", "RelayStatus", "SendRelayIntent", "Shutdown", "SendChannelIntent", "SendEmail",
-            "BeginEmailUpload", "AppendEmailUploadChunk", "SendEmailUpload", "AbortEmailUpload",
-            "StartChannelConfigured",
-            "ChannelController",
-            "ChannelInteraction",
-            "CheckChannelHealth",
-            "StartChannelSupervised",
-            "ReserveRuntime", "StartRuntime", "StopRuntime",
-            "DescribeConfiguredChannels", "StartOutboundChannel", "PrepareOutboundIntent",
-            "PrepareChannelInbound", "PrepareChannelIdentity", "ExecuteProgressive", "ExecuteRemote", "PrepareChannelControl", "StartRuntimeWithDispatch", "PrepareRuntimeCommand",
-        ],
-        signals = [],
-        // The host callback object is resolved per call, not required at load:
-        // an outbound-only host that serves nothing is supported.
-        requires = [],
-        optional = ["ai.tinyhumans.tinychannels.ChannelsHost"],
-        lazy = false,
+    macro_rules! declare_channel_exports {
+        ([$($(#[$doc:meta])* $name:ident => $method:literal),* $(,)?]) => {
+            tinybus_module::module_export_optional_static! {
+                setup = super::setup,
+                worker_threads = 4,
+                provides = ["ai.tinyhumans.tinychannels.Channels"],
+                methods = [$($method),*],
+                signals = [],
+                // The host callback object is resolved per call, not required at load:
+                // an outbound-only host that serves nothing is supported.
+                requires = [],
+                optional = ["ai.tinyhumans.tinychannels.ChannelsHost"],
+                lazy = false,
+            }
+        };
     }
+    tinychannels_bus::channel_method_registry!(declare_channel_exports);
 }
 
 #[cfg(test)]

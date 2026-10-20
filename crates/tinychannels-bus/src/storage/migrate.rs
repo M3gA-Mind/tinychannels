@@ -298,10 +298,6 @@ fn whatsapp(
     .source(legacy)
 }
 
-#[cfg(test)]
-#[path = "migrate_tests.rs"]
-mod tests;
-
 /// Milliseconds since the Unix epoch for an RFC 3339 timestamp
 /// (`YYYY-MM-DDTHH:MM:SS[.fraction](Z|+HH:MM|-HH:MM)`), or `None` when it is
 /// not one. Pure integer math so the contract needs no date library.
@@ -369,3 +365,7 @@ fn parse_rfc3339_ms(text: &str) -> Option<i64> {
     let secs = days * 86_400 + hour * 3600 + minute * 60 + second - offset_secs;
     Some(secs * 1000 + millis)
 }
+
+#[cfg(test)]
+#[path = "migrate_parse_tests.rs"]
+mod parse_tests;

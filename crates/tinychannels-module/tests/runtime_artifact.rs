@@ -1,11 +1,49 @@
+#![allow(
+    deprecated,
+    reason = "integration fixtures still exercise one-release v21 adapters"
+)]
+
 use sha2::{Digest, Sha256};
 use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 use tinybus::{Connection, broker::Broker, module::ModuleHost, transport::memory::MemoryTransport};
 use tinychannels_bus::{BUS_NAME, ChannelRuntimeReservation, HOST_BUS_NAME, OBJECT_PATH, methods};
 
+#[derive(Debug, serde::Deserialize)]
+struct PreviousChannelCapabilities {
+    remote_control: bool,
+    chat_approvals: bool,
+    progressive_edits: bool,
+    history_key_ignores_thread: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PreviousInteractionInfo {
+    capabilities: PreviousChannelCapabilities,
+    proactive_target: Option<String>,
+    supports_reactions: bool,
+    supports_draft_updates: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "result", content = "value", rename_all = "snake_case")]
+enum PreviousInteractionResult {
+    Info(PreviousInteractionInfo),
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "result", content = "value", rename_all = "snake_case")]
+enum PreviousControlResult {
+    Capabilities(PreviousChannelCapabilities),
+}
+
 #[derive(Clone, Default)]
 struct Callback {
     sends: Arc<std::sync::atomic::AtomicUsize>,
+    output_events:
+        Arc<std::sync::Mutex<Vec<tinychannels_bus::module_progressive::ChannelOutputEvent>>>,
+    requests: Arc<
+        std::sync::Mutex<Vec<tinychannels_bus::module_progressive::ProgressiveTransportRequest>>,
+    >,
 }
 
 #[tinybus::interface(name = "ai.tinyhumans.tinychannels.ChannelsHost")]
@@ -20,13 +58,32 @@ impl Callback {
         let tinychannels_bus::ChannelBackendRequest::ProgressiveTransport(request) = request else {
             return Err(tinybus::Error::failed("unexpected backend callback"));
         };
-        if matches!(request, ProgressiveTransportRequest::Send { .. }) {
-            self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let request = *request;
+        self.requests.lock().unwrap().push(request.clone());
+        match request {
+            ProgressiveTransportRequest::Send { .. } => {
+                self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+            ProgressiveTransportRequest::SendTyped { .. } => {
+                self.sends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let mut outcome = tinychannels_bus::channel::ChannelSendOutcome::default();
+                outcome.receipt.primary_platform_message_id = Some("artifact-message".into());
+                outcome.receipt.platform_message_ids = vec!["artifact-message".into()];
+                return Ok(
+                    tinychannels_bus::ChannelBackendResult::ProgressiveTransport(Box::new(
+                        ProgressiveTransportResult::Outcome(Box::new(outcome)),
+                    )),
+                );
+            }
+            ProgressiveTransportRequest::OutputEvent { event, .. } => {
+                self.output_events.lock().unwrap().push(*event);
+            }
+            _ => {}
         }
         Ok(
-            tinychannels_bus::ChannelBackendResult::ProgressiveTransport(
+            tinychannels_bus::ChannelBackendResult::ProgressiveTransport(Box::new(
                 ProgressiveTransportResult::Success(serde_json::json!({"id": "artifact-message"})),
-            ),
+            )),
         )
     }
 
@@ -146,7 +203,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         PreparedChannelIdentity, PreparedChannelInbound,
     };
     use tinychannels_bus::module_progressive::{
-        ProgressiveCommand, ProgressiveEvent, ProgressiveResult,
+        ChannelOutputEvent, ProgressiveCommand, ProgressiveResult, ProgressiveTransportRequest,
     };
     let ordinary = first_client
         .call::<ProgressiveResult>(
@@ -172,31 +229,73 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     let ProgressiveResult::Opened { handle } = opened else {
         panic!("missing progressive artifact handle");
     };
+    let terminal_events = vec![
+        ChannelOutputEvent::TextDelta {
+            text: "artifact draft".into(),
+            iteration: Some(1),
+        },
+        ChannelOutputEvent::ToolCallCompleted {
+            call_id: "artifact-call".into(),
+            tool_name: "lookup".into(),
+            success: true,
+            output_chars: 5,
+            output: "found".into(),
+            arguments: Some(serde_json::json!({"query": "artifact"})),
+            elapsed_ms: 4,
+            iteration: 1,
+            failure: None,
+            display_label: Some("Lookup".into()),
+            display_detail: None,
+            structured: Some(serde_json::json!({"kind": "lookup", "count": 1})),
+        },
+        ChannelOutputEvent::FinalMessage {
+            text: "artifact final".into(),
+            parts: vec![tinychannels_bus::OutboundContentPart::Content {
+                part: tinychannels_bus::ContentPart::Text {
+                    text: "artifact final".into(),
+                    markdown_dialect: None,
+                },
+            }],
+            receipt: None,
+        },
+    ];
     let updated: ProgressiveResult = first_client
         .call_confidential(
             methods::EXECUTE_PROGRESSIVE,
-            ProgressiveCommand::Feed {
+            ProgressiveCommand::FeedOutput {
                 handle: handle.clone(),
-                events: vec![ProgressiveEvent::TextDelta("artifact draft".into())],
+                events: terminal_events.clone(),
             },
         )
         .await
         .unwrap();
-    assert_eq!(updated, ProgressiveResult::Updated);
+    assert!(
+        matches!(updated, ProgressiveResult::DeliveryOutcome { outcome }
+        if outcome.receipt.platform_message_ids == ["artifact-message"])
+    );
     for _ in 0..2 {
         let result: ProgressiveResult = first_client
             .call_confidential(
                 methods::EXECUTE_PROGRESSIVE,
-                ProgressiveCommand::Finish {
+                ProgressiveCommand::FeedOutput {
                     handle: handle.clone(),
-                    text: "artifact final".into(),
+                    events: terminal_events.clone(),
                 },
             )
             .await
             .unwrap();
-        assert_eq!(result, ProgressiveResult::Closed);
+        assert!(
+            matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
+            if outcome.receipt.platform_message_ids == ["artifact-message"])
+        );
     }
     assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let output_events = callback.output_events.lock().unwrap().clone();
+    assert!(
+        matches!(output_events.get(1), Some(ChannelOutputEvent::ToolCallCompleted {
+        call_id, arguments: Some(arguments), structured: Some(structured), ..
+    }) if call_id == "artifact-call" && arguments["query"] == "artifact" && structured["count"] == 1)
+    );
     use tinychannels_bus::module_remote::{RemoteOperation, RemoteOperationResult, RemoteRoute};
     let remote_workspace = tempfile::tempdir().unwrap();
     use tinychannels_bus::module_control::{ChannelControlRequest, ChannelControlResult};
@@ -231,6 +330,8 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             content: "/HELP@FixtureBot".into(),
             channel: "telegram".into(),
             timestamp: 1,
+            topic_id: None,
+            reply_to_id: None,
             thread_ts: None,
             sender_name: None,
         },
@@ -239,6 +340,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             model: "fixture".into(),
         },
         history_len: 0,
+        session_scope: None,
     };
     assert!(
         first_client
@@ -250,7 +352,10 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         .call_confidential(methods::EXECUTE_REMOTE, request)
         .await
         .unwrap();
-    assert!(remote.reply.unwrap().contains("Remote control:"));
+    assert_eq!(
+        remote.reply, None,
+        "an unconfigured channel has no remote-control capability"
+    );
     let _: RemoteOperationResult = first_client
         .call_confidential(
             methods::EXECUTE_REMOTE,
@@ -313,7 +418,7 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
     assert_eq!(prepared.client_id, "inbound:discord:user");
     assert_eq!(
         prepared.session_key,
-        "tenant:discord:default:unknown:room:user"
+        "v22|namespace=p6:tenant|channel=p7:discord|account=a|kind=p7:unknown|scope=a|conversation=p4:room|parent=a|topic=a|thread=a|participant=p4:user"
     );
     assert_eq!(prepared.envelope.text, "fixture");
 
@@ -325,6 +430,13 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
             api_token: "fixture-token".into(),
             from_phone: "+15550000001".into(),
             allowed_senders: vec![],
+            webhook_secret: None,
+        }),
+        yuanbao: Some(tinychannels_bus::config::YuanbaoConfig {
+            app_key: "fixture-key".into(),
+            token: "fixture-token".into(),
+            ws_domain: "wss://example.invalid".into(),
+            ..Default::default()
         }),
         ..Default::default()
     };
@@ -367,9 +479,19 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         )
         .await
         .unwrap();
-    assert_eq!(catalog.len(), 1);
-    assert_eq!(catalog[0].name, "linq");
-    assert_eq!(catalog[0].ingress, ChannelIngressKind::ExternalWebhook);
+    assert_eq!(catalog.len(), 2);
+    let linq = catalog
+        .iter()
+        .find(|channel| channel.name == "linq")
+        .unwrap();
+    let yuanbao = catalog
+        .iter()
+        .find(|channel| channel.name == "yuanbao")
+        .unwrap();
+    assert_eq!(linq.ingress, ChannelIngressKind::ExternalWebhook);
+    assert!(!linq.interaction.capabilities.progressive_edits);
+    assert!(yuanbao.interaction.capabilities.streaming_reply_pipeline);
+    assert!(!yuanbao.interaction.capabilities.progressive_edits);
     first_client
         .call_confidential::<()>(
             methods::START_OUTBOUND_CHANNEL,
@@ -377,7 +499,94 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         )
         .await
         .unwrap();
+    let scope = tinychannels_bus::ConversationRef {
+        kind: tinychannels_bus::ConversationKind::Thread,
+        id: "artifact-room".into(),
+        scope_id: Some("artifact-scope".into()),
+        parent_id: Some("artifact-parent".into()),
+        thread_id: Some("artifact-thread".into()),
+        topic_id: Some("artifact-topic".into()),
+    };
+    let ProgressiveResult::Opened {
+        handle: scoped_handle,
+    } = first_client
+        .call_confidential(
+            methods::EXECUTE_PROGRESSIVE,
+            ProgressiveCommand::OpenOutput {
+                channel: tinychannels_bus::ChannelRef {
+                    id: "linq".into(),
+                    account_id: None,
+                },
+                conversation: scope.clone(),
+                turn_id: "artifact-scoped-turn".into(),
+                lifetime_ms: 210_000,
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("scoped output handle did not open")
+    };
+    let terminal = vec![ChannelOutputEvent::FinalMessage {
+        text: "scoped artifact final".into(),
+        parts: vec![],
+        receipt: None,
+    }];
+    for _ in 0..2 {
+        let result: ProgressiveResult = first_client
+            .call_confidential(
+                methods::EXECUTE_PROGRESSIVE,
+                ProgressiveCommand::FeedOutput {
+                    handle: scoped_handle.clone(),
+                    events: terminal.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(result, ProgressiveResult::DeliveryOutcome { outcome }
+            if outcome.receipt.platform_message_ids == ["artifact-message"])
+        );
+    }
+    let scoped_send = callback
+        .requests
+        .lock()
+        .unwrap()
+        .iter()
+        .find_map(|request| match request {
+            ProgressiveTransportRequest::SendTyped {
+                channel_ref: Some(channel),
+                conversation: Some(conversation),
+                turn_id: Some(turn_id),
+                idempotency_key: Some(key),
+                ..
+            } if turn_id == "artifact-scoped-turn" => {
+                Some((channel.clone(), conversation.clone(), key.clone()))
+            }
+            _ => None,
+        })
+        .expect("scoped typed send callback");
+    assert_eq!(scoped_send.0.id, "linq");
+    assert_eq!(scoped_send.1, scope);
+    assert!(!scoped_send.2.is_empty());
+    assert_eq!(callback.sends.load(std::sync::atomic::Ordering::SeqCst), 2);
     let interaction: tinychannels_bus::ChannelInteractionResult = first_client
+        .call_confidential(
+            methods::CHANNEL_INTERACTION,
+            (tinychannels_bus::ChannelInteractionRequest {
+                channel: "linq".into(),
+                interaction: tinychannels_bus::ChannelInteraction::DescribeV2,
+            },),
+        )
+        .await
+        .unwrap();
+    let tinychannels_bus::ChannelInteractionResult::InfoV2(described) = interaction else {
+        panic!("DescribeV2 should return its configured capabilities")
+    };
+
+    // The existing Describe operation keeps the previous four-flag payload
+    // and its supplemental fields decodable by a host built against v21.
+    let legacy_interaction: serde_json::Value = first_client
         .call_confidential(
             methods::CHANNEL_INTERACTION,
             (tinychannels_bus::ChannelInteractionRequest {
@@ -387,10 +596,80 @@ async fn runtime_only_host_closes_scoped_resources_without_a_legacy_callback_obj
         )
         .await
         .unwrap();
-    assert!(matches!(
-        interaction,
-        tinychannels_bus::ChannelInteractionResult::Info(_)
-    ));
+    let legacy: PreviousInteractionResult = serde_json::from_value(legacy_interaction).unwrap();
+    let PreviousInteractionResult::Info(legacy) = legacy;
+    assert_eq!(
+        legacy.capabilities.remote_control,
+        described.capabilities.remote_control
+    );
+    assert_eq!(
+        legacy.capabilities.chat_approvals,
+        described.capabilities.chat_approvals
+    );
+    assert_eq!(
+        legacy.capabilities.progressive_edits,
+        described.capabilities.progressive_edits
+    );
+    assert_eq!(
+        legacy.capabilities.history_key_ignores_thread,
+        described.capabilities.history_key_ignores_thread
+    );
+    assert_eq!(
+        legacy.proactive_target,
+        described.capabilities.account.proactive_target
+    );
+    assert_eq!(legacy.supports_reactions, described.capabilities.reactions);
+    assert_eq!(
+        legacy.supports_draft_updates,
+        described.capabilities.streaming_reply_pipeline
+    );
+
+    let controlled: tinychannels_bus::module_control::ChannelControlResult = first_client
+        .call_confidential(
+            methods::PREPARE_CHANNEL_CONTROL,
+            (
+                tinychannels_bus::module_control::ChannelControlRequest::CapabilitiesV2 {
+                    channel: "linq".into(),
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        controlled,
+        tinychannels_bus::module_control::ChannelControlResult::CapabilitiesV2(Box::new(
+            described.capabilities.clone()
+        ))
+    );
+    let legacy_control: serde_json::Value = first_client
+        .call_confidential(
+            methods::PREPARE_CHANNEL_CONTROL,
+            (
+                tinychannels_bus::module_control::ChannelControlRequest::Capabilities {
+                    channel: "linq".into(),
+                },
+            ),
+        )
+        .await
+        .unwrap();
+    let PreviousControlResult::Capabilities(legacy_control) =
+        serde_json::from_value(legacy_control).unwrap();
+    assert_eq!(
+        legacy_control.remote_control,
+        described.capabilities.remote_control
+    );
+    assert_eq!(
+        legacy_control.chat_approvals,
+        described.capabilities.chat_approvals
+    );
+    assert_eq!(
+        legacy_control.progressive_edits,
+        described.capabilities.progressive_edits
+    );
+    assert_eq!(
+        legacy_control.history_key_ignores_thread,
+        described.capabilities.history_key_ignores_thread
+    );
     let prepared: PreparedChannelIntent = first_client
         .call_confidential(
             methods::PREPARE_OUTBOUND_INTENT,

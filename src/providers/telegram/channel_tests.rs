@@ -1,7 +1,4 @@
-use super::super::attachments::{
-    TelegramAttachmentKind, infer_attachment_kind_from_target, parse_attachment_markers,
-    parse_path_only_attachment,
-};
+use super::super::attachments::infer_attachment_mime;
 use super::super::text::{
     TELEGRAM_MAX_MESSAGE_LENGTH, split_message_for_telegram, strip_tool_call_tags,
 };
@@ -98,6 +95,22 @@ fn supports_draft_updates_respects_stream_mode() {
     let partial = TelegramChannel::new("fake-token".into(), vec!["*".into()], false)
         .with_streaming(StreamMode::Partial, 750, true);
     assert!(partial.supports_draft_updates());
+    assert!(
+        partial
+            .capabilities()
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "draft-update")
+    );
+    assert!(
+        partial
+            .capabilities()
+            .actions
+            .supported
+            .iter()
+            .any(|name| name == "edit")
+    );
     assert_eq!(partial.draft_update_interval_ms, 750);
     assert!(partial.silent_streaming);
 }
@@ -378,51 +391,36 @@ fn telegram_allowlist_is_empty_tracks_runtime_state() {
 }
 
 #[test]
-fn parse_attachment_markers_extracts_multiple_types() {
-    let message = "Here are files [IMAGE:/tmp/a.png] and [DOCUMENT:https://example.com/a.pdf]";
-    let (cleaned, attachments) = parse_attachment_markers(message);
-
-    assert_eq!(cleaned, "Here are files  and");
-    assert_eq!(attachments.len(), 2);
-    assert_eq!(attachments[0].kind, TelegramAttachmentKind::Image);
-    assert_eq!(attachments[0].target, "/tmp/a.png");
-    assert_eq!(attachments[1].kind, TelegramAttachmentKind::Document);
-    assert_eq!(attachments[1].target, "https://example.com/a.pdf");
-}
-
-#[test]
-fn parse_attachment_markers_keeps_invalid_markers_in_text() {
-    let message = "Report [UNKNOWN:/tmp/a.bin]";
-    let (cleaned, attachments) = parse_attachment_markers(message);
-
-    assert_eq!(cleaned, "Report [UNKNOWN:/tmp/a.bin]");
-    assert!(attachments.is_empty());
-}
-
-#[test]
-fn parse_path_only_attachment_detects_existing_file() {
-    let dir = tempfile::tempdir().unwrap();
-    let image_path = dir.path().join("snap.png");
-    std::fs::write(&image_path, b"fake-png").unwrap();
-
-    let parsed = parse_path_only_attachment(image_path.to_string_lossy().as_ref())
-        .expect("expected attachment");
-
-    assert_eq!(parsed.kind, TelegramAttachmentKind::Image);
-    assert_eq!(parsed.target, image_path.to_string_lossy());
-}
-
-#[test]
-fn parse_path_only_attachment_rejects_sentence_text() {
-    assert!(parse_path_only_attachment("Screenshot saved to /tmp/snap.png").is_none());
-}
-
-#[test]
-fn infer_attachment_kind_from_target_detects_document_extension() {
-    assert_eq!(
-        infer_attachment_kind_from_target("https://example.com/files/specs.pdf?download=1"),
-        Some(TelegramAttachmentKind::Document)
-    );
+fn inbound_media_mime_inference_handles_known_extensions_and_urls() {
+    for (path, expected) in [
+        ("photo.PNG?download=1", Some("image/png")),
+        ("photo.jpeg#preview", Some("image/jpeg")),
+        ("photo.gif", Some("image/gif")),
+        ("photo.webp", Some("image/webp")),
+        ("movie.mp4", Some("video/mp4")),
+        ("movie.mov", Some("video/quicktime")),
+        ("movie.webm", Some("video/webm")),
+        ("sound.mp3", Some("audio/mpeg")),
+        ("sound.m4a", Some("audio/mp4")),
+        ("sound.wav", Some("audio/wav")),
+        ("voice.ogg", Some("audio/ogg")),
+        ("spec.pdf", Some("application/pdf")),
+        ("notes.txt", Some("text/plain")),
+        ("data.csv", Some("text/csv")),
+        ("data.json", Some("application/json")),
+        ("archive.zip", Some("application/zip")),
+        (
+            "document.docx",
+            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document"),
+        ),
+        (
+            "sheet.xlsx",
+            Some("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"),
+        ),
+        ("unknown.bin", None),
+    ] {
+        assert_eq!(infer_attachment_mime(path), expected, "{path}");
+    }
 }
 
 #[test]
@@ -657,7 +655,7 @@ fn inbound_voice_context_mention_only_group_requires_caption_mention() {
 }
 
 #[test]
-fn inbound_voice_content_preserves_caption_outside_mention_only_groups() {
+fn inbound_voice_context_accepts_caption_outside_mention_only_groups() {
     let ch = TelegramChannel::new("token".into(), vec!["*".into()], false);
     let update = serde_json::json!({
         "message": {
@@ -680,18 +678,12 @@ fn inbound_voice_content_preserves_caption_outside_mention_only_groups() {
     let ctx = ch
         .parse_incoming_message_context(&update["message"], Some("summarize this"))
         .expect("authorized voice message context should parse");
-    let content = TelegramChannel::voice_message_content(
-        "transcribed voice",
-        Some("summarize this"),
-        &ctx,
-        false,
-    );
-
-    assert_eq!(content, "summarize this\n\ntranscribed voice");
+    assert_eq!(ctx.mention_text, None);
+    assert_eq!(ctx.chat_id, "12345");
 }
 
 #[test]
-fn inbound_voice_content_uses_normalized_caption_in_mention_only_groups() {
+fn inbound_voice_context_normalizes_caption_in_mention_only_groups() {
     let ch = TelegramChannel::new("token".into(), vec!["*".into()], true);
     *ch.bot_username.lock() = Some("mybot".to_string());
     let update = serde_json::json!({
@@ -715,14 +707,8 @@ fn inbound_voice_content_uses_normalized_caption_in_mention_only_groups() {
     let ctx = ch
         .parse_incoming_message_context(&update["message"], Some("@mybot summarize this"))
         .expect("caption mention should allow voice in mention-only group");
-    let content = TelegramChannel::voice_message_content(
-        "transcribed voice",
-        Some("@mybot summarize this"),
-        &ctx,
-        true,
-    );
-
-    assert_eq!(content, "summarize this\n\ntranscribed voice");
+    assert_eq!(ctx.mention_text.as_deref(), Some("summarize this"));
+    assert_eq!(ctx.chat_id, "-100200300");
 }
 
 #[test]
@@ -835,37 +821,6 @@ fn parse_update_reaction_extracts_actor_target_and_emoji() {
     assert_eq!(reaction.reply_target, "-100200300");
     assert_eq!(reaction.target_message_id, "123");
     assert_eq!(reaction.emoji, "🔥");
-}
-
-#[test]
-fn parse_reaction_marker_supports_optional_target_id() {
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:✅|321]");
-    assert_eq!(content, "");
-    assert_eq!(marker.as_deref(), Some("✅|321"));
-
-    let (content, marker) = TelegramChannel::parse_reaction_marker("hello");
-    assert_eq!(content, "hello");
-    assert!(marker.is_none());
-}
-
-#[test]
-fn parse_reaction_marker_allows_inline_reply_text() {
-    // Bot can react AND reply in one turn: [REACTION:👍] reply text
-    let (content, marker) =
-        TelegramChannel::parse_reaction_marker("[REACTION:👍] That's a great point!");
-    assert_eq!(content, "That's a great point!");
-    assert_eq!(marker.as_deref(), Some("👍"));
-
-    // Explicit target id + inline text
-    let (content, marker) =
-        TelegramChannel::parse_reaction_marker("[REACTION:🔥|999] Here's my full reply.");
-    assert_eq!(content, "Here's my full reply.");
-    assert_eq!(marker.as_deref(), Some("🔥|999"));
-
-    // Reaction only (no trailing text) still works
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:🤔]");
-    assert_eq!(content, "");
-    assert_eq!(marker.as_deref(), Some("🤔"));
 }
 
 #[test]
@@ -1659,8 +1614,7 @@ fn parse_update_reaction_returns_none_for_unlisted_actor() {
 }
 
 #[test]
-fn parse_update_reaction_returns_none_when_new_reaction_is_empty() {
-    // Removing a reaction (new_reaction is empty) should yield None.
+fn parse_update_reaction_identifies_removed_reactions() {
     let ch = TelegramChannel::new("token".into(), vec!["*".into()], false);
     let update = serde_json::json!({
         "update_id": 51,
@@ -1672,10 +1626,11 @@ fn parse_update_reaction_returns_none_when_new_reaction_is_empty() {
             "new_reaction": []
         }
     });
-    assert!(
-        ch.parse_update_reaction(&update).is_none(),
-        "reaction removal (empty new_reaction) must be ignored"
-    );
+    let parsed = ch
+        .parse_update_reaction(&update)
+        .expect("removal event is preserved");
+    assert!(!parsed.added);
+    assert_eq!(parsed.emoji, "👍");
 }
 
 #[test]
@@ -1698,45 +1653,6 @@ fn parse_update_reaction_falls_back_to_user_id_when_username_absent() {
     assert_eq!(reaction.sender, "99999");
     assert_eq!(reaction.emoji, "❤️");
     assert_eq!(reaction.target_message_id, "77");
-}
-
-// ── Reaction marker parsing edge cases ─────────────────────────
-
-#[test]
-fn parse_reaction_marker_plain_emoji_without_pipe_has_no_explicit_target() {
-    // [REACTION:👍] — no pipe separator, no explicit target message id.
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:👍]");
-    assert_eq!(
-        content, "",
-        "content after stripping marker should be empty"
-    );
-    assert_eq!(
-        marker.as_deref(),
-        Some("👍"),
-        "marker should be the emoji without pipe"
-    );
-}
-
-#[test]
-fn parse_reaction_marker_empty_inner_produces_no_marker() {
-    // [REACTION:] — empty inner, no valid emoji.
-    let (content, marker) = TelegramChannel::parse_reaction_marker("[REACTION:]");
-    assert_eq!(
-        content, "",
-        "content should be empty string for empty marker"
-    );
-    assert!(
-        marker.is_none(),
-        "empty inner must not produce a reaction marker"
-    );
-}
-
-#[test]
-fn parse_reaction_marker_non_marker_text_is_unchanged() {
-    let input = "here is your answer";
-    let (content, marker) = TelegramChannel::parse_reaction_marker(input);
-    assert_eq!(content, input);
-    assert!(marker.is_none());
 }
 
 // ── Typing body construction tests ─────────────────────────────

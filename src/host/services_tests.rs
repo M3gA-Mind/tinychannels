@@ -26,3 +26,149 @@ async fn default_approval_gate_rejects_requests_and_does_not_parse_replies() {
         "interactive approval requests are not supported by this host"
     );
 }
+
+struct LegacyIngressSink;
+
+#[async_trait]
+impl EventSink for LegacyIngressSink {
+    async fn publish(
+        &self,
+        _domain: &str,
+        _kind: &str,
+        _payload: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+#[allow(
+    deprecated,
+    reason = "this pins the one-release v21 inbound compatibility default"
+)]
+async fn legacy_event_sink_declines_v22_inbound_for_message_channel_fallback() {
+    let sink = LegacyIngressSink;
+    assert!(
+        !sink
+            .publish_inbound(tinychannels_bus::ChannelMessage::default())
+            .await
+            .unwrap()
+    );
+    assert!(
+        !sink
+            .publish_ingress(tinychannels_bus::ChannelIngress::Inbound(
+                tinychannels_bus::ChannelInboundEnvelope::default()
+            ))
+            .await
+            .unwrap()
+    );
+}
+
+struct LegacyVoicePorts;
+
+#[async_trait]
+impl Transcriber for LegacyVoicePorts {
+    fn name(&self) -> &str {
+        "legacy"
+    }
+
+    async fn transcribe(
+        &self,
+        request: TranscriptionRequest,
+    ) -> anyhow::Result<TranscriptionResult> {
+        Ok(TranscriptionResult {
+            text: request.file_name.unwrap_or_default(),
+            language: request.language,
+            duration_secs: Some(0.5),
+        })
+    }
+}
+
+#[async_trait]
+impl SpeechSynthesizer for LegacyVoicePorts {
+    async fn synthesize(&self, request: SpeechRequest) -> anyhow::Result<SpeechResult> {
+        Ok(SpeechResult {
+            audio_base64: request.text,
+            mime_type: "audio/wav".into(),
+            ..Default::default()
+        })
+    }
+}
+
+#[tokio::test]
+async fn legacy_voice_ports_delegate_scoped_calls_and_media_resolution_fails_closed() {
+    let ports = LegacyVoicePorts;
+    let scope = tinychannels_bus::HostVoiceScope::default();
+    let transcript = ports
+        .transcribe_scoped(
+            scope.clone(),
+            TranscriptionRequest {
+                audio_base64: "bytes".into(),
+                mime_type: None,
+                file_name: Some("voice.ogg".into()),
+                language: Some("en".into()),
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(transcript.text, "voice.ogg");
+    assert_eq!(transcript.language.as_deref(), Some("en"));
+    assert_eq!(transcript.duration_secs, Some(0.5));
+
+    let speech = ports
+        .synthesize_scoped(
+            scope.clone(),
+            SpeechRequest {
+                text: "spoken bytes".into(),
+                voice: None,
+                format: None,
+                thread_id: None,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(speech.audio_base64, "spoken bytes");
+    assert_eq!(speech.mime_type, "audio/wav");
+
+    let store = DefaultVoiceMediaStore;
+    let error = store
+        .read_voice(scope, "opaque-id".into())
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "host voice media resolution is unavailable"
+    );
+}
+
+struct DocumentsOnlyStorage;
+
+#[async_trait]
+impl StorageProvider for DocumentsOnlyStorage {
+    async fn documents(
+        &self,
+    ) -> anyhow::Result<std::sync::Arc<dyn tinystoragedrivers_core::DocumentStore>> {
+        unreachable!("the blob fallback test does not request document storage")
+    }
+}
+
+#[tokio::test]
+async fn storage_provider_without_blob_port_fails_closed() {
+    let error = DocumentsOnlyStorage.blobs().await.unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "host scoped media blob storage is unavailable"
+    );
+}
+
+struct DefaultVoiceMediaStore;
+
+#[async_trait]
+impl VoiceMediaStore for DefaultVoiceMediaStore {
+    async fn store_voice(
+        &self,
+        _request: VoiceMediaRequest,
+    ) -> anyhow::Result<tinychannels_bus::HostStoreVoiceMediaResult> {
+        unreachable!("this test only exercises the default read_voice behavior")
+    }
+}

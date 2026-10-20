@@ -4,6 +4,7 @@ pub mod adapter;
 pub mod capabilities;
 pub mod envelope;
 pub mod error;
+pub mod event;
 pub mod intent;
 pub mod receipt;
 pub mod session;
@@ -17,13 +18,19 @@ pub use capabilities::{
     MarkdownDialect, channel_message_action_names, durable_final_delivery_capabilities,
 };
 pub use envelope::{
-    AccessContext, ChannelInboundEnvelope, GroupAccessPolicy, InboundMediaPayload, MediaKind,
-    MediaReference, MentionGate, SenderDmDecision,
+    AccessContext, ButtonAction, ButtonStyle, ChannelInboundEnvelope, ContactMethod, ContentPart,
+    GroupAccessPolicy, InboundMediaPayload, MediaKind, MediaReference, MentionGate,
+    SenderDmDecision, VoiceNote, VoiceTranscript, VoiceTranscriptSource, VoiceTranscriptState,
 };
 pub use error::{ChannelSendError, SendErrorKind};
+pub use event::{
+    ChannelEvent, ChannelEventKind, ChannelReaction, approval_action_id, parse_approval_action_id,
+};
 pub use intent::{ChannelOutboundIntent, DeliveryDurability, OutboundPayload};
+pub use intent::{ChannelOutboundMessage, OutboundContentPart, OutboundVoice};
 pub use receipt::{
-    MessageReceipt, MessageReceiptPart, MessageReceiptPartKind, MessageReceiptSourceResult,
+    ChannelSendOutcome, MessageReceipt, MessageReceiptPart, MessageReceiptPartKind,
+    MessageReceiptSourceResult,
 };
 pub use session::{LegacySessionKeys, SessionKeyPolicy};
 pub use types::{

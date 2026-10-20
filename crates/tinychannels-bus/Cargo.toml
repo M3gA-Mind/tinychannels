@@ -24,9 +24,6 @@ schemars = { version = "1", features = ["derive"] }
 thiserror = "2"
 # Serialization only: preserves PassthroughForward.body's existing Base64 wire encoding.
 base64 = "0.23"
-async-trait = "0.1"
-anyhow = "1"
-tokio = { version = "1", default-features = false, features = ["sync"] }
 # Optional (feature `storage`, off by default): storage ports only (no driver,
 # no I/O). The `storage` module declares this owner's schema and v1 to v2 steps
 # so a host reads them from the contract instead of linking the implementation.
@@ -40,4 +37,3 @@ storage = ["dep:tinystoragedrivers-core"]
 
 [dev-dependencies]
 toml = "1"
-tokio = { version = "1", default-features = false, features = ["rt", "macros"] }

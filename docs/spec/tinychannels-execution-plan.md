@@ -1,5 +1,9 @@
 # TinyChannels Execution Plan
 
+> **Superseded:** this historical plan is not the normative channel contract
+> or a current implementation status report. Use
+> [contract-v2.md](contract-v2.md) for the target contract and migration rules.
+
 This is the implementation plan derived from the 2026-07-04 audit of this
 crate, the OpenHuman app (`openhuman-4`), and the pinned upstream checkouts:
 
