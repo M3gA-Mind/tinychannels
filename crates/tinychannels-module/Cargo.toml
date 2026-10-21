@@ -45,6 +45,7 @@ anyhow = "1"
 tracing = "0.1"
 log = "0.4"
 async-trait = "0.1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 uuid = { version = "1", features = ["v4"] }
 
 [dev-dependencies]

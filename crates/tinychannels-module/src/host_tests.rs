@@ -364,7 +364,7 @@ async fn callback_consumer_preserves_inbound_then_status_order() {
 async fn module_host_exposes_typed_transcription_and_event_capabilities() {
     let (host, callback, _server) = connected_host().await;
     let provider_host =
-        Arc::new(crate::provider::Hooks::default()).host(host.clone(), "telegram".into());
+        Arc::new(crate::provider::Hooks::default()).host(host.clone(), "telegram".into(), None);
     let transcription = provider_host
         .transcriber()
         .unwrap()

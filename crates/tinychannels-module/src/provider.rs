@@ -193,7 +193,7 @@ impl Hooks {
 }
 
 #[derive(Clone)]
-pub(crate) struct ModuleMediaRepository(HostChannels, String, Option<String>);
+pub(crate) struct ModuleMediaRepository(pub(crate) HostChannels, pub(crate) String, pub(crate) Option<String>);
 
 impl ModuleMediaRepository {
     fn bind_scope(&self, scope: &mut tinychannels::host::MediaScope) -> anyhow::Result<()> {
