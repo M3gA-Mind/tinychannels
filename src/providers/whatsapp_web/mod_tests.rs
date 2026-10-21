@@ -649,6 +649,16 @@ async fn blocked_recipients_are_rejected_before_provider_io() {
     let group = crate::provider_test_support::send_v1(&ch, &message("11111@g.us", "nope"))
         .await
         .unwrap_err();
+    let dm = dm
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .unwrap()
+        .0
+        .clone();
+    let group = group
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .unwrap()
+        .0
+        .clone();
     for error in [dm, group] {
         assert_eq!(error.kind, crate::channel::SendErrorKind::Forbidden);
         assert!(!error.sent_before_error);
@@ -667,6 +677,11 @@ async fn unparseable_recipients_are_rejected() {
     let empty = crate::provider_test_support::send_v1(&ch, &message("   ", "x"))
         .await
         .unwrap_err();
+    let empty = empty
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .unwrap()
+        .0
+        .clone();
     assert_eq!(
         empty.kind,
         crate::channel::SendErrorKind::Forbidden,
@@ -706,6 +721,11 @@ async fn client_failures_surface_with_their_operation() {
     let send = crate::provider_test_support::send_v1(&ch, &message("+1234567890", "x"))
         .await
         .unwrap_err();
+    let send = send
+        .downcast_ref::<crate::provider_test_support::TypedSendTestError>()
+        .unwrap()
+        .0
+        .clone();
     assert_eq!(send.kind, crate::channel::SendErrorKind::Unknown);
     assert!(send.sent_before_error);
     assert!(send.message.contains("send boom"), "{}", send.message);
