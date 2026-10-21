@@ -1020,12 +1020,6 @@ impl WhatsAppWebChannel {
     }
 
     async fn start_typing_provider(&self, recipient: &str) -> Result<()> {
-        let client = self.connected_client().map_err(|_| {
-            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::rejected(
-                "WhatsApp Web client is not connected",
-            ))
-        })?;
-
         if !self.should_allow_outbound(recipient) {
             tracing::warn!(
                 "WhatsApp Web: typing target {} not in allowed list",
@@ -1034,7 +1028,16 @@ impl WhatsAppWebChannel {
             return Ok(());
         }
 
-        let to = self.recipient_to_jid(recipient)?;
+        let to = self.recipient_to_jid(recipient).map_err(|_| {
+            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::bad_format(
+                "WhatsApp recipient address is invalid",
+            ))
+        })?;
+        let client = self.connected_client().map_err(|_| {
+            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::rejected(
+                "WhatsApp Web client is not connected",
+            ))
+        })?;
         client
             .send_composing(&to)
             .await
@@ -1045,12 +1048,6 @@ impl WhatsAppWebChannel {
     }
 
     async fn stop_typing_provider(&self, recipient: &str) -> Result<()> {
-        let client = self.connected_client().map_err(|_| {
-            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::rejected(
-                "WhatsApp Web client is not connected",
-            ))
-        })?;
-
         if !self.should_allow_outbound(recipient) {
             tracing::warn!(
                 "WhatsApp Web: typing target {} not in allowed list",
@@ -1059,7 +1056,16 @@ impl WhatsAppWebChannel {
             return Ok(());
         }
 
-        let to = self.recipient_to_jid(recipient)?;
+        let to = self.recipient_to_jid(recipient).map_err(|_| {
+            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::bad_format(
+                "WhatsApp recipient address is invalid",
+            ))
+        })?;
+        let client = self.connected_client().map_err(|_| {
+            anyhow::Error::new(crate::providers::whatsapp_shared::error::WaFailure::rejected(
+                "WhatsApp Web client is not connected",
+            ))
+        })?;
         client
             .send_paused(&to)
             .await
