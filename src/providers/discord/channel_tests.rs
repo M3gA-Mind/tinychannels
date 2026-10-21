@@ -298,36 +298,58 @@ fn split_message_with_multiple_newlines() {
     assert_eq!(reconstructed, msg);
 }
 
-#[test]
-fn typing_handle_starts_as_none() {
-    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false);
-    let guard = ch.typing_handle.lock();
-    assert!(guard.is_none());
+async fn typing_sink() -> (DiscordChannel, mpsc::UnboundedReceiver<String>) {
+    let (tx, rx) = mpsc::unbounded_channel();
+    let app = Router::new().route(
+        "/channels/{channel_id}/typing",
+        post(move |Path(channel_id): Path<String>| {
+            let tx = tx.clone();
+            async move {
+                let _ = tx.send(channel_id);
+                StatusCode::NO_CONTENT
+            }
+        }),
+    );
+    let base = spawn_http(app).await;
+    (channel_at(&base, None), rx)
 }
 
 #[tokio::test]
-async fn start_typing_sets_handle() {
-    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
-        .with_api_base("http://127.0.0.1:9");
+async fn start_typing_sends_once_to_the_numeric_channel() {
+    let (ch, mut rx) = typing_sink().await;
     crate::channel::ChannelTyping::start_typing(&ch, "123456")
         .await
         .unwrap();
-    let guard = ch.typing_handle.lock();
-    assert!(guard.is_some());
+    assert_eq!(
+        tokio::time::timeout(HANG_GUARD, rx.recv())
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("123456")
+    );
+    assert!(rx.try_recv().is_err());
 }
 
 #[tokio::test]
-async fn stop_typing_clears_handle() {
-    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
-        .with_api_base("http://127.0.0.1:9");
+async fn stop_typing_leaves_discord_indicator_to_expire() {
+    let (ch, mut rx) = typing_sink().await;
     crate::channel::ChannelTyping::start_typing(&ch, "123456")
         .await
         .unwrap();
     crate::channel::ChannelTyping::stop_typing(&ch, "123456")
         .await
         .unwrap();
-    let guard = ch.typing_handle.lock();
-    assert!(guard.is_none());
+    assert_eq!(
+        tokio::time::timeout(HANG_GUARD, rx.recv())
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("123456")
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "Discord's typing indicator expires on its own"
+    );
 }
 
 #[tokio::test]
@@ -347,17 +369,24 @@ async fn stop_typing_is_idempotent() {
 }
 
 #[tokio::test]
-async fn start_typing_replaces_existing_task() {
-    let ch = DiscordChannel::new("fake".into(), None, None, vec![], false, false)
-        .with_api_base("http://127.0.0.1:9");
+async fn repeated_start_typing_targets_each_requested_channel() {
+    let (ch, mut rx) = typing_sink().await;
     crate::channel::ChannelTyping::start_typing(&ch, "111")
         .await
         .unwrap();
     crate::channel::ChannelTyping::start_typing(&ch, "222")
         .await
         .unwrap();
-    let guard = ch.typing_handle.lock();
-    assert!(guard.is_some());
+    for expected in ["111", "222"] {
+        assert_eq!(
+            tokio::time::timeout(HANG_GUARD, rx.recv())
+                .await
+                .unwrap()
+                .as_deref(),
+            Some(expected)
+        );
+    }
+    assert!(rx.try_recv().is_err());
 }
 
 // ── Message ID edge cases ─────────────────────────────────────
@@ -720,9 +749,9 @@ fn with_api_base_trims_trailing_slash_and_defaults_to_discord() {
 async fn send_posts_message_to_recipient_with_bot_auth() {
     let (base, mut rx) = message_sink(StatusCode::OK).await;
     let ch = channel_at(&base, Some("default-chan"));
-    send_text(&ch, "hello there", "chan-1").await.unwrap();
+    send_text(&ch, "hello there", "123456").await.unwrap();
     let (chan, auth, content) = rx.try_recv().unwrap();
-    assert_eq!(chan, "chan-1");
+    assert_eq!(chan, "123456");
     assert_eq!(auth, format!("Bot {BOT_TOKEN}"));
     assert_eq!(content, "hello there");
     assert!(rx.try_recv().is_err(), "exactly one request");
@@ -731,14 +760,14 @@ async fn send_posts_message_to_recipient_with_bot_auth() {
 #[tokio::test]
 async fn send_without_recipient_uses_configured_channel_and_splits_long_text() {
     let (base, mut rx) = message_sink(StatusCode::OK).await;
-    let ch = channel_at(&base, Some("default-chan"));
+    let ch = channel_at(&base, Some("123456"));
     let long = "word ".repeat(500); // 2500 chars → two chunks
     send_text(&ch, &long, "").await.unwrap();
     let first = rx.try_recv().unwrap();
     let second = rx.try_recv().unwrap();
     assert!(rx.try_recv().is_err());
-    assert_eq!(first.0, "default-chan");
-    assert_eq!(second.0, "default-chan");
+    assert_eq!(first.0, "123456");
+    assert_eq!(second.0, "123456");
     assert!(discord_units(&first.2) <= DISCORD_MAX_MESSAGE_LENGTH);
     assert_eq!(
         format!("{}{}", first.2, second.2)
@@ -753,7 +782,7 @@ async fn send_without_any_target_fails_before_any_request() {
     let (base, mut rx) = message_sink(StatusCode::OK).await;
     let ch = channel_at(&base, None);
     let err = send_text(&ch, "hi", "").await.unwrap_err().message;
-    assert!(err.contains("no target channel"), "{err}");
+    assert!(err.contains("numeric channel id"), "{err}");
     assert!(rx.try_recv().is_err());
 }
 
@@ -761,7 +790,7 @@ async fn send_without_any_target_fails_before_any_request() {
 async fn send_surfaces_non_success_status_and_body() {
     let (base, _rx) = message_sink(StatusCode::TOO_MANY_REQUESTS).await;
     let ch = channel_at(&base, None);
-    let err = send_text(&ch, "hi", "c").await.unwrap_err().message;
+    let err = send_text(&ch, "hi", "123456").await.unwrap_err().message;
     assert!(err.contains("Discord send message failed (429"), "{err}");
     assert!(err.contains("rate limited body"), "{err}");
 }
@@ -816,28 +845,16 @@ async fn health_check_reflects_users_me_status() {
 
 #[tokio::test]
 async fn start_typing_posts_typing_indicator_until_stopped() {
-    let (tx, mut rx) = mpsc::unbounded_channel::<String>();
-    let app = Router::new().route(
-        "/channels/{channel_id}/typing",
-        post(move |Path(channel_id): Path<String>| {
-            let tx = tx.clone();
-            async move {
-                let _ = tx.send(channel_id);
-                StatusCode::NO_CONTENT
-            }
-        }),
-    );
-    let base = spawn_http(app).await;
-    let ch = channel_at(&base, None);
-    crate::channel::ChannelTyping::start_typing(&ch, "chan-9")
+    let (ch, mut rx) = typing_sink().await;
+    crate::channel::ChannelTyping::start_typing(&ch, "9")
         .await
         .unwrap();
     let hit = tokio::time::timeout(HANG_GUARD, rx.recv()).await.unwrap();
-    assert_eq!(hit.as_deref(), Some("chan-9"));
-    crate::channel::ChannelTyping::stop_typing(&ch, "chan-9")
+    assert_eq!(hit.as_deref(), Some("9"));
+    crate::channel::ChannelTyping::stop_typing(&ch, "9")
         .await
         .unwrap();
-    assert!(ch.typing_handle.lock().is_none());
+    assert!(rx.try_recv().is_err());
 }
 
 // ── Gateway ───────────────────────────────────────────────────
@@ -970,7 +987,8 @@ async fn listen_handles_dm_mentions_and_bots_then_stops_on_invalid_session() {
         send_json(
             &mut ws,
             message_create(json!({
-                "content": "<@!123456> ping", "author": {"id": "u7", "bot": true}
+                "channel_id": "7654321", "content": "<@!123456> ping",
+                "author": {"id": "u7", "bot": true}
             })),
         )
         .await;
@@ -1004,8 +1022,12 @@ async fn listen_handles_dm_mentions_and_bots_then_stops_on_invalid_session() {
     );
     assert_eq!(msg.sender.id, "u7");
     assert_eq!(
-        msg.conversation.id, "u7",
-        "DM without channel id replies to author"
+        msg.conversation.id, "7654321",
+        "the typed DM conversation retains Discord's channel id"
+    );
+    assert_eq!(
+        msg.conversation.kind,
+        tinychannels_bus::ConversationKind::Dm
     );
     assert_eq!(msg.text, "ping");
     assert!(rx.try_recv().is_err());

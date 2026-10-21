@@ -787,8 +787,11 @@ async fn typed_interaction_operations_preserve_provider_validation() {
     ChannelTyping::stop_typing(&channel, "C1:1.0")
         .await
         .unwrap();
+    assert_eq!(bodies(&server, "reactions.add").await.len(), 1);
+    assert_eq!(bodies(&server, "chat.update").await.len(), 1);
+    assert_eq!(bodies(&server, "chat.delete").await.len(), 1);
     let statuses = bodies(&server, "assistant.threads.setStatus").await;
-    assert_eq!(statuses.len(), 4);
+    assert_eq!(statuses.len(), 2);
     assert_eq!(statuses[1]["status"], "");
     assert!(ChannelTyping::start_typing(&channel, "C1").await.is_err());
     assert!(ChannelTyping::stop_typing(&channel, "C1").await.is_err());
@@ -892,7 +895,11 @@ async fn listening_needs_a_channel_or_an_app_token_and_picks_the_transport() {
     }
     let bare = SlackChannel::new("t".into(), None, vec![]);
     let error = ChannelAdapter::start(&bare, &NoSink).await.unwrap_err();
-    assert!(error.message.contains("channel_id required"));
+    assert!(
+        error
+            .message
+            .contains("needs a channel_id or Socket Mode app token")
+    );
     let dead = |channel: Option<&str>, app: Option<&str>| {
         SlackChannel::new("t".into(), channel.map(str::to_owned), vec!["*".into()])
             .with_app_token(app.map(str::to_owned))

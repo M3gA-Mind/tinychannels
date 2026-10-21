@@ -108,6 +108,47 @@ impl NativeProvider for DingTalkChannel {
         false
     }
 
+    async fn health_state(&self) -> &'static str {
+        if self.register_connection().await.is_ok() {
+            "healthy"
+        } else {
+            "unhealthy"
+        }
+    }
+
+    async fn start_listener(
+        &self,
+        sink: &(dyn crate::channel::ChannelInboundSink + Send + Sync),
+    ) -> Result<(), ChannelSendError> {
+        let (id, cancellation) = self.begin_listener().map_err(|error| ChannelSendError {
+            kind: SendErrorKind::Transient,
+            message: error.to_string(),
+            retryable: true,
+            ..Default::default()
+        })?;
+        let _registration = super::ListenerRegistration { channel: self, id };
+        self.listen_owned(super::DingTalkIngress::Typed(sink), Some(cancellation))
+            .await
+            .map_err(|error| ChannelSendError {
+                kind: SendErrorKind::Transient,
+                message: error.to_string(),
+                retryable: true,
+                ..Default::default()
+            })
+    }
+
+    async fn stop_listener(&self) -> Result<(), ChannelSendError> {
+        if let Some((_, cancellation)) = self
+            .listener
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .as_ref()
+        {
+            cancellation.send_replace(true);
+        }
+        Ok(())
+    }
+
     fn declared_capabilities(&self) -> ChannelCapabilities {
         let mut caps = crate::providers::long_tail::text_capabilities(
             crate::providers::long_tail::TextSpec::default(),

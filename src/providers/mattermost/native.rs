@@ -47,6 +47,17 @@ impl NativeProvider for MattermostChannel {
         true
     }
 
+    async fn health_state(&self) -> &'static str {
+        let healthy = self
+            .http_client()
+            .get(format!("{}/api/v4/users/me", self.base_url))
+            .bearer_auth(&self.bot_token)
+            .send()
+            .await
+            .is_ok_and(|response| response.status().is_success());
+        if healthy { "healthy" } else { "unhealthy" }
+    }
+
     fn declared_capabilities(&self) -> ChannelCapabilities {
         self.declared()
     }

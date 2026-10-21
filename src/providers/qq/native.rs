@@ -61,6 +61,14 @@ impl NativeProvider for QQChannel {
         false
     }
 
+    async fn health_state(&self) -> &'static str {
+        if self.fetch_access_token().await.is_ok() {
+            "healthy"
+        } else {
+            "unhealthy"
+        }
+    }
+
     fn declared_capabilities(&self) -> ChannelCapabilities {
         let mut capabilities = crate::providers::long_tail::text_capabilities(
             crate::providers::long_tail::TextSpec::default(),
