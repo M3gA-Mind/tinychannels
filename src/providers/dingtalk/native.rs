@@ -411,7 +411,7 @@ impl NativeProvider for DingTalkChannel {
             ..Default::default()
         })?;
         let _registration = super::ListenerRegistration { channel: self, id };
-        self.listen_owned(super::DingTalkIngress::Typed(sink), Some(cancellation))
+        self.listen_owned(sink, Some(cancellation))
             .await
             .map_err(|error| {
                 tracing::debug!(%error, "DingTalk typed listener stopped");
@@ -547,24 +547,16 @@ impl DingTalkChannel {
         Ok(response.media_id)
     }
 
-    pub(super) async fn inbound_envelope(
-        &self,
-        data: &serde_json::Value,
-    ) -> Option<ChannelInboundEnvelope> {
-        self.inbound_envelope_with_mode(data, false).await
-    }
-
     pub(super) async fn inbound_envelope_for_listener(
         &self,
         data: &serde_json::Value,
     ) -> Option<ChannelInboundEnvelope> {
-        self.inbound_envelope_with_mode(data, true).await
+        self.inbound_envelope_with_mode(data).await
     }
 
     async fn inbound_envelope_with_mode(
         &self,
         data: &serde_json::Value,
-        listener: bool,
     ) -> Option<ChannelInboundEnvelope> {
         use crate::providers::native::inbound::{assemble, media_of};
 
@@ -621,11 +613,9 @@ impl DingTalkChannel {
             .to_owned();
         let mut ingested = Ingested::default();
         let voice = message_type == "audio";
-        let can_ingest_file = (listener || self.native.events.is_some())
-            && self.native.media_repository.is_some()
+        let can_ingest_file = self.native.media_repository.is_some()
             && matches!(message_type, "picture" | "file");
-        let can_ingest_voice = (listener || self.native.events.is_some())
-            && self.native.voice_media_store.is_some()
+        let can_ingest_voice = self.native.voice_media_store.is_some()
             && voice;
         if can_ingest_file || can_ingest_voice {
             let download_code = if message_type == "picture" {
