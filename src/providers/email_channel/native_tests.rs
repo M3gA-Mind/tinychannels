@@ -282,7 +282,7 @@ async fn unsupported_operations_and_the_descriptor_use_the_native_surface() {
             .unwrap_err()
             .unsupported
     );
-    assert!(channel.declared_capabilities().remote_control);
+    assert!(ChannelAdapter::declared_capabilities(&channel).remote_control);
     let outcome = ChannelTypedSend::send_typed(&channel, &message(PEER, vec![text("legacy")]))
         .await
         .unwrap();

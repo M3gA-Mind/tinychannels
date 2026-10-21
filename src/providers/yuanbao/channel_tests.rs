@@ -360,7 +360,7 @@ fn supports_draft_updates_is_true() {
             .any(|name| name == "draft-update")
     );
     assert!(
-        !ch.declared_capabilities()
+        !ChannelAdapter::declared_capabilities(&ch)
             .actions
             .supported
             .iter()

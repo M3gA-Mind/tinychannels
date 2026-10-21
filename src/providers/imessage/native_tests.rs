@@ -845,7 +845,10 @@ async fn the_descriptor_status_and_legacy_methods_use_the_native_surface() {
     assert_eq!(descriptor.id, "imessage");
     assert_eq!(descriptor.metadata["adapterMode"], "native-v2");
     assert_eq!(descriptor.metadata["voiceOut"], "attachment");
-    assert_eq!(rig.channel.declared_capabilities(), rig.channel.declared());
+    assert_eq!(
+        ChannelAdapter::declared_capabilities(&rig.channel),
+        rig.channel.declared()
+    );
     assert_eq!(
         ChannelAdapter::status(&rig.channel)
             .await
@@ -876,12 +879,7 @@ async fn the_descriptor_status_and_legacy_methods_use_the_native_surface() {
     )
     .await
     .unwrap_err();
-    assert!(
-        error
-            .downcast_ref::<crate::providers::native::NativeFailure>()
-            .unwrap()
-            .0
-            .unsupported
-    );
+    assert_eq!(error.kind, SendErrorKind::Permanent);
+    assert!(error.message.contains("unsupported"));
     let _ = SendErrorKind::Unknown;
 }

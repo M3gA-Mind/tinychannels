@@ -1155,7 +1155,7 @@ mod v2 {
         let edited = crate::channel::ChannelEdit::edit(
             &channel,
             &receipt,
-            &tinychannels_bus::ChannelOutboundIntent {
+        tinychannels_bus::ChannelOutboundIntent {
                 conversation_id: "+15550001111".into(),
                 channel_id: "whatsapp".into(),
                 payload: tinychannels_bus::OutboundPayload::Text {
