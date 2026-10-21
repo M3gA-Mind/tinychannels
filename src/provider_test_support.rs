@@ -5,7 +5,20 @@ use crate::channel::{
     outbound_intent_from_send_message,
 };
 use async_trait::async_trait;
+use std::fmt::{Display, Formatter};
+use std::error::Error;
 use tinychannels_bus::{ChannelIngress, ChannelMessage};
+
+#[derive(Debug)]
+pub(crate) struct TypedSendTestError(pub(crate) crate::channel::ChannelSendError);
+
+impl Display for TypedSendTestError {
+    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0.message)
+    }
+}
+
+impl Error for TypedSendTestError {}
 
 /// Captures the typed provider stream through its one-release text projection
 /// for tests that still assert the historical message fields.
@@ -42,11 +55,11 @@ pub(crate) async fn listen_v1<C: ChannelAdapter + ?Sized>(
 pub(crate) async fn send_v1<C: ChannelAdapter>(
     channel: &C,
     message: &SendMessage,
-) -> Result<ChannelSendOutcome, crate::channel::ChannelSendError> {
+) -> anyhow::Result<ChannelSendOutcome> {
     let intent = outbound_intent_from_send_message(&channel.descriptor().id, message);
     let outcome = channel.send(intent).await?;
     match outcome.error.clone() {
-        Some(error) => Err(error),
+        Some(error) => Err(anyhow::Error::new(TypedSendTestError(error))),
         None => Ok(outcome),
     }
 }
