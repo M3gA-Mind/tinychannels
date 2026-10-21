@@ -4,6 +4,102 @@ use hmac::{KeyInit as _, Mac as _};
 use tinychannels_bus::ChannelsConfig;
 use tinychannels_bus::config::WhatsAppConfig;
 
+#[tokio::test]
+async fn v1_email_subject_reaches_the_configured_smtp_wire() {
+    use std::io::{BufRead, Write};
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let smtp_port = listener.local_addr().unwrap().port();
+    let smtp = std::thread::spawn(move || {
+        let (socket, _) = listener.accept().unwrap();
+        let mut writer = socket.try_clone().unwrap();
+        let mut reader = std::io::BufReader::new(socket);
+        let mut transcript = Vec::new();
+        writer.write_all(b"220 fixture\r\n").unwrap();
+        let mut in_data = false;
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap_or(0) > 0 {
+            let command = line.trim_end().to_owned();
+            line.clear();
+            if in_data {
+                if command == "." {
+                    in_data = false;
+                    writer.write_all(b"250 queued\r\n").unwrap();
+                } else {
+                    transcript.push(command);
+                }
+                continue;
+            }
+            match command.as_str() {
+                "DATA" => {
+                    in_data = true;
+                    writer.write_all(b"354 send data\r\n").unwrap();
+                }
+                "QUIT" => {
+                    writer.write_all(b"221 bye\r\n").unwrap();
+                    break;
+                }
+                command if command.starts_with("EHLO") => {
+                    writer.write_all(b"250 fixture\r\n").unwrap();
+                }
+                command if command.starts_with("AUTH") => {
+                    writer.write_all(b"235 authenticated\r\n").unwrap();
+                }
+                _ => writer.write_all(b"250 ok\r\n").unwrap(),
+            }
+        }
+        transcript.join("\n")
+    });
+
+    let bus = tinybus::transport::memory::MemoryBus::new();
+    tinybus::broker::Broker::new().spawn(bus.clone());
+    let connection = tinybus::Connection::connect(bus.connect().await.unwrap())
+        .await
+        .unwrap();
+    let service = Channels::new(HostChannels::new(connection), None);
+    let config = ChannelsConfig {
+        email: Some(tinychannels_bus::config::EmailConfig {
+            imap_host: "127.0.0.1".into(),
+            imap_port: 1,
+            from_address: "bot@example.test".into(),
+            smtp_host: "127.0.0.1".into(),
+            smtp_port,
+            smtp_tls: false,
+            username: "bot".into(),
+            password: "secret".into(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    service
+        .start_channel_inner(
+            "email:work".into(),
+            config,
+            &tinychannels::factory::DefaultHttpClients,
+            None,
+            true,
+        )
+        .await
+        .unwrap();
+    service
+        .send_message(
+            "email:work".into(),
+            tinychannels::SendMessage::with_subject(
+                "mail body",
+                "alice@example.test",
+                "Project update",
+            ),
+        )
+        .await
+        .unwrap();
+
+    let transcript = smtp.join().unwrap();
+    assert!(transcript.contains("Subject: Project update"), "{transcript}");
+    assert!(transcript.contains("mail body"), "{transcript}");
+    assert!(!transcript.contains("Subject: Project update\\nSubject:"));
+    service.shutdown().await.unwrap();
+}
+
 /// Mirrors the predicate in `start_channel`.
 ///
 /// Extracted rather than duplicated in the test so the two cannot disagree:
