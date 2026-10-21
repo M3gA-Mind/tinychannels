@@ -2,19 +2,19 @@
 //! messages (text, images, files, voice notes) on the ordered ingress path.
 
 use super::LinqChannel;
-use crate::traits::ChannelMessage;
-use uuid::Uuid;
 use super::native::{LINQ_MAX_FILE_BYTES, LINQ_MAX_VOICE_BYTES};
 use crate::WebhookRejected;
 use crate::providers::native::inbound::normalize_mime;
 use crate::providers::native::inbound::{
     InboundFile, Ingest, Ingested, assemble, media_of, publish,
 };
+use crate::traits::ChannelMessage;
 use serde_json::{Value, json};
 use tinychannels_bus::{
     ChannelInboundEnvelope, ChannelRef, ConversationKind, ConversationRef, SenderRef,
     WebhookDeliveryOutcome,
 };
+use uuid::Uuid;
 
 fn linq_ref() -> ChannelRef {
     ChannelRef {
@@ -493,4 +493,3 @@ pub fn verify_linq_signature(secret: &str, body: &str, timestamp: &str, signatur
     // Constant-time comparison via HMAC verify.
     mac.verify_slice(&provided).is_ok()
 }
-

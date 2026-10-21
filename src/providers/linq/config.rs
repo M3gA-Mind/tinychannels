@@ -29,27 +29,27 @@ impl LinqChannel {
             api_token,
             from_phone,
             allowed_senders,
-            pub(super) http_client: reqwest::Client::new(),
-            pub(super) api_base: LINQ_API_BASE.to_owned(),
-            pub(super) webhook_secret: None,
-            pub(super) native: NativeState::default(),
+            http_client: reqwest::Client::new(),
+            api_base: LINQ_API_BASE.to_owned(),
+            webhook_secret: None,
+            native: NativeState::default(),
         }
     }
 
     pub fn with_http_client(
-        pub(super) api_token: String,
-        pub(super) from_phone: String,
-        pub(super) allowed_senders: Vec<String>,
-        pub(super) http_client: reqwest::Client,
+        api_token: String,
+        from_phone: String,
+        allowed_senders: Vec<String>,
+        http_client: reqwest::Client,
     ) -> Self {
         Self {
             api_token,
             from_phone,
             allowed_senders,
             http_client,
-            pub(super) api_base: LINQ_API_BASE.to_owned(),
-            pub(super) webhook_secret: None,
-            pub(super) native: NativeState::default(),
+            api_base: LINQ_API_BASE.to_owned(),
+            webhook_secret: None,
+            native: NativeState::default(),
         }
     }
 
@@ -96,11 +96,11 @@ impl LinqChannel {
         self
     }
 
-    fn http_client(&self) -> reqwest::Client {
+    pub(super) fn http_client(&self) -> reqwest::Client {
         self.http_client.clone()
     }
 
-    async fn health_probe(&self) -> bool {
+    pub(super) async fn health_probe(&self) -> bool {
         let url = format!("{}/phonenumbers", self.api_base);
         tokio::time::timeout(
             std::time::Duration::from_secs(5),
@@ -112,7 +112,6 @@ impl LinqChannel {
         .await
         .is_ok_and(|response| response.is_ok_and(|response| response.status().is_success()))
     }
-
 
     /// Get the bot's phone number.
     pub fn phone_number(&self) -> &str {

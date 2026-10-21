@@ -372,5 +372,5 @@ impl NativeProvider for IMessageChannel {
 }
 
 #[cfg(test)]
-#[path = "tests/mod.rs"]
+#[path = "outbound/tests/mod.rs"]
 mod tests;

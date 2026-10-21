@@ -489,3 +489,114 @@ fn now_ms() -> u64 {
 #[cfg(test)]
 #[path = "inbound_tests.rs"]
 mod tests;
+
+impl SignalChannel {
+    /// Effective sender: prefer `sourceNumber` (E.164), fall back to `source`.
+    pub(super) fn sender(envelope: &Envelope) -> Option<String> {
+        envelope
+            .source_number
+            .as_deref()
+            .or(envelope.source.as_deref())
+            .map(String::from)
+    }
+
+    pub(super) fn is_sender_allowed(&self, sender: &str) -> bool {
+        if self.allowed_from.iter().any(|u| u == "*") {
+            return true;
+        }
+        self.allowed_from.iter().any(|u| u == sender)
+    }
+
+    /// Check whether the message targets the configured group.
+    /// If no `group_id` is configured (None), all DMs and groups are accepted.
+    /// Use "dm" to filter DMs only.
+    pub(super) fn matches_group(&self, data_msg: &DataMessage) -> bool {
+        let Some(ref expected) = self.group_id else {
+            return true;
+        };
+        match data_msg
+            .group_info
+            .as_ref()
+            .and_then(|g| g.group_id.as_deref())
+        {
+            Some(gid) => gid == expected.as_str(),
+            None => expected.eq_ignore_ascii_case("dm"),
+        }
+    }
+
+    /// Determine the send target: group id or the sender's number.
+    pub(super) fn reply_target(&self, data_msg: &DataMessage, sender: &str) -> String {
+        if let Some(group_id) = data_msg
+            .group_info
+            .as_ref()
+            .and_then(|g| g.group_id.as_deref())
+        {
+            format!("{GROUP_TARGET_PREFIX}{group_id}")
+        } else {
+            sender.to_string()
+        }
+    }
+
+    /// Send a JSON-RPC request to signal-cli daemon.
+    /// Process a single SSE envelope, returning a ChannelMessage if valid.
+    pub(super) fn process_envelope(&self, envelope: &Envelope) -> Option<ChannelMessage> {
+        // Skip story messages when configured
+        if self.ignore_stories && envelope.story_message.is_some() {
+            return None;
+        }
+
+        let data_msg = envelope.data_message.as_ref()?;
+
+        // Skip attachment-only messages when configured
+        if self.ignore_attachments {
+            let has_attachments = data_msg.attachments.as_ref().is_some_and(|a| !a.is_empty());
+            if has_attachments && data_msg.message.is_none() {
+                return None;
+            }
+        }
+
+        let text = data_msg.message.as_deref().filter(|t| !t.is_empty())?;
+        let sender = Self::sender(envelope)?;
+
+        if !self.is_sender_allowed(&sender) {
+            return None;
+        }
+
+        if !self.matches_group(data_msg) {
+            return None;
+        }
+
+        let target = self.reply_target(data_msg, &sender);
+
+        let timestamp = data_msg
+            .timestamp
+            .or(envelope.timestamp)
+            .unwrap_or_else(|| {
+                u64::try_from(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis(),
+                )
+                .unwrap_or(u64::MAX)
+            });
+
+        Some(ChannelMessage {
+            id: format!("sig_{timestamp}"),
+            sender: sender.clone(),
+            reply_target: target,
+            content: text.to_string(),
+            channel: "signal".to_string(),
+            timestamp: timestamp / 1000, // millis to secs.
+            topic_id: None,
+            reply_to_id: None,
+            thread_ts: None,
+            sender_name: envelope
+                .source_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string),
+        })
+    }
+}

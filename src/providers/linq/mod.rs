@@ -24,7 +24,3 @@ mod fixtures;
 #[cfg(test)]
 #[path = "conformance_tests.rs"]
 mod conformance;
-
-#[cfg(test)]
-#[path = "tests/mod.rs"]
-mod tests;
