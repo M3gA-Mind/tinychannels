@@ -1765,16 +1765,27 @@ async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
         .unwrap_err();
     assert_eq!(missing_store.kind, crate::channel::SendErrorKind::Forbidden);
     assert!(!missing_store.sent_before_error);
-    assert!(missing_store.message.contains("rejected before provider dispatch"));
+    assert!(
+        missing_store
+            .message
+            .contains("rejected before provider dispatch")
+    );
 
     let channel = channel_for(&server, &["*"]).with_voice_media_store(Arc::new(VoiceReadFixture));
     let missing_reference =
         ChannelTypedSend::send_typed(&channel, &outbound_voice_message(None, Some("turn-1")))
             .await
             .unwrap_err();
-    assert_eq!(missing_reference.kind, crate::channel::SendErrorKind::Forbidden);
+    assert_eq!(
+        missing_reference.kind,
+        crate::channel::SendErrorKind::Forbidden
+    );
     assert!(!missing_reference.sent_before_error);
-    assert!(missing_reference.message.contains("rejected before provider dispatch"));
+    assert!(
+        missing_reference
+            .message
+            .contains("rejected before provider dispatch")
+    );
 
     let missing_turn =
         ChannelTypedSend::send_typed(&channel, &outbound_voice_message(Some("voice-ref"), None))
@@ -1782,7 +1793,11 @@ async fn typed_voice_rejects_missing_host_storage_reference_and_origin_turn() {
             .unwrap_err();
     assert_eq!(missing_turn.kind, crate::channel::SendErrorKind::Forbidden);
     assert!(!missing_turn.sent_before_error);
-    assert!(missing_turn.message.contains("rejected before provider dispatch"));
+    assert!(
+        missing_turn
+            .message
+            .contains("rejected before provider dispatch")
+    );
     assert!(server.received_requests().await.unwrap().is_empty());
 }
 
@@ -4912,10 +4927,14 @@ async fn listen_backs_off_when_webhook_delete_fails_and_on_transport_error() {
     .await
     .expect("typed message dispatched");
     let msg = events.inbounds.lock().unwrap()[0].clone();
-    assert!(msg.parts.iter().any(|part| matches!(
-        part,
-        tinychannels_bus::ContentPart::Text { text, .. } if text == "hey ping"
-    )), "mention stripped in mention-only group: {:?}", msg.parts);
+    assert!(
+        msg.parts.iter().any(|part| matches!(
+            part,
+            tinychannels_bus::ContentPart::Text { text, .. } if text == "hey ping"
+        )),
+        "mention stripped in mention-only group: {:?}",
+        msg.parts
+    );
     assert_eq!(json_bodies(&server, "deleteWebhook").await.len(), 1);
     ChannelAdapter::stop(ch.as_ref())
         .await
