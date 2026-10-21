@@ -110,7 +110,7 @@ async fn email_channel_new() {
 #[test]
 fn email_channel_name() {
     let channel = EmailChannel::new(EmailConfig::default());
-    assert_eq!(channel.name(), "email");
+    assert_eq!(channel.descriptor().id, "email");
 }
 
 #[test]

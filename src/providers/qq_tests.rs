@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn test_name() {
     let ch = QQChannel::new("id".into(), "secret".into(), vec![]);
-    assert_eq!(ch.name(), "qq");
+    assert_eq!(ch.descriptor().id, "qq");
 }
 
 #[test]

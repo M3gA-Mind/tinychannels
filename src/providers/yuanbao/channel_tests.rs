@@ -14,7 +14,7 @@ fn good_cfg() -> YuanbaoConfig {
 #[test]
 fn channel_construction_validates() {
     let ch = YuanbaoChannel::new(good_cfg()).unwrap();
-    assert_eq!(ch.name(), "yuanbao");
+    assert_eq!(ch.descriptor().id, "yuanbao");
 }
 
 #[test]
@@ -338,7 +338,7 @@ fn supports_draft_updates_is_true() {
             .iter()
             .any(|action| action == "typing")
     );
-    let capabilities = ch.capabilities();
+    let capabilities = ch.declared_capabilities();
     assert!(capabilities.streaming_reply_pipeline);
     assert!(!capabilities.progressive_edits);
     assert!(
@@ -349,7 +349,7 @@ fn supports_draft_updates_is_true() {
             .any(|name| name == "draft-update")
     );
     assert!(
-        !ch.capabilities()
+        !ch.declared_capabilities()
             .actions
             .supported
             .iter()

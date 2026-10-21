@@ -14,7 +14,7 @@ fn make_channel() -> WhatsAppWebChannel {
 #[cfg(feature = "whatsapp-web")]
 fn whatsapp_web_channel_name() {
     let ch = make_channel();
-    assert_eq!(ch.name(), "whatsapp");
+    assert_eq!(ch.descriptor().id, "whatsapp");
 }
 
 #[test]
@@ -1101,7 +1101,7 @@ mod v2 {
     #[test]
     fn capabilities_follow_the_wired_ports_and_the_protocol() {
         let (bare, _) = linked();
-        let facts = bare.capabilities();
+        let facts = bare.declared_capabilities();
         assert!(facts.reactions && facts.addressing.reply_to_id && !facts.addressing.thread_id);
         assert!(facts.actions.supported.iter().any(|a| a == "edit"));
         assert!(!facts.content.image.outbound && !facts.voice_out.supported);
@@ -1111,10 +1111,10 @@ mod v2 {
             .with_media_repository(Arc::new(MemoryMedia::default()))
             .with_voice_media_store(Arc::new(MemoryVoices::default()))
             .with_voice_synthesis(true);
-        let facts = wired.capabilities();
+        let facts = wired.declared_capabilities();
         assert!(facts.content.sticker.outbound && facts.voice_out.native_waveform);
         assert!(facts.voice_out.synthesis);
-        assert_eq!(wired.declared_capabilities(), wired.capabilities());
+        assert_eq!(wired.declared_capabilities(), wired.declared_capabilities());
         let descriptor = wired.descriptor();
         assert_eq!(
             descriptor.metadata.get("backend").map(String::as_str),

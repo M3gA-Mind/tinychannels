@@ -11,7 +11,7 @@ fn make_channel() -> LinqChannel {
 #[test]
 fn linq_channel_name() {
     let ch = make_channel();
-    assert_eq!(ch.name(), "linq");
+    assert_eq!(ch.descriptor().id, "linq");
 }
 
 #[test]

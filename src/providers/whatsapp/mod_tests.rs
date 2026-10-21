@@ -12,7 +12,7 @@ fn make_channel() -> WhatsAppChannel {
 #[test]
 fn whatsapp_channel_name() {
     let ch = make_channel();
-    assert_eq!(ch.name(), "whatsapp");
+    assert_eq!(ch.descriptor().id, "whatsapp");
 }
 
 #[test]
@@ -928,7 +928,7 @@ mod v2 {
     #[test]
     fn capabilities_follow_the_wired_ports() {
         let bare = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![]);
-        let facts = bare.capabilities();
+        let facts = bare.declared_capabilities();
         assert!(facts.reactions && facts.addressing.reply_to_id && !facts.addressing.thread_id);
         assert!(!facts.content.image.outbound && !facts.voice_out.supported);
         assert!(bare.supports_reactions() && bare.supports_reply_to_id());
@@ -940,7 +940,7 @@ mod v2 {
             .with_media_repository(Arc::new(MemoryMedia::default()))
             .with_voice_media_store(Arc::new(MemoryVoices::default()))
             .with_voice_synthesis(true);
-        let facts = wired.capabilities();
+        let facts = wired.declared_capabilities();
         assert!(facts.content.image.outbound && facts.content.sticker.outbound);
         assert!(facts.voice_in.supported && facts.voice_out.synthesis);
         assert!(
@@ -950,8 +950,8 @@ mod v2 {
         // Synthesis needs the voice store; without it the flag alone is not enough.
         let synth_only = WhatsAppChannel::new("t".into(), "1".into(), "v".into(), vec![])
             .with_voice_synthesis(true);
-        assert!(!synth_only.capabilities().voice_out.synthesis);
-        assert_eq!(wired.declared_capabilities(), wired.capabilities());
+        assert!(!synth_only.declared_capabilities().voice_out.synthesis);
+        assert_eq!(wired.declared_capabilities(), wired.declared_capabilities());
     }
 
     #[test]

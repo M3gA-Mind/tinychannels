@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn test_name() {
     let ch = DingTalkChannel::new("id".into(), "secret".into(), vec![]);
-    assert_eq!(ch.name(), "dingtalk");
+    assert_eq!(ch.descriptor().id, "dingtalk");
 }
 
 #[test]
@@ -504,7 +504,7 @@ async fn stream_audio_callback_stores_provider_voice_and_acknowledges_frame() {
         .with_voice_media_store(voice.clone())
         .with_events(events.clone()),
     );
-    assert!(channel.capabilities().voice_in.supported);
+    assert!(channel.declared_capabilities().voice_in.supported);
 
     let websocket = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();

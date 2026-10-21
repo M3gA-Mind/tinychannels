@@ -53,7 +53,7 @@ fn empty_allowlist_denies_all() {
 #[test]
 fn name_returns_imessage() {
     let ch = IMessageChannel::new(vec![]);
-    assert_eq!(ch.name(), "imessage");
+    assert_eq!(ch.descriptor().id, "imessage");
 }
 
 #[test]
