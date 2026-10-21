@@ -156,6 +156,7 @@ enum EmailDelivery<'a> {
 struct InboundSinkRejected;
 
 impl EmailChannel {
+    #[cfg(feature = "email")]
     pub(crate) async fn health_probe(&self) -> bool {
         self.health_check_with(self.connect_imap(), HEALTH_CHECK_TIMEOUT)
             .await
