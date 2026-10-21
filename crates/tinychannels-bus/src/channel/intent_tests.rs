@@ -70,8 +70,31 @@ fn outbound_turn_scope_is_optional_and_survives_typed_adaptation() {
         "payload": { "kind": "text", "text": "hello" }
     });
     let intent: ChannelOutboundIntent = serde_json::from_value(legacy).unwrap();
+    let typed = ChannelOutboundMessage::from_intent(&intent);
+    let encoded_typed = serde_json::to_value(typed).unwrap();
+    assert_eq!(encoded_typed["turnId"], "turn-42");
     let encoded = serde_json::to_value(intent).unwrap();
     assert_eq!(encoded["turnId"], "turn-42");
+}
+
+#[test]
+fn outbound_turn_scope_remains_optional_for_legacy_payloads() {
+    let intent: ChannelOutboundIntent = serde_json::from_value(serde_json::json!({
+        "idempotencyKey": "old",
+        "channelId": "telegram",
+        "conversationId": "room",
+        "replyToId": null,
+        "threadId": null,
+        "durability": "required",
+        "payload": { "kind": "text", "text": "hello" }
+    }))
+    .unwrap();
+    assert!(
+        serde_json::to_value(intent)
+            .unwrap()
+            .get("turnId")
+            .is_none()
+    );
 }
 
 fn parsed_payload_for_serialization() -> OutboundPayload {
