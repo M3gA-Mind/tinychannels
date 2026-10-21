@@ -4,8 +4,8 @@
 use super::events::Flow;
 use super::types::SlackChannel;
 use crate::traits::ChannelMessage;
-use futures_util::{SinkExt, StreamExt};
 use futures_util::stream::FuturesUnordered;
+use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc::Sender;
 use tokio_tungstenite::tungstenite::Message;

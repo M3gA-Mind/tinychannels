@@ -266,6 +266,60 @@ async fn polling_survives_transport_errors() {
 }
 
 #[tokio::test]
+async fn typed_polling_retries_transport_errors_before_advancing_the_cursor() {
+    use crate::channel::{ChannelInboundSink, ChannelSendError};
+    use tinychannels_bus::ChannelIngress;
+
+    struct Sink(tokio::sync::mpsc::UnboundedSender<ChannelIngress>);
+
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for Sink {
+        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+            self.0.send(ingress).map_err(|_| ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "test sink closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+        }
+    }
+
+    let server = mock_api().await;
+    mount_auth(&server, "UBOT").await;
+    let polls = Arc::new(AtomicUsize::new(0));
+    let counter = polls.clone();
+    Mock::given(method("GET"))
+        .and(path("/api/conversations.history"))
+        .respond_with(move |_| {
+            if counter.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(503).set_body_json(json!({"ok": false}))
+            } else {
+                ResponseTemplate::new(200).set_body_json(json!({"messages": [
+                    {"ts": "12.1", "user": "alice", "text": "recovered poll"}
+                ]}))
+            }
+        })
+        .mount(&server)
+        .await;
+
+    let channel = channel_for(&server, &["alice"]);
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Sink(tx);
+    let poller = tokio::spawn(async move { channel.listen_polling_typed(&sink, "C1").await });
+    let ingress = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("typed poll recovers after a failed request")
+        .expect("sink remains open");
+    let ChannelIngress::Inbound(ingress) = ingress else {
+        panic!("expected a typed inbound envelope, got {ingress:?}");
+    };
+    assert_eq!(ingress.text, "recovered poll");
+    assert!(polls.load(Ordering::SeqCst) >= 2);
+    poller.abort();
+    let _ = poller.await;
+}
+
+#[tokio::test]
 async fn typed_socket_listener_rejects_duplicates_and_restarts_after_stop() {
     use crate::channel::{ChannelAdapter, ChannelInboundSink, ChannelSendError};
     use tinychannels_bus::ChannelIngress;
@@ -364,6 +418,138 @@ async fn typed_socket_listener_rejects_duplicates_and_restarts_after_stop() {
         "restart must not duplicate prior ingress"
     );
 
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), second)
+        .await
+        .expect("restarted listener stops")
+        .expect("listener task joins")
+        .expect("stop is successful");
+}
+
+#[tokio::test]
+async fn typed_socket_ack_waits_for_sink_acceptance_without_blocking_ping() {
+    use crate::channel::{ChannelAdapter, ChannelInboundSink, ChannelSendError};
+    use tinychannels_bus::ChannelIngress;
+
+    struct BlockingFirstSink {
+        calls: AtomicUsize,
+        entered: tokio::sync::Notify,
+        accepted: tokio::sync::mpsc::UnboundedSender<ChannelIngress>,
+    }
+
+    #[async_trait::async_trait]
+    impl ChannelInboundSink for BlockingFirstSink {
+        async fn push(&self, ingress: ChannelIngress) -> Result<(), ChannelSendError> {
+            if self.calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                self.entered.notify_one();
+                std::future::pending::<()>().await;
+            }
+            self.accepted.send(ingress).map_err(|_| ChannelSendError {
+                kind: tinychannels_bus::channel::SendErrorKind::Transient,
+                message: "test sink closed".into(),
+                retryable: true,
+                ..Default::default()
+            })
+        }
+    }
+
+    let server = mock_api().await;
+    mount_auth(&server, "UBOT").await;
+    let (pong_tx, pong_rx) = tokio::sync::oneshot::channel();
+    let pong_tx = Arc::new(Mutex::new(Some(pong_tx)));
+    let url = serve(move |index, mut socket| {
+        let pong_tx = if index == 0 {
+            pong_tx.lock().unwrap().take()
+        } else {
+            None
+        };
+        Box::pin(async move {
+            socket
+                .send(envelope(
+                    "events_api",
+                    "unacked-until-accepted",
+                    message_event("11.1", "retry after listener restart"),
+                ))
+                .await
+                .unwrap();
+            if index == 0 {
+                socket
+                    .send(Message::Ping(vec![7, 8, 9].into()))
+                    .await
+                    .unwrap();
+                let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+                    .await
+                    .expect("pong is not blocked by typed delivery")
+                    .expect("socket remains open")
+                    .expect("websocket frame is valid");
+                assert_eq!(frame, Message::Pong(vec![7, 8, 9].into()));
+                if let Some(pong_tx) = pong_tx {
+                    let _ = pong_tx.send(());
+                }
+                while let Some(frame) = socket.next().await {
+                    let frame = frame.unwrap();
+                    assert!(
+                        !matches!(frame, Message::Text(_)),
+                        "a blocked sink must not cause an early Socket Mode acknowledgement"
+                    );
+                }
+            } else {
+                expect_ack(&mut socket, "unacked-until-accepted").await;
+                let _ = socket.close(None).await;
+            }
+        })
+    })
+    .await;
+    open_returns(&server, &url).await;
+
+    let channel = Arc::new(channel_for(&server, &["U1"]).with_app_token(Some("app-token".into())));
+    let (accepted_tx, mut accepted_rx) = tokio::sync::mpsc::unbounded_channel();
+    let sink = Arc::new(BlockingFirstSink {
+        calls: AtomicUsize::new(0),
+        entered: tokio::sync::Notify::new(),
+        accepted: accepted_tx,
+    });
+    let first_channel = channel.clone();
+    let first_sink = sink.clone();
+    let first = tokio::spawn(async move {
+        ChannelAdapter::start(first_channel.as_ref(), first_sink.as_ref()).await
+    });
+
+    tokio::time::timeout(Duration::from_secs(2), sink.entered.notified())
+        .await
+        .expect("typed sink begins the first delivery");
+    tokio::time::timeout(Duration::from_secs(2), pong_rx)
+        .await
+        .expect("socket reader remains responsive while sink is blocked")
+        .expect("test server observed pong");
+    ChannelAdapter::stop(channel.as_ref()).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), first)
+        .await
+        .expect("stop cancels a blocked typed sink push")
+        .expect("listener task joins")
+        .expect("stop is successful");
+    assert!(
+        accepted_rx.try_recv().is_err(),
+        "the unaccepted first attempt is not reported as delivered"
+    );
+
+    let second_channel = channel.clone();
+    let second_sink = sink.clone();
+    let second = tokio::spawn(async move {
+        ChannelAdapter::start(second_channel.as_ref(), second_sink.as_ref()).await
+    });
+    let replayed = tokio::time::timeout(Duration::from_secs(2), accepted_rx.recv())
+        .await
+        .expect("unacknowledged envelope is replayed after restart")
+        .expect("sink remains open");
+    let ChannelIngress::Inbound(replayed) = replayed else {
+        panic!("expected replayed inbound envelope, got {replayed:?}");
+    };
+    assert_eq!(replayed.text, "retry after listener restart");
+    assert!(
+        accepted_rx.try_recv().is_err(),
+        "the replay is accepted once"
+    );
     ChannelAdapter::stop(channel.as_ref()).await.unwrap();
     tokio::time::timeout(Duration::from_secs(2), second)
         .await
