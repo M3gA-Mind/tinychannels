@@ -820,6 +820,7 @@ struct NativeControllerFixtureCase {
     callbacks: std::sync::atomic::AtomicUsize,
     observations: std::sync::Mutex<Vec<NativeControllerObservation>>,
     unsupported: bool,
+    invoke_managed: bool,
 }
 
 #[async_trait]
@@ -848,6 +849,10 @@ impl NativeControllerFixture for NativeControllerFixtureCase {
         &self,
         feature: NativeControllerFeature,
     ) -> Result<(), NativeControllerError> {
+        if self.invoke_managed {
+            self.callbacks
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
         if self.unsupported {
             return Err(NativeControllerError {
                 unsupported: true,
@@ -878,6 +883,7 @@ async fn native_controller_matrix_requires_declared_wire_and_no_managed_callback
         callbacks: std::sync::atomic::AtomicUsize::new(0),
         observations: std::sync::Mutex::new(Vec::new()),
         unsupported: false,
+        invoke_managed: false,
     };
     assert!(
         check_native_controller_feature(&fixture, NativeControllerFeature::Reaction)
@@ -890,6 +896,7 @@ async fn native_controller_matrix_requires_declared_wire_and_no_managed_callback
         callbacks: std::sync::atomic::AtomicUsize::new(0),
         observations: std::sync::Mutex::new(Vec::new()),
         unsupported: true,
+        invoke_managed: false,
     };
     assert!(
         check_native_controller_feature(&unsupported, NativeControllerFeature::ThreadList)
@@ -899,9 +906,10 @@ async fn native_controller_matrix_requires_declared_wire_and_no_managed_callback
 
     let fallback = NativeControllerFixtureCase {
         capabilities: ChannelCapabilities::default(),
-        callbacks: std::sync::atomic::AtomicUsize::new(1),
+        callbacks: std::sync::atomic::AtomicUsize::new(0),
         observations: std::sync::Mutex::new(Vec::new()),
         unsupported: true,
+        invoke_managed: true,
     };
     assert!(check_native_controller_feature(&fallback, NativeControllerFeature::ThreadList)
         .await
