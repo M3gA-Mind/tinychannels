@@ -55,19 +55,17 @@ fn provider_alias_resolution_matches_registered_names_and_aliases() {
 }
 
 #[test]
-fn cached_models_and_help_responses_render_expected_text() {
+fn legacy_model_help_ignores_stale_workspace_cache() {
     let tempdir = tempfile::tempdir().unwrap();
     let state_dir = tempdir.path().join("state");
     std::fs::create_dir_all(&state_dir).unwrap();
     std::fs::write(
-        state_dir.join(MODEL_CACHE_FILE),
+        state_dir.join("models_cache.json"),
         serde_json::json!({
-            "entries": [
-                {
-                    "provider": "openai",
-                    "models": ["gpt-5", "gpt-5-mini", "gpt-4.1"]
-                }
-            ]
+            "entries": [{
+                "provider": "openai",
+                "models": ["stale-model"]
+            }]
         })
         .to_string(),
     )
@@ -75,15 +73,16 @@ fn cached_models_and_help_responses_render_expected_text() {
 
     let current = ChannelRouteSelection {
         provider: "openai".into(),
-        model: "gpt-5".into(),
+        model: "configured-model".into(),
     };
-    assert_eq!(
-        load_cached_model_preview(tempdir.path(), "openai"),
-        vec!["gpt-5", "gpt-5-mini", "gpt-4.1"]
-    );
+    assert!(load_cached_model_preview(tempdir.path(), "openai").is_empty());
+
     let model_help = build_models_help_response(&current, tempdir.path());
     assert!(model_help.contains("Current provider: `openai`"));
-    assert!(model_help.contains("- `gpt-5`"));
+    assert!(model_help.contains("Model catalog is unavailable in this channel"));
+    assert!(model_help.contains("View available models in the web UI"));
+    assert!(!model_help.contains("refresh the model list"));
+    assert!(!model_help.contains("stale-model"));
 
     let provider_help = build_providers_help_response(&current, &providers());
     assert!(provider_help.contains("Available providers"));
@@ -118,5 +117,15 @@ fn resolved_catalog_preview_preserves_first_provider_order_and_ten_item_limit() 
             &catalog,
         )
         .contains("No cached model list found for `missing`")
+    );
+    assert!(
+        build_models_help_response_from_catalog(
+            &ChannelRouteSelection {
+                provider: "missing".into(),
+                model: "configured".into()
+            },
+            &catalog,
+        )
+        .contains("Ask the operator to refresh the model list in the web UI")
     );
 }
