@@ -4078,8 +4078,8 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
     let _provider_host = hooks.host(host.clone(), instance.clone(), None);
     let running = Running::start_slack(channel, hooks, host, None, true);
     assert!(
-        running.channel.is_some(),
-        "Slack keeps its socket/polling listener"
+        running.channel.is_none(),
+        "Slack listener runs through its typed adapter"
     );
     let handle = running.adapter_handle();
     assert_eq!(handle.mode, AdapterMode::SlackNativeV2);
@@ -4207,6 +4207,104 @@ async fn configured_slack_native_adapter_routes_every_port_through_the_ordered_q
         );
     }
     running.stop().await.unwrap();
+}
+
+#[tokio::test]
+async fn configured_slack_typed_listener_delivers_socket_mode_ingress_without_legacy_channel() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    use wiremock::matchers::{header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    let api = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/auth.test"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "user_id": "UBOT"
+        })))
+        .mount(&api)
+        .await;
+    let websocket_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let websocket_url = format!("ws://{}", websocket_listener.local_addr().unwrap());
+    let websocket_task = tokio::spawn(async move {
+        let (stream, _) = websocket_listener.accept().await.unwrap();
+        let mut socket = tokio_tungstenite::accept_async(stream).await.unwrap();
+        socket
+            .send(Message::Text(
+                serde_json::json!({
+                    "type": "events_api",
+                    "envelope_id": "slack-module-event-1",
+                    "payload": {"event": {
+                        "type": "message",
+                        "channel": "C-module",
+                        "channel_type": "channel",
+                        "ts": "31.7",
+                        "thread_ts": "31.1",
+                        "user": "U1",
+                        "text": "module typed Slack"
+                    }}
+                })
+                .to_string()
+                .into(),
+            ))
+            .await
+            .unwrap();
+        let frame = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("Socket Mode event ack timeout")
+            .expect("Socket Mode disconnected before ack")
+            .expect("Socket Mode websocket error");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(frame.to_text().unwrap()).unwrap(),
+            serde_json::json!({"envelope_id": "slack-module-event-1"})
+        );
+        let _ = socket.next().await;
+    });
+    Mock::given(method("POST"))
+        .and(path("/api/apps.connections.open"))
+        .and(header("authorization", "Bearer app-token"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "ok": true,
+            "url": websocket_url
+        })))
+        .mount(&api)
+        .await;
+
+    let instance = "slack:typed-account".to_owned();
+    let hooks = Arc::new(Hooks::default());
+    let (host, callback, _server_connection, _storage) = ingress_fixture().await;
+    let _provider_host = hooks.host(host.clone(), instance, None);
+    let channel = Arc::new(
+        tinychannels::SlackChannel::new("bot-token".into(), None, vec!["U1".into()])
+            .with_app_token(Some("app-token".into()))
+            .with_api_base(format!("{}/api", api.uri())),
+    );
+    let running = Running::start_slack(channel, hooks, host, None, false);
+    assert!(running.channel.is_none());
+
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            if !callback.inbound.lock().await.is_empty() {
+                break;
+            }
+            callback.ingress_changed.notified().await;
+        }
+    })
+    .await
+    .expect("configured Slack adapter did not deliver typed ingress");
+    let received = callback.inbound.lock().await.clone();
+    assert_eq!(received.len(), 1);
+    assert_eq!(received[0].0, "slack:typed-account");
+    assert_eq!(received[0].1["conversation"]["id"], "C-module");
+    assert_eq!(received[0].1["conversation"]["threadId"], "31.1");
+    assert_eq!(received[0].1["text"], "module typed Slack");
+
+    running.stop().await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), websocket_task)
+        .await
+        .expect("mock Slack websocket did not close after module stop")
+        .unwrap();
 }
 
 #[tokio::test]
